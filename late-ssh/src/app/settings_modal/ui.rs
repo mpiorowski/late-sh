@@ -686,6 +686,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Startup subsection heading
         Constraint::Length(1),                // land on home row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Idle subsection heading
+        Constraint::Length(1),                // idle delay row
+        Constraint::Length(1),                // dim idle nickname row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
@@ -793,12 +797,34 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[17],
     );
 
+    frame.render_widget(Paragraph::new(section_heading("Idle")), sections[19]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::IdleDelaySecs,
+            width,
+            "Auto-idle after (sec, 0=never)",
+            idle_delay_span(state),
+        )),
+        sections[20],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::DimIdleNickname,
+            width,
+            "Dim my name when idle",
+            toggle_span(state.draft().dim_idle_nickname),
+        )),
+        sections[21],
+    );
+
     if gem_strip_height > 0 {
         // Pad 2 cols off each side and lift the gem 1 row off the bottom
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[19];
+        let strip = sections[23];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -2459,6 +2485,27 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }
+    }
+}
+
+fn idle_delay_span(state: &SettingsModalState) -> ValueSpan {
+    if state.editing_idle_delay() {
+        let typed = state.idle_delay_input().lines().join("");
+        if typed.is_empty() {
+            value_span("█", theme::AMBER())
+        } else {
+            value_span(
+                text_with_caret(&typed, state.idle_delay_input().cursor().1),
+                theme::AMBER(),
+            )
+        }
+    } else if state.draft().idle_delay_secs <= 0 {
+        value_span("never", theme::TEXT_FAINT())
+    } else {
+        value_span(
+            format!("{}s", state.draft().idle_delay_secs),
+            theme::TEXT_BRIGHT(),
+        )
     }
 }
 

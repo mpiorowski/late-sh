@@ -488,6 +488,8 @@ async fn profile_username_change_projects_to_live_irc_session() {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 600,
         },
     );
 

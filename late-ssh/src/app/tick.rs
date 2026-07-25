@@ -850,6 +850,22 @@ impl App {
                 self.afk_user_ids = afk_user_ids;
                 self.chat_ctx_epoch += 1;
             }
+            // Auto-idle: return-from-idle is handled instantly in
+            // `handle_input`, so only the forward transition is checked here.
+            // 1Hz is precise enough even at the shortest configurable delay.
+            // A delay of 0 means "never" (auto-idle disabled).
+            let idle_delay_secs = self.profile_state.profile().idle_delay_secs;
+            if !self.is_idle
+                && idle_delay_secs > 0
+                && self.last_input_at.elapsed() >= Duration::from_secs(idle_delay_secs as u64)
+            {
+                self.go_idle();
+            }
+            let idle_dim_user_ids = crate::state::idle_dim_users_snapshot(&self.idle_dim_users);
+            if !std::sync::Arc::ptr_eq(&idle_dim_user_ids, &self.idle_dim_user_ids) {
+                self.idle_dim_user_ids = idle_dim_user_ids;
+                self.chat_ctx_epoch += 1;
+            }
             // Sidebar clock shows minutes; repaint on rollover.
             let sidebar_clock = crate::app::common::sidebar::sidebar_clock_text(
                 self.profile_state.profile().timezone.as_deref(),

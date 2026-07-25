@@ -326,6 +326,7 @@ const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
+const DIM_IDLE_NICKNAME_KEY: &str = "dim_idle_nickname";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
 const BIO_KEY: &str = "bio";
@@ -1326,6 +1327,36 @@ pub fn extract_show_flag_fallback(settings: &Value) -> bool {
         .get(SHOW_FLAG_FALLBACK_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Subject-side privacy tweak: dim this user's own nickname for other
+/// viewers while they are auto-marked idle (inactivity, not `/brb`).
+/// Renderers look up the *message author's* preference, not the viewer's.
+/// Defaults to on, so the feature is visible out of the box; users who don't
+/// want their idle status shown to others can opt out.
+pub fn extract_dim_idle_nickname(settings: &Value) -> bool {
+    settings
+        .get(DIM_IDLE_NICKNAME_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Ceiling on `idle_delay_secs` (24h): keeps the setting-modal text input and
+/// the `/idle` command in sync on what counts as a valid value.
+pub const IDLE_DELAY_MAX_SECS: i32 = 24 * 60 * 60;
+const IDLE_DELAY_SECS_KEY: &str = "idle_delay_secs";
+/// Default auto-idle delay: 10 minutes, matching the original fixed
+/// threshold this setting replaces.
+const IDLE_DELAY_SECS_DEFAULT: i32 = 10 * 60;
+
+/// How long a session may sit with no input before it is auto-marked idle
+/// (see `App::go_idle`). `0` disables auto-idle entirely ("never").
+pub fn extract_idle_delay_secs(settings: &Value) -> i32 {
+    settings
+        .get(IDLE_DELAY_SECS_KEY)
+        .and_then(Value::as_i64)
+        .map(|value| value.clamp(0, IDLE_DELAY_MAX_SECS as i64) as i32)
+        .unwrap_or(IDLE_DELAY_SECS_DEFAULT)
 }
 
 /// Ordered list of room ids the user has pinned as favorites. Insertion

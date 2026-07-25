@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use late_core::models::user::RightSidebarMode;
@@ -5,6 +7,7 @@ use tokio::time::sleep;
 
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, HOT_TICK, IDLE_TICK};
+use crate::state::{ActiveSession, ActiveUser, idle_dim_users_snapshot};
 use crate::test_helpers::chat_compose_app;
 
 /// The ambient sidebar wave paints on anim_half edges whenever the right
@@ -220,5 +223,135 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
     assert!(
         changed < total / 2,
         "wave must skip between edges ({changed}/{total})"
+    );
+}
+
+/// The idle-dim publish path (`App::set_shared_session_idle`) only writes
+/// once this session is present in `active_users`, exactly as it would be in
+/// production (`ssh.rs` registers it on connect). Lighter test helpers pass
+/// `active_users: None`, so tests exercising the shared-state side effect
+/// register a single matching session here.
+fn register_active_session(app: &mut App) {
+    let mut sessions = HashMap::new();
+    sessions.insert(
+        app.user_id,
+        ActiveUser {
+            username: "test-user".to_string(),
+            fingerprint: None,
+            peer_ip: None,
+            audio_source: Default::default(),
+            sessions: vec![ActiveSession {
+                token: app.session_token.clone(),
+                fingerprint: None,
+                peer_ip: None,
+                afk: None,
+                idle: false,
+            }],
+            connection_count: 1,
+            last_login_at: Instant::now(),
+        },
+    );
+    app.active_users = Some(Arc::new(Mutex::new(sessions)));
+}
+
+async fn wait_until_idle(app: &mut App) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.tick();
+        if app.is_idle {
+            return;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    panic!("session never auto-marked idle");
+}
+
+/// Forward transition: past the configured delay with no input, the session
+/// marks idle, and — since the privacy tweak defaults to on — publishes
+/// itself into the shared dim set other sessions read at render time.
+#[tokio::test]
+async fn go_idle_publishes_dim_flag_when_privacy_pref_enabled() {
+    let (_test_db, mut app) = chat_compose_app("idle-dim-on").await;
+    hide_sidebar(&mut app);
+    settle_clean(&mut app, 30).await;
+    register_active_session(&mut app);
+    app.profile_state.profile.dim_idle_nickname = true;
+    app.profile_state.profile.idle_delay_secs = 1;
+
+    app.last_input_at = Instant::now() - Duration::from_secs(2);
+    wait_until_idle(&mut app).await;
+
+    let dim_users = idle_dim_users_snapshot(&app.idle_dim_users);
+    assert!(
+        dim_users.contains(&app.user_id),
+        "idle user with the privacy tweak on should be in the shared dim set"
+    );
+}
+
+/// Same forward transition, but with the privacy tweak off: the session
+/// still tracks itself as idle locally (activity tracking is unaffected),
+/// but must never appear in the shared set — other clients should not learn
+/// this user is idle at all.
+#[tokio::test]
+async fn go_idle_does_not_publish_dim_flag_when_privacy_pref_disabled() {
+    let (_test_db, mut app) = chat_compose_app("idle-dim-off").await;
+    hide_sidebar(&mut app);
+    settle_clean(&mut app, 30).await;
+    register_active_session(&mut app);
+    app.profile_state.profile.dim_idle_nickname = false;
+    app.profile_state.profile.idle_delay_secs = 1;
+
+    app.last_input_at = Instant::now() - Duration::from_secs(2);
+    wait_until_idle(&mut app).await;
+
+    let dim_users = idle_dim_users_snapshot(&app.idle_dim_users);
+    assert!(
+        !dim_users.contains(&app.user_id),
+        "idle user with the privacy tweak off must not appear in the shared dim set"
+    );
+}
+
+/// A delay of `0` means "never": no amount of inactivity should auto-mark
+/// the session idle.
+#[tokio::test]
+async fn zero_idle_delay_disables_auto_idle() {
+    let (_test_db, mut app) = chat_compose_app("idle-delay-zero").await;
+    hide_sidebar(&mut app);
+    settle_clean(&mut app, 30).await;
+    register_active_session(&mut app);
+    app.profile_state.profile.dim_idle_nickname = true;
+    app.profile_state.profile.idle_delay_secs = 0;
+
+    app.last_input_at = Instant::now() - Duration::from_secs(3600);
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        app.tick();
+        sleep(Duration::from_millis(5)).await;
+    }
+
+    assert!(!app.is_idle, "a delay of 0 must disable auto-idle");
+}
+
+/// Return-from-idle is instant on the next input, not gated behind the next
+/// tick, and clears the shared publish immediately.
+#[tokio::test]
+async fn handle_input_instantly_clears_idle_and_publish() {
+    let (_test_db, mut app) = chat_compose_app("idle-return").await;
+    hide_sidebar(&mut app);
+    settle_clean(&mut app, 30).await;
+    register_active_session(&mut app);
+    app.profile_state.profile.dim_idle_nickname = true;
+    app.profile_state.profile.idle_delay_secs = 1;
+
+    app.last_input_at = Instant::now() - Duration::from_secs(2);
+    wait_until_idle(&mut app).await;
+    assert!(idle_dim_users_snapshot(&app.idle_dim_users).contains(&app.user_id));
+
+    app.handle_input(b"x");
+
+    assert!(!app.is_idle, "any input should instantly clear idle state");
+    assert!(
+        !idle_dim_users_snapshot(&app.idle_dim_users).contains(&app.user_id),
+        "any input should instantly clear the shared publish"
     );
 }

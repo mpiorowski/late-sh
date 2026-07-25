@@ -467,6 +467,7 @@ impl Drop for ClientHandler {
             metrics::add_ssh_session(-1);
             let user_id = user.id;
             let mut user_still_afk = false;
+            let mut user_still_idle_dim = false;
             let mut active_users = self.state.active_users.lock_recover();
 
             if let Some(active) = active_users.get_mut(&user_id) {
@@ -478,10 +479,26 @@ impl Drop for ClientHandler {
                 } else {
                     active.connection_count -= 1;
                     user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
+                    // Privacy pref isn't denormalized onto ActiveSession/ActiveUser
+                    // (that would touch every construction site for a rare edge
+                    // case); fall back to the auth-time User snapshot. Can be
+                    // briefly stale if the tweak was flipped on another
+                    // still-open session right before this disconnect —
+                    // acceptable for a cosmetic style, self-corrects on the next
+                    // publish from any of the user's remaining sessions.
+                    let dim_pref =
+                        late_core::models::user::extract_dim_idle_nickname(&user.settings);
+                    user_still_idle_dim =
+                        active.sessions.iter().all(|session| session.idle) && dim_pref;
                 }
             }
             drop(active_users);
             crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
+            crate::state::set_idle_dim_user(
+                &self.state.idle_dim_users,
+                user_id,
+                user_still_idle_dim,
+            );
         }
 
         if self.over_limit || !self.per_ip_incremented {
@@ -543,6 +560,7 @@ impl ClientHandler {
             fingerprint: Some(user.fingerprint.clone()),
             peer_ip: self.peer_ip,
             afk: None,
+            idle: false,
         });
     }
 }
@@ -1005,6 +1023,7 @@ impl russh::server::Handler for ClientHandler {
             key_fingerprint,
             key_layout,
             afk_users: self.state.afk_users.clone(),
+            idle_dim_users: self.state.idle_dim_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),

@@ -46,6 +46,9 @@ pub(crate) struct ClubhouseView<'a> {
     pub own_username: &'a str,
     /// Resolved 24h username-effect styles; painted over name labels.
     pub name_styles: &'a std::collections::HashMap<Uuid, NameStyle>,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    pub idle_dim_user_ids: &'a std::collections::HashSet<Uuid>,
     pub now_playing: Option<&'a NowPlaying>,
     /// The #lounge tail, for speech bubbles.
     pub lounge_messages: &'a [ChatMessage],
@@ -739,8 +742,23 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
 
     let own_id = state.own_user_id();
     for who in state.snapshot.people.iter().filter(|p| p.user_id != own_id) {
+        let idle_dim = view.idle_dim_user_ids.contains(&who.user_id);
         let style = Style::default().fg(occupant_color(who.user_id));
         let label_style = Style::default().fg(theme::TEXT_DIM());
+        let (style, label_style) = if idle_dim {
+            (
+                Style {
+                    fg: style.fg.map(theme::dim_toward_black),
+                    ..style
+                },
+                Style {
+                    fg: label_style.fg.map(theme::dim_toward_black),
+                    ..label_style
+                },
+            )
+        } else {
+            (style, label_style)
+        };
         let (anchor, (x0, y0, x1, y1)) = draw_presence(
             cells,
             who.placement,

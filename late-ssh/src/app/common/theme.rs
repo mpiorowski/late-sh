@@ -4145,6 +4145,23 @@ fn indexed_rgb(idx: u8) -> Option<(u8, u8, u8)> {
     }
 }
 
+/// Darken any color toward black for text that should read as visually
+/// "dimmed" (e.g. an idle nickname). Unlike `Modifier::DIM` (SGR "faint"),
+/// which many terminals don't render at all — especially layered on top of
+/// bold, where the two intensity attributes commonly conflict — scaling the
+/// RGB channels directly renders reliably in every truecolor terminal.
+pub fn dim_toward_black(color: Color) -> Color {
+    let Some((r, g, b)) = color_rgb(color) else {
+        return color;
+    };
+    const KEEP_FRACTION: f32 = 0.55;
+    Color::Rgb(
+        (r as f32 * KEEP_FRACTION) as u8,
+        (g as f32 * KEEP_FRACTION) as u8,
+        (b as f32 * KEEP_FRACTION) as u8,
+    )
+}
+
 fn mix_channel(channel: u8, target: i32, amount: i32) -> u8 {
     const STEP_BASIS_POINTS: i32 = 1200;
     const LIGHTEN_STEP_BASIS_POINTS: i32 = 1300;

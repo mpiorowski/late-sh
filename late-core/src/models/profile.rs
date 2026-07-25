@@ -7,14 +7,15 @@ use uuid::Uuid;
 use super::chips::INITIAL_CHIP_BALANCE;
 use super::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_bio,
-    extract_birthday, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
-    extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
-    extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_birthday, extract_country, extract_dim_idle_nickname, extract_enable_background_color,
+    extract_favorite_room_ids, extract_ide, extract_idle_delay_secs, extract_keep_composer_focused,
+    extract_land_on_home, extract_langs, extract_notify_bell, extract_notify_cooldown_mins,
+    extract_notify_format, extract_notify_kinds, extract_os, extract_right_sidebar_components,
+    extract_right_sidebar_mode, extract_room_list_mode, extract_show_flag_fallback,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -62,6 +63,12 @@ pub struct Profile {
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
     pub birthday: Option<String>,
+    /// Privacy tweak: dim this user's own nickname for other viewers while
+    /// they are auto-marked idle (inactivity, not `/brb`).
+    pub dim_idle_nickname: bool,
+    /// Inactivity delay (seconds) before auto-idle kicks in. `0` disables
+    /// auto-idle entirely.
+    pub idle_delay_secs: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +108,8 @@ impl Default for Profile {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 10 * 60,
         }
     }
 }
@@ -135,6 +144,8 @@ pub struct ProfileParams {
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
+    pub dim_idle_nickname: bool,
+    pub idle_delay_secs: i32,
 }
 
 impl Profile {
@@ -192,7 +203,7 @@ impl Profile {
     /// enable_background_color/text_brightness_adjustment/
     /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
     /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
-    /// start_with_music_muted/show_flag_fallback into settings via
+    /// start_with_music_muted/show_flag_fallback/dim_idle_nickname into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -216,6 +227,9 @@ impl Profile {
                 .collect::<Vec<_>>(),
         )?;
         let cooldown = params.notify_cooldown_mins.max(0);
+        let idle_delay_secs = params
+            .idle_delay_secs
+            .clamp(0, super::user::IDLE_DELAY_MAX_SECS);
         let bio = params.bio.trim().to_string();
         let country = params
             .country
@@ -288,10 +302,12 @@ impl Profile {
                          'start_with_music_muted', $24::bool,
                          'show_flag_fallback', $25::bool,
                          'land_on_home', $26::bool,
-                         'show_pet_strip', $27::bool
+                         'show_pet_strip', $27::bool,
+                         'dim_idle_nickname', $28::bool,
+                         'idle_delay_secs', $29::int
                      ),
                      updated = current_timestamp
-                 WHERE id = $28
+                 WHERE id = $30
                  RETURNING *",
                 &[
                     &params.username,
@@ -321,6 +337,8 @@ impl Profile {
                     &params.show_flag_fallback,
                     &params.land_on_home,
                     &params.show_pet_strip,
+                    &params.dim_idle_nickname,
+                    &idle_delay_secs,
                     &user_id,
                 ],
             )
@@ -359,6 +377,8 @@ impl Profile {
             show_pet_strip: extract_show_pet_strip(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
+            dim_idle_nickname: extract_dim_idle_nickname(&user.settings),
+            idle_delay_secs: extract_idle_delay_secs(&user.settings),
         }
     }
 }

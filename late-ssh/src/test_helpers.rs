@@ -175,6 +175,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
     let afk_users = crate::state::new_afk_users();
+    let idle_dim_users = crate::state::new_idle_dim_users();
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
     let (activity_tx, _) = broadcast::channel::<ActivityEvent>(64);
     let session_registry = SessionRegistry::new();
@@ -236,6 +237,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
         afk_users,
+        idle_dim_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         config,
@@ -481,6 +483,7 @@ fn make_app_with_chat_service_and_permissions(
         key_fingerprint: None,
         key_layout: None,
         afk_users: crate::state::new_afk_users(),
+        idle_dim_users: crate::state::new_idle_dim_users(),
         username_directory: None,
         flair_directory: None,
         activity_feed_rx: None,
@@ -662,6 +665,7 @@ pub fn make_app_with_paired_client(
         key_fingerprint: None,
         key_layout: None,
         afk_users: crate::state::new_afk_users(),
+        idle_dim_users: crate::state::new_idle_dim_users(),
         username_directory: None,
         flair_directory: None,
         activity_feed_rx: None,

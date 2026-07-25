@@ -3,8 +3,9 @@ use crate::app::state::App;
 
 use super::gem::GemKey;
 use super::state::{
-    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IrcTokenFocus, LinkAccountEnterCodeFocus,
-    LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab, TweakRow, USERNAME_MAX_LEN,
+    AccountRow, BIO_MAX_LEN, FEED_URL_MAX_LEN, IDLE_DELAY_INPUT_MAX_LEN, IrcTokenFocus,
+    LinkAccountEnterCodeFocus, LinkAccountStep, PickerKind, Row, SYSTEM_FIELD_MAX_LEN, Tab,
+    TweakRow, USERNAME_MAX_LEN,
 };
 use crate::app::common::textarea_input::{
     EditOutcome, handle_multiline_edit, handle_single_line_edit,
@@ -54,6 +55,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 
     if app.settings_modal_state.editing_feed_url() {
         handle_feed_url_input(app, event);
+        return;
+    }
+
+    if app.settings_modal_state.editing_idle_delay() {
+        handle_idle_delay_input(app, event);
         return;
     }
 
@@ -393,6 +399,19 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+fn handle_idle_delay_input(app: &mut App, event: ParsedInput) {
+    let state = &mut app.settings_modal_state;
+    match handle_single_line_edit(
+        state.idle_delay_input_mut(),
+        &event,
+        IDLE_DELAY_INPUT_MAX_LEN,
+    ) {
+        EditOutcome::Submit => state.submit_idle_delay_edit(),
+        EditOutcome::Cancel => state.cancel_idle_delay_edit(),
+        EditOutcome::Handled | EditOutcome::Ignored => {}
+    }
+}
+
 fn handle_link_account_dialog_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
     if state.link_account_dialog().pending() {
@@ -607,6 +626,7 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 fn toggle_tweak(app: &mut App) {
     app.settings_modal_state.toggle_selected_tweak();
     app.sync_device_rails_from_settings();
+    app.refresh_idle_dim_publish();
 }
 
 fn cycle_tweak(app: &mut App, forward: bool) {

@@ -51,6 +51,9 @@ pub struct ActiveSession {
     pub peer_ip: Option<IpAddr>,
     /// Session-local away state set by `/brb`.
     pub afk: Option<String>,
+    /// Session-local auto-idle flag (inactivity threshold), distinct from
+    /// `afk` (the user-chosen `/brb` message).
+    pub idle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -66,8 +69,18 @@ pub struct ActiveUser {
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 pub type AfkUsers = Arc<Mutex<Arc<HashSet<Uuid>>>>;
+/// Users currently auto-marked idle by inactivity AND who have opted in
+/// (via their `dim_idle_nickname` profile preference) to showing that idle
+/// state to others. The privacy decision is resolved by the idle user's own
+/// session before publishing here, so membership alone is safe to render
+/// without a second preference lookup.
+pub type IdleDimUsers = Arc<Mutex<Arc<HashSet<Uuid>>>>;
 
 pub fn new_afk_users() -> AfkUsers {
+    Arc::new(Mutex::new(Arc::new(HashSet::new())))
+}
+
+pub fn new_idle_dim_users() -> IdleDimUsers {
     Arc::new(Mutex::new(Arc::new(HashSet::new())))
 }
 
@@ -97,6 +110,25 @@ pub fn set_afk_user(afk_users: &AfkUsers, user_id: Uuid, is_afk: bool) {
     // set in place.
     let users = Arc::make_mut(&mut *guard);
     if is_afk {
+        users.insert(user_id);
+    } else {
+        users.remove(&user_id);
+    }
+}
+
+pub fn idle_dim_users_snapshot(idle_dim_users: &IdleDimUsers) -> Arc<HashSet<Uuid>> {
+    Arc::clone(&idle_dim_users.lock_recover())
+}
+
+pub fn set_idle_dim_user(idle_dim_users: &IdleDimUsers, user_id: Uuid, dim: bool) {
+    let mut guard = idle_dim_users.lock_recover();
+    if guard.contains(&user_id) == dim {
+        return;
+    }
+    // Same swap-not-mutate contract as `set_afk_user`: readers hold a
+    // snapshot Arc, so `make_mut` always clones and swaps the pointer.
+    let users = Arc::make_mut(&mut *guard);
+    if dim {
         users.insert(user_id);
     } else {
         users.remove(&user_id);
@@ -151,6 +183,7 @@ pub struct State {
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
     pub afk_users: AfkUsers,
+    pub idle_dim_users: IdleDimUsers,
     pub username_directory: UsernameDirectory,
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).

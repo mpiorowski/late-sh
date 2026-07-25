@@ -193,6 +193,9 @@ struct DrawContext<'a> {
     /// Resolved 24h username-effect styles for clubhouse name labels.
     clubhouse_name_styles:
         &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    clubhouse_idle_dim_user_ids: &'a std::collections::HashSet<uuid::Uuid>,
     /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
@@ -513,6 +516,7 @@ impl App {
                 countries: chat_countries,
                 friend_user_ids: self.chat.friend_user_ids(),
                 afk_user_ids: self.afk_user_ids.as_ref(),
+                idle_dim_user_ids: self.idle_dim_user_ids.as_ref(),
                 message_reactions,
                 unread_marker: shell_active_room
                     .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
@@ -650,6 +654,7 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            idle_dim_user_ids: self.idle_dim_user_ids.as_ref(),
             ignored_user_ids: self.chat.ignored_user_ids(),
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
@@ -728,6 +733,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    idle_dim_user_ids: self.idle_dim_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -787,6 +793,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    idle_dim_user_ids: self.idle_dim_user_ids.as_ref(),
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -978,6 +985,7 @@ impl App {
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
+                        clubhouse_idle_dim_user_ids: self.idle_dim_user_ids.as_ref(),
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
                         clubhouse_bot_id: self.clubhouse_bot_id,
@@ -1402,6 +1410,7 @@ impl App {
                     state: ctx.clubhouse_state,
                     own_username: ctx.clubhouse_own_username,
                     name_styles: ctx.clubhouse_name_styles,
+                    idle_dim_user_ids: ctx.clubhouse_idle_dim_user_ids,
                     now_playing: ctx.now_playing,
                     lounge_messages: ctx.clubhouse_lounge_messages,
                     graybeard_user_id: ctx.clubhouse_graybeard_id,

@@ -28,6 +28,8 @@ const DELETE_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME
 const LINK_CODE_MAX_LEN: usize = 16;
 const LINK_CONFIRM_USERNAME_MAX_LEN: usize = late_core::models::user::USERNAME_MAX_LEN;
 pub(crate) const SYSTEM_FIELD_MAX_LEN: usize = 48;
+/// `IDLE_DELAY_MAX_SECS` (86400) is 5 digits; give a little headroom.
+pub(crate) const IDLE_DELAY_INPUT_MAX_LEN: usize = 6;
 pub(crate) const FEED_URL_MAX_LEN: usize = 2000;
 pub(crate) const BIO_MAX_LEN: usize = 1000;
 pub(crate) const DELETE_CONFIRM_MISMATCH: &str = "Typed username does not match current username.";
@@ -106,10 +108,13 @@ pub(crate) enum TweakRow {
     StartWithMusicMuted,
     FlagFallback,
     LandOnHome,
+    // Idle group.
+    IdleDelaySecs,
+    DimIdleNickname,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 11] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -119,6 +124,8 @@ impl TweakRow {
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
+        TweakRow::IdleDelaySecs,
+        TweakRow::DimIdleNickname,
     ];
 }
 
@@ -461,6 +468,8 @@ pub(crate) struct SettingsModalState {
     system_input: TextArea<'static>,
     editing_bio: bool,
     bio_input: TextArea<'static>,
+    editing_idle_delay: bool,
+    idle_delay_input: TextArea<'static>,
     picker: PickerState,
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
@@ -519,6 +528,8 @@ impl SettingsModalState {
             system_input: new_short_textarea(false),
             editing_bio: false,
             bio_input: new_bio_textarea(false),
+            editing_idle_delay: false,
+            idle_delay_input: new_short_textarea(false),
             picker: PickerState::default(),
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
@@ -577,6 +588,8 @@ impl SettingsModalState {
         self.system_input = new_short_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
+        self.editing_idle_delay = false;
+        self.idle_delay_input = new_short_textarea(false);
         self.picker = PickerState::default();
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
@@ -649,6 +662,9 @@ impl SettingsModalState {
         }
         if self.selected_tab == Tab::Feeds && self.editing_feed_url {
             self.cancel_feed_url_edit();
+        }
+        if self.selected_tab == Tab::Tweaks && self.editing_idle_delay {
+            self.submit_idle_delay_edit();
         }
         if next == Tab::Themes {
             self.sync_theme_index_to_draft();
@@ -801,6 +817,13 @@ impl SettingsModalState {
             }
             TweakRow::LandOnHome => {
                 self.draft.land_on_home ^= true;
+            }
+            TweakRow::IdleDelaySecs => {
+                self.start_idle_delay_edit();
+                return;
+            }
+            TweakRow::DimIdleNickname => {
+                self.draft.dim_idle_nickname ^= true;
             }
         }
         self.save();
@@ -1453,6 +1476,18 @@ impl SettingsModalState {
         self.editing_bio
     }
 
+    pub(crate) fn editing_idle_delay(&self) -> bool {
+        self.editing_idle_delay
+    }
+
+    pub(crate) fn idle_delay_input(&self) -> &TextArea<'static> {
+        &self.idle_delay_input
+    }
+
+    pub(crate) fn idle_delay_input_mut(&mut self) -> &mut TextArea<'static> {
+        &mut self.idle_delay_input
+    }
+
     pub(crate) fn username_input(&self) -> &TextArea<'static> {
         &self.username_input
     }
@@ -1654,6 +1689,33 @@ impl SettingsModalState {
         reset_bio_view_to_top(&mut self.bio_input);
         set_bio_cursor_visible(&mut self.bio_input, false);
         self.save();
+    }
+
+    pub(crate) fn start_idle_delay_edit(&mut self) {
+        self.editing_idle_delay = true;
+        self.idle_delay_input = new_short_textarea(true);
+        self.idle_delay_input
+            .insert_str(self.draft.idle_delay_secs.to_string());
+    }
+
+    pub(crate) fn cancel_idle_delay_edit(&mut self) {
+        self.editing_idle_delay = false;
+        self.idle_delay_input = new_short_textarea(false);
+    }
+
+    /// Parses the typed text as whole seconds, clamped to
+    /// `0..=IDLE_DELAY_MAX_SECS` (`0` = auto-idle disabled). Non-numeric or
+    /// empty input reverts to the value already on the account rather than
+    /// silently guessing.
+    pub(crate) fn submit_idle_delay_edit(&mut self) {
+        self.editing_idle_delay = false;
+        let typed = self.idle_delay_input.lines().join("");
+        self.idle_delay_input = new_short_textarea(false);
+        if let Ok(secs) = typed.trim().parse::<i32>() {
+            self.draft.idle_delay_secs =
+                secs.clamp(0, late_core::models::user::IDLE_DELAY_MAX_SECS);
+            self.save();
+        }
     }
 
     pub(crate) fn move_feed_cursor(&mut self, delta: isize) {
@@ -1932,6 +1994,8 @@ impl SettingsModalState {
                 show_pet_strip: self.draft.show_pet_strip,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
+                dim_idle_nickname: self.draft.dim_idle_nickname,
+                idle_delay_secs: self.draft.idle_delay_secs,
             },
         );
     }

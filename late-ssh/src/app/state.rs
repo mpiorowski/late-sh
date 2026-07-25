@@ -286,6 +286,7 @@ pub struct SessionConfig {
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
     pub afk_users: crate::state::AfkUsers,
+    pub idle_dim_users: crate::state::IdleDimUsers,
     pub username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
@@ -425,6 +426,7 @@ pub struct App {
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
+    pub(super) idle_dim_users: crate::state::IdleDimUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
     /// Live activity events, kept only to edge-detect friend joins for the
     /// friend-online banner; the feed itself now ships to #lounge (see
@@ -453,6 +455,10 @@ pub struct App {
     /// Chat
     pub(crate) chat: chat::state::ChatState,
     pub(crate) afk_user_ids: Arc<HashSet<Uuid>>,
+    pub(crate) idle_dim_user_ids: Arc<HashSet<Uuid>>,
+    /// True once auto-marked idle by inactivity; cleared on next input. See
+    /// `go_idle`/`return_from_idle`. Distinct from `afk` (user-chosen `/brb`).
+    pub(crate) is_idle: bool,
     pub(crate) dashboard_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) active_room_rows_cache: chat::ui::ChatRowsCache,
     /// Daily board embedded match chat; separate cache because width and
@@ -1069,6 +1075,7 @@ impl App {
 
         let active_users = config.active_users.clone();
         let afk_users = config.afk_users.clone();
+        let idle_dim_users = config.idle_dim_users.clone();
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
@@ -1162,6 +1169,7 @@ impl App {
             flair_directory: config.flair_directory,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
+            idle_dim_users: idle_dim_users.clone(),
             username_directory: config.username_directory,
             activity_feed_rx: config.activity_feed_rx,
             last_pet_strip_pet_rect: std::cell::Cell::new(None),
@@ -1194,6 +1202,8 @@ impl App {
                 notifier.clone(),
             ),
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
+            idle_dim_user_ids: crate::state::idle_dim_users_snapshot(&idle_dim_users),
+            is_idle: false,
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -1957,6 +1967,9 @@ impl App {
     pub fn handle_input(&mut self, data: &[u8]) {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
+            if self.is_idle {
+                self.return_from_idle();
+            }
         }
         // While the proxied rebels game is running, every byte (keys + mouse)
         // goes straight to the remote; late.sh parses nothing. Exit is by
@@ -2233,6 +2246,60 @@ impl App {
             } else {
                 self.afk_muted = false;
             }
+        }
+    }
+
+    /// `.all()` union, the opposite of AFK's `.any()`: AFK is a user-chosen
+    /// declaration (any session saying "away" counts), auto-idle is
+    /// activity-derived (any other actively-used session means the account
+    /// is not idle). The privacy decision (`dim_idle_nickname`) is resolved
+    /// here, before publishing, so other clients never learn a user is idle
+    /// unless that user has opted in.
+    fn set_shared_session_idle(&self, idle: bool) {
+        let dim_pref = self.profile_state.profile().dim_idle_nickname;
+        let mut shared_dim = false;
+        if let Some(active_users) = &self.active_users {
+            let mut active_users = active_users.lock_recover();
+            if let Some(active) = active_users.get_mut(&self.user_id) {
+                if let Some(session) = active
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.token == self.session_token)
+                {
+                    session.idle = idle;
+                }
+                shared_dim = active.sessions.iter().all(|session| session.idle) && dim_pref;
+            }
+        }
+        crate::state::set_idle_dim_user(&self.idle_dim_users, self.user_id, shared_dim);
+    }
+
+    /// Auto-mark idle after sustained inactivity (see `IDLE_THRESHOLD` in
+    /// `tick.rs`). Distinct from `/brb` (`go_afk`), which this does not set.
+    pub fn go_idle(&mut self) {
+        if self.is_idle {
+            return;
+        }
+        self.is_idle = true;
+        self.set_shared_session_idle(true);
+    }
+
+    /// Clear auto-idle on the next input (see `handle_input`), for instant
+    /// feedback rather than waiting for the next tick.
+    pub fn return_from_idle(&mut self) {
+        if !self.is_idle {
+            return;
+        }
+        self.is_idle = false;
+        self.set_shared_session_idle(false);
+    }
+
+    /// Re-publish immediately if the privacy tweak flips while already
+    /// idle, so other sessions see the change without waiting for the next
+    /// idle transition edge. Cheap no-op unless currently idle.
+    pub(crate) fn refresh_idle_dim_publish(&self) {
+        if self.is_idle {
+            self.set_shared_session_idle(true);
         }
     }
 

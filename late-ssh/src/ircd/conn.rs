@@ -436,6 +436,7 @@ fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr
         fingerprint: Some(registered.fingerprint.clone()),
         peer_ip: Some(peer_ip),
         afk: None,
+        idle: false,
     };
 
     if let Some(active) = active_users.get_mut(&registered.user_id) {

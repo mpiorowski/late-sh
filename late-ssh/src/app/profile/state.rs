@@ -218,5 +218,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         show_pet_strip: profile.show_pet_strip,
         favorite_room_ids: profile.favorite_room_ids.clone(),
         birthday: profile.birthday.clone(),
+        dim_idle_nickname: profile.dim_idle_nickname,
+        idle_delay_secs: profile.idle_delay_secs,
     }
 }

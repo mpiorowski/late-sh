@@ -100,6 +100,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let idle_dim_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -111,6 +112,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         versions: ChatRowsVersions::default(),
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        idle_dim_user_ids: &idle_dim_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -145,6 +147,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let idle_dim_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -162,6 +165,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         versions,
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        idle_dim_user_ids: &idle_dim_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -276,6 +280,7 @@ fn chat_view<'a>(
     static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static AFK_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static IDLE_DIM_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
     static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
@@ -348,6 +353,7 @@ fn chat_view<'a>(
         composing: false,
         current_user_id: Uuid::nil(),
         afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+        idle_dim_user_ids: IDLE_DIM_USER_IDS.get_or_init(HashSet::new),
         ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
         show_flag_fallback: false,
         cursor_visible: false,
@@ -1288,7 +1294,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
 #[test]
 fn header_segments_bare_username_only() {
     let (prefix, segs) =
-        build_author_prefix_and_segments(false, "alice", &[], None, None, None, None);
+        build_author_prefix_and_segments(false, "alice", &[], None, None, None, None, None);
     assert_eq!(prefix, "alice");
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -1312,7 +1318,7 @@ fn build_author_prefix_matches_legacy_formatter_across_combinations() {
                 format!("{author}{suffix}")
             };
             let (built, _) =
-                build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None, None);
+                build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None, None, None);
             assert_eq!(
                 built, legacy,
                 "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
@@ -1337,6 +1343,7 @@ fn header_segments_full_label_orders_special_bonsai_store() {
         &["mod"],
         Some("🐱"),
         Some("bonsai"),
+        None,
         None,
         None,
     );
@@ -1392,6 +1399,7 @@ fn header_segments_skip_empty_badges() {
         Some(""),
         None,
         None,
+        None,
     );
     // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
     assert_eq!(segs.len(), 2);
@@ -1401,8 +1409,16 @@ fn header_segments_skip_empty_badges() {
 
 #[test]
 fn header_segments_bonsai_then_store_without_specials() {
-    let (_prefix, segs) =
-        build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None, None);
+    let (_prefix, segs) = build_author_prefix_and_segments(
+        false,
+        "bob",
+        &[],
+        Some("🐱"),
+        Some("🌱"),
+        None,
+        None,
+        None,
+    );
     // author (Profile), bonsai (Profile), store (StoreBadge).
     assert_eq!(segs.len(), 3);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -1422,6 +1438,7 @@ fn header_segments_put_monthly_awards_after_author() {
         Some("shop"),
         Some("bonsai"),
         Some("AW1 CHIP2 SN3"),
+        None,
         None,
     );
 
@@ -1455,6 +1472,7 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         None,
         None,
         None,
+        None,
     );
     assert_eq!(prefix, "bob 🐱 US");
     assert_eq!(author_range, (0, 3));
@@ -1478,11 +1496,12 @@ fn header_prefix_orders_all_badge_classes() {
         Some("bonsai"),
         Some("AW1 CHIP2"),
         Some("brb"),
+        Some("zzz"),
     );
 
     assert_eq!(
         prefix,
-        "alice [AW1 CHIP2] mod developer artist bonsai badge flag brb"
+        "alice [AW1 CHIP2] mod developer artist bonsai badge flag brb zzz"
     );
 }
 

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -22,6 +24,9 @@ pub struct VoiceRoomView<'a> {
     pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    pub idle_dim_user_ids: &'a HashSet<Uuid>,
 }
 
 impl VoiceRoomView<'_> {
@@ -67,6 +72,7 @@ pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>)
             spans.extend(participant_spans(
                 participant,
                 participant.user_id == view.current_user_id,
+                view.idle_dim_user_ids.contains(&participant.user_id),
             ));
         }
         Line::from(spans)
@@ -179,7 +185,11 @@ impl Presence {
     }
 }
 
-fn participant_spans(participant: &VoiceParticipant, current_user: bool) -> Vec<Span<'static>> {
+fn participant_spans(
+    participant: &VoiceParticipant,
+    current_user: bool,
+    idle_dim: bool,
+) -> Vec<Span<'static>> {
     let presence = Presence::of(participant);
     // The name pops green+bold while a user is actively speaking (the live
     // indicator); the current user is always amber so you can find yourself.
@@ -193,6 +203,16 @@ fn participant_spans(participant: &VoiceParticipant, current_user: bool) -> Vec<
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
+    };
+    let name_style = if idle_dim {
+        let dimmed_fg = name_style.fg.map(theme::dim_toward_black);
+        Style {
+            fg: dimmed_fg,
+            ..name_style
+        }
+        .remove_modifier(Modifier::BOLD)
+    } else {
+        name_style
     };
     vec![
         Span::styled(

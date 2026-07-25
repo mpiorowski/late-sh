@@ -47,6 +47,13 @@ const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
+/// Auto-idle badge (inactivity threshold). Distinct from `AFK_BADGE`, which
+/// marks the user-chosen `/brb` status — the two are independent and can
+/// both show at once. `Modifier::DIM` alone (see the author-style branch
+/// below) is too subtle to rely on as the only signal: some terminals don't
+/// visibly render faint text layered on bold, and there's nothing to see at
+/// all from the idle user's own single session.
+const IDLE_BADGE: &str = "💤";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -80,6 +87,9 @@ pub struct DashboardChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    pub idle_dim_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
@@ -1076,6 +1086,7 @@ pub fn draw_dashboard_chat_card(
             room_id: voice_channel_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+            idle_dim_user_ids: view.idle_dim_user_ids,
         };
         let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
         let strip = Rect {
@@ -1109,6 +1120,7 @@ pub fn draw_dashboard_chat_card(
                 versions: view.rows_versions,
                 current_user_id: view.current_user_id,
                 afk_user_ids: view.afk_user_ids,
+                idle_dim_user_ids: view.idle_dim_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
@@ -1192,6 +1204,7 @@ struct ChatRowsContext<'a> {
     versions: ChatRowsVersions,
     current_user_id: Uuid,
     afk_user_ids: &'a HashSet<Uuid>,
+    idle_dim_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
@@ -1446,6 +1459,20 @@ fn ensure_chat_rows_cache(
         } else {
             Style::default().fg(theme::CHAT_AUTHOR())
         };
+        let author_style = if ctx.idle_dim_user_ids.contains(&msg.user_id) {
+            // Darken the identity color directly rather than relying on
+            // `Modifier::DIM` (SGR "faint"): many terminals don't render it
+            // at all, especially layered on bold (own/friend authors),
+            // where the two intensity attributes typically conflict.
+            let dimmed_fg = author_style.fg.map(theme::dim_toward_black);
+            Style {
+                fg: dimmed_fg,
+                ..author_style
+            }
+            .remove_modifier(Modifier::BOLD)
+        } else {
+            author_style
+        };
         let body_style = Style::default().fg(theme::CHAT_BODY());
 
         let special_list = super::special_badges::special_badges(&author);
@@ -1472,6 +1499,10 @@ fn ensure_chat_rows_cache(
             .map(String::as_str)
             .filter(|s| !s.is_empty());
         let afk_badge = ctx.afk_user_ids.contains(&msg.user_id).then_some(AFK_BADGE);
+        let idle_badge = ctx
+            .idle_dim_user_ids
+            .contains(&msg.user_id)
+            .then_some(IDLE_BADGE);
         let (prefix, segments, author_range) = build_author_prefix_and_segments_with_chat_badges(
             is_friend,
             &author,
@@ -1480,6 +1511,7 @@ fn ensure_chat_rows_cache(
             bonsai_opt,
             profile_award_badges,
             afk_badge,
+            idle_badge,
         );
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
@@ -2099,13 +2131,14 @@ fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
 /// the prefix begins at column 1. Badges render in the canonical order:
 /// `[last-month awards]`, special badges, bonsai stage, equipped store
-/// badge, equipped flag, then AFK. Award badges, special badges, the
-/// bonsai glyph, and the AFK badge map to `HeaderTarget::Profile`;
-/// equipped chat-shop badges map to `HeaderTarget::StoreBadge`, and
+/// badge, equipped flag, AFK, then idle. Award badges, special badges, the
+/// bonsai glyph, the AFK badge, and the idle badge map to
+/// `HeaderTarget::Profile`; equipped chat-shop badges map to `HeaderTarget::StoreBadge`, and
 /// equipped chat flags map to `HeaderTarget::StoreFlag`. The trailing
 /// `[stamp]` span and the gap spaces between badges are intentionally
 /// omitted — clicks there fall through to body-select.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn build_author_prefix_and_segments(
     is_friend: bool,
     author: &str,
@@ -2114,6 +2147,7 @@ fn build_author_prefix_and_segments(
     bonsai_glyph: Option<&str>,
     profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
+    idle_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>) {
     let mut chat_badges = Vec::new();
     if let Some(chat_badge) = chat_badge {
@@ -2127,10 +2161,12 @@ fn build_author_prefix_and_segments(
         bonsai_glyph,
         profile_award_badges,
         afk_badge,
+        idle_badge,
     );
     (prefix, segments)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_author_prefix_and_segments_with_chat_badges(
     is_friend: bool,
     author: &str,
@@ -2139,6 +2175,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
     bonsai_glyph: Option<&str>,
     profile_award_badges: Option<&str>,
     afk_badge: Option<&str>,
+    idle_badge: Option<&str>,
 ) -> (String, Vec<HeaderSegment>, (usize, usize)) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -2182,7 +2219,8 @@ fn build_author_prefix_and_segments_with_chat_badges(
             + chat_badges.len()
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
-            + afk_badge.is_some() as usize,
+            + afk_badge.is_some() as usize
+            + idle_badge.is_some() as usize,
     );
     let award_group = profile_award_badges
         .map(str::trim)
@@ -2201,6 +2239,9 @@ fn build_author_prefix_and_segments_with_chat_badges(
         typed_badges.push((target, s));
     }
     if let Some(s) = afk_badge.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::Profile, s));
+    }
+    if let Some(s) = idle_badge.filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     if !typed_badges.is_empty() {
@@ -2400,6 +2441,9 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    pub idle_dim_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
     pub show_flag_fallback: bool,
     pub cursor_visible: bool,
@@ -2502,6 +2546,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users currently idle who have opted in to showing it (see
+    /// `state::IdleDimUsers`); membership alone is safe to render.
+    pub idle_dim_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_marker: Option<DateTime<Utc>>,
@@ -2578,6 +2625,7 @@ pub fn draw_embedded_room_chat(
             room_id: voice_channel_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+            idle_dim_user_ids: view.idle_dim_user_ids,
         };
         let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
         let strip = Rect {
@@ -2604,6 +2652,7 @@ pub fn draw_embedded_room_chat(
             versions: view.rows_versions,
             current_user_id: view.current_user_id,
             afk_user_ids: view.afk_user_ids,
+            idle_dim_user_ids: view.idle_dim_user_ids,
             show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
@@ -3902,6 +3951,7 @@ fn draw_selected_content(
                 room_id: channel.id,
                 current_user_id,
                 paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                idle_dim_user_ids: view.idle_dim_user_ids,
             };
             let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
             let strip = Rect {
@@ -3950,6 +4000,7 @@ fn draw_selected_content(
                     },
                     current_user_id,
                     afk_user_ids: view.afk_user_ids,
+                    idle_dim_user_ids: view.idle_dim_user_ids,
                     show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,

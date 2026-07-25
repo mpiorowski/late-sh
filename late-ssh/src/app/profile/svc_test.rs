@@ -141,6 +141,8 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 600,
         },
     );
 
@@ -214,6 +216,8 @@ async fn edit_profile_normalizes_username_before_persisting() {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 600,
         },
     );
 
@@ -282,6 +286,8 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 600,
         },
     );
 
@@ -478,6 +484,7 @@ async fn delete_account_terminates_active_sessions() {
                 fingerprint: Some(user.fingerprint.clone()),
                 peer_ip: None,
                 afk: None,
+                idle: false,
             }],
             connection_count: 1,
             last_login_at: Instant::now(),
@@ -562,6 +569,8 @@ async fn edit_profile_snapshots_stay_per_user() {
             show_pet_strip: true,
             favorite_room_ids: Vec::new(),
             birthday: None,
+            dim_idle_nickname: true,
+            idle_delay_secs: 600,
         },
     );
 
