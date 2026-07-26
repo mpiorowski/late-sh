@@ -1351,9 +1351,6 @@ pub struct ChatRowsCache {
     /// any. `None` on rows belonging to messages that neither mention you nor
     /// reply to you, and on the blank separator and divider rows.
     row_attention: Vec<Option<ChatAttention>>,
-    /// Width the cached rows were laid out at, so the background wash can be
-    /// filled out to the full row width instead of stopping at the text.
-    width: usize,
     /// Parallel to `all_rows`: which message id owns each painted row.
     /// `None` on the blank separator inserted between distinct authors.
     row_message: Vec<Option<Uuid>>,
@@ -1672,7 +1669,6 @@ fn ensure_chat_rows_cache(
     cache.key = Some(key);
     cache.all_rows = all_rows;
     cache.row_attention = row_attention;
-    cache.width = width;
     cache.row_message = row_message;
     cache.row_kind = row_kind;
     cache.selected_ranges = selected_ranges;
@@ -1739,7 +1735,11 @@ fn visible_chat_rows(
 
     // Messages that mention you or reply to you get a background wash across
     // the full row width. Painted before the jump-highlight and the selection
-    // marker so both of those still win on the rows they cover.
+    // marker so both of those still win on the rows they cover. The rows were
+    // laid out at the key's width, so the wash fills out to that same width
+    // instead of stopping where the text ends; no key means no cached rows,
+    // and the loop is empty anyway.
+    let row_width = cache.key.map_or(0, |key| key.width);
     for (offset, idx) in (visible_start..visible_end).enumerate() {
         let Some(attention) = cache.row_attention.get(idx).copied().flatten() else {
             continue;
@@ -1764,9 +1764,9 @@ fn visible_chat_rows(
             .iter()
             .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
             .sum();
-        if used < cache.width {
+        if used < row_width {
             row.spans.push(Span::styled(
-                " ".repeat(cache.width - used),
+                " ".repeat(row_width - used),
                 Style::default().bg(background),
             ));
         }
