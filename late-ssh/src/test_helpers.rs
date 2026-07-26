@@ -45,6 +45,11 @@ use tokio::sync::{Semaphore, broadcast, watch};
 use tokio::time::{Duration, Instant, sleep};
 use uuid::Uuid;
 
+/// Watchdog for exact asynchronous test conditions backed by real Postgres.
+/// CI runs several migration-heavy test databases concurrently, so startup
+/// can legitimately take longer than the condition itself needs once ready.
+const ASYNC_TEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub async fn new_test_db() -> TestDb {
     test_db().await
 }
@@ -700,7 +705,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
     while Instant::now() < deadline {
         if predicate().await {
             return;
@@ -734,7 +739,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
 }
 
 pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
     let mut last_plain = String::new();
     while Instant::now() < deadline {
         app.tick();
