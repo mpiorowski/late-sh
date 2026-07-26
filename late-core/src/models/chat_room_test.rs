@@ -271,7 +271,12 @@ async fn room_state_caps_the_unread_count() {
         "a room with more unread than the cap reports exactly the cap, not the true total"
     );
     assert!(
-        state.last_message_at.get(&room.id).copied().flatten().is_some(),
+        state
+            .last_message_at
+            .get(&room.id)
+            .copied()
+            .flatten()
+            .is_some(),
         "the room carries the timestamp of its newest message"
     );
 }
