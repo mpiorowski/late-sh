@@ -89,6 +89,9 @@ pub struct State {
     /// (Panel::Map). Reset to (0, 0) whenever the panel changes, so opening the
     /// map always re-centres on the player.
     map_scroll: (i32, i32),
+    /// World-map level offset from the player's z (view underground floors).
+    /// Reset to 0 whenever the panel changes.
+    map_level_offset: i32,
 }
 
 impl State {
@@ -119,6 +122,7 @@ impl State {
             reset_elsewhere: false,
             chat_buffer: None,
             map_scroll: (0, 0),
+            map_level_offset: 0,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -204,6 +208,7 @@ impl State {
             self.cursor = 0;
             self.list_scroll.set(0);
             self.map_scroll = (0, 0);
+            self.map_level_offset = 0;
         }
     }
 
@@ -216,6 +221,7 @@ impl State {
         self.cursor = 0;
         self.list_scroll.set(0);
         self.map_scroll = (0, 0);
+        self.map_level_offset = 0;
     }
 
     /// True when the graphical overhead world map is the active panel.
@@ -234,9 +240,20 @@ impl State {
         self.map_scroll.1 += dy;
     }
 
-    /// Re-centre the world-map camera on the player.
+    /// Re-centre the world-map camera on the player (position and level).
     pub fn recenter_map(&mut self) {
         self.map_scroll = (0, 0);
+        self.map_level_offset = 0;
+    }
+
+    /// The world-map level offset from the player's own z (0 = their level).
+    pub fn map_level_offset(&self) -> i32 {
+        self.map_level_offset
+    }
+
+    /// Move the viewed world-map level up (+1) or down (-1).
+    pub fn change_map_level(&mut self, delta: i32) {
+        self.map_level_offset += delta;
     }
 
     /// Current list scroll offset (first visible line).

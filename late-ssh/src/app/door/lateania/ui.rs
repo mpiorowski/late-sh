@@ -172,7 +172,7 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
 /// camera and Enter re-centres (handled in input.rs).
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
-    use super::worldmap::{Coord, viewport, world_coords};
+    use super::worldmap::{Coord, viewport_explored, world_coords};
 
     let coords = world_coords();
     let Some(&player) = coords.get(&view.room) else {
@@ -183,10 +183,11 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         return;
     };
     let (sx, sy) = state.map_scroll();
+    let level_offset = state.map_level_offset();
     let center = Coord {
         x: player.x + sx,
         y: player.y + sy,
-        z: player.z,
+        z: player.z + level_offset,
     };
 
     let rows = Layout::vertical([
@@ -215,17 +216,21 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
-    header.push(Span::styled(
-        format!("  ·  {level}"),
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
+    let level_style = if level_offset == 0 {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        // Viewing a different floor than the one you stand on.
+        Style::default().fg(theme::AMBER())
+    };
+    header.push(Span::styled(format!("  ·  {level}"), level_style));
     frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
 
     // Body: the viewport grid, biome-coloured, with `@` at the player's room.
+    // Fog of war: only rooms the player has visited are drawn.
     let body = rows[1];
     let cols = body.width as i32;
     let height = body.height as i32;
-    let grid = viewport(coords, center, cols, height);
+    let grid = viewport_explored(coords, center, cols, height, &view.visited, view.room);
     let player_glyph_style = Style::default()
         .fg(Color::Rgb(250, 240, 140))
         .add_modifier(Modifier::BOLD);
@@ -251,7 +256,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     // Footer: controls.
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "wasd / arrows pan  ·  Enter re-centre  ·  m close",
+            "wasd / arrows pan  ·  < > level  ·  Enter re-centre  ·  m close",
             Style::default().fg(theme::TEXT_DIM()),
         ))),
         rows[2],

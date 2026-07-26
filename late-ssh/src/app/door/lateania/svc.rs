@@ -683,6 +683,8 @@ pub struct PlayerView {
     pub banked_gold: i64,
     /// The player's current room id, for centring the overhead world map.
     pub room: RoomId,
+    /// Rooms the player has visited, for the overhead map's fog of war.
+    pub visited: std::collections::HashSet<RoomId>,
     pub room_name: String,
     pub room_desc: String,
     pub zone: String,
@@ -765,6 +767,7 @@ impl PlayerView {
         Self {
             joined: false,
             room: 0,
+            visited: std::collections::HashSet::new(),
             classed: false,
             class_name: String::new(),
             class_key: String::new(),
@@ -7176,6 +7179,7 @@ impl WorldState {
                 PlayerView {
                     joined: true,
                     room: player.room,
+                    visited: player.visited.clone(),
                     classed,
                     class_name,
                     class_key,

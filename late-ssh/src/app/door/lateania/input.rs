@@ -192,6 +192,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.pan_map(1, 0);
                 return InputAction::Handled;
             }
+            b',' | b'<' => {
+                state.change_map_level(1); // view a level up
+                return InputAction::Handled;
+            }
+            b'.' | b'>' => {
+                state.change_map_level(-1); // view a level down (underground)
+                return InputAction::Handled;
+            }
             b'\r' | b'\n' => {
                 state.recenter_map();
                 return InputAction::Handled;

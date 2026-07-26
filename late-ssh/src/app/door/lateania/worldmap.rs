@@ -19,7 +19,7 @@
 // collisions remain are genuine non-Euclidean loops inside the hand-authored
 // core, which the collision report measures.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
 
 use super::world::{Dir, RoomId, World, region_layout, seed_world};
@@ -211,6 +211,27 @@ pub fn viewport(
         .map(|r| {
             (0..cols)
                 .map(|c| at.get(&(left + c, top + r)).copied())
+                .collect()
+        })
+        .collect()
+}
+
+/// A viewport with fog of war: cells the player hasn't visited read as empty.
+/// The player's own room is always shown, so the map is never blank where they
+/// stand. `visited` is the player's explored-room set.
+pub fn viewport_explored(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+    visited: &HashSet<RoomId>,
+    player_room: RoomId,
+) -> Vec<Vec<Option<RoomId>>> {
+    viewport(coords, center, cols, rows)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| cell.filter(|id| *id == player_room || visited.contains(id)))
                 .collect()
         })
         .collect()

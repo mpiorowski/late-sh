@@ -252,3 +252,27 @@ fn viewport_biome_dump_is_coherent() {
     eprintln!("\n{out}");
     assert!(out.contains('@'), "player should be on the map");
 }
+
+#[test]
+fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
+    use std::collections::HashSet;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+
+    // Nothing visited: only the player's own room shows.
+    let empty = HashSet::new();
+    let fogged = super::viewport_explored(&coords, center, cols, rows, &empty, world.start_room);
+    let shown: Vec<_> = fogged.iter().flatten().flatten().copied().collect();
+    assert_eq!(
+        shown,
+        vec![world.start_room],
+        "only the player shows under full fog"
+    );
+
+    // With everything visited, fog matches the plain viewport.
+    let all: HashSet<_> = world.rooms.keys().copied().collect();
+    let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
+    assert_eq!(lit, super::viewport(&coords, center, cols, rows));
+}
