@@ -18,6 +18,7 @@ const SCORE_MONTHLY_OFFSET: u16 = 2;
 const SCORE_USER_TAIL_HEIGHT: u16 = 2;
 const SCORE_MONTHLY_HEIGHT: u16 = 1 + TOP_LIMIT_SCORE as u16 + SCORE_USER_TAIL_HEIGHT;
 const SCORE_ALL_TIME_OFFSET: u16 = SCORE_MONTHLY_OFFSET + SCORE_MONTHLY_HEIGHT;
+const SCORE_ALL_TIME_GAP: u16 = 1;
 const WIN_STREAK_GAP: u16 = 1;
 const MORE_LEADERBOARDS_TITLE: &str = "More Leaderboards coming!";
 const TOP_BOARD_BASE_SPANS: [u16; 2] = [31, 26];
@@ -437,6 +438,7 @@ fn draw_score_panel(
         &[&monthly_rows, &all_time_rows],
         user_id,
     );
+    let all_time_offset = score_all_time_offset(area, &all_time_rows, user_id, 0);
 
     if area.height > SCORE_MONTHLY_OFFSET {
         let monthly_area = monthly_score_area(area);
@@ -449,12 +451,12 @@ fn draw_score_panel(
             content_width,
         );
     }
-    if area.height > SCORE_ALL_TIME_OFFSET {
+    if area.height > all_time_offset {
         let all_time_area = Rect::new(
             area.x,
-            area.y + SCORE_ALL_TIME_OFFSET,
+            area.y + all_time_offset,
             area.width,
-            area.height - SCORE_ALL_TIME_OFFSET,
+            area.height - all_time_offset,
         );
         draw_score_list(
             frame,
@@ -488,8 +490,13 @@ fn draw_le_word_panel(frame: &mut Frame, area: Rect, data: &LeaderboardData, use
         .map(RankedRow::from)
         .collect();
     let monthly_area = monthly_score_area(area);
-    let all_time_area =
-        preferred_score_list_area(area, SCORE_ALL_TIME_OFFSET, &all_time_rows, user_id);
+    let all_time_offset = score_all_time_offset(
+        area,
+        &all_time_rows,
+        user_id,
+        preferred_win_streak_tail_height(win_streak_rows.len()),
+    );
+    let all_time_area = preferred_score_list_area(area, all_time_offset, &all_time_rows, user_id);
     let win_streak_area = win_streak_area(area, all_time_area.bottom(), win_streak_rows.len());
     let visible_win_streak_rows = win_streak_area
         .map(|section| usize::from(section.height.saturating_sub(1)))
@@ -514,7 +521,7 @@ fn draw_le_word_panel(frame: &mut Frame, area: Rect, data: &LeaderboardData, use
             content_width,
         );
     }
-    if area.height > SCORE_ALL_TIME_OFFSET {
+    if area.height > all_time_offset {
         draw_score_list(
             frame,
             all_time_area,
@@ -570,6 +577,31 @@ fn preferred_score_list_height(rows: &[RankedRow], user_id: Uuid) -> u16 {
     1 + body_height
 }
 
+fn score_all_time_offset(
+    area: Rect,
+    rows: &[RankedRow],
+    user_id: Uuid,
+    trailing_height: u16,
+) -> u16 {
+    let padded_offset = SCORE_ALL_TIME_OFFSET + SCORE_ALL_TIME_GAP;
+    let padded_height = padded_offset
+        .saturating_add(preferred_score_list_height(rows, user_id))
+        .saturating_add(trailing_height);
+    if padded_height <= area.height {
+        padded_offset
+    } else {
+        SCORE_ALL_TIME_OFFSET
+    }
+}
+
+fn preferred_win_streak_tail_height(row_count: usize) -> u16 {
+    if row_count == 0 {
+        0
+    } else {
+        WIN_STREAK_GAP + 1 + row_count.min(TOP_LIMIT_SCORE) as u16
+    }
+}
+
 fn win_streak_area(area: Rect, all_time_bottom: u16, row_count: usize) -> Option<Rect> {
     if row_count == 0 {
         return None;
@@ -583,12 +615,7 @@ fn win_streak_area(area: Rect, all_time_bottom: u16, row_count: usize) -> Option
 
     let row_height = (row_count.min(TOP_LIMIT_SCORE) as u16).min(available_height - 1);
     let section_height = 1 + row_height;
-    Some(Rect::new(
-        area.x,
-        area.bottom() - section_height,
-        area.width,
-        section_height,
-    ))
+    Some(Rect::new(area.x, available_top, area.width, section_height))
 }
 
 fn draw_win_streak_list(

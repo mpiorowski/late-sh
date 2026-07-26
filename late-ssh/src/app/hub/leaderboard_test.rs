@@ -89,14 +89,44 @@ fn monthly_score_area_reserves_top_five_and_current_user_tail() {
 }
 
 #[test]
-fn win_streak_uses_only_space_left_after_all_time() {
+fn all_time_gap_uses_only_height_left_after_preferred_content() {
+    let me = Uuid::now_v7();
+    let mut rows: Vec<RankedRow> = (1..=5)
+        .map(|rank| row(rank, &format!("u{rank}"), 100 - rank))
+        .collect();
+
+    assert_eq!(
+        score_all_time_offset(Rect::new(0, 0, 20, 16), &rows, me, 0),
+        SCORE_ALL_TIME_OFFSET
+    );
+    assert_eq!(
+        score_all_time_offset(Rect::new(0, 0, 20, 17), &rows, me, 0),
+        SCORE_ALL_TIME_OFFSET + SCORE_ALL_TIME_GAP
+    );
+
+    rows.push(user_row(99, "me", 1, me));
+    assert_eq!(
+        score_all_time_offset(Rect::new(0, 0, 20, 18), &rows, me, 0),
+        SCORE_ALL_TIME_OFFSET
+    );
+    assert_eq!(
+        score_all_time_offset(Rect::new(0, 0, 20, 19), &rows, me, 0),
+        SCORE_ALL_TIME_OFFSET + SCORE_ALL_TIME_GAP
+    );
+}
+
+#[test]
+fn win_streak_follows_all_time_and_uses_only_remaining_space() {
     let me = Uuid::now_v7();
     let all_time_rows: Vec<RankedRow> = (1..=5)
         .map(|rank| row(rank, &format!("u{rank}"), 100 - rank))
         .collect();
     let reference = Rect::new(90, 21, 20, 19);
-    let all_time = preferred_score_list_area(reference, SCORE_ALL_TIME_OFFSET, &all_time_rows, me);
+    let streak_tail_height = preferred_win_streak_tail_height(5);
+    let all_time_offset = score_all_time_offset(reference, &all_time_rows, me, streak_tail_height);
+    let all_time = preferred_score_list_area(reference, all_time_offset, &all_time_rows, me);
 
+    assert_eq!(all_time_offset, SCORE_ALL_TIME_OFFSET);
     assert_eq!(all_time, Rect::new(90, 31, 20, 6));
     assert_eq!(
         win_streak_area(reference, all_time.bottom(), 5),
@@ -107,8 +137,14 @@ fn win_streak_uses_only_space_left_after_all_time() {
     assert_eq!(win_streak_area(pressured, all_time.bottom(), 5), None);
 
     let tall = Rect::new(90, 21, 20, 24);
+    let tall_all_time_offset = score_all_time_offset(tall, &all_time_rows, me, streak_tail_height);
+    let tall_all_time = preferred_score_list_area(tall, tall_all_time_offset, &all_time_rows, me);
     assert_eq!(
-        win_streak_area(tall, all_time.bottom(), 5),
+        tall_all_time_offset,
+        SCORE_ALL_TIME_OFFSET + SCORE_ALL_TIME_GAP
+    );
+    assert_eq!(
+        win_streak_area(tall, tall_all_time.bottom(), 5),
         Some(Rect::new(90, 39, 20, 6))
     );
 
