@@ -112,6 +112,18 @@ impl ScratchpadState {
         self.shared.lock_recover().left.is_some()
     }
 
+    /// Read fresh from the shared buffer on every call rather than caching a
+    /// local copy: there's nothing to go stale, since whichever side
+    /// last cycled it already bumped `revision`, and the render path calls
+    /// this every frame anyway.
+    pub(crate) fn language(&self) -> crate::app::scratchpad::highlight::Language {
+        self.shared.lock_recover().language
+    }
+
+    pub(crate) fn cycle_language(&mut self) {
+        self.shared.lock_recover().cycle_language();
+    }
+
     pub(crate) fn max_chars(&self) -> usize {
         MAX_CHARS
     }

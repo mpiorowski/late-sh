@@ -1,3 +1,4 @@
+pub(crate) mod highlight;
 pub(crate) mod input;
 pub(crate) mod pair;
 pub mod registry;

@@ -326,3 +326,23 @@ fn cursor_and_content_round_trip_per_side() {
     assert_eq!(buffer.cursor_for(uid(2)), (0, 7));
     assert_eq!(buffer.partner_of(uid(1)).map(|(id, _)| id), Some(uid(2)));
 }
+
+#[test]
+fn cycle_language_advances_and_bumps_revision() {
+    let registry = SharedScratchpadRegistry::new();
+    let shared = pair_up(&registry, Instant::now());
+
+    let revision_before = shared.lock_recover().revision;
+    assert_eq!(shared.lock_recover().language, Language::Plain);
+
+    shared.lock_recover().cycle_language();
+
+    let buffer = shared.lock_recover();
+    assert_eq!(buffer.language, Language::Rust);
+    assert_eq!(
+        buffer.revision,
+        revision_before + 1,
+        "cycling must bump revision so the partner's sync fires promptly, \
+         same as the `left` bump"
+    );
+}

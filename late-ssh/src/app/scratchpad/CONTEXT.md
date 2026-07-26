@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: the mutual `/pair @user` handshake and the two-person shared live text scratchpad (`Screen::Scratchpad`)
 - Primary audience: LLM agents working in `late-ssh/src/app/scratchpad`, the `/pair` chat command, or `Screen::Scratchpad`
-- Last updated: 2026-07-25
+- Last updated: 2026-07-26
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../chat/CONTEXT.md` (command parsing/dispatch), `../clubhouse/CONTEXT.md` (the `SharedLobby` registry idiom this mirrors)
@@ -22,8 +22,9 @@ Out of scope (deliberate v1 boundaries, see root roadmap's "Micro-collab tools" 
 - DB persistence. The pairing is in-memory only, same tier as `SessionRegistry`/`active_users`/`clubhouse::lobby::SharedLobby`; it is lost if both sides disconnect or the process restarts.
 - Operational-transform/CRDT merge. Every publish overwrites the whole buffer; concurrent edits from both sides can clobber each other. Acceptable for a two-person scratchpad, not for a real collaborative editor.
 - More than two participants.
-- Syntax highlighting, line numbers, or mouse click targets (keyboard-only editing via `ratatui-textarea`).
+- Mouse click targets (keyboard-only editing via `ratatui-textarea`).
 - An open/anyone-can-claim lobby (unlike `/challenge`): `/pair` only supports the directed `@user` form.
+- Per-theme syntax color matching. Highlighting uses one fixed bundled `syntect` theme (`base16-ocean.dark`) regardless of which of this app's 20+ user-selectable `theme::` themes the viewer has picked. A real per-theme mapping was considered and explicitly declined in favor of highlighting accuracy; see section 5 below.
 - Undo inside the editor. The buffer is replaced wholesale whenever the other side publishes, so the undo stack holds remote edits and one undo would rewind work that was never yours.
 
 The `/pair @user` command itself is parsed and dispatched from `chat/state.rs`/`chat/input.rs` (composer has no handle on `active_users` or the registry), same shape as directed `/challenge @user`.
@@ -34,12 +35,13 @@ The `/pair @user` command itself is parsed and dispatched from `chat/state.rs`/`
 
 ```text
 late-ssh/src/app/scratchpad/
-├── mod.rs       # declarations only
-├── registry.rs  # SharedScratchpadRegistry, ScratchpadBuffer, PairSide/PairOutcome (pub: touched from main.rs)
-├── pair.rs      # request_pair (the /pair command), poll (per-tick notice + join)
-├── state.rs     # per-session ScratchpadState: TextArea, sync_from_shared, publish, Drop -> registry.leave
-├── input.rs     # Screen::Scratchpad key routing (no prompt: pairing is mutual)
-└── ui.rs        # header ("paired with @user") + the TextArea widget
+├── mod.rs        # declarations only
+├── registry.rs   # SharedScratchpadRegistry, ScratchpadBuffer, PairSide/PairOutcome (pub: touched from main.rs)
+├── pair.rs       # request_pair (the /pair command), poll (per-tick notice + join)
+├── state.rs      # per-session ScratchpadState: TextArea, sync_from_shared, publish, Drop -> registry.leave
+├── input.rs      # Screen::Scratchpad key routing (no prompt: pairing is mutual)
+├── highlight.rs  # Language cycle, syntect-backed highlighting, the hand-built line-number gutter
+└── ui.rs         # header + the custom gutter/highlight render + manual cursor placement
 ```
 
 Cross-crate/cross-module touchpoints:
@@ -51,6 +53,7 @@ Cross-crate/cross-module touchpoints:
 - `late-ssh/src/app/render.rs`: `DrawContext::scratchpad`, the `Screen::Scratchpad` draw arm, and the page-title match.
 - `late-ssh/src/app/common/textarea_input.rs`: `handle_freeform_edit` (Enter inserts a newline, Tab indents, no undo).
 - `late-ssh/src/app/chat/commands.rs`, `chat/state.rs`, `chat/input.rs`: `/pair` autocomplete entry, `PairRequest`/`parse_pair_command`, and the post-submit dispatch into `pair::request_pair`.
+- `late-ssh/Cargo.toml`: the `syntect` dependency (`default-fancy` feature — see section 5).
 
 Keep `mod.rs` declaration-only.
 
@@ -87,35 +90,50 @@ Editing reuses `handle_freeform_edit` (`common/textarea_input.rs`), a third sibl
 
 Esc leaves the pairing, and it needs **two** handlers, which is easy to get wrong. A lone Esc never reaches the keymap at all: the parser holds it as `pending_escape` to rule out a longer sequence, and `tick.rs` resolves it through `flush_pending_escape` straight into `dispatch_escape`. That is the common case, and the `Screen::Scratchpad` arm there is what actually leaves. The keymap's `EditOutcome::Cancel` covers the other case, an Esc arriving mid-chunk alongside other bytes. Deleting either one leaves Esc broken on a path no unit test exercises; `pair_test.rs` covers the lone-Esc path end to end.
 
-## 5. Invariants
+## 5. Highlighting and the Line-Number Gutter
+
+`ratatui-textarea` cannot render either of these itself: its `Widget` impl (checked against the vendored 0.9.2 source) supports exactly one uniform `Style` for the whole buffer plus cursor/selection/search overlays, with no hook for per-token colors, and its built-in `set_line_number_style` gutter only applies to that same internal render. Both features therefore live in `ui.rs::draw`, which no longer calls `frame.render_widget(&state.editor, body_area)` — it reads `state.editor.lines()` and `state.editor.screen_cursor()` and builds the display by hand via `highlight.rs`. `TextArea` still owns every bit of editing state (insert/delete/cursor/undo); only its *rendering* was replaced.
+
+- **`Language`** (`highlight.rs`) is a small curated cycle — `Plain, Rust, Python, JavaScript, TypeScript, Go, C, Cpp, Java, Ruby, Bash, Json, Yaml` — not free-form, since syntect bundles ~200 syntaxes and cycling through all of them with one key would be unusable. It lives as a field on the shared `ScratchpadBuffer`, not a `/pair @user <language>` command arg: pairing is a mutual handshake between two independent commands, so a per-command language could leave the two sides disagreeing, where a field on the buffer they already both read cannot. `Ctrl+L` (unbound anywhere else — root `CONTEXT.md` already notes it's no longer a global help key) calls `ScratchpadState::cycle_language`, which mutates the shared buffer directly and bumps `revision` so the partner's next tick picks it up, same mechanism as the `left` bump.
+- **Highlighting** uses `syntect`, loaded once process-wide (`OnceLock`s in `highlight.rs`, not per-session) via `SyntaxSet::load_defaults_newlines()` and a single fixed `Theme` (`base16-ocean.dark` from `ThemeSet::load_defaults()`). Every render re-highlights the whole buffer top-to-bottom with a fresh `HighlightLines` parser — syntect's parser is stateful across lines (needed for multi-line constructs like block comments), so there is no cheaper "highlight only what changed" option without real incremental-parse-state caching, and at the 8,000-char `MAX_CHARS` cap a full re-highlight is trivial. `Language::Plain` skips syntect entirely.
+- **Dependency note:** `syntect` is pulled in with `default-features = false, features = ["default-fancy"]` in `late-ssh/Cargo.toml` — this swaps in the pure-Rust `fancy-regex` engine instead of the default `onig` (C/oniguruma) backend, deliberately avoiding a C build-toolchain dependency (the exact class of cross-compilation risk the door-game prebuilt images caused on Apple Silicon).
+- **Theme mismatch is a known, accepted trade-off**, not an oversight: this app has 20+ user-selectable `theme::` themes (Catppuccin variants, Solarized Light/Dark, Gruvbox, Tokyo Night, ...), and a real per-theme color mapping for syntax highlighting was considered and declined in favor of one fixed accurate syntect theme. Colors may clash on some of the lighter themes.
+- **Cursor placement without the widget's viewport.** `TextArea::screen_cursor()` returns the cursor's display row/col computed purely from document content + wrap mode (`WrapMode::None` here) — verified in the vendored source that this does **not** depend on the widget having been rendered (the internal `Viewport` scroll-tracking is separate and only updated inside the widget's own render pass, which we no longer call). `ui.rs` computes its own scroll offset (a simple "scroll only enough to keep the cursor visible" clamp, both axes, stateless — recomputed fresh every frame from the current cursor position) and places the real terminal cursor with `frame.set_cursor_position(...)`, the same API already used in `artboard/ui.rs` and `hub/admin/ui.rs`.
+- **No selection to reproduce.** `handle_freeform_edit` never puts the textarea into select mode from a keystroke (only `Ctrl+U`'s internal `clear()` helper uses `select_all`+`cut`, non-interactively), so the custom render doesn't need a selection-highlight overlay.
+
+## 6. Invariants
 
 1. **In-memory only.** No DB row, no migration. Do not add persistence without re-scoping this domain.
 2. **Pairings are bound to the session that asked.** A user can hold several concurrent SSH sessions, and only the one that ran `/pair` is pulled into the editor. `poll` filters on the session token; drop that filter and every tty a user has open gets yanked into the same buffer.
 3. **Full-replace, no merge.** `publish` always overwrites the whole buffer. Do not add per-keystroke op diffing or OT/CRDT without a real design pass.
 4. **Teardown after both sides have left, or immediately if the other side never joined.** `leave()` must not remove the buffer while the other participant might still be reading `left`/content, and must not leave an entry behind for a session that will never poll.
 5. **`mod.rs` stays declaration-only.** Free functions (`pair::request_pair`, `pair::poll`) live in their own file, per the repo-wide rule.
+6. **`highlight.rs` never touches `TextArea`'s rendering.** It only reads `lines()`/`screen_cursor()`. If a future change reintroduces `frame.render_widget(&state.editor, ..)` for the body, highlighting and the gutter silently stop appearing (the widget renders over them), and the manual cursor placement in `ui.rs` and the widget's own cursor would fight over the same terminal cursor.
 
 ---
 
-## 6. Known Gaps / Backlog
+## 7. Known Gaps / Backlog
 
 - No partner-cursor glyph rendered inline (only a "(line N)" hint in the header); the plan flagged this as optional for v1.
 - The notice is a 5-second banner drained by the first session of that user to tick. If they are inside a door game or looking away, they miss it and the intent just expires. Deliberate: a passive miss is the correct failure mode for something another user triggered.
 - Concurrent typing loses text. Both sides publish the whole buffer on every keystroke, so whoever publishes second wins the round. This is the no-merge scope boundary from section 1, not a bug to patch piecemeal.
 - If the first asker's session dies inside the 10 minute window, the mirror still creates a pairing they never join. It is torn down as soon as the other side leaves (`joined`), but until then that user reads as busy.
 - This is the "shared scratchpad" half of the root roadmap's "Micro-collab tools (shared scratchpad, snippet paste, pairing ping)" line; snippet paste is still open.
+- Highlighting colors do not adapt to the viewer's chosen `theme::` theme (see section 5). No horizontal-scroll indicator: a line pushed off the left/right edge by the cursor gives no visual cue that content is hidden there.
 
-## 7. Testing Guidance
+## 8. Testing Guidance
 
-- `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, the ping cooldown (re-ask is quiet, alternating targets cannot reopen it, a suppressed ask still pairs, it lapses, one asker cannot mute another, pairing clears it), session-scoped pairings, busy refusals on both sides, and leave/teardown including the never-joined partner.
-- `state_test.rs`: seeding from the shared buffer, publish/sync round-trips, own-publish does not bounce back, yank register survives a remote sync, `partner_left` after Drop.
+- `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, the ping cooldown (re-ask is quiet, alternating targets cannot reopen it, a suppressed ask still pairs, it lapses, one asker cannot mute another, pairing clears it), session-scoped pairings, busy refusals on both sides, leave/teardown including the never-joined partner, and `cycle_language` bumping `revision`.
+- `state_test.rs`: seeding from the shared buffer, publish/sync round-trips, own-publish does not bounce back, yank register survives a remote sync, `partner_left` after Drop, and `cycle_language`/`language()` being visible to the partner without a separate sync step.
 - `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths.
+- `highlight_test.rs`: the language cycle wraps, `Plain` never calls into syntect, a real snippet produces more than one distinct style, and the gutter width matches the digit count of the total line count.
 - `chat/state_internal_test.rs`: `parse_pair_command` accept/reject/ignore cases.
 - `common/textarea_input_test.rs`: `handle_freeform_edit` newline-on-Enter, Cancel-on-Esc, Tab indents, and no undo.
 
-## 8. References
+## 9. References
 
 - Root context: `../../../../CONTEXT.md`
 - Chat context: `../chat/CONTEXT.md`
 - Clubhouse lobby (registry idiom precedent): `late-ssh/src/app/clubhouse/lobby.rs`
 - Daily challenges (directed `@user` command parsing precedent): `late-ssh/src/app/lobby/daily/CONTEXT.md`
+- Manual `frame.set_cursor_position` precedent: `late-ssh/src/app/artboard/ui.rs`, `late-ssh/src/app/hub/admin/ui.rs`
