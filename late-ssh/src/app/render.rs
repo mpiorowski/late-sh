@@ -2083,6 +2083,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
         ("Hub", ctrl_hint("G", use_caret)),
         ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
+        ("Exit", "qq"),
     ];
 
     let mut spans = Vec::new();
