@@ -1,4 +1,4 @@
-use super::{Coord, collisions, derive_coords, dump_level};
+use super::{Coord, collisions, derive_coords, dump_level, visible};
 use crate::app::door::lateania::world::seed_world;
 
 #[test]
@@ -123,4 +123,70 @@ fn coord_ordering_is_stable_for_reports() {
             Coord { x: 1, y: 0, z: 0 },
         ]
     );
+}
+
+#[test]
+fn biomes_cover_the_regions() {
+    use crate::app::door::lateania::world::{
+        BROCELIANDE_BASE, Biome, KAELMYR_BASE, LAKES_BASE, biome_of, region_layout,
+    };
+    let world = seed_world();
+
+    assert_eq!(biome_of(world.start_room), Biome::Heartland);
+    assert_eq!(biome_of(KAELMYR_BASE), Biome::Ash); // zone 0, open ground
+    assert_eq!(biome_of(LAKES_BASE), Biome::Water);
+    assert_eq!(biome_of(BROCELIANDE_BASE), Biome::Forest);
+    // Kaelmyr zone 2 is carved as a cavern, so its biome overrides Ash.
+    // KAELMYR_W * KAELMYR_H = 13 * 9 = 117 cells per zone.
+    assert_eq!(biome_of(KAELMYR_BASE + 2 * 117), Biome::Cavern);
+
+    // Every real archipelago room reads as Islands; every catacombs/caverns
+    // room reads as Cavern.
+    for &id in world.rooms.keys() {
+        if crate::app::door::lateania::archipelago::is_archipelago_room(id) {
+            assert_eq!(biome_of(id), Biome::Islands, "arch room {id}");
+        }
+        if let Some(p) = region_layout(id)
+            && matches!(p.region, "catacombs" | "caverns")
+        {
+            assert_eq!(biome_of(id), Biome::Cavern, "underground room {id}");
+        }
+    }
+}
+
+#[test]
+fn region_atlas_names_the_start_region() {
+    use crate::app::door::lateania::world::region_atlas_entry;
+    let world = seed_world();
+    let (name, tier) = region_atlas_entry(world.start_room).expect("start room is in the atlas");
+    assert!(name.contains("Embergate"), "got region name {name:?}");
+    assert!(!tier.is_empty(), "region should carry a danger tier");
+}
+
+#[test]
+fn visible_returns_one_level_within_radius() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+
+    let win = visible(&coords, center, 3, 3);
+    assert!(
+        win.iter().any(|(id, _)| *id == world.start_room),
+        "the centre room is in its own window"
+    );
+    for (_, c) in &win {
+        assert_eq!(c.z, center.z, "window stays on one level");
+        assert!(
+            (c.x - center.x).abs() <= 3 && (c.y - center.y).abs() <= 3,
+            "cell {c:?} is outside the radius"
+        );
+    }
+    // Widening the window never drops rooms, and the result is (y, x)-sorted.
+    assert!(visible(&coords, center, 8, 8).len() >= win.len());
+    let sorted = {
+        let mut s = win.clone();
+        s.sort_by_key(|(_, c)| (c.y, c.x));
+        s
+    };
+    assert_eq!(win, sorted, "visible() must return (y, x)-sorted cells");
 }

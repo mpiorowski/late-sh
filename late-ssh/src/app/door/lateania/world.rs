@@ -7031,6 +7031,82 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
     None
 }
 
+/// A room's map biome, for colouring the overhead world map. Derived from its
+/// region, and for the mixed continents from whether its zone was carved as a
+/// cavern (`*_zone_is_cavern`) rather than open ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Biome {
+    /// The safe home fields around Embergate.
+    Heartland,
+    /// Open overworld between the capitals.
+    Plains,
+    /// Capitals, city districts, portal villages, player housing.
+    Urban,
+    /// Greenwood: Broceliande and the Thornwood.
+    Forest,
+    /// The Sunderlakes and open water.
+    Water,
+    /// The Shattered Archipelago.
+    Islands,
+    /// Kaelmyr, the Ashen Reach: ash and volcanic ground.
+    Ash,
+    /// Underground: the catacombs, the Drowned Caverns, and any cavern zone.
+    Cavern,
+    /// The Frontier and the Sundered Reaches: broken, hostile ground.
+    Badlands,
+}
+
+pub fn biome_of(id: RoomId) -> Biome {
+    if let Some(p) = region_layout(id) {
+        let cavern_zone = match p.region {
+            "reaches" => reaches_zone_is_cavern(p.zone as usize),
+            "kaelmyr" => kaelmyr_zone_is_cavern(p.zone as usize),
+            "lakes" => lakes_zone_is_cavern(p.zone as usize),
+            "broceliande" => broceliande_zone_is_cavern(p.zone as usize),
+            _ => false,
+        };
+        if cavern_zone {
+            return Biome::Cavern;
+        }
+        return match p.region {
+            "catacombs" | "caverns" => Biome::Cavern,
+            "thornwood" | "broceliande" => Biome::Forest,
+            "kaelmyr" => Biome::Ash,
+            "lakes" => Biome::Water,
+            "reaches" | "frontier" => Biome::Badlands,
+            _ => Biome::Plains,
+        };
+    }
+    // Hand-authored rooms, by id block.
+    if super::archipelago::is_archipelago_room(id) {
+        return Biome::Islands;
+    }
+    if super::archipelago::is_village_room(id) {
+        return Biome::Urban;
+    }
+    if (super::housing::HOUSING_BASE..super::housing::HOUSING_BASE + 1000).contains(&id) {
+        return Biome::Urban;
+    }
+    if (1..600).contains(&id) {
+        return Biome::Heartland;
+    }
+    if (3000..3100).contains(&id) {
+        return Biome::Urban;
+    }
+    Biome::Plains
+}
+
+/// The atlas entry (display name, danger tier) whose id range contains `id`.
+/// Powers the region-level badge on the overhead map. Tiers are the same
+/// vocabulary the text atlas uses: "safe / low", "wilds", "endgame", "brutal",
+/// "deadly", etc.
+pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
+    REGIONS
+        .iter()
+        .find(|(_, lo, hi, _, _)| (*lo..*hi).contains(&id))
+        .map(|&(name, _, _, tier, _)| (name, tier))
+}
+
 /// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
 /// feature, the creatures that haunt it, three regular mob names, the zone
 /// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies

@@ -152,6 +152,30 @@ pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
     coords
 }
 
+/// The streaming primitive: rooms inside a `(2*radius_x+1) x (2*radius_y+1)`
+/// window centred on `center`, on the SAME z-level. Far regions and other
+/// levels are skipped, so the renderer only ever handles a neighbourhood, and
+/// the reserved-block seams between regions never share the screen. Sorted by
+/// (y, x) for stable, top-to-bottom rendering.
+pub fn visible(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    radius_x: i32,
+    radius_y: i32,
+) -> Vec<(RoomId, Coord)> {
+    let mut out: Vec<(RoomId, Coord)> = coords
+        .iter()
+        .filter(|(_, c)| {
+            c.z == center.z
+                && (c.x - center.x).abs() <= radius_x
+                && (c.y - center.y).abs() <= radius_y
+        })
+        .map(|(&id, &c)| (id, c))
+        .collect();
+    out.sort_by_key(|(_, c)| (c.y, c.x));
+    out
+}
+
 /// Every coordinate shared by more than one room, with the room ids that land
 /// there. Sorted for a stable report. An empty map means a perfectly clean
 /// spatial field.
