@@ -145,6 +145,52 @@ fn wide_grid_shares_surplus_width_across_all_score_panels() {
 }
 
 #[test]
+fn top_board_borders_follow_content_and_leave_surplus_to_more_panel() {
+    let mut reference = DenseGrid::new(Rect::new(0, 0, 111, 41)).unwrap();
+    reference.set_top_panel_content_widths([34, 29]);
+    let mut wide = DenseGrid::new(Rect::new(0, 0, 144, 51)).unwrap();
+    wide.set_top_panel_content_widths([34, 29]);
+
+    assert_eq!(reference.top_dividers, vec![35, 65]);
+    assert_eq!(wide.top_dividers, vec![35, 65]);
+    assert_eq!(
+        reference
+            .top_panels()
+            .iter()
+            .map(|panel| panel.width)
+            .collect::<Vec<_>>(),
+        vec![34, 29, 44]
+    );
+    assert_eq!(
+        wide.top_panels()
+            .iter()
+            .map(|panel| panel.width)
+            .collect::<Vec<_>>(),
+        vec![34, 29, 77]
+    );
+
+    let heading = line_text(&section_heading(MORE_LEADERBOARDS_TITLE));
+    assert_eq!(heading, " ── More Leaderboards coming! ──");
+    assert_eq!(heading.chars().next(), Some(' '));
+    assert!(reference.top_panels()[2].width as usize - heading.chars().count() >= 1);
+
+    let mut constrained = DenseGrid::new(Rect::new(0, 0, 92, 41)).unwrap();
+    constrained.set_top_panel_content_widths([34, 29]);
+    assert_eq!(constrained.top_dividers, vec![31, 57]);
+    assert_eq!(
+        constrained
+            .top_panels()
+            .iter()
+            .map(|panel| panel.width)
+            .collect::<Vec<_>>(),
+        vec![30, 25, 33]
+    );
+
+    let too_narrow = DenseGrid::new(Rect::new(0, 0, 91, 41)).unwrap();
+    assert_eq!(too_narrow.top_panels().len(), 2);
+}
+
+#[test]
 fn compact_rows_match_reference_spacing() {
     assert_eq!(
         line_text(&ranked_line(
@@ -225,6 +271,69 @@ fn score_card_width_stops_at_widest_visible_line_item() {
 
     rows.push(user_row(230, "long_current_name", 940, me));
     assert_eq!(score_card_content_width(40, &[&rows], me), 29);
+}
+
+#[test]
+fn top_card_width_stops_at_two_space_name_value_gap() {
+    let nobody = Uuid::now_v7();
+    let rows = vec![
+        row(1, "lb_lemoncmd", 64_100),
+        row(2, "lb_mars", 63_200),
+        row(3, "lb_astersystem", 62_300),
+    ];
+
+    let content_width = top_card_content_width(60, &rows, "chips", nobody, None, 12, true);
+    assert_eq!(content_width, 34);
+    let lines = ranked_lines_from_rows(
+        &rows,
+        "chips",
+        nobody,
+        None,
+        12,
+        content_width,
+        TOP_LIMIT_RANKED,
+        true,
+        RowDensity::Top,
+    );
+    assert_eq!(line_text(&lines[0]), " #1  lb_lemoncmd     64,100 chips ");
+    assert_eq!(line_text(&lines[2]), " #3  lb_astersystem  62,300 chips ");
+
+    let compact_width = top_card_content_width(30, &rows, "chips", nobody, None, 12, true);
+    assert_eq!(compact_width, 30);
+    assert!(
+        line_text(
+            &ranked_lines_from_rows(
+                &rows,
+                "chips",
+                nobody,
+                None,
+                12,
+                compact_width,
+                TOP_LIMIT_RANKED,
+                true,
+                RowDensity::Top,
+            )[2]
+        )
+        .contains('…')
+    );
+}
+
+#[test]
+fn top_card_natural_width_includes_visible_current_user_tail() {
+    let me = Uuid::now_v7();
+    let mut rows: Vec<RankedRow> = (1..=10)
+        .map(|rank| row(rank, &format!("u{rank}"), 20_000 - rank))
+        .collect();
+    rows.push(user_row(51, "long_current_name", 12_500, me));
+
+    assert_eq!(
+        top_card_content_width(60, &rows, "chips", me, Some(10), 12, true),
+        38
+    );
+    assert_eq!(
+        top_card_content_width(60, &rows, "chips", me, Some(10), 12, false),
+        38
+    );
 }
 
 #[test]

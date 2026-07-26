@@ -19,6 +19,11 @@ const SCORE_USER_TAIL_HEIGHT: u16 = 2;
 const SCORE_MONTHLY_HEIGHT: u16 = 1 + TOP_LIMIT_SCORE as u16 + SCORE_USER_TAIL_HEIGHT;
 const SCORE_ALL_TIME_OFFSET: u16 = SCORE_MONTHLY_OFFSET + SCORE_MONTHLY_HEIGHT;
 const WIN_STREAK_GAP: u16 = 1;
+const MORE_LEADERBOARDS_TITLE: &str = "More Leaderboards coming!";
+const TOP_BOARD_BASE_SPANS: [u16; 2] = [31, 26];
+// The span includes the 32-cell heading, its required trailing space, and the
+// right-hand border. The heading itself supplies the required leading space.
+const MORE_LEADERBOARDS_PANEL_SPAN: u16 = 34;
 const REFERENCE_SCORE_SPAN: u16 = 110;
 const REFERENCE_SCORE_PANEL_SPANS: [u16; 5] = [23, 22, 22, 22, 21];
 
@@ -29,9 +34,10 @@ pub(crate) fn draw(
     user_id: Uuid,
     is_admin: bool,
 ) {
-    let Some(grid) = DenseGrid::new(popup) else {
+    let Some(mut grid) = DenseGrid::new(popup) else {
         return;
     };
+    fit_top_row_to_content(&mut grid, data, user_id);
 
     draw_top_row(frame, &grid, data, user_id);
     draw_score_row(frame, &grid, data, user_id);
@@ -73,11 +79,10 @@ impl DenseGrid {
         let lower_divider_y = footer_y.saturating_sub(1);
 
         let span = popup.width - 1;
-        let top_offsets = if span >= 69 {
-            vec![31, 57]
-        } else {
-            vec![span / 2]
-        };
+        let top_offsets = top_divider_offsets(
+            span,
+            TOP_BOARD_BASE_SPANS.map(|panel_span| panel_span.saturating_sub(1)),
+        );
         let score_offsets = score_divider_offsets(span);
 
         Some(Self {
@@ -141,6 +146,47 @@ impl DenseGrid {
     fn footer_area(&self) -> Rect {
         panel_between(self.popup.x, self.score_dividers[2], self.footer_y, 1)
     }
+
+    fn set_top_panel_content_widths(&mut self, content_widths: [usize; 2]) {
+        let span = self.popup.width - 1;
+        let content_widths = content_widths.map(|width| u16::try_from(width).unwrap_or(u16::MAX));
+        self.top_dividers = top_divider_offsets(span, content_widths)
+            .into_iter()
+            .map(|offset| self.popup.x + offset)
+            .collect();
+    }
+}
+
+fn top_divider_offsets(span: u16, content_widths: [u16; 2]) -> Vec<u16> {
+    let base_board_span = TOP_BOARD_BASE_SPANS.iter().sum::<u16>();
+    let base_span = base_board_span + MORE_LEADERBOARDS_PANEL_SPAN;
+    if span < base_span {
+        return vec![span / 2];
+    }
+
+    let board_budget = span - MORE_LEADERBOARDS_PANEL_SPAN;
+    let desired_spans = content_widths.map(|width| width.saturating_add(1));
+    let mut panel_spans: [u16; 2] =
+        std::array::from_fn(|index| desired_spans[index].min(TOP_BOARD_BASE_SPANS[index]));
+    let mut remaining = board_budget.saturating_sub(panel_spans.iter().sum());
+    while remaining > 0 {
+        let mut grew = false;
+        for (panel_span, desired_span) in panel_spans.iter_mut().zip(desired_spans) {
+            if *panel_span < desired_span {
+                *panel_span += 1;
+                remaining -= 1;
+                grew = true;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    vec![panel_spans[0], panel_spans.iter().sum()]
 }
 
 fn score_divider_offsets(span: u16) -> [u16; 4] {
@@ -152,19 +198,24 @@ fn score_divider_offsets(span: u16) -> [u16; 4] {
     // interior at the reference width, leaving exactly the row formatter's
     // one trailing pad before the outer border. The five cells it formerly
     // left unused are shared across the first four games.
-    let extra = span - REFERENCE_SCORE_SPAN;
-    let shared = extra / 5;
-    let remainder = extra % 5;
     let mut panel_spans = REFERENCE_SCORE_PANEL_SPANS;
-    for (index, panel_span) in panel_spans.iter_mut().enumerate() {
-        *panel_span += shared + u16::from(index < usize::from(remainder));
-    }
+    distribute_surplus(&mut panel_spans, span - REFERENCE_SCORE_SPAN);
 
     let mut offset = 0;
     std::array::from_fn(|index| {
         offset += panel_spans[index];
         offset
     })
+}
+
+fn distribute_surplus<const N: usize>(panel_spans: &mut [u16; N], extra: u16) {
+    debug_assert!(N > 0);
+    let panel_count = N as u16;
+    let shared = extra / panel_count;
+    let remainder = extra % panel_count;
+    for (index, panel_span) in panel_spans.iter_mut().enumerate() {
+        *panel_span += shared + u16::from(index < usize::from(remainder));
+    }
 }
 
 fn panel_between(left: u16, right: u16, y: u16, height: u16) -> Rect {
@@ -174,6 +225,37 @@ fn panel_between(left: u16, right: u16, y: u16, height: u16) -> Rect {
         right.saturating_sub(left).saturating_sub(1),
         height,
     )
+}
+
+fn fit_top_row_to_content(grid: &mut DenseGrid, data: &LeaderboardData, user_id: Uuid) {
+    let panel_height = grid.top_divider_y.saturating_sub(grid.content_top);
+    let body_height = usize::from(panel_height.saturating_sub(ranked_panel_body_offset(2)));
+    let fallback_widths = TOP_BOARD_BASE_SPANS.map(|panel_span| usize::from(panel_span - 1));
+    let content_widths = [
+        top_board_natural_width(
+            &data.monthly_chip_earners,
+            "chips",
+            user_id,
+            body_height,
+            true,
+        )
+        .unwrap_or(fallback_widths[0]),
+        top_board_natural_width(&data.arcade_champions, "pts", user_id, body_height, false)
+            .unwrap_or(fallback_widths[1]),
+    ];
+    grid.set_top_panel_content_widths(content_widths);
+}
+
+fn top_board_natural_width(
+    entries: &[RankedEntry],
+    unit: &str,
+    user_id: Uuid,
+    height: usize,
+    show_current_marker: bool,
+) -> Option<usize> {
+    let rows: Vec<RankedRow> = entries.iter().map(RankedRow::from).collect();
+    let user_rank = rows.iter().position(|row| row.user_id == user_id);
+    top_card_natural_width(&rows, unit, user_id, user_rank, height, show_current_marker)
 }
 
 fn draw_top_row(frame: &mut Frame, grid: &DenseGrid, data: &LeaderboardData, user_id: Uuid) {
@@ -209,12 +291,7 @@ fn draw_top_row(frame: &mut Frame, grid: &DenseGrid, data: &LeaderboardData, use
         );
     }
     if let Some(panel) = panels.get(2) {
-        render_line(
-            frame,
-            *panel,
-            0,
-            section_heading("More Leaderboards coming soon!"),
-        );
+        render_line(frame, *panel, 0, section_heading(MORE_LEADERBOARDS_TITLE));
     }
 }
 
@@ -271,6 +348,10 @@ struct RankedBoardView<'a> {
     show_current_marker: bool,
 }
 
+fn ranked_panel_body_offset(hint_count: usize) -> u16 {
+    1_u16.saturating_add(hint_count as u16).saturating_add(1)
+}
+
 fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedBoardView<'_>) {
     if area.is_empty() {
         return;
@@ -288,9 +369,7 @@ fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedB
         );
     }
 
-    let body_offset = 1_u16
-        .saturating_add(view.hints.len() as u16)
-        .saturating_add(1);
+    let body_offset = ranked_panel_body_offset(view.hints.len());
     if body_offset >= area.height {
         return;
     }
@@ -316,13 +395,22 @@ fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedB
 
     let rows: Vec<RankedRow> = view.entries.iter().map(RankedRow::from).collect();
     let user_rank = rows.iter().position(|row| row.user_id == user_id);
+    let content_width = top_card_content_width(
+        body.width as usize,
+        &rows,
+        view.unit,
+        user_id,
+        user_rank,
+        body.height as usize,
+        view.show_current_marker,
+    );
     let lines = ranked_lines_from_rows(
         &rows,
         view.unit,
         user_id,
         user_rank,
         body.height as usize,
-        body.width as usize,
+        content_width,
         TOP_LIMIT_RANKED,
         view.show_current_marker,
         RowDensity::Top,
@@ -595,14 +683,80 @@ fn score_card_rows(rows: &[RankedRow], user_id: Uuid) -> impl Iterator<Item = &R
 }
 
 fn score_row_natural_width(row: &RankedRow) -> usize {
-    let lead_width = 1;
-    let rank_width = format!("#{} ", row.rank).chars().count();
-    let username_width = row.username.chars().count();
+    ranked_row_natural_width(row, "", false, RowDensity::Score, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn top_card_content_width(
+    available_width: usize,
+    rows: &[RankedRow],
+    unit: &str,
+    user_id: Uuid,
+    user_index: Option<usize>,
+    height: usize,
+    show_current_marker: bool,
+) -> usize {
+    available_width.min(
+        top_card_natural_width(rows, unit, user_id, user_index, height, show_current_marker)
+            .unwrap_or(available_width),
+    )
+}
+
+fn top_card_natural_width(
+    rows: &[RankedRow],
+    unit: &str,
+    user_id: Uuid,
+    user_index: Option<usize>,
+    height: usize,
+    show_current_marker: bool,
+) -> Option<usize> {
+    let (top_count, include_user_tail) =
+        ranked_display_plan(rows.len(), user_index, height, TOP_LIMIT_RANKED);
+    let top_widths = rows.iter().take(top_count).map(|row| {
+        ranked_row_natural_width(
+            row,
+            unit,
+            show_current_marker && row.user_id == user_id,
+            RowDensity::Top,
+            false,
+        )
+    });
+    let tail_width = include_user_tail
+        .then(|| {
+            user_index.map(|index| {
+                ranked_row_natural_width(
+                    &rows[index],
+                    unit,
+                    show_current_marker,
+                    RowDensity::Top,
+                    !show_current_marker,
+                )
+            })
+        })
+        .flatten();
+
+    top_widths.chain(tail_width).max()
+}
+
+fn ranked_row_natural_width(
+    row: &RankedRow,
+    unit: &str,
+    is_current_user: bool,
+    density: RowDensity,
+    reserve_hidden_marker: bool,
+) -> usize {
+    let (lead, rank_text) =
+        ranked_prefix(row.rank, density, is_current_user, reserve_hidden_marker);
+    let value_text = ranked_value_text(row.value, unit);
     let name_score_gap = 2;
-    let value_width = format_number(row.value).chars().count();
     let right_pad = 1;
 
-    lead_width + rank_width + username_width + name_score_gap + value_width + right_pad
+    lead.chars().count()
+        + rank_text.chars().count()
+        + row.username.chars().count()
+        + name_score_gap
+        + value_text.chars().count()
+        + right_pad
 }
 
 fn render_line(frame: &mut Frame, area: Rect, offset: u16, line: Line<'static>) {
@@ -668,11 +822,8 @@ fn ranked_lines_from_rows(
         return Vec::new();
     }
 
-    let needs_user_tail = user_index.is_some_and(|index| index >= top_limit);
-    let tail_cost = if needs_user_tail { 2 } else { 0 };
-    let top_count = top_limit
-        .min(rows.len())
-        .min(height.saturating_sub(tail_cost));
+    let (top_count, include_user_tail) =
+        ranked_display_plan(rows.len(), user_index, height, top_limit);
 
     let mut lines = Vec::with_capacity(height);
     for row in rows.iter().take(top_count) {
@@ -685,7 +836,7 @@ fn ranked_lines_from_rows(
         ));
     }
 
-    if needs_user_tail && lines.len() + 2 <= height {
+    if include_user_tail {
         lines.push(divider_line(width));
         if let Some(index) = user_index {
             let row = &rows[index];
@@ -700,6 +851,21 @@ fn ranked_lines_from_rows(
         }
     }
     lines
+}
+
+fn ranked_display_plan(
+    row_count: usize,
+    user_index: Option<usize>,
+    height: usize,
+    top_limit: usize,
+) -> (usize, bool) {
+    let needs_user_tail = user_index.is_some_and(|index| index >= top_limit);
+    let tail_cost = if needs_user_tail { 2 } else { 0 };
+    let top_count = top_limit
+        .min(row_count)
+        .min(height.saturating_sub(tail_cost));
+    let include_user_tail = needs_user_tail && top_count + tail_cost <= height;
+    (top_count, include_user_tail)
 }
 
 fn divider_line(width: usize) -> Line<'static> {
@@ -728,18 +894,9 @@ fn ranked_line_with_marker_space(
     density: RowDensity,
     reserve_hidden_marker: bool,
 ) -> Line<'static> {
-    let (lead, rank_text) = match (density, is_current_user, reserve_hidden_marker) {
-        (RowDensity::Top, false, true) => (" ".to_string(), format!("#{:<4}", row.rank)),
-        (RowDensity::Top, true, _) => ("› ".to_string(), format!("#{} ", row.rank)),
-        (RowDensity::Top, false, false) => (" ".to_string(), format!("#{:<3}", row.rank)),
-        (RowDensity::Score, true, _) => ("›".to_string(), format!("#{} ", row.rank)),
-        (RowDensity::Score, false, _) => (" ".to_string(), format!("#{} ", row.rank)),
-    };
-    let value_text = if unit.is_empty() {
-        format_number(row.value)
-    } else {
-        format!("{} {unit}", format_number(row.value))
-    };
+    let (lead, rank_text) =
+        ranked_prefix(row.rank, density, is_current_user, reserve_hidden_marker);
+    let value_text = ranked_value_text(row.value, unit);
 
     let selected = Style::default()
         .bg(theme::BG_SELECTION())
@@ -801,6 +958,29 @@ fn ranked_line_with_marker_space(
         Span::styled(value_text, value_style),
         Span::styled(" ".repeat(right_pad), fill_style),
     ])
+}
+
+fn ranked_prefix(
+    rank: i64,
+    density: RowDensity,
+    is_current_user: bool,
+    reserve_hidden_marker: bool,
+) -> (String, String) {
+    match (density, is_current_user, reserve_hidden_marker) {
+        (RowDensity::Top, false, true) => (" ".to_string(), format!("#{rank:<4}")),
+        (RowDensity::Top, true, _) => ("› ".to_string(), format!("#{rank} ")),
+        (RowDensity::Top, false, false) => (" ".to_string(), format!("#{rank:<3}")),
+        (RowDensity::Score, true, _) => ("›".to_string(), format!("#{rank} ")),
+        (RowDensity::Score, false, _) => (" ".to_string(), format!("#{rank} ")),
+    }
+}
+
+fn ranked_value_text(value: i64, unit: &str) -> String {
+    if unit.is_empty() {
+        format_number(value)
+    } else {
+        format!("{} {unit}", format_number(value))
+    }
 }
 
 fn section_heading(title: &str) -> Line<'static> {
