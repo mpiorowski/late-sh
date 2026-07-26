@@ -152,6 +152,14 @@ fn leaderboard_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
+            title: "Le Word Board",
+            body: vec![
+                "Monthly and all-time rows count solved daily words.".to_string(),
+                "Win streak ranks each user's longest run of consecutive solved puzzle dates."
+                    .to_string(),
+            ],
+        },
+        GuideSection {
             title: "Timing",
             body: vec![
                 "Monthly boards reset on the 1st, UTC.".to_string(),

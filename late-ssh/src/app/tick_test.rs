@@ -10,7 +10,14 @@ use crate::app::tick::{ANIM_HALF_TICK, HOT_TICK, IDLE_TICK};
 use crate::test_helpers::chat_compose_app;
 
 const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
-const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Watchdog, not the assertion: `CLEAN_SETTLE_WINDOW` is what the gate is
+/// judged on. It has to outlast the whole session-startup prefetch cascade,
+/// because every landing prefetch legitimately dirties a tick and restarts the
+/// window. That cascade is a couple of seconds locally and much longer on a
+/// loaded CI runner sharing one Postgres with the rest of the suite, so this is
+/// sized like `test_helpers::ASYNC_TEST_TIMEOUT`: generously, and well inside
+/// nextest's 5-minute terminate-after.
+const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The ambient sidebar wave paints on anim_half edges whenever the right
 /// sidebar is visible, so a session showing it never settles by design.

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-17
+- Last updated: 2026-07-20
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -19,7 +19,23 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `state.rs`: selected Hub tab and tab cycling.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
-- `leaderboard.rs`: compact leaderboard panels.
+- `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
+  formatting, and cell-exact reference geometry. It is the one tab handed the
+  whole popup rect instead of the body row, so it owns its footer: a shortened
+  one inside the grid, or the shell's full-width one when the popup is too
+  small to build a grid at all. A `48x139` terminal produces the `41x111` Hub
+  modal used by the dense-layout reference; above that width, surplus columns
+  are shared evenly across the panels in both rows, the five score games below
+  and the two boards plus the "More Leaderboards" placeholder above. The
+  placeholder is not a spare-space bin: it keeps its heading-sized minimum and
+  takes only its third of the surplus.
+  A top board measures every line it prints, heading and hints and empty-state
+  copy included, not just its ranked rows: a board with no rows still has to
+  fit "no chip earnings yet this month".
+  Each panel stops right-aligning scores once its widest visible line fits with
+  the full username, a two-cell name/score gap, and the trailing edge pad. Each
+  monthly score subsection reserves two rows after its top five for the optional
+  ellipsis/current-user tail before the all-time subsection begins.
 - `admin/`:
   - `state.rs`: admin reward-template and shop-item catalogs, editable draft state, cursor-aware inline edit buffer, async load/save result drain.
   - `input.rs`: Admin-tab row/category/field navigation, inline text edits with Left/Right/Home/End cursor movement, numeric/toggle edits, save/reload actions.
@@ -76,9 +92,26 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
 - `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
-- `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
+- `Lateris`, `2048`, `Snake`, `Traffic`: each score-game panel shows monthly score events and all-time high scores.
+- `Le Word`: monthly and all-time daily solve counts, plus win-streak leaders
+  ranked by each user's longest consecutive-day solve streak. The win-streak
+  subsection uses leftover vertical space for up to five rows and disappears
+  before monthly or all-time rows are compressed. Like every score subsection
+  it shows the viewer's own row when they rank below the visible leaders, but
+  it has no reserved tail: it trades leader rows for yours out of the space it
+  was given. Every subsection drops the tail entirely rather than print the
+  ellipsis with no leader above it.
 
-Monthly windows use UTC calendar months. Score all-time boards persist.
+Monthly windows use UTC calendar months. Score and Le Word all-time boards persist;
+the Le Word win-streak board measures consecutive `puzzle_date` values across all
+recorded daily wins.
+
+An empty local database renders every panel as "no scores yet", which makes the
+responsive widths impossible to eyeball. `make seed-leaderboard`
+(`scripts/seed_leaderboard_test_data.{sh,sql}`) fills the Compose database with
+48 synthetic players spread across every board. Local development only: it owns
+the `seed:leaderboard:` fingerprints, prefixes their usernames with `lb_` to
+clear the unique index on real handles, and rewrites their stats on every rerun.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.

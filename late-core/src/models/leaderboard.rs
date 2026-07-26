@@ -75,6 +75,9 @@ pub struct LeaderboardData {
     pub monthly_2048_high_scores: Vec<HighScoreEntry>,
     pub monthly_snake_high_scores: Vec<HighScoreEntry>,
     pub monthly_traffic_high_scores: Vec<HighScoreEntry>,
+    pub monthly_le_word_wins: Vec<RankedEntry>,
+    pub all_time_le_word_wins: Vec<RankedEntry>,
+    pub le_word_win_streaks: Vec<RankedEntry>,
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
@@ -90,6 +93,9 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_2048_high_scores,
         monthly_snake_high_scores,
         monthly_traffic_high_scores,
+        monthly_le_word_wins,
+        all_time_le_word_wins,
+        le_word_win_streaks,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_today_daily_statuses(client),
@@ -102,6 +108,9 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_monthly_2048_high_scores(client, 500),
         fetch_monthly_snake_high_scores(client, 500),
         fetch_monthly_traffic_high_scores(client, 500),
+        fetch_monthly_le_word_wins(client, 500),
+        fetch_all_time_le_word_wins(client, 500),
+        fetch_le_word_win_streaks(client, 500),
     )?;
 
     Ok(LeaderboardData {
@@ -116,6 +125,9 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         monthly_2048_high_scores,
         monthly_snake_high_scores,
         monthly_traffic_high_scores,
+        monthly_le_word_wins,
+        all_time_le_word_wins,
+        le_word_win_streaks,
     })
 }
 
@@ -227,6 +239,116 @@ async fn fetch_arcade_champions(client: &Client, limit: i64) -> Result<Vec<Ranke
             value: row.get("points"),
         })
         .collect())
+}
+
+async fn fetch_monthly_le_word_wins(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH totals AS (
+                SELECT user_id, COUNT(*)::bigint AS wins
+                FROM le_word_daily_wins
+                WHERE puzzle_date >= date_trunc('month', now() AT TIME ZONE 'UTC')::date
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT u.username,
+                       t.user_id,
+                       t.wins,
+                       RANK() OVER (ORDER BY t.wins DESC) AS rank
+                FROM totals t
+                JOIN users u ON u.id = t.user_id
+            )
+            SELECT username, user_id, wins AS value, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    Ok(ranked_entries(rows))
+}
+
+async fn fetch_all_time_le_word_wins(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH totals AS (
+                SELECT user_id, COUNT(*)::bigint AS wins
+                FROM le_word_daily_wins
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT u.username,
+                       t.user_id,
+                       t.wins,
+                       RANK() OVER (ORDER BY t.wins DESC) AS rank
+                FROM totals t
+                JOIN users u ON u.id = t.user_id
+            )
+            SELECT username, user_id, wins AS value, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    Ok(ranked_entries(rows))
+}
+
+async fn fetch_le_word_win_streaks(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH numbered AS (
+                SELECT user_id,
+                       puzzle_date,
+                       puzzle_date - (
+                           ROW_NUMBER() OVER (
+                               PARTITION BY user_id
+                               ORDER BY puzzle_date
+                           )
+                       )::int AS streak_group
+                FROM le_word_daily_wins
+            ),
+            streaks AS (
+                SELECT user_id, COUNT(*)::bigint AS streak
+                FROM numbered
+                GROUP BY user_id, streak_group
+            ),
+            best AS (
+                SELECT user_id, MAX(streak)::bigint AS streak
+                FROM streaks
+                GROUP BY user_id
+            ),
+            ranked AS (
+                SELECT u.username,
+                       b.user_id,
+                       b.streak,
+                       RANK() OVER (ORDER BY b.streak DESC) AS rank
+                FROM best b
+                JOIN users u ON u.id = b.user_id
+            )
+            SELECT username, user_id, streak AS value, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    Ok(ranked_entries(rows))
+}
+
+/// Maps a ranked query onto `RankedEntry`. Every such query projects exactly
+/// `username, user_id, value, rank`, so there is no column left to name and
+/// nothing a call site can get wrong. Keep the descriptive name (`wins`,
+/// `streak`) inside the CTEs and alias it to `value` in the final SELECT.
+fn ranked_entries(rows: Vec<tokio_postgres::Row>) -> Vec<RankedEntry> {
+    rows.into_iter()
+        .map(|row| RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+        })
+        .collect()
 }
 
 async fn fetch_high_scores(client: &Client, limit: i64) -> Result<Vec<HighScoreEntry>> {
