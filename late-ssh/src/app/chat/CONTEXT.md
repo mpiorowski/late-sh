@@ -16,7 +16,7 @@ This file owns chat-specific context that used to make the root `CONTEXT.md` too
 Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
 - Home/Dashboard chat center, room rail, and the embedded game-chat surfaces (house tables, daily match boards).
-- Message composer, replies, edits, deletes, reactions, pinned messages, ignores, overlays, and autocomplete.
+- Message composer, replies, edits, deletes, reactions, ignores, overlays, and autocomplete.
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 7.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
@@ -69,7 +69,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 ## 3. Ownership Split
 
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
-- `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction/pin state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs.
+- `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs.
 - `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
 - `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, `---NEWS---` cards, and reaction footers.
@@ -86,13 +86,12 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 - Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, refreshed every 30s.
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
-- `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, discover, and pinned-message reads.
+- `read_permits: Semaphore(8)` to cap concurrent snapshot, tail, and discover reads.
 - `send_lounge_message_task` is the shared internal producer for custom `#lounge` announcements. It resolves `#lounge`, optionally joins the author first, then sends through the normal `send_message` path. News uses it with a request id so normal composer-style send success/failure events are preserved.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
 - `DELTA_LIMIT = 256`
-- `PINNED_MESSAGES_LIMIT = 100`
 - `CHAT_REFRESH_INTERVAL = 10s`
 - `USERNAME_DIRECTORY_TTL = 30s`
 - `SEARCH_RESULTS_LIMIT = 50`, `SEARCH_MIN_CHARS = 3`, `SEARCH_CONTEXT_EACH_SIDE = 4` (message search)
@@ -145,7 +144,6 @@ Messages:
 - Delta queries return ascending after `(created, id)` and are inserted into newest-first local state.
 - `reply_to_message_id` is nullable and uses `ON DELETE SET NULL`.
 - `reply_to_user_id` is nullable and uses `ON DELETE SET NULL`. It records the user a bot/automated reply is responding to, used to filter such replies for viewers who ignore that user. Set only by bot sends.
-- `pinned` is a global message-level flag with a partial pinned index.
 
 Slow modes:
 - `chat_slow_modes` is a per-user throttle, not a ban. `room_id` set means room-scoped; `room_id NULL` means server-scoped. Unique indexes enforce one row per `(room_id, target_user_id)` for room scope and one server row per target. Rows store `interval_secs`, nullable `expires_at` (`NULL` = permanent), actor, and reason.
@@ -203,7 +201,7 @@ Room navigation:
 ## 7. Home Shell And Embedded Chat
 
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
-- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `dashboard::ui::draw_dashboard`: pinned row when present, then lounge chat. Pinned messages render whenever present; when vertical space is tight, the pinned strip hides before chat drops below its minimum.
+- If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `chat::ui::draw_dashboard_chat_card`: the lounge chat card, full height.
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
 - On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
 
@@ -371,13 +369,12 @@ Keys:
 - `f` again while reaction leader is active opens reaction-owner overlay.
 - Digits `1..9` while reaction leader is active toggle quick reactions, exit reaction leader mode, and keep the message selected.
 - Digit `0` while reaction leader is active opens the icon picker for a custom reaction.
-- `Ctrl+P` toggles selected-message pin state; admin only.
 
 Selection deltas are message-based, not row-based. Positive means older, negative means newer.
 
 ---
 
-## 10. Reactions, Pins, Ignores
+## 10. Reactions, Ignores
 
 Reactions:
 - One reaction per `(message_id, user_id)`.
@@ -386,12 +383,6 @@ Reactions:
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
 - Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
-
-Pins:
-- `chat_messages.pinned` is global, not scoped to a room or user.
-- Only admins can toggle pins.
-- Toggling pin does not optimistically update local pinned dashboard state.
-- Home pinned stack comes from `load_pinned_messages_task` through a separate watch channel, not from the 10s summary snapshot.
 
 Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.
@@ -476,7 +467,7 @@ Home chat center:
 Home lounge dashboard chat:
 - Uses `DashboardChatView`.
 - Composer is capped at 5 visible lines.
-- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: pinned row always renders when present, and the top activity/quest/shop strip drops before chat when space is tight.
+- Lounge chrome is controlled by the user's Dashboard Header setting, then by vertical priority: the top activity/quest/shop strip drops before chat when space is tight.
 
 Embedded game chat:
 - Uses `EmbeddedRoomChatView`.
@@ -537,7 +528,6 @@ Cache:
 | `f` then `1..9` | Quick-react to selected message |
 | `f` then `0` | Open icon picker for a custom reaction |
 | `f` then `f` | Open reaction-owner overlay |
-| `Ctrl+P` | Admin toggle selected-message pin |
 | `Ctrl+]` | Open icon picker; inserts only into main chat composer |
 | Double-click composer bar | Enter compose mode (same as `i`). Dashboard + embedded game chat only. |
 | Click message body | Move message selection to that block (same as `j`/`k` landing on it). |
@@ -667,7 +657,7 @@ Repo-wide rule from root context still applies:
 
 Existing DB-backed coverage:
 - `src/app/announcements_test.rs`: login #announcements loading, read cursor behavior, paging.
-- `svc_test.rs`: send, reactions, pins, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
+- `svc_test.rs`: send, reactions, summaries, room tails, ignored users, discover listing/joining, public room create/fill, delete events, ignore/unignore, message search (membership/game-room/ignored exclusions, room scoping, LIKE-metacharacter escaping, context-window ordering).
 - `news/svc_test.rs`: article snapshots, empty list, author resolution, duplicate URL failure, direct DB inserts appearing after list refresh.
 - `sheet_test.rs`: character sheet model/upsert plus `open_sheet_task`/`save_sheet_task` room-scoped authorization.
 - `showcase/svc_test.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
@@ -701,10 +691,9 @@ Test gaps:
 - Ignore filtering covers all rooms including DMs, and also hides bot replies whose `reply_to_user_id` is ignored. DMs with an ignored peer are hidden from the room rail entirely.
 - `#announcements` admin-only currently depends on the provided `room_slug`; stale/missing slug is a fragile path.
 - Login `#announcements` modal marks `chat_room_members.last_read_at` only when dismissed; do not add a separate announcement-read table unless the room model itself changes.
-- Reaction and pin tasks are async; UI should not assume optimistic success.
+- Reaction tasks are async; UI should not assume optimistic success.
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
 - Poll vote shortcuts use `va/vb/vc` when the selected/visible real room has an active poll, leaving music `v1/v2/v3` selectors available.
-- Pinned messages are loaded separately from summary snapshots and chat events.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.

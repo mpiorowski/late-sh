@@ -1451,6 +1451,77 @@ async fn cycling_rails_persists_onto_the_authenticating_key() {
 }
 
 #[tokio::test]
+async fn the_lounge_renders_its_own_topic_header() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "lounge-topic-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    ChatRoom::set_topic_and_rules(&client, lounge.id, Some("tonight: the rooms upgrade"), None)
+        .await
+        .expect("set lounge topic");
+
+    // The Lounge is the one room drawn by `draw_dashboard_chat_card` instead of
+    // `draw_chat_center`, so its header needs its own coverage.
+    let mut app = make_app(test_db.db.clone(), viewer.id, "lounge-topic-flow-it");
+    wait_for_render_contains(&mut app, "tonight: the rooms upgrade").await;
+}
+
+#[tokio::test]
+async fn clicking_the_mentions_hud_text_opens_mentions() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "hud-mention-viewer").await;
+    let author = create_test_user(&test_db.db, "hud-mention-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    let (mut app, chat_service) =
+        make_app_with_chat_service(test_db.db.clone(), viewer.id, "hud-mention-flow-it");
+    chat_service.send_message_task(
+        author.id,
+        lounge.id,
+        Some("lounge".to_string()),
+        "@hud-mention-viewer got a minute?".to_string(),
+        Uuid::now_v7(),
+        false,
+    );
+    wait_for_render_contains(&mut app, "unread mention").await;
+
+    // The HUD sits on the top border row as `1 unread mention | N chips`.
+    // Border glyphs are multi-byte, so translate byte offsets into display
+    // columns by char count (every glyph on this row is single-width).
+    let frame = render_plain(&mut app);
+    let top_row = frame.lines().next().expect("top border row").to_string();
+    let char_col = |needle: &str| {
+        let byte = top_row.find(needle).expect("needle on the top border");
+        top_row[..byte].chars().count()
+    };
+    let mentions_col = char_col("unread mention");
+    let chips_col = char_col("chips");
+
+    // Clicking the chips text, right of the mentions text, must not open
+    // Mentions. SGR mouse coords are 1-indexed.
+    app.handle_input(format!("\x1b[<0;{};1M", chips_col + 1).as_bytes());
+    assert_render_not_contains_for(&mut app, "mentioned you in", Duration::from_millis(120)).await;
+
+    // Clicking inside the mentions text opens the Mentions view.
+    app.handle_input(format!("\x1b[<0;{};1M", mentions_col + 1).as_bytes());
+    wait_for_render_contains(&mut app, "mentioned you in").await;
+}
+
+#[tokio::test]
 async fn rules_command_shows_every_line_in_an_overlay() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "rules-flow-viewer").await;

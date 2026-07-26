@@ -159,6 +159,7 @@ pub(crate) fn bot_app_context() -> String {
         - The buzz sobers up on its own over time, no action needed: it decays 150 points an hour, so even a maxed-out binge is fully sober again in about a day.\n\
         - Drunk level tints the username label's background everywhere it appears (the Clubhouse floor and chat author labels alike), light green through yellow and orange to red as the level climbs.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), and Directory (5).\n\
+        - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, dopewars, and Rebels; each is launched from there, not from its own top-level page.\n\
         - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
     );
@@ -189,7 +190,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Tab / Shift+Tab cycles screens; number keys 0-5 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake).\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
-    - Home's room rail also holds RSS, News, Voice, Mentions, and Discover.\n\
+    - Home's room rail also holds RSS, News, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
     - For anything past basic directions — commands, game rules, settings, IRC, account stuff — don't guess: tell the patron to go ask @bot, that's what he's for.\n"
@@ -384,7 +385,6 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  e                  edit selected message",
         "  dd                 delete selected message (press d twice)",
         "  c                  copy selected message to clipboard",
-        "  Ctrl+P             pin / unpin selected message",
         "",
         "Rooms",
         "  h / l  or  ← / →   previous / next room",
@@ -550,6 +550,9 @@ fn social_help_lines() -> Vec<String> {
         "",
         "Mentions",
         "  User-targeted notification feed for @user mentions.",
+        "  Three ways in: pick Mentions in the Home (1) room rail, click the",
+        "  \"N unread mentions\" counter in the top-right frame border, or",
+        "  Ctrl+/ and type mentions.",
         "  Selecting Mentions marks it read.",
         "  j / k or ↑ / ↓   navigate notifications",
         "  Enter             preview the mention with surrounding messages; Enter again jumps",
@@ -730,7 +733,6 @@ fn lobby_help_lines() -> Vec<String> {
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
         "  g                 jump to a reply's original even if it has an image",
-        "  Ctrl+P            pin / unpin selected embedded-chat message",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
         "Economy",

@@ -3225,16 +3225,19 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     if app.show_splash {
         return false;
     }
-
-    let unread = app.chat.notifications.unread_count();
-    // SGR mouse coords are 1-indexed; the top border row is y=1.
-    if unread == 0 || mouse.y != 1 {
+    // Where the last frame drew the "N unread mentions" text; `None` when
+    // nothing is unread. The voice/chips text after it is not clickable.
+    let Some(rect) = app.last_mentions_hud_rect.get() else {
         return false;
-    }
-
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    let hud_width = format!(" {unread} unread {noun} ").len() as u16;
-    if mouse.x < app.size.0.saturating_sub(hud_width) {
+    };
+    // SGR mouse coords are 1-indexed; the rect is in 0-indexed frame cells.
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
         return false;
     }
 

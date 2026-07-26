@@ -438,6 +438,10 @@ pub struct App {
     /// Wander travel width of the pet strip drawn last frame; `None` when the
     /// strip was not drawn. Gates the strip animation's frame cost in tick.
     pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
+    /// Where the top-border "N unread mentions" text was drawn last frame,
+    /// for the HUD click hit test; `None` when nothing is unread. Only the
+    /// mentions segment is clickable, not the voice/chips text after it.
+    pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -1169,6 +1173,7 @@ impl App {
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
             last_pet_strip_travel: std::cell::Cell::new(None),
+            last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,

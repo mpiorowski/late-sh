@@ -211,7 +211,6 @@ fn unread_boundary_ignores_read_and_own_messages() {
         id: Uuid::now_v7(),
         created,
         updated: created,
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id,

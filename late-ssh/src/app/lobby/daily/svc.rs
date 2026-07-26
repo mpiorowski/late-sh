@@ -737,9 +737,12 @@ impl DailyService {
         state.revision = state.revision.saturating_add(1);
         state.fen = format!("{}", board);
         state.position_history.push(state.fen.clone());
+        // The resolved move's own squares, not the pair the client sent: a
+        // castle played as a two-square king push stores as the
+        // king-captures-rook encoding every other castle in the history uses.
         state.move_history.push(DailyMoveRecord {
-            from,
-            to,
+            from: mv.from as usize,
+            to: mv.to as usize,
             label: label.clone(),
             at: Utc::now(),
         });

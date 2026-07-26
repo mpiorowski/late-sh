@@ -72,6 +72,9 @@ pub struct DashboardChatView<'a> {
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
+    /// The room being shown, when it is loaded. Only its header (voice, topic,
+    /// `/rules`) is read here; messages arrive separately below.
+    pub room: Option<&'a ChatRoom>,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -1033,6 +1036,10 @@ pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     out
 }
 
+/// Rows the Lounge chat card needs before another surface may take space above
+/// it. The aquarium tray checks this before carving its strip off the top.
+pub(crate) const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
+
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
     area: Rect,
@@ -1071,25 +1078,25 @@ pub fn draw_dashboard_chat_card(
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
-    if let Some(voice_channel_id) = view.voice_channel_id {
-        let voice_view = crate::app::voice::ui::VoiceRoomView {
+    // The Lounge gets the same header block as every other room: voice state
+    // and the topic in one place, rather than a bare voice strip.
+    let voice = view
+        .voice_channel_id
+        .map(|room_id| crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
-            room_id: voice_channel_id,
+            room_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-        };
-        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-        let strip = Rect {
-            height: strip_height,
-            ..messages_area
-        };
-        crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-        messages_area = Rect {
-            y: messages_area.y + strip_height,
-            height: messages_area.height.saturating_sub(strip_height),
-            ..messages_area
-        };
-    }
+        });
+    messages_area = draw_room_header(
+        frame,
+        messages_area,
+        RoomHeader {
+            voice,
+            topic: view.room.and_then(room_topic),
+            has_rules: view.room.is_some_and(room_has_rules),
+        },
+    );
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -1415,9 +1422,8 @@ fn ensure_chat_rows_cache(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
-        // A bumped `updated` marks a message that's been edited (an admin pin
-        // also bumps it; we treat that as close enough rather than tracking a
-        // dedicated edited flag).
+        // A bumped `updated` marks a message that's been edited; there is no
+        // dedicated edited flag.
         if msg.updated > msg.created {
             stamp.push_str(" (edited)");
         }

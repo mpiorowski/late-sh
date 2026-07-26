@@ -61,7 +61,6 @@ const MODERATORS_SLUG: &str = "moderators";
 
 const HISTORY_LIMIT: i64 = 500;
 const DELTA_LIMIT: i64 = 256;
-const PINNED_MESSAGES_LIMIT: i64 = 100;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -80,7 +79,7 @@ const SEARCH_CONTEXT_EACH_SIDE: i64 = 4;
 /// `/bug` / `/suggest` report cards from regular users; free-text posting is
 /// reserved for staff so reports don't drown in conversation. A report is a
 /// normal chat message whose body starts with the kind's marker (same trick
-/// as `---NEWS---` cards), so reactions, replies, pins, and deletes all work
+/// as `---NEWS---` cards), so reactions, replies, and deletes all work
 /// on it unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReportKind {
@@ -1944,31 +1943,6 @@ impl ChatService {
         );
     }
 
-    pub fn load_pinned_messages_task(&self, pinned_tx: watch::Sender<Vec<ChatMessage>>) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result = async {
-                    let _permit = service.read_permits.acquire().await?;
-                    let client = service.db.get().await?;
-                    ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await
-                }
-                .await;
-                match result {
-                    Ok(messages) => {
-                        let _ = pinned_tx.send(messages);
-                    }
-                    Err(e) => late_core::error_span!(
-                        "chat_load_pinned_messages_failed",
-                        error = ?e,
-                        "failed to load pinned chat messages"
-                    ),
-                }
-            }
-            .instrument(info_span!("chat.load_pinned_messages_task")),
-        );
-    }
-
     pub fn check_poll_start_task(&self, user_id: Uuid, room_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -2695,46 +2669,6 @@ impl ChatService {
                 user_id = %user_id,
                 message_id = %message_id,
                 icon = %span_icon
-            )),
-        );
-    }
-
-    pub fn toggle_message_pin_task(
-        &self,
-        message_id: Uuid,
-        is_admin: bool,
-        pinned_tx: watch::Sender<Vec<ChatMessage>>,
-    ) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result: Result<Vec<ChatMessage>> = async {
-                    if !is_admin {
-                        anyhow::bail!("admin-only");
-                    }
-                    let client = service.db.get().await?;
-                    let message = ChatMessage::get(&client, message_id)
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("message not found"))?;
-                    ChatMessage::set_pinned(&client, message_id, !message.pinned).await?;
-                    let pinned = ChatMessage::list_pinned(&client, PINNED_MESSAGES_LIMIT).await?;
-                    Ok(pinned)
-                }
-                .await;
-                match result {
-                    Ok(pinned) => {
-                        let _ = pinned_tx.send(pinned);
-                    }
-                    Err(e) => late_core::error_span!(
-                        "chat_pin_failed",
-                        error = ?e,
-                        "failed to toggle message pin"
-                    ),
-                }
-            }
-            .instrument(info_span!(
-                "chat.toggle_message_pin_task",
-                message_id = %message_id
             )),
         );
     }
