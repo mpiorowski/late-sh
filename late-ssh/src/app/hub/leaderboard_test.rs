@@ -1,5 +1,5 @@
 use super::*;
-use ratatui::layout::Size;
+use ratatui::{Terminal, backend::TestBackend, layout::Size};
 
 fn row(rank: i64, name: &str, value: i64) -> RankedRow {
     RankedRow {
@@ -24,6 +24,76 @@ fn line_text(line: &Line<'_>) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
+}
+
+fn top_plan(
+    unit: &'static str,
+    me: Uuid,
+    user_index: Option<usize>,
+    height: usize,
+    show_current_marker: bool,
+) -> RowPlan<'static> {
+    RowPlan {
+        unit,
+        user_id: me,
+        user_index,
+        height,
+        show_current_marker,
+        density: RowDensity::Top,
+    }
+}
+
+fn score_plan(me: Uuid, user_index: Option<usize>, height: usize) -> RowPlan<'static> {
+    RowPlan {
+        unit: "",
+        user_id: me,
+        user_index,
+        height,
+        show_current_marker: true,
+        density: RowDensity::Score,
+    }
+}
+
+/// Draw the leaderboard over a whole `width x height` screen, taking the hub's
+/// footer row where the shell would put it, and return what landed.
+fn drawn_leaderboard(width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    let data = LeaderboardData::default();
+    terminal
+        .draw(|frame| {
+            let popup = frame.area();
+            let hub_footer = Rect::new(popup.x + 1, popup.bottom() - 2, popup.width - 2, 1);
+            draw(frame, popup, hub_footer, &data, Uuid::nil(), false);
+        })
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let mut text = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            text.push_str(buffer[(x, y)].symbol());
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// The dense grid carries its own footer, so a popup too small to build one
+/// used to render the tab with no key hints at all.
+#[test]
+fn key_hints_survive_a_popup_too_small_for_the_grid() {
+    let reference = drawn_leaderboard(111, 41);
+    assert!(
+        reference.contains("Esc/q close"),
+        "reference popup lost its footer:\n{reference}"
+    );
+
+    assert!(DenseGrid::new(Rect::new(0, 0, 80, 13)).is_none());
+    let short = drawn_leaderboard(80, 13);
+    assert!(
+        short.contains("Esc/q close"),
+        "gridless popup lost its footer:\n{short}"
+    );
 }
 
 #[test]
@@ -72,14 +142,8 @@ fn monthly_score_area_reserves_top_five_and_current_user_tail() {
     rows.push(user_row(169, "me", 10, me));
     let lines = ranked_lines_from_rows(
         &rows,
-        "",
-        me,
-        Some(5),
-        usize::from(SCORE_MONTHLY_HEIGHT - 1),
+        score_plan(me, Some(5), usize::from(SCORE_MONTHLY_HEIGHT - 1)),
         22,
-        TOP_LIMIT_SCORE,
-        true,
-        RowDensity::Score,
     );
 
     assert_eq!(lines.len(), 7);
@@ -302,11 +366,42 @@ fn score_card_width_stops_at_widest_visible_line_item() {
     ];
 
     assert_eq!(score_row_natural_width(&rows[0]), 26);
-    assert_eq!(score_card_content_width(40, &[&rows], me), 26);
-    assert_eq!(score_card_content_width(20, &[&rows], me), 20);
+    assert_eq!(score_card_content_width(40, score_card_rows(&rows, me)), 26);
+    assert_eq!(score_card_content_width(20, score_card_rows(&rows, me)), 20);
 
     rows.push(user_row(230, "long_current_name", 940, me));
-    assert_eq!(score_card_content_width(40, &[&rows], me), 29);
+    assert_eq!(score_card_content_width(40, score_card_rows(&rows, me)), 29);
+
+    // A section with room for two rows prints two leaders and no tail, so it
+    // must not widen for the deep row it never shows.
+    let cramped = score_plan(me, Some(5), 2);
+    assert_eq!(
+        score_card_content_width(40, planned_rows(&rows, cramped)),
+        26
+    );
+}
+
+#[test]
+fn deep_ranked_streak_replaces_leaders_instead_of_hiding_you() {
+    let me = Uuid::now_v7();
+    let mut rows: Vec<RankedRow> = (1..=20)
+        .map(|rank| row(rank, &format!("u{rank}"), 30 - rank))
+        .collect();
+    rows.push(user_row(21, "me", 2, me));
+
+    // Five rows of room: three leaders, the ellipsis, then your streak.
+    let lines = ranked_lines_from_rows(&rows, score_plan(me, Some(20), 5), 20);
+    assert_eq!(lines.len(), 5);
+    assert!(line_text(&lines[2]).contains("#3 "));
+    assert!(line_text(&lines[3]).contains('…'));
+    assert!(line_text(&lines[4]).starts_with("›#21 me"));
+
+    // Two rows leave no leader above the ellipsis, so the tail is dropped and
+    // the space goes back to the leaders rather than showing you alone.
+    let cramped = ranked_lines_from_rows(&rows, score_plan(me, Some(20), 2), 20);
+    assert_eq!(cramped.len(), 2);
+    assert!(line_text(&cramped[0]).contains("#1 "));
+    assert!(line_text(&cramped[1]).contains("#2 "));
 }
 
 #[test]
@@ -318,40 +413,16 @@ fn top_card_width_stops_at_two_space_name_value_gap() {
         row(3, "lb_astersystem", 62_300),
     ];
 
-    let content_width = top_card_content_width(60, &rows, "chips", nobody, None, 12, true);
+    let plan = top_plan("chips", nobody, None, 12, true);
+    let content_width = card_content_width(60, &rows, plan);
     assert_eq!(content_width, 34);
-    let lines = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        nobody,
-        None,
-        12,
-        content_width,
-        TOP_LIMIT_RANKED,
-        true,
-        RowDensity::Top,
-    );
+    let lines = ranked_lines_from_rows(&rows, plan, content_width);
     assert_eq!(line_text(&lines[0]), " #1  lb_lemoncmd     64,100 chips ");
     assert_eq!(line_text(&lines[2]), " #3  lb_astersystem  62,300 chips ");
 
-    let compact_width = top_card_content_width(30, &rows, "chips", nobody, None, 12, true);
+    let compact_width = card_content_width(30, &rows, plan);
     assert_eq!(compact_width, 30);
-    assert!(
-        line_text(
-            &ranked_lines_from_rows(
-                &rows,
-                "chips",
-                nobody,
-                None,
-                12,
-                compact_width,
-                TOP_LIMIT_RANKED,
-                true,
-                RowDensity::Top,
-            )[2]
-        )
-        .contains('…')
-    );
+    assert!(line_text(&ranked_lines_from_rows(&rows, plan, compact_width)[2]).contains('…'));
 }
 
 #[test]
@@ -363,11 +434,11 @@ fn top_card_natural_width_includes_visible_current_user_tail() {
     rows.push(user_row(51, "long_current_name", 12_500, me));
 
     assert_eq!(
-        top_card_content_width(60, &rows, "chips", me, Some(10), 12, true),
+        card_content_width(60, &rows, top_plan("chips", me, Some(10), 12, true)),
         38
     );
     assert_eq!(
-        top_card_content_width(60, &rows, "chips", me, Some(10), 12, false),
+        card_content_width(60, &rows, top_plan("chips", me, Some(10), 12, false)),
         38
     );
 }
@@ -380,17 +451,7 @@ fn top_visible_users_render_top_only() {
         row(2, "bob", 800),
         row(3, "carol", 600),
     ];
-    let lines = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        me,
-        Some(0),
-        12,
-        40,
-        10,
-        true,
-        RowDensity::Top,
-    );
+    let lines = ranked_lines_from_rows(&rows, top_plan("chips", me, Some(0), 12, true), 40);
     assert_eq!(lines.len(), 3);
 }
 
@@ -401,30 +462,10 @@ fn deep_rank_appends_divider_and_user() {
         .map(|rank| row(rank, &format!("u{rank}"), 1000 - rank * 10))
         .collect();
     rows.push(user_row(51, "me", 100, me));
-    let lines = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        me,
-        Some(50),
-        14,
-        40,
-        10,
-        true,
-        RowDensity::Top,
-    );
+    let lines = ranked_lines_from_rows(&rows, top_plan("chips", me, Some(50), 14, true), 40);
     assert_eq!(lines.len(), 12);
 
-    let unmarked = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        me,
-        Some(50),
-        14,
-        40,
-        10,
-        false,
-        RowDensity::Top,
-    );
+    let unmarked = ranked_lines_from_rows(&rows, top_plan("chips", me, Some(50), 14, false), 40);
     assert!(line_text(unmarked.last().unwrap()).starts_with(" #51  me"));
 }
 
@@ -434,17 +475,7 @@ fn no_user_no_tail() {
     let rows: Vec<RankedRow> = (1..=12)
         .map(|rank| row(rank, &format!("u{rank}"), 100))
         .collect();
-    let lines = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        nobody,
-        None,
-        12,
-        40,
-        10,
-        true,
-        RowDensity::Top,
-    );
+    let lines = ranked_lines_from_rows(&rows, top_plan("chips", nobody, None, 12, true), 40);
     assert_eq!(lines.len(), 10);
 }
 
@@ -455,17 +486,7 @@ fn tight_budget_keeps_tail_visible() {
         .map(|rank| row(rank, &format!("u{rank}"), 100))
         .collect();
     rows.push(user_row(51, "me", 1, me));
-    let lines = ranked_lines_from_rows(
-        &rows,
-        "chips",
-        me,
-        Some(50),
-        3,
-        40,
-        10,
-        true,
-        RowDensity::Top,
-    );
+    let lines = ranked_lines_from_rows(&rows, top_plan("chips", me, Some(50), 3, true), 40);
     assert_eq!(lines.len(), 3);
 }
 

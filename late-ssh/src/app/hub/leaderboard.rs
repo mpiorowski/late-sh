@@ -10,8 +10,6 @@ use uuid::Uuid;
 
 use crate::app::common::theme;
 
-use super::state::HubTab;
-
 const TOP_LIMIT_RANKED: usize = 10;
 const TOP_LIMIT_SCORE: usize = 5;
 const SCORE_MONTHLY_OFFSET: u16 = 2;
@@ -31,18 +29,24 @@ const REFERENCE_SCORE_PANEL_SPANS: [u16; 5] = [23, 22, 22, 22, 21];
 pub(crate) fn draw(
     frame: &mut Frame,
     popup: Rect,
+    hub_footer: Rect,
     data: &LeaderboardData,
     user_id: Uuid,
     is_admin: bool,
 ) {
+    // The dense grid carries its own footer, cut short so a column divider can
+    // run past the right of it. When the popup is too small to build a grid,
+    // the hub's plain full-width footer stands in: without it the tab would
+    // render as an empty modal with no key hints at all.
     let Some(mut grid) = DenseGrid::new(popup) else {
+        super::ui::draw_footer(frame, hub_footer, is_admin);
         return;
     };
     fit_top_row_to_content(&mut grid, data, user_id);
 
     draw_top_row(frame, &grid, data, user_id);
     draw_score_row(frame, &grid, data, user_id);
-    super::ui::draw_footer(frame, grid.footer_area(), HubTab::Leaderboard, is_admin);
+    super::ui::draw_footer(frame, grid.footer_area(), is_admin);
     draw_grid(frame, &grid);
 }
 
@@ -255,8 +259,8 @@ fn top_board_natural_width(
     show_current_marker: bool,
 ) -> Option<usize> {
     let rows: Vec<RankedRow> = entries.iter().map(RankedRow::from).collect();
-    let user_rank = rows.iter().position(|row| row.user_id == user_id);
-    top_card_natural_width(&rows, unit, user_id, user_rank, height, show_current_marker)
+    let plan = top_row_plan(&rows, unit, user_id, height, show_current_marker);
+    card_natural_width(&rows, plan)
 }
 
 fn draw_top_row(frame: &mut Frame, grid: &DenseGrid, data: &LeaderboardData, user_id: Uuid) {
@@ -395,27 +399,15 @@ fn draw_ranked_panel(frame: &mut Frame, area: Rect, user_id: Uuid, view: RankedB
     }
 
     let rows: Vec<RankedRow> = view.entries.iter().map(RankedRow::from).collect();
-    let user_rank = rows.iter().position(|row| row.user_id == user_id);
-    let content_width = top_card_content_width(
-        body.width as usize,
+    let plan = top_row_plan(
         &rows,
         view.unit,
         user_id,
-        user_rank,
-        body.height as usize,
+        usize::from(body.height),
         view.show_current_marker,
     );
-    let lines = ranked_lines_from_rows(
-        &rows,
-        view.unit,
-        user_id,
-        user_rank,
-        body.height as usize,
-        content_width,
-        TOP_LIMIT_RANKED,
-        view.show_current_marker,
-        RowDensity::Top,
-    );
+    let content_width = card_content_width(usize::from(body.width), &rows, plan);
+    let lines = ranked_lines_from_rows(&rows, plan, content_width);
     frame.render_widget(Paragraph::new(lines), body);
 }
 
@@ -435,8 +427,7 @@ fn draw_score_panel(
     let all_time_rows: Vec<RankedRow> = all_time.into_iter().map(RankedRow::from).collect();
     let content_width = score_card_content_width(
         usize::from(area.width),
-        &[&monthly_rows, &all_time_rows],
-        user_id,
+        score_card_rows(&monthly_rows, user_id).chain(score_card_rows(&all_time_rows, user_id)),
     );
     let all_time_offset = score_all_time_offset(area, &all_time_rows, user_id, 0);
 
@@ -497,18 +488,26 @@ fn draw_le_word_panel(frame: &mut Frame, area: Rect, data: &LeaderboardData, use
         preferred_win_streak_tail_height(win_streak_rows.len()),
     );
     let all_time_area = preferred_score_list_area(area, all_time_offset, &all_time_rows, user_id);
-    let win_streak_area = win_streak_area(area, all_time_area.bottom(), win_streak_rows.len());
-    let visible_win_streak_rows = win_streak_area
-        .map(|section| usize::from(section.height.saturating_sub(1)))
-        .unwrap_or_default();
+    let streak_area = win_streak_area(area, all_time_area.bottom(), win_streak_rows.len());
+    // The streak section lives on leftover rows, so unlike the two boards above
+    // it there is no reserved tail: whatever height it got decides how many
+    // leaders it trades away to show your own streak.
+    let streak_plan = streak_area.map(|section| {
+        score_row_plan(
+            &win_streak_rows,
+            user_id,
+            usize::from(section.height.saturating_sub(1)),
+        )
+    });
     let content_width = score_card_content_width(
         usize::from(area.width),
-        &[
-            &monthly_rows,
-            &all_time_rows,
-            &win_streak_rows[..visible_win_streak_rows],
-        ],
-        user_id,
+        score_card_rows(&monthly_rows, user_id)
+            .chain(score_card_rows(&all_time_rows, user_id))
+            .chain(
+                streak_plan
+                    .into_iter()
+                    .flat_map(|plan| planned_rows(&win_streak_rows, plan)),
+            ),
     );
 
     if area.height > SCORE_MONTHLY_OFFSET {
@@ -531,14 +530,8 @@ fn draw_le_word_panel(frame: &mut Frame, area: Rect, data: &LeaderboardData, use
             content_width,
         );
     }
-    if let Some(win_streak_area) = win_streak_area {
-        draw_win_streak_list(
-            frame,
-            win_streak_area,
-            &win_streak_rows,
-            user_id,
-            content_width,
-        );
+    if let (Some(section), Some(plan)) = (streak_area, streak_plan) {
+        draw_win_streak_list(frame, section, &win_streak_rows, plan, content_width);
     }
 }
 
@@ -622,28 +615,12 @@ fn draw_win_streak_list(
     frame: &mut Frame,
     area: Rect,
     rows: &[RankedRow],
-    user_id: Uuid,
+    plan: RowPlan<'_>,
     content_width: usize,
 ) {
-    render_line(frame, area, 0, subsection_heading("win streak"));
-    for (index, row) in rows
-        .iter()
-        .take(usize::from(area.height.saturating_sub(1)))
-        .enumerate()
-    {
-        render_line(
-            frame,
-            area,
-            index as u16 + 1,
-            ranked_line(
-                row,
-                "",
-                row.user_id == user_id,
-                content_width,
-                RowDensity::Score,
-            ),
-        );
-    }
+    let mut lines = vec![subsection_heading("win streak")];
+    lines.extend(ranked_lines_from_rows(rows, plan, content_width));
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn draw_score_list(
@@ -669,37 +646,29 @@ fn draw_score_list(
                 ),
             ]));
         } else {
-            let user_rank = rows.iter().position(|row| row.user_id == user_id);
-            lines.extend(ranked_lines_from_rows(
-                rows,
-                "",
-                user_id,
-                user_rank,
-                body_room,
-                content_width,
-                TOP_LIMIT_SCORE,
-                true,
-                RowDensity::Score,
-            ));
+            let plan = score_row_plan(rows, user_id, body_room);
+            lines.extend(ranked_lines_from_rows(rows, plan, content_width));
         }
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn score_card_content_width(
+/// Right-align the values at the widest line the card will actually print, so
+/// a rank nobody can see never pushes the score column out. Callers pass the
+/// rows they are about to draw.
+fn score_card_content_width<'a>(
     available_width: usize,
-    boards: &[&[RankedRow]],
-    user_id: Uuid,
+    rows: impl Iterator<Item = &'a RankedRow>,
 ) -> usize {
-    let natural_width = boards
-        .iter()
-        .flat_map(|rows| score_card_rows(rows, user_id))
+    let natural_width = rows
         .map(score_row_natural_width)
         .max()
         .unwrap_or(available_width);
     available_width.min(natural_width)
 }
 
+/// The rows a full-height score subsection shows: the top five, plus the
+/// viewer's own row when they rank below it.
 fn score_card_rows(rows: &[RankedRow], user_id: Uuid) -> impl Iterator<Item = &RankedRow> {
     let user_tail = rows
         .iter()
@@ -709,54 +678,46 @@ fn score_card_rows(rows: &[RankedRow], user_id: Uuid) -> impl Iterator<Item = &R
     rows.iter().take(TOP_LIMIT_SCORE).chain(user_tail)
 }
 
+/// The rows a height-constrained plan will fit, tail included when it survives.
+fn planned_rows<'a>(
+    rows: &'a [RankedRow],
+    plan: RowPlan<'_>,
+) -> impl Iterator<Item = &'a RankedRow> {
+    let (top_count, include_user_tail) = ranked_display_plan(rows.len(), plan);
+    let user_tail = include_user_tail
+        .then(|| plan.user_index.map(|index| &rows[index]))
+        .flatten();
+    rows.iter().take(top_count).chain(user_tail)
+}
+
 fn score_row_natural_width(row: &RankedRow) -> usize {
     ranked_row_natural_width(row, "", false, RowDensity::Score, false)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn top_card_content_width(
-    available_width: usize,
-    rows: &[RankedRow],
-    unit: &str,
-    user_id: Uuid,
-    user_index: Option<usize>,
-    height: usize,
-    show_current_marker: bool,
-) -> usize {
-    available_width.min(
-        top_card_natural_width(rows, unit, user_id, user_index, height, show_current_marker)
-            .unwrap_or(available_width),
-    )
+fn card_content_width(available_width: usize, rows: &[RankedRow], plan: RowPlan<'_>) -> usize {
+    available_width.min(card_natural_width(rows, plan).unwrap_or(available_width))
 }
 
-fn top_card_natural_width(
-    rows: &[RankedRow],
-    unit: &str,
-    user_id: Uuid,
-    user_index: Option<usize>,
-    height: usize,
-    show_current_marker: bool,
-) -> Option<usize> {
-    let (top_count, include_user_tail) =
-        ranked_display_plan(rows.len(), user_index, height, TOP_LIMIT_RANKED);
+fn card_natural_width(rows: &[RankedRow], plan: RowPlan<'_>) -> Option<usize> {
+    let (top_count, include_user_tail) = ranked_display_plan(rows.len(), plan);
     let top_widths = rows.iter().take(top_count).map(|row| {
         ranked_row_natural_width(
             row,
-            unit,
-            show_current_marker && row.user_id == user_id,
-            RowDensity::Top,
+            plan.unit,
+            plan.show_current_marker && row.user_id == plan.user_id,
+            plan.density,
             false,
         )
     });
     let tail_width = include_user_tail
         .then(|| {
-            user_index.map(|index| {
+            plan.user_index.map(|index| {
                 ranked_row_natural_width(
                     &rows[index],
-                    unit,
-                    show_current_marker,
-                    RowDensity::Top,
-                    !show_current_marker,
+                    plan.unit,
+                    plan.show_current_marker,
+                    plan.density,
+                    !plan.show_current_marker,
                 )
             })
         })
@@ -831,68 +792,120 @@ enum RowDensity {
     Score,
 }
 
-/// Shows the first `top_limit` rows. If the current user is ranked below that,
-/// append an ellipsis plus their row, reducing the visible top rows as needed.
-#[allow(clippy::too_many_arguments)]
-fn ranked_lines_from_rows(
-    rows: &[RankedRow],
-    unit: &str,
+impl RowDensity {
+    /// How deep the leader slice goes before the current-user tail takes over.
+    /// A property of the density, not of the caller: the roomy top boards show
+    /// ten, the stacked score subsections five.
+    fn top_limit(self) -> usize {
+        match self {
+            RowDensity::Top => TOP_LIMIT_RANKED,
+            RowDensity::Score => TOP_LIMIT_SCORE,
+        }
+    }
+}
+
+/// Everything one board needs to place its rows: which entry is the viewer's,
+/// how much vertical room the body has, and how a row is spelled at this
+/// density. Width stays out of it, because the width is what the natural-width
+/// pass is computing.
+#[derive(Clone, Copy)]
+struct RowPlan<'a> {
+    unit: &'a str,
     user_id: Uuid,
     user_index: Option<usize>,
     height: usize,
-    width: usize,
-    top_limit: usize,
     show_current_marker: bool,
     density: RowDensity,
+}
+
+fn top_row_plan<'a>(
+    rows: &[RankedRow],
+    unit: &'a str,
+    user_id: Uuid,
+    height: usize,
+    show_current_marker: bool,
+) -> RowPlan<'a> {
+    RowPlan {
+        unit,
+        user_id,
+        user_index: rows.iter().position(|row| row.user_id == user_id),
+        height,
+        show_current_marker,
+        density: RowDensity::Top,
+    }
+}
+
+fn score_row_plan(rows: &[RankedRow], user_id: Uuid, height: usize) -> RowPlan<'static> {
+    RowPlan {
+        unit: "",
+        user_id,
+        user_index: rows.iter().position(|row| row.user_id == user_id),
+        height,
+        show_current_marker: true,
+        density: RowDensity::Score,
+    }
+}
+
+/// Shows the first `density.top_limit()` rows. If the current user is ranked
+/// below that, append an ellipsis plus their row, reducing the visible top rows
+/// as needed.
+fn ranked_lines_from_rows(
+    rows: &[RankedRow],
+    plan: RowPlan<'_>,
+    width: usize,
 ) -> Vec<Line<'static>> {
-    if rows.is_empty() || height == 0 {
+    if rows.is_empty() || plan.height == 0 {
         return Vec::new();
     }
 
-    let (top_count, include_user_tail) =
-        ranked_display_plan(rows.len(), user_index, height, top_limit);
+    let (top_count, include_user_tail) = ranked_display_plan(rows.len(), plan);
 
-    let mut lines = Vec::with_capacity(height);
+    let mut lines = Vec::with_capacity(plan.height);
     for row in rows.iter().take(top_count) {
         lines.push(ranked_line(
             row,
-            unit,
-            show_current_marker && row.user_id == user_id,
+            plan.unit,
+            plan.show_current_marker && row.user_id == plan.user_id,
             width,
-            density,
+            plan.density,
         ));
     }
 
     if include_user_tail {
         lines.push(divider_line(width));
-        if let Some(index) = user_index {
+        if let Some(index) = plan.user_index {
             let row = &rows[index];
             lines.push(ranked_line_with_marker_space(
                 row,
-                unit,
-                show_current_marker,
+                plan.unit,
+                plan.show_current_marker,
                 width,
-                density,
-                !show_current_marker,
+                plan.density,
+                !plan.show_current_marker,
             ));
         }
     }
     lines
 }
 
-fn ranked_display_plan(
-    row_count: usize,
-    user_index: Option<usize>,
-    height: usize,
-    top_limit: usize,
-) -> (usize, bool) {
-    let needs_user_tail = user_index.is_some_and(|index| index >= top_limit);
-    let tail_cost = if needs_user_tail { 2 } else { 0 };
-    let top_count = top_limit
-        .min(row_count)
-        .min(height.saturating_sub(tail_cost));
-    let include_user_tail = needs_user_tail && top_count + tail_cost <= height;
-    (top_count, include_user_tail)
+fn ranked_display_plan(row_count: usize, plan: RowPlan<'_>) -> (usize, bool) {
+    let top_limit = plan.density.top_limit();
+    let needs_user_tail = plan.user_index.is_some_and(|index| index >= top_limit);
+    let leaders = |reserved: usize| {
+        top_limit
+            .min(row_count)
+            .min(plan.height.saturating_sub(reserved))
+    };
+
+    // The tail costs an ellipsis row plus your own. It only earns them if a
+    // leader still fits above it: a divider hanging under the heading with
+    // nothing before it reads as a broken list, not as "you are further down".
+    let with_tail = leaders(2);
+    if needs_user_tail && with_tail >= 1 && with_tail + 2 <= plan.height {
+        (with_tail, true)
+    } else {
+        (leaders(0), false)
+    }
 }
 
 fn divider_line(width: usize) -> Line<'static> {

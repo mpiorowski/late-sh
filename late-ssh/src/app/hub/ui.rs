@@ -44,22 +44,34 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     } = props;
 
     let layout = draw_hub_shell(frame, area, state, is_admin);
-    let leaderboard_selected = state.selected_tab() == HubTab::Leaderboard;
+    // Every tab but the leaderboard renders inside the body row and gets the
+    // shell's footer. The leaderboard spans the whole popup so its grid can
+    // meet the border, which means it draws its own footer.
     match state.selected_tab() {
-        HubTab::Leaderboard => {
-            crate::app::hub::leaderboard::draw(frame, layout.popup, leaderboard, user_id, is_admin)
+        HubTab::Leaderboard => crate::app::hub::leaderboard::draw(
+            frame,
+            layout.popup,
+            layout.footer,
+            leaderboard,
+            user_id,
+            is_admin,
+        ),
+        HubTab::Dailies => {
+            crate::app::hub::dailies::ui::draw(frame, layout.body, quest_state);
+            draw_footer(frame, layout.footer, is_admin);
         }
-        HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout.body, quest_state),
         HubTab::Shop => {
-            crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet_species)
+            crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet_species);
+            draw_footer(frame, layout.footer, is_admin);
         }
-        HubTab::Events => crate::app::hub::events::draw(frame, layout.body),
+        HubTab::Events => {
+            crate::app::hub::events::draw(frame, layout.body);
+            draw_footer(frame, layout.footer, is_admin);
+        }
         HubTab::Admin => {
-            crate::app::hub::admin::ui::draw(frame, layout.body, admin_state, is_admin)
+            crate::app::hub::admin::ui::draw(frame, layout.body, admin_state, is_admin);
+            draw_footer(frame, layout.footer, is_admin);
         }
-    }
-    if !leaderboard_selected {
-        draw_footer(frame, layout.footer, state.selected_tab(), is_admin);
     }
 }
 
@@ -133,7 +145,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-pub(super) fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab, is_admin: bool) {
+pub(super) fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
     let mut spans = vec![

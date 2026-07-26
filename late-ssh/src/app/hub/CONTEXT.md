@@ -20,9 +20,12 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
 - `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
-  formatting, and cell-exact reference geometry. A `48x139` terminal produces
-  the `41x111` Hub modal used by the dense-layout reference; above that width,
-  surplus lower-grid columns are shared across all five panels.
+  formatting, and cell-exact reference geometry. It is the one tab handed the
+  whole popup rect instead of the body row, so it owns its footer: a shortened
+  one inside the grid, or the shell's full-width one when the popup is too
+  small to build a grid at all. A `48x139` terminal produces the `41x111` Hub
+  modal used by the dense-layout reference; above that width, surplus
+  lower-grid columns are shared across all five panels.
   Each panel stops right-aligning scores once its widest visible line fits with
   the full username, a two-cell name/score gap, and the trailing edge pad. Each
   monthly score subsection reserves two rows after its top five for the optional
@@ -87,11 +90,22 @@ Current compact boards:
 - `Le Word`: monthly and all-time daily solve counts, plus win-streak leaders
   ranked by each user's longest consecutive-day solve streak. The win-streak
   subsection uses leftover vertical space for up to five rows and disappears
-  before monthly or all-time rows are compressed.
+  before monthly or all-time rows are compressed. Like every score subsection
+  it shows the viewer's own row when they rank below the visible leaders, but
+  it has no reserved tail: it trades leader rows for yours out of the space it
+  was given. Every subsection drops the tail entirely rather than print the
+  ellipsis with no leader above it.
 
 Monthly windows use UTC calendar months. Score and Le Word all-time boards persist;
 the Le Word win-streak board measures consecutive `puzzle_date` values across all
 recorded daily wins.
+
+An empty local database renders every panel as "no scores yet", which makes the
+responsive widths impossible to eyeball. `make seed-leaderboard`
+(`scripts/seed_leaderboard_test_data.{sh,sql}`) fills the Compose database with
+48 synthetic players spread across every board. Local development only: it owns
+the `seed:leaderboard:` fingerprints, prefixes their usernames with `lb_` to
+clear the unique index on real handles, and rewrites their stats on every rerun.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.

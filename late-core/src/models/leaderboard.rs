@@ -110,7 +110,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_monthly_traffic_high_scores(client, 500),
         fetch_monthly_le_word_wins(client, 500),
         fetch_all_time_le_word_wins(client, 500),
-        fetch_le_word_win_streaks(client, 5),
+        fetch_le_word_win_streaks(client, 500),
     )?;
 
     Ok(LeaderboardData {
@@ -258,14 +258,14 @@ async fn fetch_monthly_le_word_wins(client: &Client, limit: i64) -> Result<Vec<R
                 FROM totals t
                 JOIN users u ON u.id = t.user_id
             )
-            SELECT username, user_id, wins, rank
+            SELECT username, user_id, wins AS value, rank
             FROM ranked
             ORDER BY rank ASC, username ASC
             LIMIT $1",
             &[&limit],
         )
         .await?;
-    Ok(ranked_entries(rows, "wins"))
+    Ok(ranked_entries(rows))
 }
 
 async fn fetch_all_time_le_word_wins(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
@@ -284,14 +284,14 @@ async fn fetch_all_time_le_word_wins(client: &Client, limit: i64) -> Result<Vec<
                 FROM totals t
                 JOIN users u ON u.id = t.user_id
             )
-            SELECT username, user_id, wins, rank
+            SELECT username, user_id, wins AS value, rank
             FROM ranked
             ORDER BY rank ASC, username ASC
             LIMIT $1",
             &[&limit],
         )
         .await?;
-    Ok(ranked_entries(rows, "wins"))
+    Ok(ranked_entries(rows))
 }
 
 async fn fetch_le_word_win_streaks(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
@@ -326,23 +326,27 @@ async fn fetch_le_word_win_streaks(client: &Client, limit: i64) -> Result<Vec<Ra
                 FROM best b
                 JOIN users u ON u.id = b.user_id
             )
-            SELECT username, user_id, streak, rank
+            SELECT username, user_id, streak AS value, rank
             FROM ranked
             ORDER BY rank ASC, username ASC
             LIMIT $1",
             &[&limit],
         )
         .await?;
-    Ok(ranked_entries(rows, "streak"))
+    Ok(ranked_entries(rows))
 }
 
-fn ranked_entries(rows: Vec<tokio_postgres::Row>, value_column: &str) -> Vec<RankedEntry> {
+/// Maps a ranked query onto `RankedEntry`. Every such query projects exactly
+/// `username, user_id, value, rank`, so there is no column left to name and
+/// nothing a call site can get wrong. Keep the descriptive name (`wins`,
+/// `streak`) inside the CTEs and alias it to `value` in the final SELECT.
+fn ranked_entries(rows: Vec<tokio_postgres::Row>) -> Vec<RankedEntry> {
     rows.into_iter()
         .map(|row| RankedEntry {
             username: row.get("username"),
             user_id: row.get("user_id"),
             rank: row.get("rank"),
-            value: row.get(value_column),
+            value: row.get("value"),
         })
         .collect()
 }
