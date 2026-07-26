@@ -681,6 +681,22 @@ impl User {
         Ok(extract_uuid_ids(&settings, FRIEND_USER_IDS_KEY))
     }
 
+    /// Friends and ignores from one read. Both lists live in the same
+    /// `users.settings` document and the chat snapshot needs both on every
+    /// pass, so calling the two single-list helpers fetched the identical row
+    /// twice: 11.1M `SELECT settings` calls in an 18-day window, exactly 2.006
+    /// per snapshot.
+    pub async fn friend_and_ignored_user_ids(
+        client: &Client,
+        user_id: Uuid,
+    ) -> Result<(Vec<Uuid>, Vec<Uuid>)> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok((
+            extract_uuid_ids(&settings, FRIEND_USER_IDS_KEY),
+            extract_uuid_ids(&settings, IGNORED_USER_IDS_KEY),
+        ))
+    }
+
     pub async fn favorite_room_ids(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_favorite_room_ids(&settings))

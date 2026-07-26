@@ -47,10 +47,10 @@ async fn test_chat_room_member() {
     ChatRoomMember::mark_read_now(&client, room.id, user.id)
         .await
         .unwrap();
-    let counts = ChatRoomMember::unread_counts_for_user(&client, user.id)
+    let state = ChatRoom::list_for_user_with_state(&client, user.id, None)
         .await
         .unwrap();
-    assert_eq!(counts.get(&room.id), Some(&0));
+    assert_eq!(state.unread_counts.get(&room.id), Some(&0));
 }
 
 #[tokio::test]

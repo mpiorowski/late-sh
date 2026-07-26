@@ -231,11 +231,11 @@ fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
 }
 
 #[test]
-fn help_hint_title_lists_guide_last() {
+fn help_hint_title_lists_exit_last() {
     let help = app_frame_help_hint_title(HelpHintStyle::DottedCtrl);
     assert_eq!(
         line_text(&help),
-        " Settings Ctrl+O · Hub Ctrl+G · Lobby Ctrl+Q · Guide ? "
+        " Settings Ctrl+O · Hub Ctrl+G · Lobby Ctrl+Q · Guide ? · Exit qq "
     );
 }
 
@@ -246,11 +246,11 @@ fn help_hint_title_compacts_separators_then_ctrl_notation() {
     let caret = app_frame_help_hint_title(HelpHintStyle::SpacedCaret);
     assert_eq!(
         line_text(&spaced),
-        " Settings Ctrl+O  Hub Ctrl+G  Lobby Ctrl+Q  Guide ? "
+        " Settings Ctrl+O  Hub Ctrl+G  Lobby Ctrl+Q  Guide ?  Exit qq "
     );
     assert_eq!(
         line_text(&caret),
-        " Settings ^O  Hub ^G  Lobby ^Q  Guide ? "
+        " Settings ^O  Hub ^G  Lobby ^Q  Guide ?  Exit qq "
     );
 
     let (help, sponsor) = app_frame_bottom_titles((line_width(&dotted) + 2) as u16);

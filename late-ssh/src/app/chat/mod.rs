@@ -10,6 +10,7 @@ pub mod polls;
 #[cfg(test)]
 mod sheet_test;
 pub mod showcase;
+pub(crate) mod slur;
 pub(crate) mod special_badges;
 pub mod state;
 #[cfg(test)]

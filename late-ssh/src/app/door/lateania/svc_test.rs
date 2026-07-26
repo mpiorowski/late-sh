@@ -1438,30 +1438,97 @@ fn broceliande_beast_room() -> RoomId {
 #[test]
 fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
     let mut s = world();
-    s.join(uid(1));
-    s.choose_class(uid(1), Class::Ranger);
-    // Stand where the easiest beasts (level 1) gather, and be well-trained so
-    // the roll is a near-sure thing; force success by maxing the odds.
-    s.players.get_mut(&uid(1)).unwrap().room = broceliande_beast_room();
-    s.players.get_mut(&uid(1)).unwrap().taming_xp = super::super::skills::xp_for_skill_level(50);
+    let user_id = uid(1);
+    s.join(user_id);
+    s.choose_class(user_id, Class::Ranger);
+    s.players.get_mut(&user_id).unwrap().room = broceliande_beast_room();
     // The easiest beast in the room is the first tameable species.
     let beasts = super::super::taming::beasts_at(broceliande_beast_room());
     assert!(!beasts.is_empty(), "beasts roam the first forest gate");
-    let before_xp = s.players[&uid(1)].taming_xp;
-    // Try a few times; a master's odds cap at 95%, so one of a handful lands.
-    for _ in 0..40 {
-        if s.players[&uid(1)].pet.is_some() {
-            break;
+    let beast_index = beasts[0].species;
+    let species = &TAMEABLE[beast_index];
+    let cooldown_key = (user_id, beast_index);
+    let baseline_xp = super::super::skills::xp_for_skill_level(species.tame_level);
+    s.players.get_mut(&user_id).unwrap().taming_xp = baseline_xp;
+
+    // Exercise both real RNG outcomes. The old retry loop was flaky because a
+    // failed roll records a 30-second cooldown, so its immediate retries never
+    // rolled again. After proving that behavior, remove only that transient test
+    // token; after success, reset its side effects if a failure is still needed.
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut attempt_count = 0;
+    while success_count == 0 || failure_count == 0 {
+        attempt_count += 1;
+        assert!(
+            attempt_count <= 10_000,
+            "real taming RNG did not produce both outcomes: {success_count} successes, {failure_count} failures"
+        );
+
+        let before_xp = s.players[&user_id].taming_xp;
+        s.tame(user_id, 0);
+
+        if let Some(pet) = s.players[&user_id].pet {
+            success_count += 1;
+            assert_eq!(pet.species.key, species.key);
+            assert!(
+                pet.species.is_tameable(),
+                "the companion is a tamed wild beast"
+            );
+            assert_eq!(
+                s.players[&user_id].taming_xp,
+                before_xp + tame_xp(species) as i64,
+                "taming trains Animal Taming xp"
+            );
+            assert!(!s.tame_cooldowns.contains_key(&cooldown_key));
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .iter()
+                    .any(|line| line.text.contains("You've earned its trust!"))
+            );
+
+            if failure_count == 0 {
+                let player = s.players.get_mut(&user_id).unwrap();
+                player.pet = None;
+                player.taming_xp = baseline_xp;
+            }
+        } else {
+            failure_count += 1;
+            assert_eq!(s.players[&user_id].taming_xp, before_xp);
+            let failed_at = *s
+                .tame_cooldowns
+                .get(&cooldown_key)
+                .expect("a failed tame records the tamer-beast cooldown");
+            assert!(failed_at.elapsed() < TAME_COOLDOWN);
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .last()
+                    .is_some_and(|line| line.text.contains("shies, then bolts"))
+            );
+
+            s.tame(user_id, 0);
+            assert!(s.players[&user_id].pet.is_none());
+            assert_eq!(s.players[&user_id].taming_xp, before_xp);
+            assert_eq!(s.tame_cooldowns.get(&cooldown_key), Some(&failed_at));
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .last()
+                    .unwrap()
+                    .text
+                    .contains("still wary")
+            );
+
+            if success_count == 0 {
+                assert_eq!(s.tame_cooldowns.remove(&cooldown_key), Some(failed_at));
+            }
         }
-        s.tame(uid(1), 0);
     }
-    let p = &s.players[&uid(1)];
-    assert!(p.pet.is_some(), "a successful tame yields a companion");
-    assert!(
-        p.pet.unwrap().species.is_tameable(),
-        "the companion is a tamed wild beast"
-    );
-    assert!(p.taming_xp > before_xp, "taming trains Animal Taming xp");
+
+    assert!(success_count > 0);
+    assert!(failure_count > 0);
 }
 
 #[test]

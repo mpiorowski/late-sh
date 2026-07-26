@@ -2075,3 +2075,30 @@ async fn push_message_bumps_only_its_room_version() {
     state.replace_message(edited);
     assert_eq!(state.room_version(lounge.id), lounge_version + 2);
 }
+
+#[test]
+fn parse_pair_command_accepts_directed_form() {
+    assert_eq!(
+        parse_pair_command("/pair @alice"),
+        Some(Some(PairRequest::Directed("alice".to_string())))
+    );
+}
+
+#[test]
+fn parse_pair_command_rejects_bare_and_malformed_forms() {
+    assert_eq!(parse_pair_command("/pair"), Some(None), "no target");
+    assert_eq!(parse_pair_command("/pair @"), Some(None), "empty username");
+    assert_eq!(parse_pair_command("/pair alice"), Some(None), "missing @");
+    assert_eq!(
+        parse_pair_command("/pair @alice extra"),
+        Some(None),
+        "trailing token"
+    );
+}
+
+#[test]
+fn parse_pair_command_ignores_unrelated_input() {
+    assert_eq!(parse_pair_command("/pairing @alice"), None);
+    assert_eq!(parse_pair_command("hello /pair @alice"), None);
+    assert_eq!(parse_pair_command("/challenge @alice"), None);
+}

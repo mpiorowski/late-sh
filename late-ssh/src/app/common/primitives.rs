@@ -79,6 +79,9 @@ pub enum Screen {
     /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
     /// modal.
     HouseTable,
+    /// Paired live coding scratchpad. Entered only once both users have run
+    /// `/pair @other`, absent from the Tab cycle; Esc leaves the pairing.
+    Scratchpad,
 }
 
 impl Screen {
@@ -105,6 +108,7 @@ impl Screen {
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
         }
     }
 
@@ -126,6 +130,7 @@ impl Screen {
             | Screen::GreenDragon => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
         }
     }
 }
@@ -177,6 +182,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Scratchpad => "Scratchpad",
     };
 
     let current_line = Paragraph::new(Line::from(vec![
