@@ -270,25 +270,49 @@ Drop the `anim_half`/`anim_quarter` gates in tick.rs and restore the aquarium's 
 
 ## DB Cost Ranking
 
-First full ranking of the workload, taken 2026-07-26 from a `pg_stat_statements` window opened 2026-07-07 (18.6 days, 59.05M calls, 56,625 s total execution time). Percentages are share of total execution time.
+Baseline taken 2026-07-26 from a `pg_stat_statements` window opened 2026-07-07 (18.6 days, 59.05M calls, 56,625 s total execution time). Percentages are share of total execution time in that window, before the fixes landed the same day.
 
-| # | Subsystem | DB time | Calls | Cadence |
-|---|---|---|---|---|
-| 1 | Chat snapshot poll (Pain Point 7) | 50-68% | 22.1M+ | 10 s per session |
-| 2 | Leaderboard refresh loop | 13.1% | 1.1M | 30 s, process-global |
-| 3 | `list_discover_public_topic_rooms` | 5.6% | 6.0k | on demand, 510 ms mean |
-| 4 | Artboard snapshot reads | 2.9% | 39k | on demand, 158 ms and 624 ms means |
-| 5 | Chat username list scan | 1.9% | 66k | 30 s, process-global |
-| 6 | Feed fan-outs (Pain Point 6) | 0.5% | 3.6M | per feed write |
+| # | Subsystem | Baseline | Calls | Cadence | Status |
+|---|---|---|---|---|---|
+| 1 | Chat snapshot poll (Pain Point 7) | 50-68% | 22.1M+ | 10 s per session | partly fixed |
+| 2 | Leaderboard refresh loop | 13.1% | 1.1M | 30 s, process-global | fixed |
+| 3 | `list_discover_public_topic_rooms` | 5.6% | 6.0k | on demand, 510 ms mean | open |
+| 4 | Artboard snapshot reads | 2.9% | 39k | on demand, 158 ms and 624 ms means | open, not worth it |
+| 5 | Chat username list scan | 1.9% | 66k | 30 s, process-global | fixed |
+| 6 | Feed fan-outs (Pain Point 6) | 0.5% | 3.6M | per feed write | open, correctness |
 
 Notes on reading this table:
 
 - The range on #1 is deploy-generation variants of the same statement: the conservative match gives 50.4%, counting every variant visible in the top 25 gives 67.8%. The unambiguous figure is `unread_counts_for_user` at 43.0% on its own.
-- **#2 is the cheapest win on the list.** `LeaderboardService::start_refresh_loop` (`app/hub/svc.rs:35`) runs `fetch_leaderboard_data` every 30 s forever, process-global, whether or not anyone is connected or looking at the Hub. Six queries per pass, the heaviest being a `chip_ledger` aggregate at 40 ms mean. Gate it on having a live subscriber, or widen the interval, for roughly 13% back at the cost of one condition.
-- #5 was `SELECT username FROM users WHERE username <> $1 ORDER BY username`, a full scan of 14k rows every 30 s to rebuild the mention-autocomplete list. **Removed 2026-07-26**: the process-wide `UsernameDirectory` already holds every username and is written through on login/profile save/rename/delete, so `refresh_username_directory` reads that instead of the DB. Autocomplete is now fresher than it was, at zero query cost. The DB arm survives only for constructions with no directory attached (tests).
-- Everything not attributed above is 27.5% spread across the long tail.
+- Everything not attributed above is 27.5% spread across the long tail. Nothing in the tail exceeds 0.5%; the largest oddities are `UPDATE rss_entries` (982k calls, 0.32%, the poller writes entries whether or not the content changed) and `INSERT INTO tetris_games` (328k calls, 0.16%).
+- #4 is not a missing index. `artboard_snapshots` is 17 rows in 9.9 MB, about 580 KB of JSONB per row, and `board_key` is already uniquely indexed. The time is detoasting the blob. Fixing it means smaller payloads or incremental persistence, not an index.
 
-Confirmed by this ranking: the chat snapshot poll and the leaderboard loop together are roughly two thirds of the database workload, and **neither of them is triggered by a user doing anything.** Both are timers.
+The shape worth remembering: the two largest items were **timers, not user actions.** Nobody had to do anything for either to run.
+
+### Fixed 2026-07-26
+
+All four shipped together, no migration, no schema change, no new infrastructure. Percentages are of the baseline total above.
+
+| Change | Baseline | Expected after |
+|---|---|---|
+| `unread_counts_for_user`: count capped at 100, per-message `users` join replaced by a UUID compare | 43% | ~1% |
+| Leaderboard loop: 30 s to 300 s, skipped entirely with no subscribers | 13.1% | ~1.3% |
+| Mention-autocomplete list: read the in-memory `UsernameDirectory` instead of re-scanning `users` | 1.9% | 0 |
+| `User::friend_and_ignored_user_ids`: one `SELECT settings` per snapshot instead of two | 0.9% | 0.45% |
+
+Roughly **56% of the total workload**, projected. Not yet verified in prod: reset `pg_stat_statements` after the deploy and re-run this ranking before trusting these numbers or planning against them.
+
+### Remaining DB work, ranked by impact
+
+1. **The rest of the chat snapshot poll, about 26% of baseline.** Still the largest single item even with `unread_counts_for_user` fixed, and still the only one that scales with concurrency. The remaining eight queries are individually cheap (0.2 ms to 0.9 ms) and expensive only because the bundle runs 5.5M times: `list_chat_author_metadata` 9.0%, `last_message_at_for_rooms` 6.4%, `list_for_user` 6.2%, `voice_channels` 2.1%, then polls, owners, settings, unread under 1% each. Per-snapshot cost is now about 3.0 ms, down from about 7.3 ms, so a connected idle session costs roughly 1.1 s of DB per hour instead of 2.6 s. Two directions, both still open, detail in Pain Point 7:
+   - **Merge round trips.** `list_for_user`, `last_message_at_for_rooms`, `owner_ids_for_rooms`, and `voice_channels` all key off the same room set and could be one or two queries instead of four. This also shortens the sequential chain.
+   - **Run the bundle less often.** Raising `CHAT_REFRESH_INTERVAL` is a one-constant change but costs badge latency unless unread is incremented locally first, which introduces dual-maintenance of the unread rule. Weigh that tradeoff deliberately; it was rejected once already on those grounds.
+2. **`list_discover_public_topic_rooms`, 5.6%.** 510 ms mean and a 969 ms variant, on demand, so this is user-facing latency rather than background load: half a second to open Discover. Options unchanged from the DB Hot Queries section: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation.
+3. **The sequential session loop, no direct DB cost.** `refresh_registered_sessions` awaits one session at a time, so cycle time is N_sessions × snapshot latency and `MissedTickBehavior::Skip` hides the overrun. Harmless at 60 sessions and at 3 ms per snapshot, but it is a latent cliff at 4 figures. Cheap to fix now that each snapshot is fast.
+4. **Feed fan-outs, 0.5%.** Fix for correctness, not capacity: three identical O(users) loops that overflow their broadcast channels and drop events in every live session. Pain Point 6.
+5. **`UPDATE rss_entries`, 0.32%.** 982k writes because the poller updates every entry on every pass whether or not the content changed. A content compare before the write would remove nearly all of it. Small, but it is pure waste and the fix is local.
+
+Below this, nothing measured exceeds 0.2%. Re-rank after the deploy rather than working further down this list from the pre-fix baseline.
 
 ## DB Investigation
 
@@ -329,8 +353,9 @@ Both rewrites below were patched in source on 2026-06-04 and are live in prod.
 
 Source: `late-core/src/models/chat_room_member.rs`
 
-- Old shape: joined all memberships for a user to `chat_messages`; the planner chose a full sequential scan (about 86k messages); representative heavy user about 381 ms.
-- New shape: per-room `LEFT JOIN LATERAL` using `idx_chat_messages_room_created`; representative heavy user about 2.5 ms.
+- 2026-06-04 shape: joined all memberships for a user to `chat_messages`; the planner chose a full sequential scan (about 86k messages); representative heavy user about 381 ms.
+- 2026-06-04 rewrite: per-room `LEFT JOIN LATERAL` using `idx_chat_messages_room_created`; representative heavy user about 2.5 ms. That number did not age well. It was measured against a room-and-message set less than half the current size, and the lateral it introduced is per membership row, so its cost tracks rooms-per-user, which only grows. By 2026-07-26 the same query was 43% of all database execution time and 578 ms for a user who had never opened anything.
+- 2026-07-26 rewrite (current): the lateral counts under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` and the per-message `users` join is replaced by a UUID compare against the system bot. Same never-read user: **11.8 ms, 3,534 buffers**, down from 578 ms and 483,271. Full story in Pain Point 7.
 
 ### `ChatMessage::list_recent_for_rooms`
 
@@ -344,11 +369,12 @@ Source: `late-core/src/models/chat_message.rs`
 Source: `late-core/src/models/chat_room.rs`
 
 - Current shape: public topic room discovery uses lateral counts for member count and message count; representative runtime about 300-475 ms, dominated by repeated counts over `chat_room_members`.
-- Not as urgent as connect/snapshot paths, but should be optimized or cached before large traffic. Options: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation with a better index.
+- Confirmed 2026-07-26 at 5.6% of all DB execution time, 510 ms mean over 5,688 calls, plus a 969 ms variant. Now the **largest remaining single query** after the chat-poll fixes, and unlike those it is on demand, so the cost lands as user-facing latency: about half a second to open Discover.
+- Options unchanged: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation with a better index.
 
 ## Immediate Next Work
 
-Ordered by measured payoff as of 2026-07-26. The first two items are pure code changes that together take roughly two thirds of the load off Postgres; do them before any infra move.
+Ordered by measured payoff as of 2026-07-26. Four DB fixes landed that day (see DB Cost Ranking, Fixed 2026-07-26) removing a projected 56% of the workload; items 1 and 2 below are what survived of them. **Re-run the ranking against a reset `pg_stat_statements` after that deploy before planning further DB work from this list.**
 
 ### 1. Kill the chat snapshot poll's per-room fan-out
 
@@ -356,7 +382,7 @@ Partly done 2026-07-26. The dominant term, `unread_counts_for_user`, is fixed: t
 
 Also done: the duplicate `SELECT settings` read is gone (`User::friend_and_ignored_user_ids` fetches the row once for both lists, was 11.1M calls at exactly 2.006 per snapshot).
 
-Still open from Pain Point 7: the sequential session loop, and the remaining per-room fan-out in `last_message_at_for_rooms`. Both much smaller now. Re-rank against `pg_stat_statements` after this deploys before spending more on it.
+Still open: the other eight queries in the bundle, which are individually cheap and expensive only because the bundle runs 5.5M times, plus the sequential session loop. Ranked with the rest of the leftovers under DB Cost Ranking, Remaining DB work. Do not work further down that list from the pre-fix baseline; re-measure first.
 
 ### 2. Gate the leaderboard refresh loop
 
@@ -474,9 +500,10 @@ Residual risk:
 
 - single-node cluster (second node is the next infra step)
 - single `service-ssh` pod for real session ownership
-- the chat snapshot poll (Pain Point 7) is 50-68% of DB execution time and scales with sessions × rooms-per-user, both of which only grow. This is the binding DB constraint on the 1000-user target
+- the chat snapshot poll (Pain Point 7) is still the only DB load that scales with concurrency. Its worst term is fixed, but the remaining bundle is about 26% of the pre-fix baseline and grows with sessions × rooms-per-user, both of which only grow. This is the binding DB constraint on the 1000-user target
+- the four 2026-07-26 DB fixes are projected, not verified. `pg_stat_statements` has not been re-read since they landed
 - the feed fan-outs (Pain Point 6) drop feed events in every live session on each write, several times an hour
 - no PgBouncer yet
 - no horizontal `service-ssh` sharding yet
 
-For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users, the remaining projects are: kill the chat snapshot fan-out, gate the leaderboard loop, add the second node, then shardable `service-ssh` (with PgBouncer before replicas multiply). The render-cost multiplier is verified; the DB side is now measured and is the next thing to move.
+For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users, the remaining projects are: verify the 2026-07-26 DB fixes in prod, finish the chat snapshot bundle, add the second node, then shardable `service-ssh` (with PgBouncer before replicas multiply). The render-cost multiplier is verified; the DB side is now measured, and the largest single item on it has been cut.

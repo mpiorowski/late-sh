@@ -21,7 +21,7 @@ use late_core::{
             ChatMessageReactionSummary,
         },
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         moderation_audit_log::ModerationAuditLog,
@@ -1140,22 +1140,25 @@ impl ChatService {
     async fn build_chat_snapshot(&self, user_id: Uuid) -> Result<ChatSnapshot> {
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
-        let rooms = ChatRoom::list_for_user(&client, user_id).await?;
+
+        // Two pipelined rounds rather than eight serial round trips.
+        // tokio-postgres pipelines concurrent queries on one connection, so
+        // each round costs about one round trip instead of one per query.
+        // Postgres still executes them in order, so this buys latency, not
+        // server CPU; latency is what bounds `refresh_registered_sessions`,
+        // which walks every live session in turn.
+        let (room_state, friends_and_ignored) = tokio::join!(
+            ChatRoom::list_for_user_with_state(&client, user_id, self.system_user_id()),
+            User::friend_and_ignored_user_ids(&client, user_id),
+        );
+        let UserRoomState {
+            rooms,
+            last_message_at: room_last_message_at,
+            unread_counts,
+        } = room_state?;
+        let (friend_user_ids, ignored_user_ids) = friends_and_ignored?;
+
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
-        let voice_channels_by_room_id =
-            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids).await?;
-        let room_last_message_at =
-            ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
-        let active_polls = chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
-                HashMap::new()
-            });
-        let unread_counts =
-            ChatRoomMember::unread_counts_for_user(&client, user_id, self.system_user_id()).await?;
-        let (friend_user_ids, ignored_user_ids) =
-            User::friend_and_ignored_user_ids(&client, user_id).await?;
         let lounge_room_id = rooms
             .iter()
             .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
@@ -1175,13 +1178,28 @@ impl ChatService {
         visible_user_ids.extend(friend_user_ids.iter().copied());
         visible_user_ids.sort();
         visible_user_ids.dedup();
-        let author_metadata = Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
         let private_room_ids: Vec<Uuid> = rooms
             .iter()
             .filter(|room| room.kind == "topic" && room.visibility == "private")
             .map(|room| room.id)
             .collect();
-        let room_owner_ids = ChatRoom::owner_ids_for_rooms(&client, &private_room_ids).await?;
+
+        // Round two: everything that needed the room and friend sets. Joined
+        // rather than try_join'd so each failure keeps its own handling, and
+        // so a poll failure stays non-fatal to the rest of the snapshot.
+        let (voice_channels_by_room_id, active_polls, author_metadata, room_owner_ids) = tokio::join!(
+            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids),
+            chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids),
+            Self::load_chat_author_metadata(&client, &visible_user_ids),
+            ChatRoom::owner_ids_for_rooms(&client, &private_room_ids),
+        );
+        let voice_channels_by_room_id = voice_channels_by_room_id?;
+        let active_polls = active_polls.unwrap_or_else(|error| {
+            tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
+            HashMap::new()
+        });
+        let author_metadata = author_metadata?;
+        let room_owner_ids = room_owner_ids?;
 
         let rooms = rooms.into_iter().map(|chat| (chat, Vec::new())).collect();
 
