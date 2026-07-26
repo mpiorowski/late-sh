@@ -2815,6 +2815,18 @@ fn handle_mouse_scroll_over_screen(
         return false;
     };
 
+    // Scrolling over the music stage adjusts the paired client's volume.
+    if let Some(dock) = app.last_music_dock_rect.get()
+        && rect_contains(dock, x, y)
+    {
+        if delta > 0 {
+            app.paired_client_volume_up();
+        } else {
+            app.paired_client_volume_down();
+        }
+        return true;
+    }
+
     if !matches!(screen, Screen::Dashboard) {
         return false;
     }
@@ -2871,6 +2883,79 @@ fn handle_pet_strip_click(app: &mut App, x: u16, y: u16) -> bool {
     false
 }
 
+/// Clicks on the sidebar music stage's render-recorded dock area. The row
+/// layout in `music_stage_lines` is fixed, so a click row maps to a source
+/// header (radio/youtube/icecast), a station/stream selector, or the mute
+/// toggle. Only live on frames where the stage drew.
+fn handle_music_stage_click(app: &mut App, x: u16, y: u16) -> bool {
+    use crate::app::common::primitives::Banner;
+    use late_core::models::user::AudioSource;
+
+    if chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    let Some(dock) = app.last_music_dock_rect.get() else {
+        return false;
+    };
+    if !rect_contains(dock, x, y) {
+        return false;
+    }
+    let rel = y - dock.y;
+
+    // Source headers and the mute row sit at fixed offsets in the dock.
+    match rel {
+        1 => {
+            app.toggle_paired_client_mute();
+            return true;
+        }
+        2 => {
+            app.set_paired_playback_source(AudioSource::Radio);
+            app.banner = Some(Banner::success("Audio source: Radio"));
+            return true;
+        }
+        4 => {
+            app.set_paired_playback_source(AudioSource::Youtube);
+            app.banner = Some(Banner::success("Audio source: YouTube"));
+            return true;
+        }
+        6 => {
+            app.set_paired_playback_source(AudioSource::Icecast);
+            app.banner = Some(Banner::success("Audio source: Icecast"));
+            return true;
+        }
+        _ => {}
+    }
+
+    // Selector rows in the detail area: radio stations start at dock row 9
+    // (v1..v5); icecast streams at row 10 (row 9 is the progress line).
+    use crate::app::audio::stations;
+    match app.paired_browser_source {
+        AudioSource::Radio if (9..=13).contains(&rel) => {
+            let index = (rel - 9 + 1) as u8;
+            if let Some(station) = stations::radio_station_by_index(index) {
+                app.select_radio_station(station);
+                app.banner = Some(Banner::success(&format!(
+                    "Station: {}",
+                    stations::radio_station_display_name(station)
+                )));
+            }
+            true
+        }
+        AudioSource::Icecast if (10..=11).contains(&rel) => {
+            let index = (rel - 10 + 1) as u8;
+            if let Some(stream) = stations::icecast_stream_by_index(index) {
+                app.select_icecast_stream(stream);
+                app.banner = Some(Banner::success(&format!(
+                    "Stream: {}",
+                    stations::icecast_stream_display_name(stream)
+                )));
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
@@ -2890,6 +2975,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         return true;
     }
     if handle_pet_strip_click(app, x, y) {
+        return true;
+    }
+    if handle_music_stage_click(app, x, y) {
         return true;
     }
     if handle_chat_scroll_click(app, screen, x, y) {

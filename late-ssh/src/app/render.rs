@@ -270,6 +270,7 @@ struct DrawContext<'a> {
     online_count: usize,
     active_friend_names: &'a [String],
     marquee_tick: usize,
+    music_dock_rect: &'a std::cell::Cell<Option<Rect>>,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
     pet_species: &'a str,
@@ -1056,6 +1057,7 @@ impl App {
                         online_count,
                         active_friend_names,
                         marquee_tick: self.marquee_tick,
+                        music_dock_rect: &self.last_music_dock_rect,
                         chat_state: &self.chat,
                         user_id: self.user_id,
                         pet_species: &self.pet_state.species,
@@ -1476,6 +1478,7 @@ impl App {
                     online_count: ctx.online_count,
                     active_friend_names: ctx.active_friend_names,
                     marquee_tick: ctx.marquee_tick,
+                    music_dock_rect: Some(ctx.music_dock_rect),
                 },
             );
         }
@@ -2075,6 +2078,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
         ("Hub", ctrl_hint("G", use_caret)),
         ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
+        ("Exit", "qq"),
     ];
 
     let mut spans = Vec::new();

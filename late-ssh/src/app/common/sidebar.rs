@@ -105,6 +105,10 @@ pub(crate) struct SidebarProps<'a> {
     pub active_friend_names: &'a [String],
     /// Free-running frame counter for the music stage's marquee rows.
     pub marquee_tick: usize,
+    /// Slot the music stage records its dock area into each frame, so the mouse
+    /// handler in `app::input` can hit-test clicks (source headers, station
+    /// rows, mute) and scroll (volume) against it.
+    pub music_dock_rect: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
@@ -227,6 +231,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         icecast_source_count: props.icecast_source_count,
                         radio_source_count: props.radio_source_count,
                         marquee_tick: props.marquee_tick,
+                        music_dock_rect: props.music_dock_rect,
                     },
                 );
             }
@@ -556,6 +561,8 @@ struct MusicStageProps<'a> {
     /// Free-running frame counter driving the marquee on now-playing rows
     /// too long for the rail.
     marquee_tick: usize,
+    /// See [`SidebarProps::music_dock_rect`].
+    music_dock_rect: Option<&'a std::cell::Cell<Option<Rect>>>,
 }
 
 /// Music stage: a small ambient equalizer strip pinned on top, then the
@@ -587,6 +594,12 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
+    // Record the dock area so mouse clicks/scroll can drive the stage. The row
+    // layout in `music_stage_lines` is fixed, so the input handler maps a click
+    // row back to a source header, station row, or the mute toggle.
+    if let Some(slot) = props.music_dock_rect {
+        slot.set(Some(dock_area));
+    }
     let muted = props.paired_client.is_some_and(|client| client.muted);
     render_eq(frame, viz_area, props.marquee_tick, muted);
 

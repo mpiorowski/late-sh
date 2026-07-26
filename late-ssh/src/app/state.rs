@@ -442,6 +442,9 @@ pub struct App {
     /// for the HUD click hit test; `None` when nothing is unread. Only the
     /// mentions segment is clickable, not the voice/chips text after it.
     pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
+    /// Dock area of the sidebar music stage, recorded each frame so the mouse
+    /// handler can click source headers / station rows / mute and scroll volume.
+    pub(crate) last_music_dock_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -1174,6 +1177,7 @@ impl App {
             last_pet_strip_water_rect: std::cell::Cell::new(None),
             last_pet_strip_travel: std::cell::Cell::new(None),
             last_mentions_hud_rect: std::cell::Cell::new(None),
+            last_music_dock_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -2283,14 +2287,24 @@ impl App {
             AudioSource::Youtube => AudioSource::Icecast,
             AudioSource::Icecast => AudioSource::Radio,
         };
-        self.paired_browser_source = next;
+        self.set_paired_playback_source(next)
+    }
+
+    /// Set the paired-browser audio source directly (mouse click on a dock
+    /// header). Mirrors [`Self::toggle_paired_playback_source`] but without
+    /// cycling. Returns the source set.
+    pub fn set_paired_playback_source(
+        &mut self,
+        source: late_core::models::user::AudioSource,
+    ) -> late_core::models::user::AudioSource {
+        self.paired_browser_source = source;
         if let Some(active_users) = &self.active_users
             && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
         {
-            active.audio_source = next;
+            active.audio_source = source;
         }
-        self.audio.persist_audio_source(next);
-        next
+        self.audio.persist_audio_source(source);
+        source
     }
 
     pub fn select_icecast_stream(&mut self, stream: late_core::models::user::IcecastStream) {

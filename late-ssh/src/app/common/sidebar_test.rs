@@ -60,6 +60,7 @@ fn stage_lines_with(
             icecast_source_count: 9,
             radio_source_count: 1,
             marquee_tick: 0,
+            music_dock_rect: None,
         },
     )
 }
@@ -166,6 +167,7 @@ fn radio_dock_row_prefers_sse_metadata() {
             icecast_source_count: 9,
             radio_source_count: 1,
             marquee_tick: 0,
+            music_dock_rect: None,
         },
     );
     let texts: Vec<String> = lines.iter().map(line_text).collect();
@@ -249,4 +251,23 @@ fn visible_components_skips_unfit_panel_without_stopping() {
         visible_components(&components, height),
         vec![RightSidebarComponent::Daily, RightSidebarComponent::Bonsai]
     );
+}
+
+#[test]
+fn music_stage_row_offsets_match_the_mouse_handler() {
+    // app::input::handle_music_stage_click maps dock click-rows to actions by
+    // these fixed offsets. If the stage layout is reordered, update both.
+    let radio = stage_lines(AudioSource::Radio);
+    assert!(line_text(&radio[1]).contains("mute"), "row 1 = mute hint");
+    assert!(line_text(&radio[2]).contains("radio"), "row 2 = radio header");
+    assert!(line_text(&radio[4]).contains("youtube"), "row 4 = youtube header");
+    assert!(line_text(&radio[6]).contains("icecast"), "row 6 = icecast header");
+    // Radio station selectors occupy detail rows 9..=13 (v1..v5).
+    assert!(line_text(&radio[9]).contains("v1"), "row 9 = radio v1");
+    assert!(line_text(&radio[13]).contains("v5"), "row 13 = radio v5");
+
+    // Icecast stream selectors occupy detail rows 10 and 11 (row 9 is progress).
+    let icecast = stage_lines(AudioSource::Icecast);
+    assert!(line_text(&icecast[10]).contains("v1"), "row 10 = icecast v1");
+    assert!(line_text(&icecast[11]).contains("v2"), "row 11 = icecast v2");
 }
