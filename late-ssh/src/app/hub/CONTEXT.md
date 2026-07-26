@@ -24,8 +24,14 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   whole popup rect instead of the body row, so it owns its footer: a shortened
   one inside the grid, or the shell's full-width one when the popup is too
   small to build a grid at all. A `48x139` terminal produces the `41x111` Hub
-  modal used by the dense-layout reference; above that width, surplus
-  lower-grid columns are shared across all five panels.
+  modal used by the dense-layout reference; above that width, surplus columns
+  are shared evenly across the panels in both rows, the five score games below
+  and the two boards plus the "More Leaderboards" placeholder above. The
+  placeholder is not a spare-space bin: it keeps its heading-sized minimum and
+  takes only its third of the surplus.
+  A top board measures every line it prints, heading and hints and empty-state
+  copy included, not just its ranked rows: a board with no rows still has to
+  fit "no chip earnings yet this month".
   Each panel stops right-aligning scores once its widest visible line fits with
   the full username, a two-cell name/score gap, and the trailing edge pad. Each
   monthly score subsection reserves two rows after its top five for the optional
