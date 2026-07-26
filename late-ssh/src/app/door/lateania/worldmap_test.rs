@@ -276,3 +276,40 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
     let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
     assert_eq!(lit, super::viewport(&coords, center, cols, rows));
 }
+
+#[test]
+fn pois_index_bosses_tameables_and_monsters() {
+    let world = seed_world();
+    let pois = super::pois();
+    assert!(!pois.is_empty(), "the world has points of interest");
+
+    // Every boss's home room is a POI with the boss set.
+    let mut boss_homes = 0;
+    for spawn in world.spawns.iter().filter(|s| s.boss) {
+        boss_homes += 1;
+        assert!(
+            super::poi(spawn.home).is_some_and(|p| p.boss == Some(spawn.name)),
+            "boss {} missing from its home POI",
+            spawn.name
+        );
+    }
+    assert!(boss_homes >= 1, "there is at least one boss");
+    assert!(
+        pois.values()
+            .any(|p| p.boss.is_some() && !p.reward.is_empty()),
+        "at least one boss lists a guaranteed reward"
+    );
+    assert!(
+        pois.values().any(|p| p.tameable.is_some()),
+        "some rooms host a tameable beast"
+    );
+
+    // Every spawn appears in its home room's monster list.
+    for spawn in &world.spawns {
+        assert!(
+            super::poi(spawn.home).is_some_and(|p| p.monsters.contains(&spawn.name)),
+            "spawn {} missing from its home POI",
+            spawn.name
+        );
+    }
+}

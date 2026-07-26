@@ -237,6 +237,56 @@ pub fn viewport_explored(
         .collect()
 }
 
+/// Points of interest at a room, for the map's overlay and cell inspector.
+/// All static and deterministic, built once from the mob roster and the taming
+/// table.
+#[derive(Default, Clone, Debug)]
+pub struct Poi {
+    /// The zone boss lairing here, if any (a guaranteed rich drop).
+    pub boss: Option<&'static str>,
+    /// The boss's guaranteed loot, by item name.
+    pub reward: Vec<&'static str>,
+    /// Names of the mobs that spawn (can be slain) here.
+    pub monsters: Vec<&'static str>,
+    /// A tameable wild beast roaming here, if any.
+    pub tameable: Option<&'static str>,
+}
+
+static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
+
+fn build_pois() -> HashMap<RoomId, Poi> {
+    let world = seed_world();
+    let mut map: HashMap<RoomId, Poi> = HashMap::new();
+    for spawn in &world.spawns {
+        let e = map.entry(spawn.home).or_default();
+        e.monsters.push(spawn.name);
+        if spawn.boss {
+            e.boss = Some(spawn.name);
+            for &item_id in spawn.loot {
+                if let Some(item) = super::items::item(item_id) {
+                    e.reward.push(item.name);
+                }
+            }
+        }
+    }
+    for beast in super::taming::wild_beasts() {
+        map.entry(beast.home).or_default().tameable =
+            Some(super::taming::TAMEABLE[beast.species].name);
+    }
+    map
+}
+
+/// The process-wide points-of-interest index (bosses, rewards, monsters,
+/// tameable beasts), keyed by room. Built once on first use.
+pub fn pois() -> &'static HashMap<RoomId, Poi> {
+    &POIS
+}
+
+/// The points of interest at a single room, if any.
+pub fn poi(room: RoomId) -> Option<&'static Poi> {
+    POIS.get(&room)
+}
+
 /// Every coordinate shared by more than one room, with the room ids that land
 /// there. Sorted for a stable report. An empty map means a perfectly clean
 /// spatial field.

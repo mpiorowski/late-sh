@@ -191,9 +191,10 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     };
 
     let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(1), // header
+        Constraint::Min(1),    // map body
+        Constraint::Length(2), // cell inspector (crosshair target)
+        Constraint::Length(1), // controls + legend
     ])
     .split(area);
 
@@ -225,27 +226,48 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     header.push(Span::styled(format!("  ·  {level}"), level_style));
     frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
 
-    // Body: the viewport grid, biome-coloured, with `@` at the player's room.
-    // Fog of war: only rooms the player has visited are drawn.
+    // Body: the viewport grid. Fog of war means only visited rooms draw. Boss
+    // and taming rooms show a marker over their biome; `@` is the player; the
+    // viewport centre is the inspector crosshair (reverse-highlighted).
     let body = rows[1];
     let cols = body.width as i32;
     let height = body.height as i32;
     let grid = viewport_explored(coords, center, cols, height, &view.visited, view.room);
-    let player_glyph_style = Style::default()
+    let cx = (cols / 2) as usize;
+    let cy = (height / 2) as usize;
+    let player_style = Style::default()
         .fg(Color::Rgb(250, 240, 140))
+        .add_modifier(Modifier::BOLD);
+    let boss_style = Style::default()
+        .fg(Color::Rgb(250, 210, 90))
+        .add_modifier(Modifier::BOLD);
+    let tame_style = Style::default()
+        .fg(Color::Rgb(230, 140, 160))
         .add_modifier(Modifier::BOLD);
     let lines: Vec<Line> = grid
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(r, row)| {
             let spans: Vec<Span> = row
                 .iter()
-                .map(|cell| match cell {
-                    Some(id) if *id == view.room => Span::styled("@", player_glyph_style),
-                    Some(id) => {
-                        let (ch, color) = biome_style(super::world::biome_of(*id));
-                        Span::styled(ch.to_string(), Style::default().fg(color))
+                .enumerate()
+                .map(|(c, cell)| {
+                    let (ch, mut style): (String, Style) = match cell {
+                        Some(id) if *id == view.room => ("@".to_string(), player_style),
+                        Some(id) => match super::worldmap::poi(*id) {
+                            Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
+                            Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                            _ => {
+                                let (g, color) = biome_style(super::world::biome_of(*id));
+                                (g.to_string(), Style::default().fg(color))
+                            }
+                        },
+                        None => (" ".to_string(), Style::default()),
+                    };
+                    if r == cy && c == cx {
+                        style = style.add_modifier(Modifier::REVERSED);
                     }
-                    None => Span::raw(" "),
+                    Span::styled(ch, style)
                 })
                 .collect();
             Line::from(spans)
@@ -253,13 +275,70 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         .collect();
     frame.render_widget(Paragraph::new(lines), body);
 
-    // Footer: controls.
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "wasd / arrows pan  ·  < > level  ·  Enter re-centre  ·  m close",
+    // Inspector: what sits under the crosshair (viewport centre). Fog already
+    // blanked unvisited cells, so a room here is one the player has seen.
+    let cursor_room = grid.get(cy).and_then(|row| row.get(cx)).copied().flatten();
+    let mut inspect: Vec<Line> = Vec::new();
+    if let Some(id) = cursor_room {
+        let (rn, rt) = region_atlas_entry(id).unwrap_or(("The wilds", ""));
+        let mut top = vec![
+            Span::styled("\u{25ce} ", Style::default().fg(theme::AMBER())), // ◎
+            Span::styled(rn.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
+        ];
+        if !rt.is_empty() {
+            top.push(Span::styled(
+                format!("  ·  {rt}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        inspect.push(Line::from(top));
+
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(p) = super::worldmap::poi(id) {
+            if let Some(boss) = p.boss {
+                if p.reward.is_empty() {
+                    parts.push(format!("boss {boss}"));
+                } else {
+                    parts.push(format!("boss {boss} (drops {})", p.reward.join(", ")));
+                }
+            }
+            if let Some(t) = p.tameable {
+                parts.push(format!("tame {t}"));
+            }
+            if !p.monsters.is_empty() {
+                parts.push(format!("foes {}", p.monsters.join(", ")));
+            }
+        }
+        let poi_text = if parts.is_empty() {
+            "no notable sites here".to_string()
+        } else {
+            parts.join("  ·  ")
+        };
+        inspect.push(Line::from(Span::styled(
+            poi_text,
             Style::default().fg(theme::TEXT_DIM()),
-        ))),
-        rows[2],
+        )));
+    } else {
+        inspect.push(Line::from(Span::styled(
+            "unexplored",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+    frame.render_widget(Paragraph::new(inspect), rows[2]);
+
+    // Footer: controls + marker legend.
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "wasd/arrows pan · <> level · Enter re-centre · m close    ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+            Span::styled(" boss  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+            Span::styled(" tame", Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        rows[3],
     );
 }
 
