@@ -85,6 +85,10 @@ pub struct State {
     /// mode captures keys). Chat is world-local via the service's `say`, so it
     /// never leaks into late.sh's global feed.
     chat_buffer: Option<String>,
+    /// Camera offset (in world cells) from the player on the overhead world map
+    /// (Panel::Map). Reset to (0, 0) whenever the panel changes, so opening the
+    /// map always re-centres on the player.
+    map_scroll: (i32, i32),
 }
 
 impl State {
@@ -114,6 +118,7 @@ impl State {
             reset_version,
             reset_elsewhere: false,
             chat_buffer: None,
+            map_scroll: (0, 0),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -198,6 +203,7 @@ impl State {
             self.panel = panel;
             self.cursor = 0;
             self.list_scroll.set(0);
+            self.map_scroll = (0, 0);
         }
     }
 
@@ -209,6 +215,28 @@ impl State {
         }
         self.cursor = 0;
         self.list_scroll.set(0);
+        self.map_scroll = (0, 0);
+    }
+
+    /// True when the graphical overhead world map is the active panel.
+    pub fn map_open(&self) -> bool {
+        self.panel == Panel::Map
+    }
+
+    /// The world-map camera offset from the player, in world cells.
+    pub fn map_scroll(&self) -> (i32, i32) {
+        self.map_scroll
+    }
+
+    /// Pan the world-map camera (arrow / wasd while the map is open).
+    pub fn pan_map(&mut self, dx: i32, dy: i32) {
+        self.map_scroll.0 += dx;
+        self.map_scroll.1 += dy;
+    }
+
+    /// Re-centre the world-map camera on the player.
+    pub fn recenter_map(&mut self) {
+        self.map_scroll = (0, 0);
     }
 
     /// Current list scroll offset (first visible line).

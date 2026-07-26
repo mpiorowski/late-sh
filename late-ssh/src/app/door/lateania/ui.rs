@@ -144,9 +144,118 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
             ])),
             body[1],
         );
+    } else if view.classed && state.map_open() {
+        draw_world_map(frame, rows[1], state, &view);
     } else {
         draw_game(frame, rows[1], state, usernames);
     }
+}
+
+/// Per-biome map glyph and colour for the overhead world map.
+fn biome_style(biome: super::world::Biome) -> (char, Color) {
+    use super::world::Biome;
+    match biome {
+        Biome::Heartland => ('"', Color::Rgb(120, 180, 90)),
+        Biome::Plains => ('.', Color::Rgb(150, 160, 80)),
+        Biome::Urban => ('#', Color::Rgb(175, 175, 175)),
+        Biome::Forest => ('\u{2663}', Color::Rgb(60, 145, 70)), // ♣
+        Biome::Water => ('\u{2248}', Color::Rgb(70, 120, 205)), // ≈
+        Biome::Islands => ('~', Color::Rgb(90, 175, 185)),
+        Biome::Ash => ('%', Color::Rgb(165, 85, 70)),
+        Biome::Cavern => ('\u{00b7}', Color::Rgb(125, 115, 135)), // ·
+        Biome::Badlands => (':', Color::Rgb(165, 125, 80)),
+    }
+}
+
+/// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
+/// centred on the player. `@` is the player's room; arrows / wasd pan the
+/// camera and Enter re-centres (handled in input.rs).
+fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    use super::world::region_atlas_entry;
+    use super::worldmap::{Coord, viewport, world_coords};
+
+    let coords = world_coords();
+    let Some(&player) = coords.get(&view.room) else {
+        frame.render_widget(
+            Paragraph::new("No map for this place.").style(Style::default().fg(theme::TEXT_DIM())),
+            area,
+        );
+        return;
+    };
+    let (sx, sy) = state.map_scroll();
+    let center = Coord {
+        x: player.x + sx,
+        y: player.y + sy,
+        z: player.z,
+    };
+
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+
+    // Header: region name + danger tier, and the current level (z).
+    let (region_name, tier) = region_atlas_entry(view.room).unwrap_or(("The wilds", ""));
+    let level = match center.z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    };
+    let mut header = vec![Span::styled(
+        region_name.to_string(),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !tier.is_empty() {
+        header.push(Span::styled(
+            format!("  ·  {tier}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    header.push(Span::styled(
+        format!("  ·  {level}"),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
+
+    // Body: the viewport grid, biome-coloured, with `@` at the player's room.
+    let body = rows[1];
+    let cols = body.width as i32;
+    let height = body.height as i32;
+    let grid = viewport(coords, center, cols, height);
+    let player_glyph_style = Style::default()
+        .fg(Color::Rgb(250, 240, 140))
+        .add_modifier(Modifier::BOLD);
+    let lines: Vec<Line> = grid
+        .iter()
+        .map(|row| {
+            let spans: Vec<Span> = row
+                .iter()
+                .map(|cell| match cell {
+                    Some(id) if *id == view.room => Span::styled("@", player_glyph_style),
+                    Some(id) => {
+                        let (ch, color) = biome_style(super::world::biome_of(*id));
+                        Span::styled(ch.to_string(), Style::default().fg(color))
+                    }
+                    None => Span::raw(" "),
+                })
+                .collect();
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body);
+
+    // Footer: controls.
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "wasd / arrows pan  ·  Enter re-centre  ·  m close",
+            Style::default().fg(theme::TEXT_DIM()),
+        ))),
+        rows[2],
+    );
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {

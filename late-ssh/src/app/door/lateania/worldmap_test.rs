@@ -190,3 +190,65 @@ fn visible_returns_one_level_within_radius() {
     };
     assert_eq!(win, sorted, "visible() must return (y, x)-sorted cells");
 }
+
+#[test]
+fn world_coords_is_cached_and_complete() {
+    let via_cache = super::world_coords();
+    let fresh = derive_coords(&seed_world());
+    assert_eq!(*via_cache, fresh, "cached coords must match a fresh derive");
+    assert!(!via_cache.is_empty());
+}
+
+#[test]
+fn viewport_centres_on_the_player() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+    let grid = super::viewport(&coords, center, cols, rows);
+
+    assert_eq!(grid.len(), rows as usize);
+    assert!(grid.iter().all(|r| r.len() == cols as usize));
+    let (cx, cy) = (cols as usize / 2, rows as usize / 2);
+    assert_eq!(
+        grid[cy][cx],
+        Some(world.start_room),
+        "the centre cell holds the player's room"
+    );
+    let filled = grid.iter().flatten().filter(|c| c.is_some()).count();
+    assert!(filled > 1, "the start town should have visible neighbours");
+}
+
+// Eyeball helper (run with --nocapture): a biome-lettered map around the start.
+#[test]
+fn viewport_biome_dump_is_coherent() {
+    use crate::app::door::lateania::world::{Biome, biome_of};
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let grid = super::viewport(&coords, center, 60, 20);
+    let mut out = String::new();
+    for row in &grid {
+        for cell in row {
+            let ch = match cell {
+                Some(id) if *id == world.start_room => '@',
+                Some(id) => match biome_of(*id) {
+                    Biome::Heartland => 'h',
+                    Biome::Plains => '.',
+                    Biome::Urban => '#',
+                    Biome::Forest => 'f',
+                    Biome::Water => '~',
+                    Biome::Islands => 'i',
+                    Biome::Ash => 'a',
+                    Biome::Cavern => 'c',
+                    Biome::Badlands => 'b',
+                },
+                None => ' ',
+            };
+            out.push(ch);
+        }
+        out.push('\n');
+    }
+    eprintln!("\n{out}");
+    assert!(out.contains('@'), "player should be on the map");
+}

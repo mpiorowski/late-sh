@@ -681,6 +681,8 @@ pub struct PlayerView {
     pub level: i32,
     pub gold: i64,
     pub banked_gold: i64,
+    /// The player's current room id, for centring the overhead world map.
+    pub room: RoomId,
     pub room_name: String,
     pub room_desc: String,
     pub zone: String,
@@ -762,6 +764,7 @@ impl PlayerView {
     fn empty() -> Self {
         Self {
             joined: false,
+            room: 0,
             classed: false,
             class_name: String::new(),
             class_key: String::new(),
@@ -7172,6 +7175,7 @@ impl WorldState {
                 *user_id,
                 PlayerView {
                     joined: true,
+                    room: player.room,
                     classed,
                     class_name,
                     class_key,

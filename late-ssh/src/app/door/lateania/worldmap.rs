@@ -20,8 +20,19 @@
 // core, which the collision report measures.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::LazyLock;
 
-use super::world::{Dir, RoomId, World, region_layout};
+use super::world::{Dir, RoomId, World, region_layout, seed_world};
+
+/// The world's coordinate field, derived once. The world is deterministic, so
+/// these are stable for the whole process and shared by every session's map.
+static WORLD_COORDS: LazyLock<HashMap<RoomId, Coord>> =
+    LazyLock::new(|| derive_coords(&seed_world()));
+
+/// The process-wide coordinate field. First call builds it (one world-gen).
+pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
+    &WORLD_COORDS
+}
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
 /// surface, negative is underground (down exits), positive is above.
@@ -174,6 +185,35 @@ pub fn visible(
         .collect();
     out.sort_by_key(|(_, c)| (c.y, c.x));
     out
+}
+
+/// A `cols x rows` grid of room ids centred on `center`, for painting the map.
+/// `grid[row][col]` is the room at that screen cell, or `None` for empty space.
+/// Where the spatial field still collides (hand-authored core), the lowest room
+/// id wins so the picture is stable.
+pub fn viewport(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+) -> Vec<Vec<Option<RoomId>>> {
+    let rx = cols / 2;
+    let ry = rows / 2;
+    let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
+    for (id, c) in visible(coords, center, rx + 1, ry + 1) {
+        at.entry((c.x, c.y))
+            .and_modify(|cur| *cur = (*cur).min(id))
+            .or_insert(id);
+    }
+    let left = center.x - rx;
+    let top = center.y - ry;
+    (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| at.get(&(left + c, top + r)).copied())
+                .collect()
+        })
+        .collect()
 }
 
 /// Every coordinate shared by more than one room, with the room ids that land
