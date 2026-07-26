@@ -550,6 +550,7 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_daily_challenge: Option<DailyChallengeRequest>,
+    requested_pair: Option<PairRequest>,
     requested_icon_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
@@ -735,6 +736,7 @@ impl ChatState {
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_daily_challenge: None,
+            requested_pair: None,
             requested_icon_picker: false,
             requested_message_search: None,
             requested_petname: None,
@@ -1013,6 +1015,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_daily_challenge(&mut self) -> Option<DailyChallengeRequest> {
         self.requested_daily_challenge.take()
+    }
+
+    pub(crate) fn take_requested_pair(&mut self) -> Option<PairRequest> {
+        self.requested_pair.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -2136,6 +2142,19 @@ impl ChatState {
                         "Usage: /challenge [@user] [{}]",
                         crate::app::lobby::daily::games::DailyGame::usage_labels()
                     )));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_pair_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                Some(request) => {
+                    self.requested_pair = Some(request);
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error("Usage: /pair @user"));
                 }
             }
         }
@@ -5152,6 +5171,37 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
         amount,
         message,
     })
+}
+
+/// A `/pair` request drained by `handle_post_submit_requests` (the composer
+/// has no handle on `active_users`/the scratchpad registry of its own).
+/// Only the directed form exists: `/pair` has no open/anyone-can-claim
+/// lobby, unlike `/challenge`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PairRequest {
+    Directed(String),
+}
+
+/// `Some(Some(PairRequest::Directed(username)))` on `/pair @user`,
+/// `Some(None)` on a malformed line (usage banner), `None` when it isn't
+/// `/pair` at all.
+fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
+    let trimmed = input.trim();
+    if trimmed == "/pair" {
+        return Some(None);
+    }
+    let rest = trimmed.strip_prefix("/pair ")?;
+    let mut tokens = rest.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return Some(None);
+    };
+    let Some(username) = first.strip_prefix('@').filter(|name| !name.is_empty()) else {
+        return Some(None);
+    };
+    if tokens.next().is_some() {
+        return Some(None);
+    }
+    Some(Some(PairRequest::Directed(username.to_string())))
 }
 
 /// A `/challenge` request drained by `handle_post_submit_requests` (the

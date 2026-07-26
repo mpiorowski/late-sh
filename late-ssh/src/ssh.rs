@@ -998,6 +998,7 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
             ),

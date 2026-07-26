@@ -35,6 +35,7 @@ pub(crate) mod quit_confirm;
 mod render;
 pub(crate) mod room_info_modal;
 pub(crate) mod room_search_modal;
+pub mod scratchpad;
 pub(crate) mod settings_modal;
 pub(crate) mod sheet_modal;
 #[cfg(test)]

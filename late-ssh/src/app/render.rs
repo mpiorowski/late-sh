@@ -184,6 +184,7 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
@@ -975,6 +976,7 @@ impl App {
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
@@ -1448,6 +1450,11 @@ impl App {
                 ctx.house_chat_view.take(),
                 terminal_images,
             ),
+            Screen::Scratchpad => {
+                if let Some(scratchpad) = ctx.scratchpad {
+                    crate::app::scratchpad::ui::draw(frame, content_area, scratchpad);
+                }
+            }
         }
 
         if let Some(sidebar_area) = sidebar_area {
@@ -1768,6 +1775,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Scratchpad => "Scratchpad",
     };
     spans.push(Span::styled(
         " | ",

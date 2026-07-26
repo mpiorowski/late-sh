@@ -35,6 +35,15 @@ fn clean_info(s: Option<&str>) -> Option<&str> {
     s.map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// One user's rooms and the per-room counters that come back with them.
+/// Both maps are keyed by room id and always carry an entry for every room
+/// in `rooms`, so callers never have to distinguish "absent" from "zero".
+pub struct UserRoomState {
+    pub rooms: Vec<ChatRoom>,
+    pub last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub unread_counts: HashMap<Uuid, i64>,
+}
+
 impl ChatRoom {
     pub async fn ensure_lounge(client: &Client) -> Result<Self> {
         let row = client
@@ -394,6 +403,106 @@ impl ChatRoom {
             .await?;
 
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// The rooms a user is in, together with the two per-room counters the
+    /// chat rail renders from.
+    ///
+    /// One query rather than three. `last_message_at` and the unread count
+    /// both key off the very `chat_room_members` row this already walks, so
+    /// folding them in as laterals removes two redundant scans of the user's
+    /// membership set on every snapshot pass. The snapshot poll runs per
+    /// session every `CHAT_REFRESH_INTERVAL`, so those scans were the same
+    /// work repeated millions of times a day.
+    ///
+    /// `system_user_id` is the #lounge feed bot (`app/activity/lounge.rs`),
+    /// whose `· `-prefixed activity lines must never light an unread badge.
+    /// It is passed in rather than re-derived per row: the old shape joined
+    /// `users` and read `settings->>'system'` out of JSONB for every message,
+    /// which made Postgres hash the entire users table to answer a question
+    /// with one constant answer. `None` means no system user exists yet, in
+    /// which case nothing is excluded.
+    pub async fn list_for_user_with_state(
+        client: &Client,
+        user_id: Uuid,
+        system_user_id: Option<Uuid>,
+    ) -> Result<UserRoomState> {
+        let rows = client
+            .query(
+                // The system-feed bot posts ambient activity lines prefixed
+                // with `· `; those must never light anyone's unread badge. The
+                // same author also posts real messages (a new public room
+                // reported to #moderators), which must. The prefix is the
+                // discriminator everywhere else too, see
+                // `chat/state.rs::system_line_text_in`.
+                //
+                // IS NOT DISTINCT FROM keeps a NULL $2 (no system user) from
+                // nulling out the whole predicate and dropping every row.
+                //
+                // The unread count stops at $3; see `UNREAD_COUNT_CAP` for why
+                // an exact total is neither needed nor affordable.
+                "SELECT r.*,
+                        latest.created AS last_message_at,
+                        COALESCE(unread.unread_count, 0)::bigint AS unread_count
+                 FROM chat_rooms r
+                 JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN LATERAL (
+                    SELECT created
+                    FROM chat_messages
+                    WHERE room_id = r.id
+                    ORDER BY created DESC, id DESC
+                    LIMIT 1
+                 ) latest ON true
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS unread_count
+                    FROM (
+                       SELECT 1
+                       FROM chat_messages msg
+                       WHERE msg.room_id = r.id
+                         AND msg.user_id <> m.user_id
+                         AND NOT (
+                             msg.user_id IS NOT DISTINCT FROM $2::uuid
+                             AND msg.body LIKE '· %'
+                         )
+                         AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                       LIMIT $3
+                    ) capped
+                 ) unread ON true
+                 WHERE m.user_id = $1
+                 ORDER BY
+                     CASE
+                         WHEN r.kind = 'lounge' AND r.slug = 'lounge' THEN 0
+                         WHEN r.permanent THEN 1
+                         WHEN r.visibility = 'public' THEN 2
+                         WHEN r.kind = 'dm' THEN 4
+                         ELSE 3
+                     END ASC,
+                     COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
+                     r.created ASC,
+                     r.id ASC",
+                &[
+                    &user_id,
+                    &system_user_id,
+                    &crate::models::chat_room_member::ChatRoomMember::UNREAD_COUNT_CAP,
+                ],
+            )
+            .await?;
+
+        let mut state = UserRoomState {
+            rooms: Vec::with_capacity(rows.len()),
+            last_message_at: HashMap::with_capacity(rows.len()),
+            unread_counts: HashMap::with_capacity(rows.len()),
+        };
+        for row in rows {
+            // Read the joined columns before `from` consumes the row.
+            let last_message_at: Option<DateTime<Utc>> = row.get("last_message_at");
+            let unread_count: i64 = row.get("unread_count");
+            let room = Self::from(row);
+            state.last_message_at.insert(room.id, last_message_at);
+            state.unread_counts.insert(room.id, unread_count);
+            state.rooms.push(room);
+        }
+        Ok(state)
     }
 
     pub async fn get_target_user_ids(client: &Client, room_id: Uuid) -> Result<Option<Vec<Uuid>>> {

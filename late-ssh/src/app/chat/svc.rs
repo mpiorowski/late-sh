@@ -21,7 +21,7 @@ use late_core::{
             ChatMessageReactionSummary,
         },
         chat_poll::{self, ActiveChatPoll, CreateChatPoll},
-        chat_room::ChatRoom,
+        chat_room::{ChatRoom, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         moderation_audit_log::ModerationAuditLog,
@@ -159,6 +159,14 @@ pub struct ChatService {
     refresh_signal_tx: mpsc::UnboundedSender<Uuid>,
     refresh_signal_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Uuid>>>>,
     read_permits: Arc<Semaphore>,
+    /// The #lounge feed bot's user id, published once by
+    /// `activity::lounge::start_lounge_feed_task` after it ensures the row.
+    /// Snapshots hand it to `list_for_user_with_state` so activity lines are
+    /// excluded by a UUID compare instead of a per-message join into `users`.
+    /// `None` until that task runs, which only means a brief window at boot
+    /// where a system line could count toward a badge; the next snapshot
+    /// corrects it.
+    system_user_id: Arc<Mutex<Option<Uuid>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -899,7 +907,18 @@ impl ChatService {
             refresh_signal_tx,
             refresh_signal_rx: Arc::new(Mutex::new(Some(refresh_signal_rx))),
             read_permits: Arc::new(Semaphore::new(8)),
+            system_user_id: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Publish the #lounge feed bot's id. Called once at startup by
+    /// `activity::lounge::start_lounge_feed_task`, which owns ensuring the row.
+    pub fn set_system_user_id(&self, user_id: Uuid) {
+        *self.system_user_id.lock_recover() = Some(user_id);
+    }
+
+    fn system_user_id(&self) -> Option<Uuid> {
+        *self.system_user_id.lock_recover()
     }
 
     pub fn new_with_active_users(
@@ -1047,9 +1066,33 @@ impl ChatService {
         )
     }
 
+    /// Rebuild the mention-autocomplete name list.
+    ///
+    /// This reads the process-wide `UsernameDirectory` rather than the DB. That
+    /// directory already holds every username, and it is written through on
+    /// login, profile save, mod rename, and account delete, so autocomplete is
+    /// fresher this way than the scan ever was. The scan it replaces
+    /// (`SELECT username FROM users ... ORDER BY username`, all 14k rows every
+    /// 30 s) was 1.9% of all database execution time on its own, purely to
+    /// re-fetch data already in memory. The DB arm remains for constructions
+    /// with no directory attached, such as tests.
     async fn refresh_username_directory(&self) -> Result<()> {
-        let client = self.db.get().await?;
-        let usernames = User::list_all_usernames(&client).await?;
+        let usernames = match &self.username_directory {
+            Some(directory) => {
+                let mut names: Vec<String> = crate::usernames::snapshot(directory)
+                    .values()
+                    .filter(|name| !name.trim().is_empty())
+                    .cloned()
+                    .collect();
+                // The DB arm sorts under the C collation, which is byte order.
+                names.sort();
+                names
+            }
+            None => {
+                let client = self.db.get().await?;
+                User::list_all_usernames(&client).await?
+            }
+        };
         let _ = self.username_tx.send(Arc::new(usernames));
         Ok(())
     }
@@ -1097,20 +1140,25 @@ impl ChatService {
     async fn build_chat_snapshot(&self, user_id: Uuid) -> Result<ChatSnapshot> {
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
-        let rooms = ChatRoom::list_for_user(&client, user_id).await?;
+
+        // Two pipelined rounds rather than eight serial round trips.
+        // tokio-postgres pipelines concurrent queries on one connection, so
+        // each round costs about one round trip instead of one per query.
+        // Postgres still executes them in order, so this buys latency, not
+        // server CPU; latency is what bounds `refresh_registered_sessions`,
+        // which walks every live session in turn.
+        let (room_state, friends_and_ignored) = tokio::join!(
+            ChatRoom::list_for_user_with_state(&client, user_id, self.system_user_id()),
+            User::friend_and_ignored_user_ids(&client, user_id),
+        );
+        let UserRoomState {
+            rooms,
+            last_message_at: room_last_message_at,
+            unread_counts,
+        } = room_state?;
+        let (friend_user_ids, ignored_user_ids) = friends_and_ignored?;
+
         let room_ids: Vec<Uuid> = rooms.iter().map(|room| room.id).collect();
-        let voice_channels_by_room_id =
-            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids).await?;
-        let room_last_message_at =
-            ChatMessage::last_message_at_for_rooms(&client, &room_ids).await?;
-        let active_polls = chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
-                HashMap::new()
-            });
-        let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
-        let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let lounge_room_id = rooms
             .iter()
             .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
@@ -1130,14 +1178,34 @@ impl ChatService {
         visible_user_ids.extend(friend_user_ids.iter().copied());
         visible_user_ids.sort();
         visible_user_ids.dedup();
-        let author_metadata = Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
-        let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
         let private_room_ids: Vec<Uuid> = rooms
             .iter()
             .filter(|room| room.kind == "topic" && room.visibility == "private")
             .map(|room| room.id)
             .collect();
-        let room_owner_ids = ChatRoom::owner_ids_for_rooms(&client, &private_room_ids).await?;
+
+        // Round two: everything that needed the room and friend sets. Joined
+        // rather than try_join'd so each failure keeps its own handling, and
+        // so a poll failure stays non-fatal to the rest of the snapshot.
+        let (voice_channels_by_room_id, active_polls, author_metadata, room_owner_ids) = tokio::join!(
+            VoiceChannel::enabled_for_chat_rooms(&client, &room_ids),
+            chat_poll::list_active_polls_for_rooms(&client, user_id, &room_ids),
+            Self::load_chat_author_metadata(&client, &visible_user_ids),
+            ChatRoom::owner_ids_for_rooms(&client, &private_room_ids),
+        );
+        let voice_channels_by_room_id = voice_channels_by_room_id?;
+        // The only failure in this snapshot that is not fatal: a room's poll
+        // is decoration, so a poll read that fails costs the poll, not the
+        // chat. Every other arm propagates.
+        let active_polls = match active_polls {
+            Ok(polls) => polls,
+            Err(error) => {
+                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
+                HashMap::new()
+            }
+        };
+        let author_metadata = author_metadata?;
+        let room_owner_ids = room_owner_ids?;
 
         let rooms = rooms.into_iter().map(|chat| (chat, Vec::new())).collect();
 
