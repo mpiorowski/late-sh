@@ -194,10 +194,10 @@ fn scramble(word: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
         Depth::Shuffle => shuffle_interior(&mut chars, rng),
     }
 
-    if rng.percent(intensity.slur_percent) {
-        if let Some(slurred) = slurred(&chars, rng) {
-            return slurred;
-        }
+    if rng.percent(intensity.slur_percent)
+        && let Some(slurred) = slurred(&chars, rng)
+    {
+        return slurred;
     }
     chars.into_iter().collect()
 }

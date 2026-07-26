@@ -73,7 +73,9 @@ fn bar_sections() -> Vec<GuideSection> {
             body: vec![
                 "Mention @bartender in the Lounge to order; press t at the bar.".to_string(),
                 "There is no menu. He invents the drink and prices it".to_string(),
-                format!("{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."),
+                format!(
+                    "{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."
+                ),
                 "Your first ever drink is on the house.".to_string(),
                 format!(
                     "\"@bartender round\" buys every human online a pour for {BARTENDER_ROUND_PRICE} chips."

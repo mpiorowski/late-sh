@@ -59,8 +59,7 @@ fn each_drink_reads_harder_than_the_last() {
         changed * 100 / sampled
     };
 
-    let [tipsy, buzzed, sloshed, wasted] =
-        [1, 2, 3, DRUNK_MAX_LEVEL].map(hit_percent);
+    let [tipsy, buzzed, sloshed, wasted] = [1, 2, 3, DRUNK_MAX_LEVEL].map(hit_percent);
 
     assert!(tipsy < 8, "tipsy should barely show, hit {tipsy}%");
     assert!(
@@ -95,10 +94,10 @@ fn the_things_that_carry_meaning_are_never_garbled() {
         );
         // The handle survives even though the ordinary words around it do not.
         assert!(
-            slurred.lines().nth(1).is_some_and(|line| line
-                .split_whitespace()
-                .next()
-                == Some("@alice")),
+            slurred
+                .lines()
+                .nth(1)
+                .is_some_and(|line| line.split_whitespace().next() == Some("@alice")),
             "{slurred}"
         );
         assert!(slurred.contains("https://late.sh/docs"), "{slurred}");
@@ -118,4 +117,3 @@ fn non_ascii_text_is_left_alone() {
         assert!(slurred.contains("gänsefüßchen"), "{slurred}");
     }
 }
-
