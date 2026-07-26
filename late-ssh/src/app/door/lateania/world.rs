@@ -6939,6 +6939,98 @@ pub fn is_broceliande_room(id: RoomId) -> bool {
         .contains(&id)
 }
 
+/// Where a procedurally-generated room sits inside its own generator grid.
+/// `region`/`zone` name the grid it belongs to, `(x, y)` is its cell within
+/// that `zone_w` x `zone_h` grid, and `z` is the map level (0 surface, negative
+/// underground). Rooms are numbered `base [+ zone*stride] + cell` and cells are
+/// `(cell % w, cell / w)`, so this is a pure decode of the room id. Returns
+/// `None` for hand-authored rooms (the capitals, roads, villages, housing,
+/// archipelago) which have no grid and are laid out by walking exits instead.
+/// The overhead world map uses this to place each zone as an exact,
+/// collision-free block rather than flattening the whole world onto one plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionPlacement {
+    pub region: &'static str,
+    pub zone: u32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub zone_w: i32,
+    pub zone_h: i32,
+}
+
+pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
+    // Single-grid regions: `id = base + cell`.
+    let single = |region, base: RoomId, w: usize, h: usize, z: i32| {
+        (base..base + (w * h) as u32).contains(&id).then(|| {
+            let cell = (id - base) as i32;
+            RegionPlacement {
+                region,
+                zone: 0,
+                x: cell % w as i32,
+                y: cell / w as i32,
+                z,
+                zone_w: w as i32,
+                zone_h: h as i32,
+            }
+        })
+    };
+    if let Some(p) = single("catacombs", CATACOMBS_BASE, CATACOMBS_W, CATACOMBS_H, -1) {
+        return Some(p);
+    }
+    if let Some(p) = single("thornwood", THORNWOOD_BASE, THORNWOOD_W, THORNWOOD_H, 0) {
+        return Some(p);
+    }
+    if let Some(p) = single("caverns", CAVERNS_BASE, CAVERNS_W, CAVERNS_H, -1) {
+        return Some(p);
+    }
+
+    // Multi-zone regions: `id = base + zone*stride + cell`, stride = w*h.
+    let multi = |region, base: RoomId, w: usize, h: usize, z: i32| {
+        let stride = (w * h) as u32;
+        let off = id - base;
+        let zone = off / stride;
+        let cell = (off % stride) as i32;
+        RegionPlacement {
+            region,
+            zone,
+            x: cell % w as i32,
+            y: cell / w as i32,
+            z,
+            zone_w: w as i32,
+            zone_h: h as i32,
+        }
+    };
+    if is_frontier_room(id) {
+        return Some(multi(
+            "frontier",
+            FRONTIER_BASE,
+            FRONTIER_W as usize,
+            FRONTIER_H as usize,
+            -1,
+        ));
+    }
+    if is_reaches_room(id) {
+        return Some(multi("reaches", REACHES_BASE, REACHES_W, REACHES_H, 0));
+    }
+    if is_kaelmyr_room(id) {
+        return Some(multi("kaelmyr", KAELMYR_BASE, KAELMYR_W, KAELMYR_H, 0));
+    }
+    if is_lakes_room(id) {
+        return Some(multi("lakes", LAKES_BASE, LAKES_W, LAKES_H, 0));
+    }
+    if is_broceliande_room(id) {
+        return Some(multi(
+            "broceliande",
+            BROCELIANDE_BASE,
+            BROCELIANDE_W,
+            BROCELIANDE_H,
+            0,
+        ));
+    }
+    None
+}
+
 /// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
 /// feature, the creatures that haunt it, three regular mob names, the zone
 /// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies

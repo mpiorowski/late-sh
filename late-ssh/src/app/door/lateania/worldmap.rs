@@ -1,23 +1,27 @@
-// Overhead world map - slice 1: the coordinate field.
+// Overhead world map - the coordinate field (slices 1 + 1b).
 //
-// The world is a room *graph*, not a heightmap, so this derives a spatial
-// (x, y, z) for every room by walking exits out from the start room. Horizontal
-// exits step x/y via `Dir::delta_2d`; up/down exits step z. The world is
-// deterministic (fixed seeds), so this is recomputed identically every boot and
-// never needs storing.
+// Derives a spatial (x, y, z) for every room by two mechanisms:
 //
-// Rooms reachable from the start form one connected component; portal-only
-// regions (catacombs, the archipelago) carry no directional exits and so form
-// their own components. Each component is laid out in its own coordinate space
-// and then shifted east of the previous one, so the global field has no
-// *artificial* cross-region collisions - the only collisions that remain are
-// genuine non-Euclidean loops inside a single component, which is exactly what
-// the collision report measures. Streaming only ever renders one neighbourhood,
-// so those local conflicts never share the screen.
+// * Procedurally-generated regions (the Reaches, Kaelmyr, the Sunderlakes,
+//   Broceliande, the Frontier, the catacombs/thornwood/caverns) are laid out
+//   from their generator grids via `world::region_layout`: each zone is an
+//   exact w x h block placed at its own reserved origin. Room ids decode
+//   straight to cell (x, y), so within a zone the layout is collision-free by
+//   construction and zones never overlap.
+// * Everything hand-authored (the capitals, roads, villages, housing, the
+//   archipelago) has no grid, so it's placed by walking exits (BFS) per
+//   connected component, each component shifted clear of the last. BFS never
+//   steps into a generated zone (those are already placed).
+//
+// The world is deterministic (fixed seeds), so this is recomputed identically
+// every boot and never stored. Streaming only renders one neighbourhood, so the
+// non-continuous seams between reserved blocks never share the screen. What few
+// collisions remain are genuine non-Euclidean loops inside the hand-authored
+// core, which the collision report measures.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use super::world::{Dir, RoomId, World};
+use super::world::{Dir, RoomId, World, region_layout};
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
 /// surface, negative is underground (down exits), positive is above.
@@ -44,37 +48,72 @@ fn z_step(dir: Dir) -> i32 {
 /// touch in the global field.
 const COMPONENT_MARGIN: i32 = 4;
 
-/// Derive an (x, y, z) for every room in the world. Deterministic: the start
-/// room's component is laid out first (anchored at the low-x end), then every
-/// other component in ascending room-id order, each shifted clear of the last.
+/// Derive an (x, y, z) for every room. Generated zones are placed as exact
+/// blocks from `region_layout`; hand-authored rooms are walked out by exits.
 pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
     let mut coords: HashMap<RoomId, Coord> = HashMap::new();
     let mut next_base_x: i32 = 0;
 
-    // Seed the start room first so the main landmass sits at the western edge,
-    // then walk every room id so nothing reachable only by portal is left out.
-    let mut seeds = Vec::with_capacity(world.rooms.len() + 1);
-    seeds.push(world.start_room);
     let mut ids: Vec<RoomId> = world.rooms.keys().copied().collect();
     ids.sort_unstable();
-    seeds.extend(ids);
+
+    // 1. Generated regions: group rooms by (region, zone) and place each zone in
+    //    its own reserved column-block at exact cell offsets. Keys are sorted
+    //    (BTreeMap) so the field is stable across boots.
+    let mut zones: BTreeMap<(&'static str, u32), (i32, Vec<RoomId>)> = BTreeMap::new();
+    for &id in &ids {
+        if let Some(p) = region_layout(id) {
+            zones
+                .entry((p.region, p.zone))
+                .or_insert((p.zone_w, Vec::new()))
+                .1
+                .push(id);
+        }
+    }
+    for (zone_w, rids) in zones.into_values() {
+        let origin_x = next_base_x;
+        for id in rids {
+            // A pure re-decode; matches the grouping above.
+            let p = region_layout(id).expect("grouped by region_layout");
+            coords.insert(
+                id,
+                Coord {
+                    x: origin_x + p.x,
+                    y: p.y,
+                    z: p.z,
+                },
+            );
+        }
+        next_base_x = origin_x + zone_w + COMPONENT_MARGIN;
+    }
+
+    // 2. Hand-authored rooms: walk exits per connected component, each shifted
+    //    clear of the last. Start room first so the capitals land together. BFS
+    //    (not DFS) means the shortest exit-path wins any clash the graph's
+    //    geometry would create, and it never steps into an already-placed zone.
+    let mut seeds = Vec::with_capacity(ids.len() + 1);
+    seeds.push(world.start_room);
+    seeds.extend(ids.iter().copied());
 
     for seed in seeds {
-        if coords.contains_key(&seed) || world.room(seed).is_none() {
+        if coords.contains_key(&seed) || world.room(seed).is_none() || region_layout(seed).is_some()
+        {
             continue;
         }
 
-        // BFS this component in its own relative space. BFS (not DFS) means the
-        // shortest exit-path to each room wins any clash the graph's geometry
-        // would otherwise create - the same rule the side-panel minimap uses.
         let mut rel: HashMap<RoomId, Coord> = HashMap::new();
         rel.insert(seed, Coord { x: 0, y: 0, z: 0 });
         let mut queue = VecDeque::from([seed]);
         while let Some(rid) = queue.pop_front() {
             let here = rel[&rid];
-            let Some(room) = world.room(rid) else { continue };
+            let Some(room) = world.room(rid) else {
+                continue;
+            };
             for (dir, &dest) in &room.exits {
-                if rel.contains_key(&dest) || coords.contains_key(&dest) {
+                if rel.contains_key(&dest)
+                    || coords.contains_key(&dest)
+                    || region_layout(dest).is_some()
+                {
                     continue;
                 }
                 let placed = match dir.delta_2d() {
@@ -94,8 +133,7 @@ pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
             }
         }
 
-        // Slide the whole component east so its western edge lands at
-        // `next_base_x`, then park the next component clear of this one.
+        // Slide the component east so its western edge lands at `next_base_x`.
         let min_x = rel.values().map(|c| c.x).min().unwrap_or(0);
         let shift = next_base_x - min_x;
         let mut max_x = next_base_x;

@@ -29,13 +29,12 @@ fn start_room_anchors_the_surface() {
     let world = seed_world();
     let coords = derive_coords(&world);
     let start = coords[&world.start_room];
-    // The main landmass is the first component, laid out on the surface with the
-    // start room at its western edge.
+    // The start room seeds the hand-authored core component at (0, 0, 0) before
+    // being shifted east clear of the generated zones: y and z stay anchored on
+    // the surface, x is non-negative (past the reserved zone blocks).
     assert_eq!(start.y, 0, "start room should anchor y");
     assert_eq!(start.z, 0, "start room should sit on the surface");
-    // The first component is shifted so its western edge is x=0; the start room
-    // sits somewhere inside it, so its x is non-negative but not necessarily 0.
-    assert!(start.x >= 0, "start room should sit inside the first component");
+    assert!(start.x >= 0, "start room x should be non-negative");
 }
 
 #[test]
@@ -49,7 +48,9 @@ fn vertical_exits_populate_z_levels() {
 }
 
 #[test]
-fn spatial_collisions_stay_within_the_naive_budget() {
+fn generated_zones_are_collision_free_and_the_core_stays_tight() {
+    use crate::app::door::lateania::world::region_layout;
+
     let world = seed_world();
     let coords = derive_coords(&world);
     let clashes = collisions(&coords);
@@ -65,15 +66,25 @@ fn spatial_collisions_stay_within_the_naive_budget() {
         rate * 100.0,
     );
 
-    // This is slice 1: a *naive* BFS embedding. Cross-component overlap is
-    // engineered away, but each procedural region is still BFS-flattened onto
-    // one plane, so its internal grids/zones can pile onto each other - about
-    // 13% of rooms today. Slice 1b lays regions from their generator grids at
-    // reserved origins to drive this toward zero. Until then this guards against
-    // the layout *regressing* past the measured baseline.
+    // Slice 1b lays every procedurally-generated zone from its generator grid at
+    // a reserved origin, so NO generated room may share a cell with anything.
+    // The key guarantee: every remaining collision is hand-authored core (the
+    // capitals/roads, which are walked out by exits and can loop non-Euclidean).
+    for ids in clashes.values() {
+        for &id in ids {
+            assert!(
+                region_layout(id).is_none(),
+                "generated room {id} collided - a zone was not laid from its grid",
+            );
+        }
+    }
+
+    // The hand-authored remainder is a small tail (~1% today, was ~13% under the
+    // slice-1 naive BFS). Streaming never shows two of these together; this just
+    // guards against a layout regression.
     assert!(
-        rate < 0.15,
-        "spatial collisions spiked to {:.2}% of rooms (naive-BFS baseline is ~13%)",
+        rate < 0.03,
+        "spatial collisions rose to {:.2}% of rooms (expected ~1% hand-authored tail)",
         rate * 100.0
     );
 }
