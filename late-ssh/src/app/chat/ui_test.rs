@@ -1684,3 +1684,24 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
     assert!(row.contains("A cozy corner"));
     assert!(!row.contains("/rules"));
 }
+
+#[test]
+fn unread_badge_shows_exact_counts_below_the_cap() {
+    assert_eq!(format_unread_badge(1), "1");
+    assert_eq!(format_unread_badge(42), "42");
+    assert_eq!(
+        format_unread_badge(ChatRoomMember::UNREAD_COUNT_CAP - 1),
+        "99"
+    );
+}
+
+#[test]
+fn unread_badge_collapses_at_the_cap() {
+    // SQL stops counting at the cap, so the exact total is unknown past it.
+    // Rendering it as a precise number would be a lie.
+    assert_eq!(format_unread_badge(ChatRoomMember::UNREAD_COUNT_CAP), "99+");
+    assert_eq!(
+        format_unread_badge(ChatRoomMember::UNREAD_COUNT_CAP + 500),
+        "99+"
+    );
+}

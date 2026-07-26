@@ -235,34 +235,60 @@ impl ChatRoomMember {
         Ok(count)
     }
 
+    /// Unread counting stops here. A room the user never opened accumulates
+    /// unread forever, and `#lounge` (auto-join, every user, 127k messages as
+    /// of 2026-07-26) made the uncapped count 578 ms per user per pass and 43%
+    /// of all database execution time. Nobody reads an exact four-digit badge,
+    /// the room tail only ever loads `HISTORY_LIMIT` (500) messages anyway, and
+    /// room ordering only tests `unread > 0`. So the count walks the index
+    /// forward from `last_read_at` and stops here; the UI renders anything at
+    /// the cap as `99+` (`chat/ui.rs::format_unread_badge`).
+    pub const UNREAD_COUNT_CAP: i64 = 100;
+
+    /// Per-room unread counts for one user, each capped at `UNREAD_COUNT_CAP`.
+    ///
+    /// `system_user_id` is the #lounge feed bot (`app/activity/lounge.rs`),
+    /// whose `· `-prefixed activity lines must never light an unread badge.
+    /// It is passed in rather than re-derived per row: the old shape joined
+    /// `users` and read `settings->>'system'` out of JSONB for every message,
+    /// which made Postgres hash the entire users table to answer a question
+    /// with one constant answer. `None` means no system user exists yet, in
+    /// which case nothing is excluded.
     pub async fn unread_counts_for_user(
         client: &Client,
         user_id: Uuid,
+        system_user_id: Option<Uuid>,
     ) -> Result<HashMap<Uuid, i64>> {
         let rows = client
             .query(
-                // The system-feed bot (settings.system = true) posts ambient
-                // activity lines prefixed with `· `; those must never light
-                // anyone's unread badge. The same author also posts real
-                // messages (a new public room reported to #moderators), which
-                // must. The prefix is the discriminator everywhere else too,
-                // see `chat/state.rs::system_line_text_in`.
+                // The system-feed bot posts ambient activity lines prefixed
+                // with `· `; those must never light anyone's unread badge. The
+                // same author also posts real messages (a new public room
+                // reported to #moderators), which must. The prefix is the
+                // discriminator everywhere else too, see
+                // `chat/state.rs::system_line_text_in`.
+                //
+                // IS NOT DISTINCT FROM keeps a NULL $2 (no system user) from
+                // nulling out the whole predicate and dropping every row.
                 "SELECT m.room_id, COALESCE(unread.unread_count, 0)::bigint AS unread_count
                  FROM chat_room_members m
                  LEFT JOIN LATERAL (
-                    SELECT COUNT(msg.id)::bigint AS unread_count
-                    FROM chat_messages msg
-                    JOIN users author ON author.id = msg.user_id
-                    WHERE msg.room_id = m.room_id
-                      AND msg.user_id <> m.user_id
-                      AND NOT (
-                          COALESCE((author.settings->>'system')::boolean, false)
-                          AND msg.body LIKE '· %'
-                      )
-                      AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                    SELECT COUNT(*)::bigint AS unread_count
+                    FROM (
+                       SELECT 1
+                       FROM chat_messages msg
+                       WHERE msg.room_id = m.room_id
+                         AND msg.user_id <> m.user_id
+                         AND NOT (
+                             msg.user_id IS NOT DISTINCT FROM $2::uuid
+                             AND msg.body LIKE '· %'
+                         )
+                         AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                       LIMIT $3
+                    ) capped
                  ) unread ON true
                  WHERE m.user_id = $1",
-                &[&user_id],
+                &[&user_id, &system_user_id, &Self::UNREAD_COUNT_CAP],
             )
             .await?;
 

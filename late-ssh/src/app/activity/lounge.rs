@@ -76,6 +76,9 @@ pub fn start_lounge_feed_task(
                 return;
             }
         };
+        // Chat snapshots need this id to exclude `· ` activity lines from
+        // unread counts without joining `users` per message.
+        chat.set_system_user_id(system_user_id);
         let mut recent: HashMap<String, Instant> = HashMap::new();
         loop {
             let event = match rx.recv().await {

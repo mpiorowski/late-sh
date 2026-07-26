@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
-use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
+use late_core::models::{
+    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -2892,7 +2894,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         let prefix = room_jump_prefix(jump_key, view.room_jump_active, is_selected);
         let text = if unread > 0 {
-            format!("{prefix}{label} ({unread})")
+            format!("{prefix}{label} ({})", format_unread_badge(unread))
         } else {
             format!("{prefix}{label}")
         };
@@ -3487,7 +3489,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         let display = format!("{key_prefix}{display_label}");
         let used = UnicodeWidthStr::width(display.as_str());
         let unread_str = if unread > 0 {
-            format!("{unread}")
+            format_unread_badge(unread)
         } else {
             String::new()
         };
@@ -3675,6 +3677,19 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         lines,
         hit_slots,
         selected_row_index,
+    }
+}
+
+/// Unread badge text. Counts are capped in SQL at
+/// `ChatRoomMember::UNREAD_COUNT_CAP`, so anything at the cap means "at least
+/// this many" and renders as `99+` rather than a misleading exact number.
+/// Applies to feed badges too, which are uncapped in the DB but read the same
+/// way on screen.
+fn format_unread_badge(unread: i64) -> String {
+    if unread >= ChatRoomMember::UNREAD_COUNT_CAP {
+        format!("{}+", ChatRoomMember::UNREAD_COUNT_CAP - 1)
+    } else {
+        unread.to_string()
     }
 }
 

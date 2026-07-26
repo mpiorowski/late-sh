@@ -159,6 +159,14 @@ pub struct ChatService {
     refresh_signal_tx: mpsc::UnboundedSender<Uuid>,
     refresh_signal_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<Uuid>>>>,
     read_permits: Arc<Semaphore>,
+    /// The #lounge feed bot's user id, published once by
+    /// `activity::lounge::start_lounge_feed_task` after it ensures the row.
+    /// Snapshots hand it to `unread_counts_for_user` so activity lines are
+    /// excluded by a UUID compare instead of a per-message join into `users`.
+    /// `None` until that task runs, which only means a brief window at boot
+    /// where a system line could count toward a badge; the next snapshot
+    /// corrects it.
+    system_user_id: Arc<Mutex<Option<Uuid>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -899,7 +907,18 @@ impl ChatService {
             refresh_signal_tx,
             refresh_signal_rx: Arc::new(Mutex::new(Some(refresh_signal_rx))),
             read_permits: Arc::new(Semaphore::new(8)),
+            system_user_id: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Publish the #lounge feed bot's id. Called once at startup by
+    /// `activity::lounge::start_lounge_feed_task`, which owns ensuring the row.
+    pub fn set_system_user_id(&self, user_id: Uuid) {
+        *self.system_user_id.lock_recover() = Some(user_id);
+    }
+
+    fn system_user_id(&self) -> Option<Uuid> {
+        *self.system_user_id.lock_recover()
     }
 
     pub fn new_with_active_users(
@@ -1109,7 +1128,8 @@ impl ChatService {
                 tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
                 HashMap::new()
             });
-        let unread_counts = ChatRoomMember::unread_counts_for_user(&client, user_id).await?;
+        let unread_counts =
+            ChatRoomMember::unread_counts_for_user(&client, user_id, self.system_user_id()).await?;
         let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
         let lounge_room_id = rooms
             .iter()

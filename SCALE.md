@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-07-26 (first `pg_stat_statements` cost ranking of the whole DB workload: the 10 s per-session chat snapshot poll is 50-68% of all database execution time and `unread_counts_for_user` alone is 43%, see Pain Point 7 and the DB Cost Ranking. The work-feed fan-out that Pain Point 6 called the biggest stall is 0.5% of DB time and is a correctness bug, not a capacity one. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-07-26 (first `pg_stat_statements` cost ranking of the whole DB workload, then the top two items fixed. `unread_counts_for_user` was 43% of all database execution time on its own; capping the count and dropping its per-message `users` join took a worst-case user from 578 ms to 11.8 ms. The leaderboard refresh loop was 13% for a timer nobody was watching; it is now 5-minutely and skips when no session is subscribed. The work-feed fan-out that Pain Point 6 called the biggest stall is 0.5% of DB time and is a correctness bug, not a capacity one. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -205,12 +205,21 @@ Two structural problems on top of the raw cost:
 - **The session loop is sequential.** `refresh_registered_sessions` (`svc.rs:1291`) is a plain `for session in sessions { ... .await }`, so the effective concurrency is 1 and the 8-permit `read_permits` semaphore does nothing on this path. Cycle time is N_sessions × snapshot latency, and `MissedTickBehavior::Skip` means an overrun degrades silently into a continuous back-to-back loop rather than erroring. Unread-badge latency is therefore 10 s plus the session's position in the cycle.
 - **The poll is load-bearing for unread badges.** The only writes to `ChatState::unread_counts` are mark-read to 0 (`chat/state.rs:869`), wholesale replace from the snapshot (`:3746`), and remove on room deletion (`:4547`). There is no increment path, so `MessageCreated` events do not move a badge and the DB poll is the only source of truth.
 
-Fix direction (not yet implemented), in order of payoff:
+**Where the cost actually was, measured 2026-07-26.** `#lounge` is auto-join with all 14,346 users as members and 127,246 messages, and it is where the activity feed posts. 46% of all memberships have `last_read_at IS NULL`, never opened once, so their count starts at the first message ever posted and walks the whole room. On top of that, the "is this an activity line" test read `users.settings->>'system'` out of JSONB per message, so Postgres sequentially scanned the entire users table and built a 5 MB hash to answer a question with one constant answer. Worst-case single user: 578 ms, 183,914 buffers, 12,613 rows removed by that filter out of 127,260 examined.
 
-1. **Increment unread locally on `MessageCreated`.** `push_message` (`chat/state.rs:4470`) already computes every predicate the SQL does: membership gate at `:4473`, system-line divert at `:4480`, ignore check at `:4490`, `is_viewing_room` at `:4489`. Mirror the SQL predicate exactly (including counting ignored authors) so the backstop poll cannot flip the number back. This is what makes the poll non-load-bearing.
-2. **Raise `CHAT_REFRESH_INTERVAL`** to a correctness backstop (60 s or more). Room-list freshness survives it: a first-time DM already forces an immediate `request_list()` (`chat/state.rs:3823`), and room switches already signal the scheduler directly.
-3. **Collapse the duplicate `settings` read** into one call that extracts both friends and ignores.
-4. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts.
+Two ideas that did NOT survive measurement, recorded so nobody re-proposes them:
+
+- *Skip rooms with no new activity* (denormalized `chat_rooms.last_message_at`): would skip **1.9%** of memberships, because never-opened rooms always have something newer than "never".
+- *Maintain an incremental unread counter per membership*: `#lounge` has 14,346 members, so every message would update 14,346 rows. That is the Pain Point 6 disease, worse.
+
+**Fixed 2026-07-26** (`late-core/src/models/chat_room_member.rs`): the lateral count runs under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` (100) so it walks the index forward from `last_read_at` and stops, and the `users` join is replaced by a UUID compare against the system bot id passed in from `ChatService` (published once at startup by the #lounge feed task). 578 ms to 11.8 ms on the same user. Room ordering only tests `unread > 0` so it is unaffected, and the room tail only ever loads 500 messages anyway.
+
+Still open, all much smaller now:
+
+1. **Collapse the duplicate `settings` read** into one call that extracts both friends and ignores (11.1M calls, exactly 2 per snapshot).
+2. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts.
+3. **`last_message_at_for_rooms`** still fans out one index scan per joined room (6.4% before this change).
+4. If it ever matters again, the O(1) shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting. It needs a migration and a decision about the activity lines, which is why it is not the fix today.
 
 No new infrastructure is needed and none is wanted here. The events already exist and already reach every session; the bug is that the client discards them and re-derives the state from Postgres on a timer. A broker (NATS, Redis pub/sub) would add a hop to a pipeline that already works and would not remove one of those 22M queries.
 
@@ -344,11 +353,13 @@ Ordered by measured payoff as of 2026-07-26. The first two items are pure code c
 
 ### 1. Kill the chat snapshot poll's per-room fan-out
 
-Top of the list. 50-68% of all DB execution time, and it grows with both concurrency and rooms-per-user. Full description and the four-step fix direction in Pain Point 7.
+Partly done 2026-07-26. The dominant term, `unread_counts_for_user`, is fixed: the count is capped at `ChatRoomMember::UNREAD_COUNT_CAP` (100) and the per-message `users` join is gone. Measured on prod against a never-read user: **578 ms to 11.8 ms, 483,271 buffers to 3,534**. The UI renders anything at the cap as `99+`.
+
+Still open from Pain Point 7: the duplicate `SELECT settings` read (2 per snapshot, 11.1M calls), the sequential session loop, and the remaining per-room fan-out in `last_message_at_for_rooms`. All much smaller now. Re-rank against `pg_stat_statements` after this deploys before spending more on it.
 
 ### 2. Gate the leaderboard refresh loop
 
-13.1% of DB time for a timer that runs every 30 s regardless of whether anyone is connected. See the DB Cost Ranking note. Smallest diff on this list by a wide margin.
+Done 2026-07-26 (`app/hub/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
 
 ### 3. Add a second node; give `service-ssh` a full node to itself
 
