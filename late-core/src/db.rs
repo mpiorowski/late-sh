@@ -193,3 +193,24 @@ impl Db {
         Ok(())
     }
 }
+
+/// Stable fingerprint of the embedded migration set.
+///
+/// Every migration's name and body is length-prefixed into the hash, so any
+/// edit, addition, removal, or rename produces a different value. Test-database
+/// templating (`test_utils`) keys its template name on this, which is what makes
+/// a stale template impossible rather than merely unlikely: change a migration
+/// and the next run simply builds a template under a new name.
+#[cfg(feature = "testing")]
+pub(crate) fn migrations_fingerprint() -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    for (name, sql) in MIGRATIONS {
+        hasher.update((name.len() as u64).to_le_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update((sql.len() as u64).to_le_bytes());
+        hasher.update(sql.as_bytes());
+    }
+    hex::encode(&hasher.finalize()[..8])
+}
