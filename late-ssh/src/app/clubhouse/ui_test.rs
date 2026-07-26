@@ -107,7 +107,6 @@ fn fresh_bubbles_take_the_newest_message_per_author_from_a_newest_first_tail() {
         id: Uuid::from_u128(n),
         created: now - chrono::Duration::seconds(secs_ago),
         updated: now - chrono::Duration::seconds(secs_ago),
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: Uuid::from_u128(99),

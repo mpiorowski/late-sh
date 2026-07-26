@@ -29,7 +29,7 @@ pub(crate) fn top_tray_area(area: Rect) -> Rect {
 /// tray is only reachable through the `/aquarium` composer command, so a tray
 /// that eats the composer would lock the user out of hiding it again.
 pub(crate) fn carve_top_tray(area: Rect) -> (Option<Rect>, Rect) {
-    if area.height < TOP_TRAY_HEIGHT + crate::app::dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE {
+    if area.height < TOP_TRAY_HEIGHT + crate::app::chat::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE {
         return (None, area);
     }
     let tray = top_tray_area(area);

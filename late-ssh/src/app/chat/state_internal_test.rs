@@ -634,6 +634,9 @@ fn make_room(
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            topic: None,
+            rules: None,
+            created_by: None,
         },
         Vec::new(),
     )
@@ -1023,6 +1026,9 @@ fn room_slug_for_uses_explicit_room_id() {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
+                topic: None,
+                rules: None,
+                created_by: None,
             },
             vec![],
         ),
@@ -1039,6 +1045,9 @@ fn room_slug_for_uses_explicit_room_id() {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
+                topic: None,
+                rules: None,
+                created_by: None,
             },
             vec![],
         ),
@@ -1459,7 +1468,6 @@ fn make_msg(id: Uuid) -> ChatMessage {
         id,
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: Uuid::from_u128(999),
@@ -1758,6 +1766,9 @@ fn make_dm(user_a: Uuid, user_b: Uuid) -> ChatRoom {
         language_code: None,
         dm_user_a: Some(user_a),
         dm_user_b: Some(user_b),
+        topic: None,
+        rules: None,
+        created_by: None,
     }
 }
 
@@ -2043,7 +2054,6 @@ async fn push_message_bumps_only_its_room_version() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: lounge.id,
@@ -2064,4 +2074,31 @@ async fn push_message_bumps_only_its_room_version() {
     edited.updated = Utc::now();
     state.replace_message(edited);
     assert_eq!(state.room_version(lounge.id), lounge_version + 2);
+}
+
+#[test]
+fn parse_pair_command_accepts_directed_form() {
+    assert_eq!(
+        parse_pair_command("/pair @alice"),
+        Some(Some(PairRequest::Directed("alice".to_string())))
+    );
+}
+
+#[test]
+fn parse_pair_command_rejects_bare_and_malformed_forms() {
+    assert_eq!(parse_pair_command("/pair"), Some(None), "no target");
+    assert_eq!(parse_pair_command("/pair @"), Some(None), "empty username");
+    assert_eq!(parse_pair_command("/pair alice"), Some(None), "missing @");
+    assert_eq!(
+        parse_pair_command("/pair @alice extra"),
+        Some(None),
+        "trailing token"
+    );
+}
+
+#[test]
+fn parse_pair_command_ignores_unrelated_input() {
+    assert_eq!(parse_pair_command("/pairing @alice"), None);
+    assert_eq!(parse_pair_command("hello /pair @alice"), None);
+    assert_eq!(parse_pair_command("/challenge @alice"), None);
 }

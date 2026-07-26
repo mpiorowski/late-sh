@@ -132,3 +132,55 @@ fn multiline_escape_reports_cancel() {
         EditOutcome::Cancel
     );
 }
+
+#[test]
+fn freeform_enter_inserts_newline_instead_of_submitting() {
+    let mut input = ta("ab");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(b'\r'), 10),
+        EditOutcome::Handled
+    );
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Char('c'), 10),
+        EditOutcome::Handled
+    );
+    assert_eq!(text(&input), "ab\nc");
+}
+
+#[test]
+fn freeform_escape_reports_cancel() {
+    let mut input = ta("abc");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(0x1B), 8),
+        EditOutcome::Cancel
+    );
+}
+
+#[test]
+fn freeform_tab_indents_instead_of_falling_through() {
+    // Regression test: an unhandled Tab reaches the global page cycle, which
+    // on the scratchpad changes screen and so ends the pairing.
+    let mut input = ta("fn main() {");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(b'\r'), 64),
+        EditOutcome::Handled
+    );
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(0x09), 64),
+        EditOutcome::Handled
+    );
+    assert_eq!(text(&input), "fn main() {\n    ");
+}
+
+#[test]
+fn freeform_has_no_undo() {
+    // Undo would rewind across a remote sync, republishing content the
+    // partner never asked to lose. Ctrl+_ must not be an editing key here.
+    let mut input = ta("");
+    handle_freeform_edit(&mut input, &ParsedInput::Char('a'), 8);
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(0x1F), 8),
+        EditOutcome::Ignored
+    );
+    assert_eq!(text(&input), "a");
+}

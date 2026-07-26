@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
+use std::collections::HashMap;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -19,7 +20,28 @@ crate::model! {
         pub language_code: Option<String>,
         pub dm_user_a: Option<Uuid>,
         pub dm_user_b: Option<Uuid>,
+        // What this room is about, one line. Projected as the IRC topic.
+        pub topic: Option<String>,
+        // The room's general rules, shown on request.
+        pub rules: Option<String>,
+        // Who opened this room. Written by the create paths only, never
+        // back-filled; see `owner_id` for the ownership actually in force.
+        pub created_by: Option<Uuid>,
     }
+}
+
+/// Trim a room-info field and treat an empty result as "unset" (NULL).
+fn clean_info(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// One user's rooms and the per-room counters that come back with them.
+/// Both maps are keyed by room id and always carry an entry for every room
+/// in `rooms`, so callers never have to distinguish "absent" from "zero".
+pub struct UserRoomState {
+    pub rooms: Vec<ChatRoom>,
+    pub last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
+    pub unread_counts: HashMap<Uuid, i64>,
 }
 
 impl ChatRoom {
@@ -220,17 +242,23 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
-    pub async fn create_private_room(client: &Client, slug: &str) -> Result<Self> {
+    /// Create a private room owned by `created_by`. The creator is recorded in
+    /// the same statement, so a private room is never momentarily ownerless.
+    pub async fn create_private_room(
+        client: &Client,
+        slug: &str,
+        created_by: Uuid,
+    ) -> Result<Self> {
         let slug = normalize_topic_slug(slug)?;
 
         let row = client
             .query_opt(
-                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug)
-                 VALUES ('topic', 'private', false, $1)
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, created_by)
+                 VALUES ('topic', 'private', false, $1, $2)
                  ON CONFLICT (visibility, slug) WHERE kind = 'topic'
                  DO NOTHING
                  RETURNING *",
-                &[&slug],
+                &[&slug, &created_by],
             )
             .await?;
 
@@ -238,6 +266,81 @@ impl ChatRoom {
             Some(row) => Ok(Self::from(row)),
             None => bail!("private room #{slug} already exists"),
         }
+    }
+
+    /// Record who opened a room, from the create path only. The `created_by IS
+    /// NULL` guard is a concurrency guard, not a back-fill: two sessions racing
+    /// `/public #foo` both land here, and the loser must not overwrite the
+    /// winner. Never call this to grant ownership of an existing room.
+    pub async fn set_creator(client: &Client, room_id: Uuid, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE chat_rooms SET created_by = $2
+                 WHERE id = $1 AND created_by IS NULL",
+                &[&room_id, &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Owners of `room_ids`, derived rather than stored: the recorded creator
+    /// while they are still a member, otherwise the earliest remaining member
+    /// (ties broken by user id so the answer is stable). Ownership therefore
+    /// succeeds on its own when a creator leaves, and rooms that predate
+    /// `created_by` resolve to their first member. A room with no members left
+    /// is absent from the map.
+    pub async fn owner_ids_for_rooms(
+        client: &Client,
+        room_ids: &[Uuid],
+    ) -> Result<HashMap<Uuid, Uuid>> {
+        if room_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = client
+            .query(
+                "SELECT DISTINCT ON (m.room_id) m.room_id, m.user_id
+                   FROM chat_room_members m
+                   JOIN chat_rooms r ON r.id = m.room_id
+                  WHERE m.room_id = ANY($1)
+                  ORDER BY m.room_id,
+                           COALESCE(m.user_id = r.created_by, false) DESC,
+                           m.joined_at ASC,
+                           m.user_id ASC",
+                &[&room_ids],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("room_id"), row.get("user_id")))
+            .collect())
+    }
+
+    /// The owner of one room. Same derivation as `owner_ids_for_rooms`.
+    pub async fn owner_id(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
+        Ok(Self::owner_ids_for_rooms(client, &[room_id])
+            .await?
+            .remove(&room_id))
+    }
+
+    /// Set what the room is about and its rules. Empty strings are stored as
+    /// NULL so a cleared field reads as "unset" rather than blank. Authority is
+    /// resolved by the caller (service layer).
+    pub async fn set_topic_and_rules(
+        client: &Client,
+        room_id: Uuid,
+        topic: Option<&str>,
+        rules: Option<&str>,
+    ) -> Result<Self> {
+        let row = client
+            .query_one(
+                "UPDATE chat_rooms
+                    SET topic = $2, rules = $3, updated = current_timestamp
+                  WHERE id = $1
+                 RETURNING *",
+                &[&room_id, &clean_info(topic), &clean_info(rules)],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
     pub async fn get_or_create_room(client: &Client, slug: &str) -> Result<Self> {
@@ -300,6 +403,106 @@ impl ChatRoom {
             .await?;
 
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// The rooms a user is in, together with the two per-room counters the
+    /// chat rail renders from.
+    ///
+    /// One query rather than three. `last_message_at` and the unread count
+    /// both key off the very `chat_room_members` row this already walks, so
+    /// folding them in as laterals removes two redundant scans of the user's
+    /// membership set on every snapshot pass. The snapshot poll runs per
+    /// session every `CHAT_REFRESH_INTERVAL`, so those scans were the same
+    /// work repeated millions of times a day.
+    ///
+    /// `system_user_id` is the #lounge feed bot (`app/activity/lounge.rs`),
+    /// whose `· `-prefixed activity lines must never light an unread badge.
+    /// It is passed in rather than re-derived per row: the old shape joined
+    /// `users` and read `settings->>'system'` out of JSONB for every message,
+    /// which made Postgres hash the entire users table to answer a question
+    /// with one constant answer. `None` means no system user exists yet, in
+    /// which case nothing is excluded.
+    pub async fn list_for_user_with_state(
+        client: &Client,
+        user_id: Uuid,
+        system_user_id: Option<Uuid>,
+    ) -> Result<UserRoomState> {
+        let rows = client
+            .query(
+                // The system-feed bot posts ambient activity lines prefixed
+                // with `· `; those must never light anyone's unread badge. The
+                // same author also posts real messages (a new public room
+                // reported to #moderators), which must. The prefix is the
+                // discriminator everywhere else too, see
+                // `chat/state.rs::system_line_text_in`.
+                //
+                // IS NOT DISTINCT FROM keeps a NULL $2 (no system user) from
+                // nulling out the whole predicate and dropping every row.
+                //
+                // The unread count stops at $3; see `UNREAD_COUNT_CAP` for why
+                // an exact total is neither needed nor affordable.
+                "SELECT r.*,
+                        latest.created AS last_message_at,
+                        COALESCE(unread.unread_count, 0)::bigint AS unread_count
+                 FROM chat_rooms r
+                 JOIN chat_room_members m ON m.room_id = r.id
+                 LEFT JOIN LATERAL (
+                    SELECT created
+                    FROM chat_messages
+                    WHERE room_id = r.id
+                    ORDER BY created DESC, id DESC
+                    LIMIT 1
+                 ) latest ON true
+                 LEFT JOIN LATERAL (
+                    SELECT COUNT(*)::bigint AS unread_count
+                    FROM (
+                       SELECT 1
+                       FROM chat_messages msg
+                       WHERE msg.room_id = r.id
+                         AND msg.user_id <> m.user_id
+                         AND NOT (
+                             msg.user_id IS NOT DISTINCT FROM $2::uuid
+                             AND msg.body LIKE '· %'
+                         )
+                         AND msg.created > COALESCE(m.last_read_at, '-infinity'::timestamptz)
+                       LIMIT $3
+                    ) capped
+                 ) unread ON true
+                 WHERE m.user_id = $1
+                 ORDER BY
+                     CASE
+                         WHEN r.kind = 'lounge' AND r.slug = 'lounge' THEN 0
+                         WHEN r.permanent THEN 1
+                         WHEN r.visibility = 'public' THEN 2
+                         WHEN r.kind = 'dm' THEN 4
+                         ELSE 3
+                     END ASC,
+                     COALESCE(r.slug, COALESCE(r.language_code, '')) ASC,
+                     r.created ASC,
+                     r.id ASC",
+                &[
+                    &user_id,
+                    &system_user_id,
+                    &crate::models::chat_room_member::ChatRoomMember::UNREAD_COUNT_CAP,
+                ],
+            )
+            .await?;
+
+        let mut state = UserRoomState {
+            rooms: Vec::with_capacity(rows.len()),
+            last_message_at: HashMap::with_capacity(rows.len()),
+            unread_counts: HashMap::with_capacity(rows.len()),
+        };
+        for row in rows {
+            // Read the joined columns before `from` consumes the row.
+            let last_message_at: Option<DateTime<Utc>> = row.get("last_message_at");
+            let unread_count: i64 = row.get("unread_count");
+            let room = Self::from(row);
+            state.last_message_at.insert(room.id, last_message_at);
+            state.unread_counts.insert(room.id, unread_count);
+            state.rooms.push(room);
+        }
+        Ok(state)
     }
 
     pub async fn get_target_user_ids(client: &Client, room_id: Uuid) -> Result<Option<Vec<Uuid>>> {
@@ -430,6 +633,7 @@ impl ChatRoom {
             .query(
                 "SELECT r.id,
                         r.slug,
+                        r.topic,
                         COALESCE(m.member_count, 0)::bigint AS member_count,
                         COALESCE(msg.message_count, 0)::bigint AS message_count,
                         msg.last_message_at
@@ -464,6 +668,7 @@ impl ChatRoom {
                 slug.map(|slug| DiscoverPublicTopicRoom {
                     room_id: row.get("id"),
                     slug,
+                    topic: row.get("topic"),
                     member_count: row.get("member_count"),
                     message_count: row.get("message_count"),
                     last_message_at: row.get("last_message_at"),
@@ -695,6 +900,9 @@ impl ChatRoom {
 pub struct DiscoverPublicTopicRoom {
     pub room_id: Uuid,
     pub slug: String,
+    /// What the room is about, when a mod has set it. This is the one line
+    /// someone reads before deciding whether to join.
+    pub topic: Option<String>,
     pub member_count: i64,
     pub message_count: i64,
     pub last_message_at: Option<DateTime<Utc>>,

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-06-21
+- Last updated: 2026-07-25 (the inline voice strip is one row now: roster left, keys flushed right, and on Home chat it is the first row of the shared room header above the topic)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -146,7 +146,7 @@ The pair WS still carries audio/clipboard events too; voice handlers must ignore
 Voice is embedded into whatever surface owns the active voice channel. Chat rooms and game surfaces (house tables, daily match boards) both render voice through the same chat-room-targeted channels.
 
 Render:
-- `draw_voice_strip` is borderless and titleless. It renders only two rows: the participant/status roster and compact action hints. Do not add a `Voice` title, live-count header, or border row.
+- `draw_voice_strip` is borderless and titleless, and renders exactly one row (`VOICE_STRIP_HEIGHT = 1`): the participant/status roster from the left, the compact action hints flushed to the right edge via `primitives::row_with_hint` (which drops the hints rather than wrap when the row is too narrow). Do not add a `Voice` title, live-count header, or border row. On the Home chat centre this row is the first line of the shared room header (`chat/ui.rs::draw_room_header`), which adds a divider and the room topic below it; `voice_strip_line` is the composable form used there.
 - `render.rs` also draws a global right-aligned top chrome badge when the current user is actually joined to any voice channel. The badge is derived from `VoiceSnapshot::current_room`, prefers `#chat-room` or table display labels, and shows the current user's voice status. It is presence-only UI; do not route media or LiveKit control through render.
 - The strip appears whenever the active surface has an enabled voice channel, regardless of whether the current paired client can publish voice.
 - Chat-room voice is shown at the top of the message area, including the Home/dashboard-with-top-boxes chat path. The room rail does not append a speaker icon for voice-enabled rooms.

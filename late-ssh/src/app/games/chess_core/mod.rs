@@ -6,3 +6,5 @@ pub mod types;
 
 #[cfg(test)]
 mod cursor_test;
+#[cfg(test)]
+mod rules_test;

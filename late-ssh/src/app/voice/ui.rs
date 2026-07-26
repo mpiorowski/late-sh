@@ -8,14 +8,15 @@ use ratatui::{
 use uuid::Uuid;
 
 use crate::app::{
-    common::theme,
+    common::{primitives::row_with_hint, theme},
     voice::svc::{VoiceParticipant, VoiceSnapshot},
 };
 
 /// Fixed height of the inline voice strip drawn at the top of a voice-enabled
-/// room: one roster row and one controls row. Constant so
-/// the chrome below it never shifts as people join and leave.
-pub const VOICE_STRIP_HEIGHT: u16 = 2;
+/// room: who is connected on the left, the keys that act on it flushed right,
+/// on one row. Constant so the chrome below it never shifts as people join and
+/// leave.
+pub const VOICE_STRIP_HEIGHT: u16 = 1;
 
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
@@ -44,40 +45,55 @@ impl VoiceRoomView<'_> {
     }
 }
 
-/// Draw the inline voice channel strip at the top of a voice-enabled room: the
-/// roster of who is connected and the controls line. Sized to exactly
-/// `VOICE_STRIP_HEIGHT`.
+/// Draw the inline voice channel strip at the top of a voice-enabled room.
+/// Sized to exactly `VOICE_STRIP_HEIGHT`.
 pub fn draw_voice_strip(frame: &mut Frame, area: Rect, view: &VoiceRoomView<'_>) {
-    let roster = if !view.snapshot.enabled {
-        Line::from(Span::styled(
+    frame.render_widget(
+        Paragraph::new(voice_strip_line(view, area.width as usize)),
+        area,
+    );
+}
+
+/// The voice row: who is in the channel, then the keys that act on it flushed
+/// to the right edge.
+pub fn voice_strip_line(view: &VoiceRoomView<'_>, width: usize) -> Line<'static> {
+    row_with_hint(voice_roster_spans(view), voice_control_spans(view), width)
+}
+
+/// Who is connected, or why nobody can be.
+fn voice_roster_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
+    if !view.snapshot.enabled {
+        return vec![Span::styled(
             "Voice is off on this server.",
             Style::default().fg(theme::TEXT_DIM()),
-        ))
-    } else if view.participants().is_empty() {
-        Line::from(Span::styled(
+        )];
+    }
+    if view.participants().is_empty() {
+        return vec![Span::styled(
             "No one is in voice yet.",
             Style::default().fg(theme::TEXT_DIM()),
-        ))
-    } else {
-        let mut spans = Vec::new();
-        for participant in view.participants() {
-            if !spans.is_empty() {
-                spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));
-            }
-            spans.extend(participant_spans(
-                participant,
-                participant.user_id == view.current_user_id,
-            ));
+        )];
+    }
+    let mut spans = Vec::new();
+    for participant in view.participants() {
+        if !spans.is_empty() {
+            spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));
         }
-        Line::from(spans)
-    };
+        spans.extend(participant_spans(
+            participant,
+            participant.user_id == view.current_user_id,
+        ));
+    }
+    spans
+}
 
-    let controls = Line::from(Span::styled(
+/// Your own state plus the keys for it. Dim, because it is a reminder and not
+/// the content of the room.
+fn voice_control_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
+    vec![Span::styled(
         voice_controls_text(view),
         Style::default().fg(theme::TEXT_DIM()),
-    ));
-
-    frame.render_widget(Paragraph::new(vec![roster, controls]), area);
+    )]
 }
 
 pub fn global_voice_badge<F>(

@@ -1,7 +1,7 @@
 use super::{
     audio::booth as audio_booth,
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, sheet_modal,
+    room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -814,6 +814,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
 
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
+        return;
+    }
+
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_input(app, event);
         return;
     }
 
@@ -1731,6 +1736,15 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::lobby::house::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Scratchpad {
+        // Full-screen paired scratchpad: forward everything to the editor,
+        // same shape as the daily board / house table.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::scratchpad::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Arcade && app.is_playing_game {
         match event {
             ParsedInput::Byte(byte) => {
@@ -2376,6 +2390,10 @@ fn dispatch_escape(app: &mut App) {
         close_icon_picker(app);
         return;
     }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();
@@ -2484,6 +2502,15 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::lobby::house::input::close_table(app);
+        return;
+    }
+    // Esc from the paired scratchpad leaves the pairing (notifying the partner
+    // via the registry) and returns to Home. This arm is not redundant with the
+    // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
+    // it is held as `pending_escape` and lands here via `flush_pending_escape`.
+    // The keymap only sees Esc when it arrives mid-chunk with other bytes.
+    if ctx.screen == Screen::Scratchpad {
+        app.set_screen(Screen::Dashboard);
         return;
     }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
@@ -3216,16 +3243,19 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     if app.show_splash {
         return false;
     }
-
-    let unread = app.chat.notifications.unread_count();
-    // SGR mouse coords are 1-indexed; the top border row is y=1.
-    if unread == 0 || mouse.y != 1 {
+    // Where the last frame drew the "N unread mentions" text; `None` when
+    // nothing is unread. The voice/chips text after it is not clickable.
+    let Some(rect) = app.last_mentions_hud_rect.get() else {
         return false;
-    }
-
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    let hud_width = format!(" {unread} unread {noun} ").len() as u16;
-    if mouse.x < app.size.0.saturating_sub(hud_width) {
+    };
+    // SGR mouse coords are 1-indexed; the rect is in 0-indexed frame cells.
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
         return false;
     }
 
@@ -3294,6 +3324,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
         Screen::HouseTable => false,
+        // Scratchpad arrows are consumed in handle_dedicated_screen_input.
+        Screen::Scratchpad => false,
     }
 }
 
@@ -4031,6 +4063,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::HouseTable => {
             // House table keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Scratchpad => {
+            // Scratchpad keys are handled in handle_dedicated_screen_input.
         }
     }
 }

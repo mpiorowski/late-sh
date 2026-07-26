@@ -52,6 +52,23 @@ pub fn from_user_with_tags(nick: &str, command: Command, tags: Vec<Tag>) -> Mess
     }
 }
 
+/// 332 with the topic, or 331 when the room has none. Same shape whether it
+/// answers a JOIN burst or a `TOPIC` query.
+pub fn topic(nick: &str, channel: &str, topic: Option<&str>) -> Message {
+    match topic.map(str::trim).filter(|topic| !topic.is_empty()) {
+        Some(topic) => numeric(
+            nick,
+            Response::RPL_TOPIC,
+            vec![channel.to_string(), topic.to_string()],
+        ),
+        None => numeric(
+            nick,
+            Response::RPL_NOTOPIC,
+            vec![channel.to_string(), "No topic is set".to_string()],
+        ),
+    }
+}
+
 pub fn server_notice(nick: &str, text: impl Into<String>) -> Message {
     server_msg(Command::NOTICE(nick.to_string(), text.into()))
 }

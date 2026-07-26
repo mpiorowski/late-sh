@@ -6,6 +6,19 @@ use late_core::models::leaderboard::{LeaderboardData, fetch_leaderboard_data};
 use late_core::models::profile_award::snapshot_previous_month_profile_awards;
 use tokio::sync::watch;
 
+/// How often the leaderboard is rebuilt from the DB while at least one session
+/// is watching it.
+///
+/// `fetch_leaderboard_data` is eleven aggregate queries costing about 100 ms of
+/// database time per pass, and it is a timer, not a reaction to anything a user
+/// did. At the old 30 s cadence it was 13% of all database execution time in
+/// prod (2026-07-26 `pg_stat_statements` ranking, SCALE.md). The data is daily
+/// and monthly standings, so minutes of staleness are invisible. The one
+/// latency-sensitive consumer, the per-session chip balance read in
+/// `app/tick.rs`, does not wait for this loop: chip mutations notify
+/// `chip_user_changed` and `ShopService` pushes the new balance per user.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
 #[derive(Clone)]
 pub struct LeaderboardService {
     db: Db,
@@ -25,6 +38,14 @@ impl LeaderboardService {
         self.data_tx.subscribe()
     }
 
+    /// Whether any session is currently watching the leaderboard. Every SSH
+    /// session subscribes at bootstrap, so this is "is anyone connected". A
+    /// refresh with no subscribers is eleven aggregate queries published to
+    /// nobody, so the loop skips it.
+    fn has_subscribers(&self) -> bool {
+        self.data_tx.receiver_count() > 0
+    }
+
     pub async fn refresh(&self) -> Result<()> {
         let client = self.db.get().await?;
         let data = fetch_leaderboard_data(&client).await?;
@@ -37,10 +58,15 @@ impl LeaderboardService {
             if let Err(e) = self.refresh().await {
                 tracing::error!(error = ?e, "initial leaderboard refresh failed");
             }
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            let mut interval = tokio::time::interval(REFRESH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             interval.tick().await;
             loop {
                 interval.tick().await;
+                if !self.has_subscribers() {
+                    tracing::debug!("no leaderboard subscribers, skipping refresh");
+                    continue;
+                }
                 if let Err(e) = self.refresh().await {
                     tracing::warn!(error = ?e, "leaderboard refresh failed");
                 }
@@ -72,3 +98,7 @@ impl LeaderboardService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

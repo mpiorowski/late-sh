@@ -118,7 +118,6 @@ fn lounge_msg(n: u128, author: u128, created: chrono::DateTime<chrono::Utc>) -> 
         id: Uuid::from_u128(n),
         created,
         updated: created,
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: Uuid::from_u128(99),

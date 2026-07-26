@@ -1,11 +1,15 @@
 use std::time::{Duration, Instant};
 
 use late_core::models::user::RightSidebarMode;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
+use crate::app::chat::svc::ChatEvent;
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, HOT_TICK, IDLE_TICK};
 use crate::test_helpers::chat_compose_app;
+
+const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
+const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The ambient sidebar wave paints on anim_half edges whenever the right
 /// sidebar is visible, so a session showing it never settles by design.
@@ -23,22 +27,27 @@ fn drain_frame(app: &mut App) {
     let _ = std::mem::take(&mut app.pending_terminal_commands);
 }
 
-/// Drive ticks until `consecutive` in a row report no change. Initial
+/// Drive ticks until the app stays clean for a wall-clock window. Initial
 /// prefetches, the splash, chat refresh cadence, and at most one clock
-/// rollover may keep early ticks dirty, so this loops with a deadline
-/// instead of asserting on a fixed tick count.
-async fn settle_clean(app: &mut App, consecutive: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut clean = 0usize;
-    while Instant::now() < deadline {
-        if app.tick() {
-            clean = 0;
+/// rollover may keep early ticks dirty. Wall time, rather than a count of
+/// 5ms sleeps, keeps scheduler load from changing the success condition.
+async fn settle_clean(app: &mut App) {
+    let deadline = Instant::now() + CLEAN_SETTLE_TIMEOUT;
+    let mut clean_since = None;
+    loop {
+        let changed = app.tick();
+        let now = Instant::now();
+        if changed {
+            clean_since = None;
             drain_frame(app);
         } else {
-            clean += 1;
-            if clean >= consecutive {
+            let since = clean_since.get_or_insert(now);
+            if now.duration_since(*since) >= CLEAN_SETTLE_WINDOW {
                 return;
             }
+        }
+        if Instant::now() >= deadline {
+            break;
         }
         sleep(Duration::from_millis(5)).await;
     }
@@ -47,11 +56,12 @@ async fn settle_clean(app: &mut App, consecutive: usize) {
     let screen_before = app.screen;
     let dirty_again = app.tick();
     panic!(
-        "app never settled to {consecutive} consecutive clean ticks\n\
+        "app never stayed clean for {}ms\n\
          one more tick changed={dirty_again} screen={screen_before:?}->{:?}\n\
          chat_epoch {context_epoch_before}->{} app_epoch {app_epoch_before}->{}\n\
          splash={} banner={} outbox={} term_cmds={} clipboard={} image_modal={}\n\
          settings={} ultimate={} hub={} lobby={} profile={} bonsai={} bonsai2={} poll={} icon={} booth={} search={}",
+        CLEAN_SETTLE_WINDOW.as_millis(),
         app.screen,
         app.chat.context_epoch(),
         app.chat_ctx_epoch,
@@ -83,22 +93,38 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
     let (_test_db, mut app) = chat_compose_app("tick-gate").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
+    let mut chat_events = app.chat.service.subscribe_events();
+    let user_id = app.user_id;
     app.handle_input(b"hello\r");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut woke = false;
-    while Instant::now() < deadline {
-        if app.tick() {
-            woke = true;
-            drain_frame(&mut app);
-            break;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match chat_events.recv().await {
+                Ok(ChatEvent::MessageCreated { message, .. })
+                    if message.user_id == user_id && message.body == "hello" =>
+                {
+                    return;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    panic!("chat event receiver lagged by {skipped} events");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("chat event channel closed before the message was created");
+                }
+            }
         }
-        sleep(Duration::from_millis(5)).await;
-    }
-    assert!(woke, "chat send never produced a changed tick");
+    })
+    .await
+    .expect("chat send never produced MessageCreated");
+    assert!(
+        app.tick(),
+        "queued chat message event did not dirty the tick"
+    );
+    drain_frame(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
 /// The adaptive loop's cadence contract: a settled idle session on a
@@ -110,7 +136,7 @@ async fn wake_hint_idles_when_settled_and_heats_on_input() {
     let (_test_db, mut app) = chat_compose_app("wake-hint").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     // Age the app past the post-input hot window.
     app.last_input_at = Instant::now() - Duration::from_secs(10);
@@ -129,7 +155,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-ultimate").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.ultimate_state.set_cooldown(
         crate::app::ultimates::UltimateKind::Wonderland.id(),
@@ -137,7 +163,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     );
     app.show_ultimate_modal = true;
     drain_frame(&mut app);
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.ultimate_state.set_cooldown(
         crate::app::ultimates::UltimateKind::Wonderland.id(),
@@ -155,7 +181,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     }
     assert!(woke, "cooldown expiry never produced a changed tick");
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
 /// Phase-1 tightening: an open, untouched modal is static between async
@@ -167,13 +193,13 @@ async fn open_settings_modal_settles_clean() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-modal").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.handle_input(&[0x0F]); // Ctrl+O
     assert!(app.show_settings, "ctrl+o opens the settings modal");
     drain_frame(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
 /// The always-on ambient wave: a session showing the sidebar never goes

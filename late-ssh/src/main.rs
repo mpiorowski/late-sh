@@ -295,6 +295,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
+    let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
     let ghost_service = GhostService::new(
         db.clone(),
         chat_service.clone(),
@@ -360,6 +361,7 @@ async fn main() -> anyhow::Result<()> {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
+        scratchpad_registry,
         afk_users,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
