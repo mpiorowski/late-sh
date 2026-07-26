@@ -216,8 +216,7 @@ Two ideas that did NOT survive measurement, recorded so nobody re-proposes them:
 
 Still open, all much smaller now:
 
-1. **Collapse the duplicate `settings` read** into one call that extracts both friends and ignores (11.1M calls, exactly 2 per snapshot).
-2. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts.
+1. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts.
 3. **`last_message_at_for_rooms`** still fans out one index scan per joined room (6.4% before this change).
 4. If it ever matters again, the O(1) shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting. It needs a migration and a decision about the activity lines, which is why it is not the fix today.
 
@@ -286,7 +285,7 @@ Notes on reading this table:
 
 - The range on #1 is deploy-generation variants of the same statement: the conservative match gives 50.4%, counting every variant visible in the top 25 gives 67.8%. The unambiguous figure is `unread_counts_for_user` at 43.0% on its own.
 - **#2 is the cheapest win on the list.** `LeaderboardService::start_refresh_loop` (`app/hub/svc.rs:35`) runs `fetch_leaderboard_data` every 30 s forever, process-global, whether or not anyone is connected or looking at the Hub. Six queries per pass, the heaviest being a `chip_ledger` aggregate at 40 ms mean. Gate it on having a live subscriber, or widen the interval, for roughly 13% back at the cost of one condition.
-- #5 is `SELECT username FROM users WHERE username <> $1 ORDER BY username`, a full scan of 14k rows every 30 s to rebuild the mention-autocomplete list (`chat/svc.rs:1077`).
+- #5 was `SELECT username FROM users WHERE username <> $1 ORDER BY username`, a full scan of 14k rows every 30 s to rebuild the mention-autocomplete list. **Removed 2026-07-26**: the process-wide `UsernameDirectory` already holds every username and is written through on login/profile save/rename/delete, so `refresh_username_directory` reads that instead of the DB. Autocomplete is now fresher than it was, at zero query cost. The DB arm survives only for constructions with no directory attached (tests).
 - Everything not attributed above is 27.5% spread across the long tail.
 
 Confirmed by this ranking: the chat snapshot poll and the leaderboard loop together are roughly two thirds of the database workload, and **neither of them is triggered by a user doing anything.** Both are timers.
@@ -355,7 +354,9 @@ Ordered by measured payoff as of 2026-07-26. The first two items are pure code c
 
 Partly done 2026-07-26. The dominant term, `unread_counts_for_user`, is fixed: the count is capped at `ChatRoomMember::UNREAD_COUNT_CAP` (100) and the per-message `users` join is gone. Measured on prod against a never-read user: **578 ms to 11.8 ms, 483,271 buffers to 3,534**. The UI renders anything at the cap as `99+`.
 
-Still open from Pain Point 7: the duplicate `SELECT settings` read (2 per snapshot, 11.1M calls), the sequential session loop, and the remaining per-room fan-out in `last_message_at_for_rooms`. All much smaller now. Re-rank against `pg_stat_statements` after this deploys before spending more on it.
+Also done: the duplicate `SELECT settings` read is gone (`User::friend_and_ignored_user_ids` fetches the row once for both lists, was 11.1M calls at exactly 2.006 per snapshot).
+
+Still open from Pain Point 7: the sequential session loop, and the remaining per-room fan-out in `last_message_at_for_rooms`. Both much smaller now. Re-rank against `pg_stat_statements` after this deploys before spending more on it.
 
 ### 2. Gate the leaderboard refresh loop
 

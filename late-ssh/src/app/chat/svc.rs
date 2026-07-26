@@ -1066,9 +1066,33 @@ impl ChatService {
         )
     }
 
+    /// Rebuild the mention-autocomplete name list.
+    ///
+    /// This reads the process-wide `UsernameDirectory` rather than the DB. That
+    /// directory already holds every username, and it is written through on
+    /// login, profile save, mod rename, and account delete, so autocomplete is
+    /// fresher this way than the scan ever was. The scan it replaces
+    /// (`SELECT username FROM users ... ORDER BY username`, all 14k rows every
+    /// 30 s) was 1.9% of all database execution time on its own, purely to
+    /// re-fetch data already in memory. The DB arm remains for constructions
+    /// with no directory attached, such as tests.
     async fn refresh_username_directory(&self) -> Result<()> {
-        let client = self.db.get().await?;
-        let usernames = User::list_all_usernames(&client).await?;
+        let usernames = match &self.username_directory {
+            Some(directory) => {
+                let mut names: Vec<String> = crate::usernames::snapshot(directory)
+                    .values()
+                    .filter(|name| !name.trim().is_empty())
+                    .cloned()
+                    .collect();
+                // The DB arm sorts under the C collation, which is byte order.
+                names.sort();
+                names
+            }
+            None => {
+                let client = self.db.get().await?;
+                User::list_all_usernames(&client).await?
+            }
+        };
         let _ = self.username_tx.send(Arc::new(usernames));
         Ok(())
     }
@@ -1130,7 +1154,8 @@ impl ChatService {
             });
         let unread_counts =
             ChatRoomMember::unread_counts_for_user(&client, user_id, self.system_user_id()).await?;
-        let friend_user_ids = User::friend_user_ids(&client, user_id).await?;
+        let (friend_user_ids, ignored_user_ids) =
+            User::friend_and_ignored_user_ids(&client, user_id).await?;
         let lounge_room_id = rooms
             .iter()
             .find(|room| room.kind == "lounge" && room.slug.as_deref() == Some("lounge"))
@@ -1151,7 +1176,6 @@ impl ChatService {
         visible_user_ids.sort();
         visible_user_ids.dedup();
         let author_metadata = Self::load_chat_author_metadata(&client, &visible_user_ids).await?;
-        let ignored_user_ids = User::ignored_user_ids(&client, user_id).await?;
         let private_room_ids: Vec<Uuid> = rooms
             .iter()
             .filter(|room| room.kind == "topic" && room.visibility == "private")
