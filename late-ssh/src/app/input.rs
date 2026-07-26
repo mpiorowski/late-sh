@@ -1737,11 +1737,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Scratchpad {
-        // Full-screen paired scratchpad: forward everything to the editor,
-        // same shape as the daily board / house table.
-        if door_games_allows_global_help(event) {
-            return false;
-        }
+        // Unlike the daily board / house table above, this is a free-typing
+        // text editor, not a game board: '?' is a character someone can
+        // legitimately want to type, so it must not escape to the global
+        // help guide the way it does for those two. Forward everything.
         return crate::app::scratchpad::input::handle_event(app, event);
     }
 

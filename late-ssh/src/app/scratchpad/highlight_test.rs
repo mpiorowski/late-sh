@@ -52,7 +52,11 @@ fn gutter_stays_separate_from_content_so_it_cannot_scroll_away_with_it() {
     let content = highlighted_lines(&lines, Language::Plain);
     let gutter = gutter_lines(lines.len());
 
-    assert_eq!(content[0].spans.len(), 1, "no gutter span mixed into content");
+    assert_eq!(
+        content[0].spans.len(),
+        1,
+        "no gutter span mixed into content"
+    );
     assert_eq!(content[0].spans[0].content.as_ref(), "a");
     assert_eq!(gutter[0].spans[0].content.as_ref(), "1 ");
 }

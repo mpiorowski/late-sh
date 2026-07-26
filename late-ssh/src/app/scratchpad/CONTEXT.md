@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: the mutual `/pair @user` handshake and the two-person shared live text scratchpad (`Screen::Scratchpad`)
 - Primary audience: LLM agents working in `late-ssh/src/app/scratchpad`, the `/pair` chat command, or `Screen::Scratchpad`
-- Last updated: 2026-07-26
+- Last updated: 2026-07-27
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../chat/CONTEXT.md` (command parsing/dispatch), `../clubhouse/CONTEXT.md` (the `SharedLobby` registry idiom this mirrors)
@@ -90,6 +90,8 @@ Editing reuses `handle_freeform_edit` (`common/textarea_input.rs`), a third sibl
 
 Esc leaves the pairing, and it needs **two** handlers, which is easy to get wrong. A lone Esc never reaches the keymap at all: the parser holds it as `pending_escape` to rule out a longer sequence, and `tick.rs` resolves it through `flush_pending_escape` straight into `dispatch_escape`. That is the common case, and the `Screen::Scratchpad` arm there is what actually leaves. The keymap's `EditOutcome::Cancel` covers the other case, an Esc arriving mid-chunk alongside other bytes. Deleting either one leaves Esc broken on a path no unit test exercises; `pair_test.rs` covers the lone-Esc path end to end.
 
+Unlike `Screen::DailyMatch`/`Screen::HouseTable`, the scratchpad's arm in `handle_dedicated_screen_input` (`app/input.rs`) does **not** call `door_games_allows_global_help` before forwarding to the editor. Those two are game boards where `?` never means anything to type, so letting it escape to the global help guide is correct there; the scratchpad is a free-typing text editor, where `?` is just a character (a comment, a question in code) that must be inserted like any other. This was a real bug in the initial implementation, copied verbatim from the daily-board/house-table shape without noticing the difference; `pair_test.rs` covers it. Relatedly, `handle_freeform_edit` needs a `ParsedInput::Byte(byte) if byte.is_ascii_graphic()` fallback arm (matching `handle_single_line_edit`'s convention, unlike `handle_multiline_edit`): some terminals send plain punctuation as a raw byte rather than a parsed `Char`, and without the fallback those keystrokes were silently dropped instead of typed.
+
 ## 5. Highlighting and the Line-Number Gutter
 
 `ratatui-textarea` cannot render either of these itself: its `Widget` impl (checked against the vendored 0.9.2 source) supports exactly one uniform `Style` for the whole buffer plus cursor/selection/search overlays, with no hook for per-token colors, and its built-in `set_line_number_style` gutter only applies to that same internal render. Both features therefore live in `ui.rs::draw`, which no longer calls `frame.render_widget(&state.editor, body_area)` — it reads `state.editor.lines()` and `state.editor.screen_cursor()` and builds the display by hand via `highlight.rs`. `TextArea` still owns every bit of editing state (insert/delete/cursor/undo); only its *rendering* was replaced.
@@ -125,10 +127,10 @@ Esc leaves the pairing, and it needs **two** handlers, which is easy to get wron
 
 - `registry_test.rs`: the handshake (one-sided ask waits, mirror pairs, expired ask does not), notice drain-once, the ping cooldown (re-ask is quiet, alternating targets cannot reopen it, a suppressed ask still pairs, it lapses, one asker cannot mute another, pairing clears it), session-scoped pairings, busy refusals on both sides, leave/teardown including the never-joined partner, and `cycle_language` bumping `revision`.
 - `state_test.rs`: seeding from the shared buffer, publish/sync round-trips, own-publish does not bounce back, yank register survives a remote sync, `partner_left` after Drop, and `cycle_language`/`language()` being visible to the partner without a separate sync step.
-- `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths.
+- `pair_test.rs`: `find_active_user_by_username` case-insensitivity and not-found paths, plus full two-session flow tests (`two_sessions`/`run_command` helpers) covering the handshake, a one-sided ask leaving the target's screen alone, content sync, Esc leaving, and `?` typing into the buffer instead of opening the global guide.
 - `highlight_test.rs`: the language cycle wraps, `Plain` never calls into syntect, a real snippet produces more than one distinct style, and the gutter width matches the digit count of the total line count.
 - `chat/state_internal_test.rs`: `parse_pair_command` accept/reject/ignore cases.
-- `common/textarea_input_test.rs`: `handle_freeform_edit` newline-on-Enter, Cancel-on-Esc, Tab indents, and no undo.
+- `common/textarea_input_test.rs`: `handle_freeform_edit` newline-on-Enter, Cancel-on-Esc, Tab indents, no undo, and the raw-byte fallback for plain punctuation.
 
 ## 9. References
 

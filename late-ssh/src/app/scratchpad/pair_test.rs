@@ -217,3 +217,28 @@ async fn esc_leaves_the_pairing_and_tells_the_partner() {
     );
     wait_for_render_contains(&mut bob, "alice-esc left the pairing").await;
 }
+
+#[tokio::test]
+async fn question_mark_types_into_the_scratchpad_instead_of_opening_the_guide() {
+    // Regression test: the daily board / house table let '?' escape to the
+    // global help guide, since neither is a place where you'd ever want to
+    // type a literal '?'. The scratchpad's dedicated-screen dispatch copied
+    // that shape verbatim, so '?' silently opened the guide instead of being
+    // inserted -- wrong for a free-typing text editor.
+    use crate::test_helpers::{render_plain, wait_for_render_contains};
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let [mut alice, mut bob] = two_sessions(&test_db, ["alice-qmark", "bob-qmark"]).await;
+    run_command(&mut alice, "/pair @bob-qmark").await;
+    run_command(&mut bob, "/pair @alice-qmark").await;
+    wait_for_render_contains(&mut alice, "paired with @bob-qmark").await;
+
+    alice.handle_input(b"what does this do?");
+
+    wait_for_render_contains(&mut bob, "what does this do?").await;
+    let frame = render_plain(&mut alice);
+    assert!(
+        !frame.contains("Install `late` / Pair Browser"),
+        "the global guide must not have opened; frame={frame:?}"
+    );
+}
