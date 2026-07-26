@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
-use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
+use late_core::models::{
+    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -1302,6 +1304,15 @@ enum RowKindLite {
     Image,
 }
 
+/// Why a chat message is painted with a background wash: it mentions you, or
+/// it is a reply to a message you wrote. Messages you wrote yourself never
+/// qualify, so talking about yourself does not light up the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatAttention {
+    Mention,
+    Reply,
+}
+
 /// Counter inputs that decide chat row cache validity. `room_version` bumps
 /// on any message-store change in the rendered room (new message, edit,
 /// delete, tail merge, reactions); the two epochs bump when author context
@@ -1336,6 +1347,10 @@ pub struct ChatRowsCache {
     all_rows: Vec<Line<'static>>,
     selected_ranges: HashMap<Uuid, (usize, usize)>,
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
+    /// Parallel to `all_rows`: the background wash each row should get, if
+    /// any. `None` on rows belonging to messages that neither mention you nor
+    /// reply to you, and on the blank separator and divider rows.
+    row_attention: Vec<Option<ChatAttention>>,
     /// Parallel to `all_rows`: which message id owns each painted row.
     /// `None` on the blank separator inserted between distinct authors.
     row_message: Vec<Option<Uuid>>,
@@ -1387,6 +1402,36 @@ fn is_unread_boundary_message(
     marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
 }
 
+/// Whether `body` mentions `username_lower`. Uses the same mention parser as
+/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
+/// does not, and a mention inside a code span does not count.
+fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
+    let Some(username_lower) = username_lower else {
+        return false;
+    };
+    crate::app::common::mentions::extract_mentions(body)
+        .iter()
+        .any(|mentioned| mentioned == username_lower)
+}
+
+/// Whether `message` is a reply to a message written by `user_id`. Human
+/// replies carry only the target message id, so the target's author is looked
+/// up in `message_authors`; bot replies carry the target user id directly.
+fn replies_to_user(
+    message: &ChatMessage,
+    user_id: Uuid,
+    message_authors: &HashMap<Uuid, Uuid>,
+) -> bool {
+    if message.reply_to_user_id == Some(user_id) {
+        return true;
+    }
+    message
+        .reply_to_message_id
+        .and_then(|target_id| message_authors.get(&target_id))
+        .copied()
+        == Some(user_id)
+}
+
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
     messages: Vec<&ChatMessage>,
@@ -1398,10 +1443,17 @@ fn ensure_chat_rows_cache(
         return;
     }
 
-    let our_mention = ctx
+    let our_username_lower = ctx
         .usernames
         .get(&ctx.current_user_id)
-        .map(|name| format!("@{name}"));
+        .map(|name| name.to_ascii_lowercase());
+    // Reply targets are stored as a message id, so resolving "is this a reply
+    // to me" needs the author of every message currently loaded. A reply whose
+    // target has scrolled out of the loaded window cannot be resolved and gets
+    // no wash.
+    let message_authors: HashMap<Uuid, Uuid> =
+        messages.iter().map(|msg| (msg.id, msg.user_id)).collect();
+    let mut attention_by_message: HashMap<Uuid, ChatAttention> = HashMap::new();
     let mut all_rows: Vec<Line> = Vec::new();
     let mut row_message: Vec<Option<Uuid>> = Vec::new();
     let mut row_kind: Vec<RowKindLite> = Vec::new();
@@ -1505,9 +1557,22 @@ fn ensure_chat_rows_cache(
             .map(Vec::as_slice)
             .unwrap_or(&[]);
 
-        let mentions_us = our_mention
-            .as_ref()
-            .is_some_and(|m| msg.body.contains(m.as_str()));
+        // A reply is checked before a mention because the composer prepends a
+        // `> @author: …` quote line to every reply, which would otherwise make
+        // every reply to you look like a plain mention.
+        let attention = if is_own {
+            None
+        } else if replies_to_user(msg, ctx.current_user_id, &message_authors) {
+            Some(ChatAttention::Reply)
+        } else if mentions_user(&msg.body, our_username_lower.as_deref()) {
+            Some(ChatAttention::Mention)
+        } else {
+            None
+        };
+        if let Some(attention) = attention {
+            attention_by_message.insert(msg.id, attention);
+        }
+        let mentions_us = attention.is_some();
 
         // System-feed lines (authored by the system bot, prefix-marked)
         // render as one authorless row; consecutive ones stack with no
@@ -1594,8 +1659,16 @@ fn ensure_chat_rows_cache(
     debug_assert_eq!(all_rows.len(), row_message.len());
     debug_assert_eq!(all_rows.len(), row_kind.len());
 
+    // Derived from `row_message` rather than pushed alongside it, so the blank
+    // separator rows and the "new messages" divider need no special handling.
+    let row_attention = row_message
+        .iter()
+        .map(|owner| owner.and_then(|message_id| attention_by_message.get(&message_id).copied()))
+        .collect::<Vec<_>>();
+
     cache.key = Some(key);
     cache.all_rows = all_rows;
+    cache.row_attention = row_attention;
     cache.row_message = row_message;
     cache.row_kind = row_kind;
     cache.selected_ranges = selected_ranges;
@@ -1660,6 +1733,45 @@ fn visible_chat_rows(
         })
         .collect();
 
+    // Messages that mention you or reply to you get a background wash across
+    // the full row width. Painted before the jump-highlight and the selection
+    // marker so both of those still win on the rows they cover. The rows were
+    // laid out at the key's width, so the wash fills out to that same width
+    // instead of stopping where the text ends; no key means no cached rows,
+    // and the loop is empty anyway.
+    let row_width = cache.key.map_or(0, |key| key.width);
+    for (offset, idx) in (visible_start..visible_end).enumerate() {
+        let Some(attention) = cache.row_attention.get(idx).copied().flatten() else {
+            continue;
+        };
+        let (background, accent) = match attention {
+            ChatAttention::Mention => (theme::CHAT_MENTION_BG(), theme::MENTION()),
+            ChatAttention::Reply => (theme::CHAT_REPLY_BG(), theme::CHAT_AUTHOR()),
+        };
+        let row = &mut lines[offset];
+        for span in &mut row.spans {
+            span.style = span.style.bg(background);
+        }
+        // The left margin bar is drawn in the mention color by `ui_text`;
+        // recolor it here so a reply reads as a reply.
+        if let Some(first_span) = row.spans.first_mut()
+            && first_span.content == "│"
+        {
+            first_span.style = first_span.style.fg(accent);
+        }
+        let used: usize = row
+            .spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        if used < row_width {
+            row.spans.push(Span::styled(
+                " ".repeat(row_width - used),
+                Style::default().bg(background),
+            ));
+        }
+    }
+
     if let Some((start, end)) = highlighted_row_range {
         let start = start.max(visible_start);
         let end = end.min(visible_end);
@@ -1678,7 +1790,13 @@ fn visible_chat_rows(
             if let Some(first_span) = row.spans.first()
                 && (first_span.content == " " || first_span.content == "│")
             {
-                row.spans[0] = Span::styled("▸", Style::default().fg(theme::AMBER()));
+                // Keep whatever background the row already has (the mention or
+                // reply wash), so the marker does not punch a hole in it.
+                let mut style = Style::default().fg(theme::AMBER());
+                if let Some(background) = first_span.style.bg {
+                    style = style.bg(background);
+                }
+                row.spans[0] = Span::styled("▸", style);
             }
         }
     }
@@ -2892,7 +3010,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         let prefix = room_jump_prefix(jump_key, view.room_jump_active, is_selected);
         let text = if unread > 0 {
-            format!("{prefix}{label} ({unread})")
+            format!("{prefix}{label} ({})", format_unread_badge(unread))
         } else {
             format!("{prefix}{label}")
         };
@@ -2971,7 +3089,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
+            format!(
+                "{prefix}mentions ({})",
+                format_unread_badge(view.notifications_unread_count)
+            )
         } else {
             format!("{prefix}mentions")
         };
@@ -2997,7 +3118,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.news_unread_count > 0 {
-            format!("{prefix}news ({})", view.news_unread_count)
+            format!(
+                "{prefix}news ({})",
+                format_unread_badge(view.news_unread_count)
+            )
         } else {
             format!("{prefix}news")
         };
@@ -3020,7 +3144,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 Style::default().fg(theme::TEXT())
             };
             let label = if view.feeds_unread_count > 0 {
-                format!("{prefix}rss ({})", view.feeds_unread_count)
+                format!(
+                    "{prefix}rss ({})",
+                    format_unread_badge(view.feeds_unread_count)
+                )
             } else {
                 format!("{prefix}rss")
             };
@@ -3487,7 +3614,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         let display = format!("{key_prefix}{display_label}");
         let used = UnicodeWidthStr::width(display.as_str());
         let unread_str = if unread > 0 {
-            format!("{unread}")
+            format_unread_badge(unread)
         } else {
             String::new()
         };
@@ -3675,6 +3802,19 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         lines,
         hit_slots,
         selected_row_index,
+    }
+}
+
+/// Unread badge text. Counts are capped in SQL at
+/// `ChatRoomMember::UNREAD_COUNT_CAP`, so anything at the cap means "at least
+/// this many" and renders as `99+` rather than a misleading exact number.
+/// Applies to feed badges too, which are uncapped in the DB but read the same
+/// way on screen.
+fn format_unread_badge(unread: i64) -> String {
+    if unread >= ChatRoomMember::UNREAD_COUNT_CAP {
+        format!("{}+", ChatRoomMember::UNREAD_COUNT_CAP - 1)
+    } else {
+        unread.to_string()
     }
 }
 

@@ -150,7 +150,7 @@ const BARTENDER_TAB_BOUNCED_LINE: &str =
 /// Flat price of a round for the house: one debit, a glass for every human
 /// online. Deliberately above [`DRINK_PRICE_MAX`] — only the deterministic
 /// `@bartender round` command can spend it, never the model.
-const BARTENDER_ROUND_PRICE: i64 = 5_000;
+pub(crate) const BARTENDER_ROUND_PRICE: i64 = 5_000;
 /// Buzz each patron gets from a round; lands them squarely in "buzzed"
 /// (level 2 spans 300..1000).
 const BARTENDER_ROUND_POINTS: i64 = 600;
