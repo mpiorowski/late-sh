@@ -8,7 +8,7 @@
 //!
 //! Bodies never contain `@`, so the mention pipeline stays quiet, and the
 //! system author is excluded from unread counts at the SQL layer
-//! (`ChatRoomMember::unread_counts_for_user`).
+//! (`ChatRoom::list_for_user_with_state`).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -32,7 +32,7 @@ use super::filter::lounge_includes;
 
 /// The system feed's author row. Same lazily-ensured bot pattern as the
 /// ghost users; `settings.system` additionally marks it for the unread-count
-/// exclusion in `ChatRoomMember::unread_counts_for_user`.
+/// exclusion in `ChatRoom::list_for_user_with_state`.
 ///
 /// Prod note: `system` was squatted by a real zero-message account until
 /// 2026-07-12, when the owner renamed it to `system-9` to free the nick.

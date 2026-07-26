@@ -366,7 +366,7 @@ async fn friend_and_ignored_user_ids_reads_both_lists_from_one_row() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let mut make = async |fingerprint: &str, username: &str| {
+    let make = async |fingerprint: &str, username: &str| {
         User::create(
             &client,
             UserParams {

@@ -186,7 +186,7 @@ Measured 2026-07-26 (first full `pg_stat_statements` ranking, see DB Cost Rankin
 
 `ChatService::ensure_refresh_scheduler` (`app/chat/svc.rs:1255`) runs one process-global task that rebuilds a full `ChatSnapshot` for **every connected session every 10 seconds** (`CHAT_REFRESH_INTERVAL`, `svc.rs:64`), on top of on-demand rebuilds at room switch and `request_list`.
 
-Each rebuild is 9 sequential round trips on one held pool connection, 11 when a room has a live poll:
+Each rebuild was 9 sequential round trips on one held pool connection, 11 when a room has a live poll:
 
 1. `ChatRoom::list_for_user`
 2. `VoiceChannel::enabled_for_chat_rooms`
@@ -197,6 +197,8 @@ Each rebuild is 9 sequential round trips on one held pool connection, 11 when a 
 7. `User::list_chat_author_metadata`
 8. `User::ignored_user_ids` -> **the identical `SELECT settings` query a second time** (`late-core/src/models/user.rs:985`)
 9. `ChatRoom::owner_ids_for_rooms`
+
+It is now **5 queries in 2 pipelined rounds** (7 queries when a poll is live). See "Fixed 2026-07-26" below.
 
 Why it is so expensive: **`chat_room_members` holds 444,994 rows over 583 rooms and 14,347 users, averaging 31 rooms per user and peaking at 154** (2026-07-26). Auto-join means memberships only accumulate. So queries 3 and 5 fan out over every room a user has ever joined, whether or not it is on screen, and the unread query returns 32.5 rows per call on average. The double `settings` read shows up as 11,070,677 calls, exactly 2.006 per snapshot.
 
@@ -212,13 +214,21 @@ Two ideas that did NOT survive measurement, recorded so nobody re-proposes them:
 - *Skip rooms with no new activity* (denormalized `chat_rooms.last_message_at`): would skip **1.9%** of memberships, because never-opened rooms always have something newer than "never".
 - *Maintain an incremental unread counter per membership*: `#lounge` has 14,346 members, so every message would update 14,346 rows. That is the Pain Point 6 disease, worse.
 
-**Fixed 2026-07-26** (`late-core/src/models/chat_room_member.rs`): the lateral count runs under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` (100) so it walks the index forward from `last_read_at` and stops, and the `users` join is replaced by a UUID compare against the system bot id passed in from `ChatService` (published once at startup by the #lounge feed task). 578 ms to 11.8 ms on the same user. Room ordering only tests `unread > 0` so it is unaffected, and the room tail only ever loads 500 messages anyway.
+**Fixed 2026-07-26, part one: the unread count itself.** The lateral count runs under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` (100) so it walks the index forward from `last_read_at` and stops, and the `users` join is replaced by a UUID compare against the system bot id passed in from `ChatService` (published once at startup by the #lounge feed task). 578 ms to 11.8 ms on the same user. Room ordering only tests `unread > 0` so it is unaffected, and the room tail only ever loads 500 messages anyway.
+
+**Fixed 2026-07-26, part two: the shape of the bundle.** Two changes, no new infrastructure:
+
+- **Three queries merged into one.** `list_for_user`, `last_message_at_for_rooms`, and `unread_counts_for_user` all keyed off the same `chat_room_members` row for the same user, so the user's membership set was index-scanned three times per pass. They are now `ChatRoom::list_for_user_with_state`, one query with two laterals, returning rooms plus both per-room maps. Measured on prod against the heaviest user in the system (157 rooms): **1,452 buffers / 5.2 ms exec / 4.1 ms planning**, against **1,760 buffers / 8.1 ms exec / 6.3 ms planning** for the three it replaces. Both laterals plan as index scans on `idx_chat_messages_room_created`. `unread_counts_for_user` and `last_message_at_for_rooms` were **deleted**, not left beside it: a second copy of that SQL is a drift hazard, and their tests moved onto the merged function.
+- **The remaining queries are pipelined, not serial.** `build_chat_snapshot` is now two rounds of `tokio::join!` on one pooled connection: round one is the merged room query plus `friend_and_ignored_user_ids`; round two is voice channels, polls, author metadata, and owners, all of which need the room or friend set from round one. tokio-postgres pipelines concurrent queries on a single connection, so each round costs about one round trip rather than one per query. Same pattern as `late_core::models::leaderboard::fetch_leaderboard_data`. **This buys latency, not server CPU** (Postgres still executes them in order), which is exactly what the sequential session loop below needs.
+
+Net: 9 sequential round trips to 5 queries in 2 pipelined rounds.
 
 Still open, all much smaller now:
 
-1. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts.
-3. **`last_message_at_for_rooms`** still fans out one index scan per joined room (6.4% before this change).
-4. If it ever matters again, the O(1) shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting. It needs a migration and a decision about the activity lines, which is why it is not the fix today.
+1. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts. The pipelining above cut per-snapshot latency, which raises the ceiling, but does not remove it.
+2. If it ever matters again, the O(1) shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting. It needs a migration and a decision about the activity lines, which is why it is not the fix today.
+
+**Do not widen `CHAT_REFRESH_INTERVAL` as a cheap win.** It looks like a free 3x, and it is not: the poll is the only writer of unread badges (see the second structural problem above), so tripling the interval triples worst-case badge latency for every room the user is not looking at. That is the primary signal in the product.
 
 No new infrastructure is needed and none is wanted here. The events already exist and already reach every session; the bug is that the client discards them and re-derives the state from Postgres on a timer. A broker (NATS, Redis pub/sub) would add a hop to a pipeline that already works and would not remove one of those 22M queries.
 

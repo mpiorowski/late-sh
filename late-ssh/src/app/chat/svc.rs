@@ -161,7 +161,7 @@ pub struct ChatService {
     read_permits: Arc<Semaphore>,
     /// The #lounge feed bot's user id, published once by
     /// `activity::lounge::start_lounge_feed_task` after it ensures the row.
-    /// Snapshots hand it to `unread_counts_for_user` so activity lines are
+    /// Snapshots hand it to `list_for_user_with_state` so activity lines are
     /// excluded by a UUID compare instead of a per-message join into `users`.
     /// `None` until that task runs, which only means a brief window at boot
     /// where a system line could count toward a badge; the next snapshot

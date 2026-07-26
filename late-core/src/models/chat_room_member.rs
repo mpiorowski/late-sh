@@ -1,7 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
-use std::collections::HashMap;
 use tokio_postgres::{Client, Row};
 use uuid::Uuid;
 
@@ -243,8 +242,8 @@ impl ChatRoomMember {
     /// room ordering only tests `unread > 0`. So the count walks the index
     /// forward from `last_read_at` and stops here; the UI renders anything at
     /// the cap as `99+` (`chat/ui.rs::format_unread_badge`).
-    pub const UNREAD_COUNT_CAP: i64 = 100;
-
+    ///
     /// The counting itself lives in `ChatRoom::list_for_user_with_state`, which
     /// returns the counts alongside the rooms they belong to in one query.
+    pub const UNREAD_COUNT_CAP: i64 = 100;
 }
