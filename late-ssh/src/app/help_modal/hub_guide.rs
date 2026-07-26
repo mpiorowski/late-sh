@@ -2,8 +2,11 @@ use asterion_core::MAX_MAZE_ID;
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chips::difficulty_bonus,
+    drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
+
+use crate::app::ai::ghost::BARTENDER_ROUND_PRICE;
 
 pub(crate) fn bot_context_lines() -> Vec<String> {
     let mut lines = Vec::new();
@@ -25,6 +28,7 @@ struct GuideSection {
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(bar_sections());
     sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
@@ -57,6 +61,42 @@ fn chip_sections() -> Vec<GuideSection> {
                 "Betting losses offset betting wins; Shop spending does not lower your rank."
                     .to_string(),
                 "Floor restores are excluded from the board.".to_string(),
+            ],
+        },
+    ]
+}
+
+fn bar_sections() -> Vec<GuideSection> {
+    vec![
+        GuideSection {
+            title: "The Bar",
+            body: vec![
+                "Mention @bartender in the Lounge to order; press t at the bar.".to_string(),
+                "There is no menu. He invents the drink and prices it".to_string(),
+                format!(
+                    "{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."
+                ),
+                "Your first ever drink is on the house.".to_string(),
+                format!(
+                    "\"@bartender round\" buys every human online a pour for {BARTENDER_ROUND_PRICE} chips."
+                ),
+                "Name someone in your order to buy their drink instead.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Last Call",
+            body: vec![
+                "Drinks build a buzz: tipsy, buzzed, sloshed, wasted.".to_string(),
+                "Your level shows beside your name wherever you talk.".to_string(),
+                format!(
+                    "It wears off on its own at {DRUNK_DECAY_PER_HOUR} points an hour, so a big night is gone by morning."
+                ),
+                "Wasted is last call: water and coffee only after that.".to_string(),
+                "A buzz also comes out in your typing, in public rooms only.".to_string(),
+                "Letters inside a word shuffle, more of them the drunker you".to_string(),
+                "are, but every word keeps its first and last letter so it".to_string(),
+                "stays readable. Handles, links, and code are never touched.".to_string(),
+                "What you typed is saved that way; sobering up will not fix it.".to_string(),
             ],
         },
     ]

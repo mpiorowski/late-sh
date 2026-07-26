@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -24,6 +24,7 @@ use late_core::{
         chat_room::{ChatRoom, UserRoomState},
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
+        drinks::UserDrinks,
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
@@ -36,6 +37,7 @@ use tracing::{Instrument, info_span};
 
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::bonsai::state::stage_for;
+use crate::app::chat::slur;
 use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::ircd::registry::IrcRegistry;
@@ -380,6 +382,17 @@ const LINK_TLDS: &[&str] = &[
     ".com", ".net", ".org", ".io", ".gg", ".xyz", ".co", ".me", ".tv", ".link", ".app", ".dev",
     ".info", ".biz", ".online", ".site", ".shop", ".ru", ".cn", ".to", ".ly", ".ai",
 ];
+
+/// A fresh seed for one message's typos. The slurred text is stored, so the
+/// roll happens once and never has to be reproducible after the fact; only
+/// [`slur::slur`] itself takes a caller-supplied seed, which is what keeps it
+/// testable.
+fn slur_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+}
 
 /// Whether a message body contains anything that looks like a clickable link.
 /// Catches `http(s)://`, `www.`, and bare `domain.tld` forms so a link can't slip
@@ -2568,10 +2581,15 @@ impl ChatService {
             ChatRoomMember::join(&client, room_id, user_b).await?;
         }
 
+        // Last thing before the row is written, so every check above (report
+        // markers, link cooldown, slow mode) judged the sober text, and the
+        // mention task below sees the same body the room will.
+        let body = self.slurred_body(&client, user_id, &room, body).await?;
+
         let message = ChatMessageParams {
             room_id,
             user_id,
-            body: body.to_string(),
+            body: body.clone(),
         };
         let chat = ChatMessage::create_with_reply_targets(
             &client,
@@ -2594,9 +2612,39 @@ impl ChatService {
         });
         metrics::record_chat_message_sent();
         self.notification_svc
-            .create_mentions_task(user_id, chat.id, room_id, body.to_string());
+            .create_mentions_task(user_id, chat.id, room_id, body);
         tracing::info!(chat_id = %chat.id, "message sent");
         Ok(())
+    }
+
+    /// The patron's message after the bar gets a say in it: a drink deep
+    /// enough to earn a `(tipsy)` label starts putting typos in what they
+    /// type, scaling up to `(wasted)`.
+    ///
+    /// Public rooms only. A DM or a private room can carry something that
+    /// genuinely needs reading, and the joke is a tavern joke, so it stays out
+    /// on the floor where the drinking happens. Sober patrons and the ghost
+    /// bots (who never drink) pass through untouched, and the level lookup
+    /// only runs where it can matter.
+    async fn slurred_body(
+        &self,
+        client: &tokio_postgres::Client,
+        user_id: Uuid,
+        room: &ChatRoom,
+        body: &str,
+    ) -> Result<String> {
+        if room.visibility != "public" {
+            return Ok(body.to_string());
+        }
+
+        let level = match UserDrinks::find(client, user_id).await? {
+            Some(drinks) => drinks.level(Utc::now()),
+            None => 0,
+        };
+        // Rolled once, here, and stored: the level at the moment of typing is
+        // the only one that ever made sense, and it must not re-roll or sober
+        // up under a reader later.
+        Ok(slur::slur(body, level, slur_seed()))
     }
 
     pub fn edit_message_task(
