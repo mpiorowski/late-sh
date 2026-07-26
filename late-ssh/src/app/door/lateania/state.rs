@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
+use super::worldmap::{Coord, MapCamera};
 
 /// Lines moved per `[` / `]` press when scrolling a text panel.
 const SCROLL_STEP: usize = 3;
@@ -85,13 +86,10 @@ pub struct State {
     /// mode captures keys). Chat is world-local via the service's `say`, so it
     /// never leaks into late.sh's global feed.
     chat_buffer: Option<String>,
-    /// Camera offset (in world cells) from the player on the overhead world map
-    /// (Panel::Map). Reset to (0, 0) whenever the panel changes, so opening the
-    /// map always re-centres on the player.
-    map_scroll: (i32, i32),
-    /// World-map level offset from the player's z (view underground floors).
-    /// Reset to 0 whenever the panel changes.
-    map_level_offset: i32,
+    /// Where the overhead world map (Panel::Map) is looking, relative to the
+    /// player. Reset whenever the panel changes, so opening the map always
+    /// re-centres on them.
+    map_camera: MapCamera,
 }
 
 impl State {
@@ -121,8 +119,7 @@ impl State {
             reset_version,
             reset_elsewhere: false,
             chat_buffer: None,
-            map_scroll: (0, 0),
-            map_level_offset: 0,
+            map_camera: MapCamera::default(),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -207,8 +204,7 @@ impl State {
             self.panel = panel;
             self.cursor = 0;
             self.list_scroll.set(0);
-            self.map_scroll = (0, 0);
-            self.map_level_offset = 0;
+            self.map_camera.recenter();
         }
     }
 
@@ -220,8 +216,7 @@ impl State {
         }
         self.cursor = 0;
         self.list_scroll.set(0);
-        self.map_scroll = (0, 0);
-        self.map_level_offset = 0;
+        self.map_camera.recenter();
     }
 
     /// True when the graphical overhead world map is the active panel.
@@ -229,31 +224,40 @@ impl State {
         self.panel == Panel::Map
     }
 
-    /// The world-map camera offset from the player, in world cells.
-    pub fn map_scroll(&self) -> (i32, i32) {
-        self.map_scroll
+    /// Where the world map is looking, relative to the player.
+    pub fn map_camera(&self) -> MapCamera {
+        self.map_camera
+    }
+
+    /// Where the player's own room sits in the coordinate field, if it has one.
+    /// Reads the snapshot directly rather than through `view()`, which clones
+    /// the whole PlayerView.
+    pub fn player_coord(&self) -> Option<Coord> {
+        let room = self.snapshot.players.get(&self.user_id)?.room?;
+        super::worldmap::world_coords().get(&room).copied()
     }
 
     /// Pan the world-map camera (arrow / wasd while the map is open).
     pub fn pan_map(&mut self, dx: i32, dy: i32) {
-        self.map_scroll.0 += dx;
-        self.map_scroll.1 += dy;
+        let Some(player) = self.player_coord() else {
+            return;
+        };
+        self.map_camera
+            .pan(player, super::worldmap::bounds(), dx, dy);
     }
 
     /// Re-centre the world-map camera on the player (position and level).
     pub fn recenter_map(&mut self) {
-        self.map_scroll = (0, 0);
-        self.map_level_offset = 0;
-    }
-
-    /// The world-map level offset from the player's own z (0 = their level).
-    pub fn map_level_offset(&self) -> i32 {
-        self.map_level_offset
+        self.map_camera.recenter();
     }
 
     /// Move the viewed world-map level up (+1) or down (-1).
     pub fn change_map_level(&mut self, delta: i32) {
-        self.map_level_offset += delta;
+        let Some(player) = self.player_coord() else {
+            return;
+        };
+        self.map_camera
+            .change_level(player, super::worldmap::bounds(), delta);
     }
 
     /// Current list scroll offset (first visible line).
@@ -599,10 +603,12 @@ impl State {
                     Some(SectionRow::Header { key, .. }) => self.toggle_section(key),
                     Some(SectionRow::Item { index }) => {
                         if let Some(row) = self.view().inventory.get(index) {
-                            if row.slot.is_some() {
-                                self.svc.equip_task(self.user_id, row.item_id);
-                            } else {
-                                self.svc.use_item_task(self.user_id, row.item_id);
+                            match inv_action(row) {
+                                InvAction::Unequip => {
+                                    self.svc.unequip_task(self.user_id, row.item_id)
+                                }
+                                InvAction::Equip => self.svc.equip_task(self.user_id, row.item_id),
+                                InvAction::Use => self.svc.use_item_task(self.user_id, row.item_id),
                             }
                         }
                     }
@@ -738,3 +744,27 @@ impl Drop for State {
         self.close_session();
     }
 }
+
+/// What Enter does to a row of the inventory panel. The panel lists worn gear
+/// alongside loose gear, so the row's own state picks the verb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvAction {
+    /// Take off worn gear and put it back in the pack.
+    Unequip,
+    /// Put on a piece of gear from the pack.
+    Equip,
+    /// Drink/eat/apply a consumable.
+    Use,
+}
+
+pub fn inv_action(row: &super::svc::InvView) -> InvAction {
+    match (row.equipped, row.slot.is_some()) {
+        (true, _) => InvAction::Unequip,
+        (false, true) => InvAction::Equip,
+        (false, false) => InvAction::Use,
+    }
+}
+
+#[cfg(test)]
+#[path = "state_test.rs"]
+mod state_test;

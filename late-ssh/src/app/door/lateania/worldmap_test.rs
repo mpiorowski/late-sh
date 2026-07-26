@@ -1,4 +1,7 @@
-use super::{Coord, collisions, derive_coords, dump_level, visible};
+use super::{
+    Coord, MAX_VIEWPORT_COLS, MapCamera, PAN_LIMIT, collisions, derive_bounds, derive_coords,
+    dump_level, visible,
+};
 use crate::app::door::lateania::world::seed_world;
 
 #[test]
@@ -271,10 +274,192 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
         "only the player shows under full fog"
     );
 
-    // With everything visited, fog matches the plain viewport.
+    // With everything visited, fog matches the plain viewport everywhere except
+    // the player's own cell, which they always win (see the collision test).
     let all: HashSet<_> = world.rooms.keys().copied().collect();
     let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
-    assert_eq!(lit, super::viewport(&coords, center, cols, rows));
+    let plain = super::viewport(&coords, center, cols, rows);
+    let (cx, cy) = (cols as usize / 2, rows as usize / 2);
+    assert_eq!(lit[cy][cx], Some(world.start_room));
+    for (r, (lit_row, plain_row)) in lit.iter().zip(plain.iter()).enumerate() {
+        for (c, (l, p)) in lit_row.iter().zip(plain_row.iter()).enumerate() {
+            if (r, c) != (cy, cx) {
+                assert_eq!(l, p, "cell ({r}, {c}) diverged from the fog-less view");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_player_holds_their_own_cell_against_a_collision() {
+    use std::collections::HashSet;
+    // The hand-authored core stacks whole regions on shared cells (the Mistfen
+    // under Whisperwood, the Obsidian Throne under Frostspire, house interiors
+    // under Embergate). Standing in the higher-id room of such a pair must not
+    // hide the player: resolving the cell by lowest id before the fog used to
+    // drop their `@` and point the inspector at somewhere else entirely.
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (&cell, ids) = clashes
+        .iter()
+        .find(|(_, ids)| ids.len() > 1)
+        .expect("the hand-authored core still collides somewhere");
+    let loser = *ids.last().expect("a colliding cell has room ids");
+
+    // Everything visited, so only the tie-break can hide the player.
+    let all: HashSet<_> = world.rooms.keys().copied().collect();
+    let (cols, rows) = (21, 11);
+    let grid = super::viewport_explored(&coords, cell, cols, rows, &all, loser);
+    assert_eq!(
+        grid[rows as usize / 2][cols as usize / 2],
+        Some(loser),
+        "the player's own room must win its cell (collided with {ids:?})"
+    );
+}
+
+#[test]
+fn fog_hides_an_unvisited_room_squatting_a_visited_one() {
+    use std::collections::HashSet;
+    // A cell shared by two rooms where only the higher-id one has been visited:
+    // the map must show the room the player actually knows, not blank.
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (&cell, ids) = clashes
+        .iter()
+        .find(|(_, ids)| ids.len() > 1)
+        .expect("the hand-authored core still collides somewhere");
+    let known = *ids.last().expect("a colliding cell has room ids");
+
+    let visited: HashSet<_> = [known].into_iter().collect();
+    let (cols, rows) = (21, 11);
+    // Player elsewhere entirely, so only `visited` decides this cell.
+    let grid = super::viewport_explored(&coords, cell, cols, rows, &visited, world.start_room);
+    assert_eq!(
+        grid[rows as usize / 2][cols as usize / 2],
+        Some(known),
+        "a visited room must not be hidden by an unvisited squatter"
+    );
+}
+
+#[test]
+fn one_screen_never_shows_two_reserved_blocks() {
+    use crate::app::door::lateania::world::{KAELMYR_BASE, region_layout};
+    // The module promises that seams between reserved blocks never share the
+    // screen. That only holds while neighbouring blocks sit further apart than
+    // the widest map we paint. At the original margin of 4, an 80-column map
+    // showed five unrelated zones side by side and a forest slab pasted onto
+    // Embergate's town square.
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let bounds = derive_bounds(&coords);
+    let here = region_layout(KAELMYR_BASE).expect("kaelmyr decodes to a grid cell");
+    let player = coords[&KAELMYR_BASE];
+
+    // Standing still, and panned as far as the camera will go in each
+    // direction: a fully panned viewport must still not reach the next block.
+    let mut centers = vec![player];
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let mut cam = MapCamera::default();
+        for _ in 0..(PAN_LIMIT + 10) {
+            cam.pan(player, bounds, dx, dy);
+        }
+        centers.push(cam.center(player));
+    }
+
+    for center in centers {
+        for (id, c) in visible(
+            &coords,
+            center,
+            MAX_VIEWPORT_COLS / 2,
+            MAX_VIEWPORT_COLS / 2,
+        ) {
+            let there = region_layout(id);
+            assert!(
+                there.is_some_and(|p| (p.region, p.zone) == (here.region, here.zone)),
+                "from {center:?}, room {id} at {c:?} shares the screen with {}/{}, \
+                 but belongs to {:?}",
+                here.region,
+                here.zone,
+                there.map(|p| (p.region, p.zone)),
+            );
+        }
+    }
+}
+
+#[test]
+fn the_camera_pans_and_clamps_to_the_field() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let bounds = derive_bounds(&coords);
+    let player = coords[&world.start_room];
+
+    let mut cam = MapCamera::default();
+    assert_eq!(cam.center(player), player, "a fresh camera sits on you");
+
+    cam.pan(player, bounds, 1, 0);
+    cam.pan(player, bounds, 0, 1);
+    assert_eq!(cam.scroll(), (1, 1));
+    assert_eq!(
+        cam.center(player),
+        Coord {
+            x: player.x + 1,
+            y: player.y + 1,
+            z: player.z
+        }
+    );
+
+    // Panning east forever stops within reach of the player rather than running
+    // off into unbounded blank (and never far enough to see the next block).
+    for _ in 0..(PAN_LIMIT * 3) {
+        cam.pan(player, bounds, 1, 0);
+    }
+    assert_eq!(
+        cam.center(player).x,
+        (player.x + PAN_LIMIT).min(bounds.max.x),
+        "pan clamps east"
+    );
+    for _ in 0..(PAN_LIMIT * 6) {
+        cam.pan(player, bounds, -1, 0);
+    }
+    assert_eq!(
+        cam.center(player).x,
+        (player.x - PAN_LIMIT).max(bounds.min.x),
+        "pan clamps west"
+    );
+
+    cam.recenter();
+    assert_eq!(cam.center(player), player, "Enter puts you back under it");
+}
+
+#[test]
+fn the_camera_only_visits_levels_that_exist() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let bounds = derive_bounds(&coords);
+    let player = coords[&world.start_room];
+
+    let mut cam = MapCamera::default();
+    for _ in 0..50 {
+        cam.change_level(player, bounds, -1);
+    }
+    assert_eq!(
+        cam.center(player).z,
+        bounds.min.z,
+        "down stops at the deepest"
+    );
+    for _ in 0..100 {
+        cam.change_level(player, bounds, 1);
+    }
+    assert_eq!(
+        cam.center(player).z,
+        bounds.max.z,
+        "up stops at the highest"
+    );
+
+    cam.recenter();
+    assert_eq!(cam.level_offset(), 0);
 }
 
 #[test]

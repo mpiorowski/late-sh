@@ -122,9 +122,25 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         rows[0],
     );
     // While composing a chat line, reserve the bottom row for the say prompt.
-    if let Some(text) = state.chat_text() {
-        let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
-        draw_game(frame, body[0], state, usernames);
+    // The body above it keeps drawing whatever panel is open, map included, so
+    // pressing `'` never swaps the view out from under you.
+    let chat = state.chat_text();
+    let (body, prompt) = match chat.is_some() {
+        true => {
+            let split =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
+            (split[0], Some(split[1]))
+        }
+        false => (rows[1], None),
+    };
+    if view.classed && state.map_open() && map_fits(body) {
+        draw_world_map(frame, body, state, &view);
+    } else {
+        // Below the graphical map's minimum, Panel::Map falls back to the text
+        // atlas in the side panel (see `draw_side`).
+        draw_game(frame, body, state, usernames);
+    }
+    if let (Some(text), Some(prompt)) = (chat, prompt) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -142,13 +158,17 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ])),
-            body[1],
+            prompt,
         );
-    } else if view.classed && state.map_open() {
-        draw_world_map(frame, rows[1], state, &view);
-    } else {
-        draw_game(frame, rows[1], state, usernames);
     }
+}
+
+/// The smallest area the graphical world map is worth drawing in. Header,
+/// inspector, and footer cost 4 rows before a single cell of map, and the
+/// legend needs the width. Below this, `draw_game` takes over: the text atlas
+/// in the side panel down to 50x9, then compact mode.
+fn map_fits(area: Rect) -> bool {
+    area.width >= 50 && area.height >= 12
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
@@ -172,23 +192,23 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
 /// camera and Enter re-centres (handled in input.rs).
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
-    use super::worldmap::{Coord, viewport_explored, world_coords};
+    use super::worldmap::{viewport_explored, world_coords};
 
     let coords = world_coords();
-    let Some(&player) = coords.get(&view.room) else {
+    let Some(player_room) = view.room else {
+        return;
+    };
+    let Some(&player) = coords.get(&player_room) else {
         frame.render_widget(
             Paragraph::new("No map for this place.").style(Style::default().fg(theme::TEXT_DIM())),
             area,
         );
         return;
     };
-    let (sx, sy) = state.map_scroll();
-    let level_offset = state.map_level_offset();
-    let center = Coord {
-        x: player.x + sx,
-        y: player.y + sy,
-        z: player.z + level_offset,
-    };
+    let camera = state.map_camera();
+    let level_offset = camera.level_offset();
+    let panned = camera.scroll() != (0, 0) || level_offset != 0;
+    let center = camera.center(player);
 
     let rows = Layout::vertical([
         Constraint::Length(1), // header
@@ -199,7 +219,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     .split(area);
 
     // Header: region name + danger tier, and the current level (z).
-    let (region_name, tier) = region_atlas_entry(view.room).unwrap_or(("The wilds", ""));
+    let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
     let level = match center.z {
         0 => "surface".to_string(),
         z if z < 0 => format!("underground {}", -z),
@@ -224,6 +244,14 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Style::default().fg(theme::AMBER())
     };
     header.push(Span::styled(format!("  ·  {level}"), level_style));
+    if panned {
+        // The header names where the player stands; the inspector below names
+        // the crosshair. Say so, or a panned map reads as two contradictions.
+        header.push(Span::styled(
+            "  ·  panned (Enter re-centres)",
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
 
     // Body: the viewport grid. Fog of war means only visited rooms draw. Boss
@@ -232,7 +260,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let body = rows[1];
     let cols = body.width as i32;
     let height = body.height as i32;
-    let grid = viewport_explored(coords, center, cols, height, &view.visited, view.room);
+    let grid = viewport_explored(coords, center, cols, height, &view.visited, player_room);
     let cx = (cols / 2) as usize;
     let cy = (height / 2) as usize;
     let player_style = Style::default()
@@ -253,7 +281,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                 .enumerate()
                 .map(|(c, cell)| {
                     let (ch, mut style): (String, Style) = match cell {
-                        Some(id) if *id == view.room => ("@".to_string(), player_style),
+                        Some(id) if *id == player_room => ("@".to_string(), player_style),
                         Some(id) => match super::worldmap::poi(*id) {
                             Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                             Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
@@ -1313,7 +1341,15 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     lines
 }
 
-/// Right column: combat numbers, revives, earned titles, and the XP meter.
+/// Earned titles shown inline on the character sheet before the list is
+/// summarised. The full list is browsable in the Titles panel (`k`); the sheet
+/// is a fixed-height column with no scroll of its own, so an unbounded list
+/// here used to push the XP meter clean off the bottom.
+const SHEET_TITLES_SHOWN: usize = 4;
+
+/// Right column: combat numbers, revives, the XP meter, then earned titles.
+/// Experience comes first on purpose: it is the number you always want, and
+/// titles are the section that grows without limit.
 fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     // Combat rated by level; attack reads as offence (green), armour as
     // defence (blue), split for clarity.
@@ -1336,20 +1372,6 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::raw(""));
-    lines.push(section("Titles"));
-    if view.titles.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  none yet",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-    for title in &view.titles {
-        lines.push(Line::from(Span::styled(
-            format!("  {title}"),
-            Style::default().fg(theme::BADGE_GOLD()),
-        )));
-    }
-    lines.push(Line::raw(""));
     lines.push(section("Experience"));
     if view.xp_for_next > 0 {
         lines.push(Line::from(Span::styled(
@@ -1367,6 +1389,27 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(
             "  max level reached",
             Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("Titles"));
+    if view.titles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for title in view.titles.iter().take(SHEET_TITLES_SHOWN) {
+        lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    let rest = view.titles.len().saturating_sub(SHEET_TITLES_SHOWN);
+    if rest > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  +{rest} more (k)"),
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     }
     lines.push(Line::raw(""));

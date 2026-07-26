@@ -201,3 +201,34 @@ fn recent_log_trims_oldest_when_it_overflows_height() {
         "newest event must rest on the bottom row, got {rendered:?}"
     );
 }
+
+#[test]
+fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
+    // The bug: the full-screen character sheet is three fixed-height columns
+    // with no scroll of its own (`[`/`]` only reach the narrow side panel), and
+    // the right column listed every earned title *before* Experience. Enough
+    // titles and the XP bar walked off the bottom with no way to reach it.
+    let mut view = empty_player_view();
+    view.level = 30;
+    view.xp_into_level = 120;
+    view.xp_for_next = 400;
+    view.titles = (0..30).map(|i| format!("Champion of Zone {i}")).collect();
+
+    let lines = super::sheet_derived(&view, ratatui::style::Color::White);
+    let text: Vec<String> = lines.iter().map(line_text).collect();
+    let xp_row = text
+        .iter()
+        .position(|l| l.contains("to next"))
+        .expect("the sheet shows the xp meter");
+
+    // The sheet only draws when the area is at least 18 rows tall, minus the
+    // block border: the meter has to land inside that.
+    assert!(
+        xp_row < 16,
+        "xp meter fell to row {xp_row}, off a 16-row column: {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l.contains("+26 more")),
+        "the title list is summarised rather than unbounded: {text:?}"
+    );
+}

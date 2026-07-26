@@ -14,10 +14,11 @@
 //   steps into a generated zone (those are already placed).
 //
 // The world is deterministic (fixed seeds), so this is recomputed identically
-// every boot and never stored. Streaming only renders one neighbourhood, so the
-// non-continuous seams between reserved blocks never share the screen. What few
-// collisions remain are genuine non-Euclidean loops inside the hand-authored
-// core, which the collision report measures.
+// every boot and never stored. Streaming only renders one neighbourhood, and
+// `COMPONENT_MARGIN` is wider than any terminal, so the non-continuous seams
+// between reserved blocks never share the screen. What few collisions remain
+// are genuine non-Euclidean loops inside the hand-authored core, which the
+// collision report measures.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
@@ -32,6 +33,15 @@ static WORLD_COORDS: LazyLock<HashMap<RoomId, Coord>> =
 /// The process-wide coordinate field. First call builds it (one world-gen).
 pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
     &WORLD_COORDS
+}
+
+/// Force the coordinate field and the POI index to build now. Both are lazy
+/// statics that cost a world-gen apiece; the service calls this at startup so
+/// the first player to open the map doesn't pay for them on the render thread,
+/// which holds the app mutex.
+pub fn warm() {
+    LazyLock::force(&WORLD_COORDS);
+    LazyLock::force(&POIS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -55,9 +65,21 @@ fn z_step(dir: Dir) -> i32 {
     }
 }
 
+/// The widest map viewport we ever paint, in cells. Terminals wider than this
+/// are not a thing we render maps into.
+pub const MAX_VIEWPORT_COLS: i32 = 400;
+
+/// How far the camera may pan from the player, in cells each way. Far enough to
+/// look around any one place, near enough that Enter is never a long way home.
+pub const PAN_LIMIT: i32 = MAX_VIEWPORT_COLS;
+
 /// Blank columns left between adjacent components so their bounding boxes never
-/// touch in the global field.
-const COMPONENT_MARGIN: i32 = 4;
+/// touch in the global field. Two reserved blocks are unrelated places, and a
+/// seam between them must never share the screen: the furthest a player can see
+/// from where they stand is a full pan plus half a viewport, so the margin has
+/// to beat that. (At the original margin of 4, an 80-column map showed five
+/// unrelated zones side by side and a forest slab against Embergate's square.)
+const COMPONENT_MARGIN: i32 = PAN_LIMIT + MAX_VIEWPORT_COLS;
 
 /// Derive an (x, y, z) for every room. Generated zones are placed as exact
 /// blocks from `region_layout`; hand-authored rooms are walked out by exits.
@@ -190,7 +212,9 @@ pub fn visible(
 /// A `cols x rows` grid of room ids centred on `center`, for painting the map.
 /// `grid[row][col]` is the room at that screen cell, or `None` for empty space.
 /// Where the spatial field still collides (hand-authored core), the lowest room
-/// id wins so the picture is stable.
+/// id wins so the picture is stable. This is the fog-less view, used by the
+/// dumps and the tests; what players see comes from `viewport_explored`, which
+/// resolves collisions against the player and their explored set instead.
 pub fn viewport(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -217,8 +241,15 @@ pub fn viewport(
 }
 
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
-/// The player's own room is always shown, so the map is never blank where they
-/// stand. `visited` is the player's explored-room set.
+/// `visited` is the player's explored-room set.
+///
+/// Cells are resolved with the player's own room first, then the lowest visited
+/// room id. Resolving before the fog (as a plain filter over `viewport` would)
+/// loses to the collision tie-break: the hand-authored core stacks whole regions
+/// on shared cells (the Mistfen under Whisperwood, the Obsidian Throne under
+/// Frostspire, every house interior under Embergate), and a player standing in
+/// the higher-id room of such a pair would watch their own `@` vanish and the
+/// inspector describe somewhere else.
 pub fn viewport_explored(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -227,14 +258,139 @@ pub fn viewport_explored(
     visited: &HashSet<RoomId>,
     player_room: RoomId,
 ) -> Vec<Vec<Option<RoomId>>> {
-    viewport(coords, center, cols, rows)
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|cell| cell.filter(|id| *id == player_room || visited.contains(id)))
+    let rx = cols / 2;
+    let ry = rows / 2;
+    let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
+    for (id, c) in visible(coords, center, rx + 1, ry + 1) {
+        if id != player_room && !visited.contains(&id) {
+            continue;
+        }
+        match at.entry((c.x, c.y)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(id);
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                let cur = *slot.get();
+                if cur != player_room && (id == player_room || id < cur) {
+                    slot.insert(id);
+                }
+            }
+        }
+    }
+    let left = center.x - rx;
+    let top = center.y - ry;
+    (0..rows)
+        .map(|r| {
+            (0..cols)
+                .map(|c| at.get(&(left + c, top + r)).copied())
                 .collect()
         })
         .collect()
+}
+
+/// The bounding box of the whole coordinate field, for clamping the camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bounds {
+    pub min: Coord,
+    pub max: Coord,
+}
+
+static BOUNDS: LazyLock<Bounds> = LazyLock::new(|| derive_bounds(world_coords()));
+
+/// The process-wide field bounds. Cheap after the first call.
+pub fn bounds() -> Bounds {
+    *BOUNDS
+}
+
+pub fn derive_bounds(coords: &HashMap<RoomId, Coord>) -> Bounds {
+    let zero = Coord { x: 0, y: 0, z: 0 };
+    let mut min = zero;
+    let mut max = zero;
+    for (i, c) in coords.values().enumerate() {
+        if i == 0 {
+            min = *c;
+            max = *c;
+            continue;
+        }
+        min = Coord {
+            x: min.x.min(c.x),
+            y: min.y.min(c.y),
+            z: min.z.min(c.z),
+        };
+        max = Coord {
+            x: max.x.max(c.x),
+            y: max.y.max(c.y),
+            z: max.z.max(c.z),
+        };
+    }
+    Bounds { min, max }
+}
+
+/// The world-map camera: where the view sits relative to the player's own room.
+/// Held per session by `State`; the player's coordinate is passed in on every
+/// move so the camera itself stays a pure value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapCamera {
+    scroll: (i32, i32),
+    level_offset: i32,
+}
+
+impl MapCamera {
+    /// Offset from the player, in world cells (0, 0 = centred on them).
+    pub fn scroll(self) -> (i32, i32) {
+        self.scroll
+    }
+
+    /// Levels above (+) or below (-) the one the player stands on.
+    pub fn level_offset(self) -> i32 {
+        self.level_offset
+    }
+
+    /// The cell the view is centred on, given where the player stands.
+    pub fn center(self, player: Coord) -> Coord {
+        Coord {
+            x: player.x + self.scroll.0,
+            y: player.y + self.scroll.1,
+            z: player.z + self.level_offset,
+        }
+    }
+
+    /// Snap back onto the player, position and level.
+    pub fn recenter(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Pan by one cell, clamped twice: to `PAN_LIMIT` cells from the player,
+    /// which is what keeps a panned viewport from ever reaching the next
+    /// reserved block, and to the field's own bounds, so a held key cannot walk
+    /// the camera into unbounded blank with only Enter to get back.
+    pub fn pan(&mut self, player: Coord, bounds: Bounds, dx: i32, dy: i32) {
+        let clamp = |want: i32, player: i32, lo: i32, hi: i32| {
+            want.clamp(player - PAN_LIMIT, player + PAN_LIMIT)
+                .clamp(lo, hi)
+                - player
+        };
+        self.scroll = (
+            clamp(
+                player.x + self.scroll.0 + dx,
+                player.x,
+                bounds.min.x,
+                bounds.max.x,
+            ),
+            clamp(
+                player.y + self.scroll.1 + dy,
+                player.y,
+                bounds.min.y,
+                bounds.max.y,
+            ),
+        );
+    }
+
+    /// View one level up (+1) or down (-1), clamped to the levels that exist.
+    pub fn change_level(&mut self, player: Coord, bounds: Bounds, delta: i32) {
+        let want = player.z + self.level_offset + delta;
+        self.level_offset = want.clamp(bounds.min.z, bounds.max.z) - player.z;
+    }
 }
 
 /// Points of interest at a room, for the map's overlay and cell inspector.
