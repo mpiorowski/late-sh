@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use late_core::models::user::RightSidebarMode;
+use late_core::models::user_ssh_key::KeyLayout;
 use tokio::time::{sleep, timeout};
 
 use crate::app::chat::svc::ChatEvent;
@@ -15,8 +16,22 @@ const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// sidebar is visible, so a session showing it never settles by design.
 /// Settle-based tests turn the sidebar off to exercise the gate beneath;
 /// `sidebar_wave_holds_half_rate_and_paints_on_edges` covers the wave path.
+///
+/// This writes the per-device rails rather than the profile. `ProfileState::
+/// drain_snapshot` replaces the whole profile every time a `ProfileService`
+/// snapshot lands, so a profile-level edit here survives only until the
+/// session's first profile prefetch arrives. That prefetch is async: on an
+/// unloaded machine it lands before the settle loop starts, but under load it
+/// lands mid-settle, silently restores the account's `On`, and switches the
+/// wave back on -- at which point the app dirties every anim_half edge
+/// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
+/// takes precedence over the profile in `device_rails_or_profile` and nothing
+/// async overwrites it, so the sidebar stays off for the whole test.
 fn hide_sidebar(app: &mut App) {
-    app.profile_state.profile.right_sidebar_mode = RightSidebarMode::Off;
+    app.device_rails = Some(KeyLayout {
+        room_list_mode: app.rail_modes().0,
+        right_sidebar_mode: RightSidebarMode::Off,
+    });
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
