@@ -96,6 +96,49 @@ fn key_hints_survive_a_popup_too_small_for_the_grid() {
     );
 }
 
+/// The width pass used to measure ranked rows only, so a board with no rows
+/// fell back to its base span and clipped its own empty-state line ("no chip
+/// earnings yet this mon") while the placeholder beside it sat half empty.
+#[test]
+fn empty_top_boards_are_wide_enough_for_their_own_copy() {
+    let data = LeaderboardData::default();
+    for view in &top_board_views(&data) {
+        let natural = top_board_natural_width(view, Uuid::nil(), 12);
+        let title = view.title;
+
+        let heading = section_heading_width(title) + 1;
+        assert!(
+            natural >= heading,
+            "{title} clips its heading: {natural} < {heading}"
+        );
+
+        let empty = view.empty.chars().count() + 2;
+        assert!(
+            natural >= empty,
+            "{title} clips its empty state: {natural} < {empty}"
+        );
+
+        for hint in view.hints {
+            let hint_width = hint.chars().count() + 2;
+            assert!(
+                natural >= hint_width,
+                "{title} clips hint {hint:?}: {natural} < {hint_width}"
+            );
+        }
+    }
+
+    // And end to end, the panel really does print the whole line.
+    let wide = drawn_leaderboard(160, 44);
+    assert!(
+        wide.contains("no chip earnings yet this month"),
+        "Top Chips clipped its empty state:\n{wide}"
+    );
+    assert!(
+        wide.contains("no daily puzzle wins yet this month"),
+        "Arcade Wins clipped its empty state:\n{wide}"
+    );
+}
+
 #[test]
 fn reference_grid_matches_target_cells() {
     let grid = DenseGrid::new(Rect::new(0, 0, 111, 41)).unwrap();
@@ -105,14 +148,14 @@ fn reference_grid_matches_target_cells() {
     assert_eq!(grid.lower_divider_y, 38);
     assert_eq!(grid.footer_y, 39);
     assert_eq!(grid.bottom_y, 40);
-    assert_eq!(grid.top_dividers, vec![31, 57]);
+    assert_eq!(grid.top_dividers, vec![38, 70]);
     assert_eq!(grid.score_dividers, [23, 45, 67, 89]);
     assert_eq!(
         grid.top_panels()
             .iter()
             .map(|panel| Size::new(panel.width, panel.height))
             .collect::<Vec<Size>>(),
-        vec![Size::new(30, 16), Size::new(25, 16), Size::new(52, 16)]
+        vec![Size::new(37, 16), Size::new(31, 16), Size::new(39, 16)]
     );
     assert_eq!(
         grid.score_panels()
@@ -245,28 +288,30 @@ fn wide_grid_shares_surplus_width_across_all_score_panels() {
 }
 
 #[test]
-fn top_board_borders_follow_content_and_leave_surplus_to_more_panel() {
+fn top_board_borders_follow_content_and_share_the_surplus() {
     let mut reference = DenseGrid::new(Rect::new(0, 0, 111, 41)).unwrap();
     reference.set_top_panel_content_widths([34, 29]);
     let mut wide = DenseGrid::new(Rect::new(0, 0, 144, 51)).unwrap();
     wide.set_top_panel_content_widths([34, 29]);
 
-    assert_eq!(reference.top_dividers, vec![35, 65]);
-    assert_eq!(wide.top_dividers, vec![35, 65]);
+    // Both boards clear the 35 and 30 spans their content asked for, then the
+    // leftover is split three ways instead of landing in the placeholder.
+    assert_eq!(reference.top_dividers, vec![39, 73]);
+    assert_eq!(wide.top_dividers, vec![50, 95]);
     assert_eq!(
         reference
             .top_panels()
             .iter()
             .map(|panel| panel.width)
             .collect::<Vec<_>>(),
-        vec![34, 29, 44]
+        vec![38, 33, 36]
     );
     assert_eq!(
         wide.top_panels()
             .iter()
             .map(|panel| panel.width)
             .collect::<Vec<_>>(),
-        vec![34, 29, 77]
+        vec![49, 44, 47]
     );
 
     let heading = line_text(&section_heading(MORE_LEADERBOARDS_TITLE));

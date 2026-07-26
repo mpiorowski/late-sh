@@ -170,10 +170,13 @@ fn top_divider_offsets(span: u16, content_widths: [u16; 2]) -> Vec<u16> {
     }
 
     let board_budget = span - MORE_LEADERBOARDS_PANEL_SPAN;
-    let desired_spans = content_widths.map(|width| width.saturating_add(1));
-    let mut panel_spans: [u16; 2] =
-        std::array::from_fn(|index| desired_spans[index].min(TOP_BOARD_BASE_SPANS[index]));
-    let mut remaining = board_budget.saturating_sub(panel_spans.iter().sum());
+    let desired_spans: [u16; 2] = std::array::from_fn(|index| {
+        content_widths[index]
+            .saturating_add(1)
+            .max(TOP_BOARD_BASE_SPANS[index])
+    });
+    let mut panel_spans = TOP_BOARD_BASE_SPANS;
+    let mut remaining = board_budget.saturating_sub(base_board_span);
     while remaining > 0 {
         let mut grew = false;
         for (panel_span, desired_span) in panel_spans.iter_mut().zip(desired_spans) {
@@ -189,6 +192,16 @@ fn top_divider_offsets(span: u16, content_widths: [u16; 2]) -> Vec<u16> {
         if !grew {
             break;
         }
+    }
+
+    // Space the boards could not use is shared across all three panels rather
+    // than pooling in the placeholder, the way the score row shares its own
+    // surplus. Two roomy boards beside a right-sized "coming soon" beats two
+    // cramped ones beside a mostly empty half-screen.
+    if remaining > 0 {
+        let mut all_spans = [panel_spans[0], panel_spans[1], MORE_LEADERBOARDS_PANEL_SPAN];
+        distribute_surplus(&mut all_spans, remaining);
+        panel_spans = [all_spans[0], all_spans[1]];
     }
 
     vec![panel_spans[0], panel_spans.iter().sum()]
@@ -232,68 +245,63 @@ fn panel_between(left: u16, right: u16, y: u16, height: u16) -> Rect {
     )
 }
 
+/// One definition per top board, shared by the width pass and the draw pass.
+/// Measuring has to see the same headings, hints and empty-state text that get
+/// printed, or a board sizes itself to rows it may not even have.
+fn top_board_views(data: &LeaderboardData) -> [RankedBoardView<'_>; 2] {
+    [
+        RankedBoardView {
+            title: "Top Chips",
+            unit: "chips",
+            entries: &data.monthly_chip_earners,
+            empty: "no chip earnings yet this month",
+            hints: &["monthly net chip delta", "shop spend ignored"],
+            show_current_marker: true,
+        },
+        RankedBoardView {
+            title: "Arcade Wins",
+            unit: "pts",
+            entries: &data.arcade_champions,
+            empty: "no daily puzzle wins yet this month",
+            hints: &["daily puzzle value:", "easy 1·medium 3·hard 5"],
+            show_current_marker: false,
+        },
+    ]
+}
+
 fn fit_top_row_to_content(grid: &mut DenseGrid, data: &LeaderboardData, user_id: Uuid) {
     let panel_height = grid.top_divider_y.saturating_sub(grid.content_top);
     let body_height = usize::from(panel_height.saturating_sub(ranked_panel_body_offset(2)));
-    let fallback_widths = TOP_BOARD_BASE_SPANS.map(|panel_span| usize::from(panel_span - 1));
-    let content_widths = [
-        top_board_natural_width(
-            &data.monthly_chip_earners,
-            "chips",
-            user_id,
-            body_height,
-            true,
-        )
-        .unwrap_or(fallback_widths[0]),
-        top_board_natural_width(&data.arcade_champions, "pts", user_id, body_height, false)
-            .unwrap_or(fallback_widths[1]),
-    ];
+    let views = top_board_views(data);
+    let content_widths =
+        std::array::from_fn(|index| top_board_natural_width(&views[index], user_id, body_height));
     grid.set_top_panel_content_widths(content_widths);
 }
 
-fn top_board_natural_width(
-    entries: &[RankedEntry],
-    unit: &str,
-    user_id: Uuid,
-    height: usize,
-    show_current_marker: bool,
-) -> Option<usize> {
-    let rows: Vec<RankedRow> = entries.iter().map(RankedRow::from).collect();
-    let plan = top_row_plan(&rows, unit, user_id, height, show_current_marker);
-    card_natural_width(&rows, plan)
+fn top_board_natural_width(view: &RankedBoardView<'_>, user_id: Uuid, height: usize) -> usize {
+    let rows: Vec<RankedRow> = view.entries.iter().map(RankedRow::from).collect();
+    let plan = top_row_plan(&rows, view.unit, user_id, height, view.show_current_marker);
+    let widest_row = card_natural_width(&rows, plan).unwrap_or(0);
+
+    // The heading, the hints and the empty-state line are printed too, each
+    // with a leading space already in the text and one trailing cell of pad.
+    let heading = section_heading_width(view.title) + 1;
+    let widest_note = view
+        .hints
+        .iter()
+        .copied()
+        .chain(rows.is_empty().then_some(view.empty))
+        .map(|note| note.chars().count() + 2)
+        .max()
+        .unwrap_or(0);
+
+    widest_row.max(heading).max(widest_note)
 }
 
 fn draw_top_row(frame: &mut Frame, grid: &DenseGrid, data: &LeaderboardData, user_id: Uuid) {
     let panels = grid.top_panels();
-    if let Some(panel) = panels.first() {
-        draw_ranked_panel(
-            frame,
-            *panel,
-            user_id,
-            RankedBoardView {
-                title: "Top Chips",
-                unit: "chips",
-                entries: &data.monthly_chip_earners,
-                empty: "no chip earnings yet this month",
-                hints: &["monthly net chip delta", "shop spend ignored"],
-                show_current_marker: true,
-            },
-        );
-    }
-    if let Some(panel) = panels.get(1) {
-        draw_ranked_panel(
-            frame,
-            *panel,
-            user_id,
-            RankedBoardView {
-                title: "Arcade Wins",
-                unit: "pts",
-                entries: &data.arcade_champions,
-                empty: "no daily puzzle wins yet this month",
-                hints: &["daily puzzle value:", "easy 1·medium 3·hard 5"],
-                show_current_marker: false,
-            },
-        );
+    for (panel, view) in panels.iter().zip(top_board_views(data)) {
+        draw_ranked_panel(frame, *panel, user_id, view);
     }
     if let Some(panel) = panels.get(2) {
         render_line(frame, *panel, 0, section_heading(MORE_LEADERBOARDS_TITLE));
@@ -1021,6 +1029,11 @@ fn ranked_value_text(value: i64, unit: &str) -> String {
     } else {
         format!("{} {unit}", format_number(value))
     }
+}
+
+/// Rendered width of [`section_heading`], leading space included.
+fn section_heading_width(title: &str) -> usize {
+    " ── ".chars().count() + title.chars().count() + " ──".chars().count()
 }
 
 fn section_heading(title: &str) -> Line<'static> {
