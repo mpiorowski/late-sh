@@ -2973,7 +2973,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
+            format!(
+                "{prefix}mentions ({})",
+                format_unread_badge(view.notifications_unread_count)
+            )
         } else {
             format!("{prefix}mentions")
         };
@@ -2999,7 +3002,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.news_unread_count > 0 {
-            format!("{prefix}news ({})", view.news_unread_count)
+            format!(
+                "{prefix}news ({})",
+                format_unread_badge(view.news_unread_count)
+            )
         } else {
             format!("{prefix}news")
         };
@@ -3022,7 +3028,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 Style::default().fg(theme::TEXT())
             };
             let label = if view.feeds_unread_count > 0 {
-                format!("{prefix}rss ({})", view.feeds_unread_count)
+                format!(
+                    "{prefix}rss ({})",
+                    format_unread_badge(view.feeds_unread_count)
+                )
             } else {
                 format!("{prefix}rss")
             };

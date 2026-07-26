@@ -301,24 +301,27 @@ The shape worth remembering: the two largest items were **timers, not user actio
 
 ### Fixed 2026-07-26
 
-All four shipped together, no migration, no schema change, no new infrastructure. Percentages are of the baseline total above.
+All shipped together, no migration, no schema change, no new infrastructure. Percentages are of the baseline total above.
 
 | Change | Baseline | Expected after |
 |---|---|---|
 | `unread_counts_for_user`: count capped at 100, per-message `users` join replaced by a UUID compare | 43% | ~1% |
 | Leaderboard loop: 30 s to 300 s, skipped entirely with no subscribers | 13.1% | ~1.3% |
+| `list_for_user` + `last_message_at_for_rooms` + `unread_counts_for_user` merged into `ChatRoom::list_for_user_with_state` | 12.6% + the unread row above | ~8% |
 | Mention-autocomplete list: read the in-memory `UsernameDirectory` instead of re-scanning `users` | 1.9% | 0 |
 | `User::friend_and_ignored_user_ids`: one `SELECT settings` per snapshot instead of two | 0.9% | 0.45% |
 
-Roughly **56% of the total workload**, projected. Not yet verified in prod: reset `pg_stat_statements` after the deploy and re-run this ranking before trusting these numbers or planning against them.
+Plus one change with no `pg_stat_statements` line of its own: `build_chat_snapshot` now issues its remaining queries as **two pipelined `tokio::join!` rounds instead of a serial chain**, which cuts per-snapshot latency without changing server CPU. That is what raises the ceiling on the sequential session loop (item 3 below).
+
+Roughly **60% of the total workload**, projected. Not yet verified in prod: reset `pg_stat_statements` after the deploy and re-run this ranking before trusting these numbers or planning against them.
 
 ### Remaining DB work, ranked by impact
 
-1. **The rest of the chat snapshot poll, about 26% of baseline.** Still the largest single item even with `unread_counts_for_user` fixed, and still the only one that scales with concurrency. The remaining eight queries are individually cheap (0.2 ms to 0.9 ms) and expensive only because the bundle runs 5.5M times: `list_chat_author_metadata` 9.0%, `last_message_at_for_rooms` 6.4%, `list_for_user` 6.2%, `voice_channels` 2.1%, then polls, owners, settings, unread under 1% each. Per-snapshot cost is now about 3.0 ms, down from about 7.3 ms, so a connected idle session costs roughly 1.1 s of DB per hour instead of 2.6 s. Two directions, both still open, detail in Pain Point 7:
-   - **Merge round trips.** `list_for_user`, `last_message_at_for_rooms`, `owner_ids_for_rooms`, and `voice_channels` all key off the same room set and could be one or two queries instead of four. This also shortens the sequential chain.
-   - **Run the bundle less often.** Raising `CHAT_REFRESH_INTERVAL` is a one-constant change but costs badge latency unless unread is incremented locally first, which introduces dual-maintenance of the unread rule. Weigh that tradeoff deliberately; it was rejected once already on those grounds.
+1. **The rest of the chat snapshot poll, about 13% of baseline** (was 26% before the merge). Still the largest single item and still the only one that scales with concurrency. What is left is `list_chat_author_metadata` 9.0%, `voice_channels` 2.1%, then polls, owners, and settings under 1% each: individually cheap (0.2 ms to 0.9 ms) and expensive only because the bundle runs 5.5M times. `list_chat_author_metadata` is now the one worth looking at, and it is the odd one out because it keys off the *user* set, not the room set, so it did not merge. Remaining directions:
+   - **Merge what is left.** `voice_channels` and `owner_ids_for_rooms` still key off the room set and could fold into `list_for_user_with_state`, but neither is one row per room (voice is 0-N, owners only apply to private topic rooms), so both need lateral guards to avoid making the lounge scan its 14k members. Smaller payoff than the merge already done, and more ways to get the plan wrong. Measure first.
+   - **Run the bundle less often.** Raising `CHAT_REFRESH_INTERVAL` is a one-constant change but costs badge latency, because the poll is the only writer of unread badges. It is only free if unread is incremented locally first, which introduces dual-maintenance of the unread rule. Weigh that tradeoff deliberately; it was rejected once already on those grounds.
 2. **`list_discover_public_topic_rooms`, 5.6%.** 510 ms mean and a 969 ms variant, on demand, so this is user-facing latency rather than background load: half a second to open Discover. Options unchanged from the DB Hot Queries section: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation.
-3. **The sequential session loop, no direct DB cost.** `refresh_registered_sessions` awaits one session at a time, so cycle time is N_sessions × snapshot latency and `MissedTickBehavior::Skip` hides the overrun. Harmless at 60 sessions and at 3 ms per snapshot, but it is a latent cliff at 4 figures. Cheap to fix now that each snapshot is fast.
+3. **The sequential session loop, no direct DB cost.** `refresh_registered_sessions` awaits one session at a time, so cycle time is N_sessions × snapshot latency and `MissedTickBehavior::Skip` hides the overrun. Harmless at 60 sessions, and the 2026-07-26 pipelining cut per-snapshot latency further, but it is still a latent cliff at 4 figures: the loop degrades silently into a continuous back-to-back cycle rather than erroring, and unread badges just get slower. Cheap to fix now that each snapshot is fast.
 4. **Feed fan-outs, 0.5%.** Fix for correctness, not capacity: three identical O(users) loops that overflow their broadcast channels and drop events in every live session. Pain Point 6.
 5. **`UPDATE rss_entries`, 0.32%.** 982k writes because the poller updates every entry on every pass whether or not the content changed. A content compare before the write would remove nearly all of it. Small, but it is pure waste and the fix is local.
 
