@@ -1194,10 +1194,16 @@ impl ChatService {
             ChatRoom::owner_ids_for_rooms(&client, &private_room_ids),
         );
         let voice_channels_by_room_id = voice_channels_by_room_id?;
-        let active_polls = active_polls.unwrap_or_else(|error| {
-            tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
-            HashMap::new()
-        });
+        // The only failure in this snapshot that is not fatal: a room's poll
+        // is decoration, so a poll read that fails costs the poll, not the
+        // chat. Every other arm propagates.
+        let active_polls = match active_polls {
+            Ok(polls) => polls,
+            Err(error) => {
+                tracing::warn!(error = ?error, user_id = %user_id, "failed to load active chat polls");
+                HashMap::new()
+            }
+        };
         let author_metadata = author_metadata?;
         let room_owner_ids = room_owner_ids?;
 
