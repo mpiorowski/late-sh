@@ -312,7 +312,7 @@ pub struct SessionConfig {
 
     /// Display config
     pub initial_theme_id: String,
-    /// Initial audio source for the paired browser, loaded from
+    /// Initial audio source for the paired client, loaded from
     /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
     /// persists the new value.
     pub initial_audio_source: late_core::models::user::AudioSource,
@@ -381,7 +381,9 @@ pub struct App {
     pub(super) shared: SharedBuffer,
 
     /// Session / connection
-    pub(super) connect_url: String,
+    /// Public site base (`LATE_WEB_URL`), no trailing slash. Profile links and
+    /// the listen-page URL in the guide are built from it.
+    pub(super) web_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
     pub(super) session_token: String,
@@ -473,10 +475,10 @@ pub struct App {
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
-    /// the DB, and pushes `SetPlaybackSource` to browsers and YouTube-capable
-    /// CLI control-plane clients. On browser pair-up the current value is
-    /// replayed so a refresh lands in the right mode.
-    pub(crate) paired_browser_source: late_core::models::user::AudioSource,
+    /// the DB, and pushes `SetPlaybackSource` to the paired CLI and its
+    /// webview helper. On pair-up the current value is replayed so a
+    /// reconnect lands in the right mode.
+    pub(crate) paired_source: late_core::models::user::AudioSource,
     pub(crate) selected_icecast_stream: late_core::models::user::IcecastStream,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
 
@@ -701,6 +703,14 @@ pub struct App {
     /// username converts to `@mention` insertion instead. Resolved from
     /// `App::tick`.
     pub(crate) pending_chat_profile_open: Option<super::input::PendingChatProfileOpen>,
+}
+
+/// Public listen page for a site base url. Static and shareable: it carries no
+/// session token, because it follows the same global streams and YouTube queue
+/// for everyone. Takes the base rather than `&App` so callers can build it
+/// while other fields of `App` are mutably borrowed.
+pub(super) fn listen_url(web_url: &str) -> String {
+    format!("{web_url}/listen")
 }
 
 impl App {
@@ -1148,7 +1158,7 @@ impl App {
             vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
-            connect_url: format!("{}/{}", config.web_url, config.session_token),
+            web_url: config.web_url.trim_end_matches('/').to_string(),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
             session_token: config.session_token.clone(),
@@ -1221,7 +1231,7 @@ impl App {
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
             ),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
-            paired_browser_source: config.initial_audio_source,
+            paired_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
             music_prefix_armed: false,
@@ -2286,27 +2296,20 @@ impl App {
     /// persisted choice plus the current surface policy: browser Icecast only
     /// when no CLI is paired, and embedded CLI webview only when no real
     /// browser is paired.
-    pub fn replay_paired_browser_source(&self) {
-        let Some(registry) = self.paired_client_registry.as_ref() else {
-            return;
-        };
-        registry.broadcast_playback_source_for_token(&self.session_token);
-    }
-
     /// Flip the per-user audio source preference. Persisted server-side; the
     /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
-    /// paired entry (CLI and browser) for this user. Works whether a browser
-    /// is paired or not — the preference is meaningful even with only a CLI,
-    /// because the CLI gates its Icecast decoder on the received source.
+    /// paired entry for this user. Meaningful with only a CLI paired: the CLI
+    /// gates its direct-stream decoder on the received source and starts or
+    /// stops its webview helper for YouTube.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
         // Dock order in the sidebar music stage: radio → youtube → icecast.
-        let next = match self.paired_browser_source {
+        let next = match self.paired_source {
             AudioSource::Radio => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
             AudioSource::Icecast => AudioSource::Radio,
         };
-        self.paired_browser_source = next;
+        self.paired_source = next;
         if let Some(active_users) = &self.active_users
             && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
         {

@@ -42,7 +42,7 @@ Application deployments:
 Public endpoints still required:
 
 - `late.sh`: public web and browser `/stream`
-- `api.late.sh`: browser/CLI pair WebSocket and API
+- `api.late.sh`: CLI/webview pair WebSocket and API
 - `audio.late.sh`: direct public Icecast path, especially for CLI/local audio
 - `ssh late.sh`: public SSH ingress
 
@@ -106,7 +106,7 @@ Current `service-ssh` has in-memory ownership for:
 - artboard state
 - activity fanout
 
-Scaling `service-ssh` to multiple replicas without routing browser pair WebSockets to the owning pod will break pairing. If SSH lands on pod A and `/api/ws/pair` lands on pod B, pod B does not know that token/session.
+Scaling `service-ssh` to multiple replicas without routing pair WebSockets to the owning pod will break pairing. If SSH lands on pod A and `/api/ws/pair` lands on pod B, pod B does not know that token/session.
 
 The pair-WS surface itself was hardened 2026-07-22 (per-token cap of 8 sockets, per-IP concurrent-socket cap, bounded control queues with drop-on-full), so it is no longer a memory amplifier, but none of that changes the ownership problem above.
 

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-27 (Lateania gained a graphical overhead world map on `m`: a derived, deterministic coordinate field per room, biome colouring, fog of war, boss/tameable markers, and a clamped pan/level camera; the text atlas is now its small-terminal fallback)
+- Last updated: 2026-07-27 (browser pairing removed: `late-web/pages/connect`, `LATE_SSH_PUBLIC_URL`, `LATE_ALLOWED_ORIGINS` and the CORS layer are gone, replaced by the public token-less `late.sh/listen` page over the new memory-only `GET /api/listen`; the pair WS is now CLI + webview helper only)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -39,9 +39,9 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 |---|---|---|
 | `CONTEXT.md` | Any task in this repo; cross-domain behavior; global contracts. | Repo architecture, test policy, service contracts, data model, telemetry, runbook, global screens/keybindings, and high-risk invariants. |
 | `late-cli/CONTEXT.md` | The `late` companion binary, local audio playback, SSH launch behavior, token acquisition, pairing, installers, or CLI env/flags. | CLI architecture, native/OpenSSH/old SSH modes, identity generation, token handshake, audio decode/output/analyzer, paired-client WebSocket behavior, logging, scripts, release artifacts, and fragile CLI invariants. |
-| `late-web/CONTEXT.md` | Public web pages, browser pairing/gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, browser WebSocket protocols, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
-| `late-ssh/src/app/audio/CONTEXT.md` | Icecast, now-playing, YouTube queue, Music Booth, visualizer, `/audio` commands, paired audio source switching, or browser/CLI audio arbitration. | AudioService state machine, queue persistence, server-owned playback timers, fallback behavior, pair-WS audio messages, source arbitration policy, skip-vote eligibility, and cross-crate audio touchpoints in CLI/Web. |
-| `late-ssh/src/app/voice/CONTEXT.md` | LiveKit voice rooms, TUI voice controls/status, CLI voice media, `/voice` browser listen-only, or pair-WS voice messages. | VoiceService token/snapshot ownership, LiveKit grants, pair-WS voice protocol, native CLI voice runtime, browser listen-only behavior, pruning/heartbeat invariants, and current voice UX gaps. |
+| `late-web/CONTEXT.md` | Public web pages, the `/listen` page, gallery/profiles, web route tests, templates/assets, web config, or `/stream`. | Axum app shape, routes, Askama templates, static assets, the listen-state proxy, audio stream proxy, gallery/profile DB contracts, web telemetry, and web-specific test placement. |
+| `late-ssh/src/app/audio/CONTEXT.md` | Icecast, now-playing, YouTube queue, Music Booth, visualizer, `/audio` commands, paired audio source switching, or the public `/listen` snapshot. | AudioService state machine, queue persistence, server-owned playback timers, fallback behavior, pair-WS audio messages, source-selection policy, skip-vote eligibility, and cross-crate audio touchpoints in CLI/Web. |
+| `late-ssh/src/app/voice/CONTEXT.md` | LiveKit voice rooms, TUI voice controls/status, CLI voice media, or pair-WS voice messages. | VoiceService token/snapshot ownership, LiveKit grants, pair-WS voice protocol, native CLI voice runtime, pruning/heartbeat invariants, and current voice UX gaps. |
 | `late-ssh/src/app/hub/CONTEXT.md` | `Ctrl+G` Hub, Leaderboard, Quests, Shop/marketplace, pet/aquarium unlocks, chip economy presentation, or events surface work. | Hub tab ownership, leaderboard refresh, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps for future events/shop work. |
 | `late-ssh/src/app/bonsai_v2/CONTEXT.md` | Dynamic Bonsai branch graph, care modal, sidebar preview, growth simulation, badge scoring, or `dynamic_bonsai` shop selection. | Dynamic Bonsai persistence, renderers, input model, growth/death rules, chat badge scoring, classic Bonsai compatibility bridge, and prototype invariants. |
 | `late-ssh/src/app/lobby/CONTEXT.md` | The Lobby: the `Ctrl+Q` modal, `LobbyState`/`LobbyEntry`, or the backtick workspace cycle spanning daily boards, house tables, and unfinished Arcade dailies. | Lobby domain overview and the modal/workspace contracts; routes onward to `lobby/daily/CONTEXT.md` and `lobby/house/CONTEXT.md` for the two game domains. |
@@ -79,7 +79,7 @@ Routing rules for future LLM agents:
 The system is a Rust workspace with four main crates (`late-cli`, `late-core`, `late-ssh`, `late-web`) — plus `late-webview` (the CLI's embedded YouTube helper, split out so `late` never links WebKitGTK on Linux) and the standalone door hosts (`late-brogue`, `late-dcss`, `late-dopewars`, `late-nethack`, `late-usurper`) — backed by PostgreSQL, Icecast audio streaming, Liquidsoap playlist management, and LiveKit voice media.
 
 - **Primary entry points:** SSH server (russh on port 2222), optional embedded IRC server (plaintext 6667 or TLS 6697), HTTP API (axum on port 4000), Web server (axum on port 3000), LiveKit RTC (`rtc.<domain>`)
-- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend, paired browser/CLI audio control plus visualizer, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), the Usurper door game (the real upstream LORD-era BBS door run on a PTY in its own `late-usurper` host, one shared persistent world), the Brogue door game (the real upstream Brogue CE run on a PTY in its own `late-brogue` host, per-player save directories), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off/auto mode, the Home room-list rail (same three modes), and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; **the two rail rows are per device, not per account** (see `Per-device home rails` below); when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
+- **Main responsibilities:** Multi-screen TUI over SSH (Clubhouse `0`, Home/Dashboard `1`, The Arcade `2`, Games `3`, Artboard `4`, Directory `5`; top-level pages are selected by their number key or cycled with `Tab`/`Shift+Tab`. The Clubhouse `0` is the landing screen for every session: the walkable multiplayer Late Lounge tavern (see `late-ssh/src/app/clubhouse/CONTEXT.md`). The Games hub at page `3` is the dedicated landing/launcher for the Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, Rebels, and dopewars door games: a selector row of game cards with the selected game's full landing rendered below it (arrows/h/l switch, Enter launches). These games are no longer top-level tabs but live-game screens reached only through the hub), optional IRC access to late.sh chat, public web frontend including the token-less late.sh/listen page, paired CLI audio control, LiveKit-backed voice room control for native `late` CLI users, real-time chat and chat-adjacent surfaces inside Home including room-scoped `/poll` polls, private per-user RSS/Atom inboxes that can be shared into News, link/YouTube sharing with AI summaries/ASCII thumbnails, Arcade games, the `Ctrl+Q` Lobby (daily correspondence matches + fixed house tables), a shared multi-user ASCII Artboard, Lateania's persistent shared world, the Rebels in the Sky SSH door-game proxy, the NetHack door game (real upstream NetHack run locally on a PTY), the Green Dragon door game (a native, in-process LORD-style remake of LoGD with per-user persistent characters), the dopewars door game (real upstream dopewars run locally on a PTY as an in-process child of late-ssh), the Usurper door game (the real upstream LORD-era BBS door run on a PTY in its own `late-usurper` host, one shared persistent world), the Brogue door game (the real upstream Brogue CE run on a PTY in its own `late-brogue` host, per-player save directories), a global Hub domain for leaderboard/quests/shop/events surfaces including repeatable Chat/Companion consumables and permanent monthly leaderboard profile awards, a Shop-unlocked ambient Aquarium tray shown only in the Home Lounge view, toggled with the `/aquarium` composer command (alias `/aq`; state persists per user), and one structured global Activity stream for user actions. The complete local context routing map is in `Context Directory (Read-First Routing)` above. Configurable Home layout surfaces: the global right sidebar (a pinned two-row core block — online human count + clock, then connected friends or the AFK indicator — plus a user-ordered, individually toggleable list of visualizer, audio playback, daily games, and bonsai panels; the bonsai panel is the one flexible panel and absorbs leftover rows, its tree scaling to the space) shown on Home and Arcade only via a master on/off/auto mode, the Home room-list rail (same three modes), and the pet strip above the Lounge chat composer (Pet Companion owners only, `Pet companion strip` tweak or the `/pet` command); these live under `Ctrl+O` settings (Tweaks → Appearance), where the sidebar panel editor reorders panels and toggles each on/off; **the two rail rows are per device, not per account** (see `Per-device home rails` below); when vertical space runs short the sidebar drops panels by a fixed shrink priority (visualizer first, then bonsai, daily; the music stage is the last panel standing) independent of the user's display order. The former sidebar Activity panel is retired: stale `"activity"` entries in stored panel lists are dropped on read, and the public feed ships to #lounge instead (see the `Activity` service row). Pet care runs through the strip: click the bowls/pet or use `/feed`, `/water`; locked users are dropped straight into the Hub Shop tab (`Ctrl+G` on its own opens Hub on Quests). Global `q` opens quit confirm; pressing `q` again exits and `Esc` dismisses it.
 - **Highest-risk areas:** SSH render loop backpressure, connection limiting, chat sync consistency, paired-client WS routing/state drift
 
 ---
@@ -178,7 +178,7 @@ flowchart LR
     App --> SR
     App --> PCR
 
-    Browser["Browser<br/>/connect/{token}"] <-->|"WS viz + control + state"| API
+    Browser["Browser<br/>/listen (public)"] -->|"polls /listen/state"| WEB
     Browser -->|"audio stream"| IC
     CLI["late CLI<br/>local audio"] <-->|"WS viz + control + state"| API
     Terminal["User Terminal<br/>(SSH client)"] <-->|"SSH channel"| SSH
@@ -217,7 +217,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    B["Browser pair"] -->|"client_state / player_state"| WS["WebSocket<br/>/api/ws/pair"]
+    B["Webview helper"] -->|"client_state / player_state"| WS["WebSocket<br/>/api/ws/pair"]
     C["CLI pair"] -->|"viz + client_state"| WS
     WS -->|"SessionMessage::Viz"| SR["SessionRegistry"]
     WS -->|"client state"| PCR["PairedClientRegistry"]
@@ -365,7 +365,7 @@ The stored-permit regression is locked down by `ssh::tests::stale_permit_does_no
 ### 2.7 Audio infrastructure
 
 `late-ssh/src/app/audio/CONTEXT.md` owns the audio domain: Icecast house
-radio, browser/CLI source arbitration, the YouTube queue + booth, visualizer
+radio, per-user source selection, the YouTube queue + booth, visualizer
 behavior, voice-room audio boundary notes, parked work, and deferred backlog.
 
 ```mermaid
@@ -373,7 +373,7 @@ flowchart LR
     LOCAL["Local .m3u<br/>CC0/CC-BY music"] -->|"playlist"| LS
     LS["Liquidsoap"] -->|"MP3 128kbps"| IC["Icecast<br/>port 8000"]
     IC -->|"/stream/chill<br/>/stream/classical"| WEBSTREAM["late-web<br/>/stream proxy"]
-    WEBSTREAM -->|"stable MP3 stream"| B["Browser / CLI audio"]
+    WEBSTREAM -->|"stable MP3 stream"| B["/listen page + CLI audio"]
     IC -->|"/status-json.xsl"| FETCH["NowPlaying fetcher<br/>(10s poll)"]
     FETCH -->|"watch channel"| APP["App sidebar"]
 ```
@@ -467,7 +467,7 @@ The Lateania source domain is `late-ssh/src/app/door/lateania`, with top-level s
 
 Root-level contracts:
 - `late-cli` is a standalone crate with no `late-core` dependency.
-- Browser and CLI share the paired-client WebSocket schema, so the TUI can show client kind plus live mute/volume state.
+- The CLI and its webview helper share the paired-client WebSocket schema, so the TUI can show client kind plus live mute/volume state.
 - Native SSH is the default launcher path. `--ssh-mode old` remains the legacy OpenSSH-through-PTY compatibility path, and `--ssh-mode openssh` is the OpenSSH-managed path for hardware-backed keys.
 - Native and OpenSSH modes require server support for the `late-cli-token-v1` SSH exec handshake.
 - Detailed CLI architecture, flags/env vars, audio pipeline, installer behavior, SSH modes, and fragile invariants live in `late-cli/CONTEXT.md`.
@@ -557,12 +557,13 @@ late-sh/
 - `GET /api/now-playing?mount={chill|classical}` → `NowPlayingResponse { current_track, listeners_count, started_at_ts }` (`mount` defaults to `chill`)
 - `GET /api/radio-meta` → `{ "<station>": { artist, title }, ... }` - live Nightride station metadata; empty map while the SSE feed is down
 - `GET /api/status` → `StatusResponse { online, message, version }`
-- `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired browser/CLI control, browser player reports, and CLI visualizer frames
+- `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired CLI and webview-helper control plus helper player reports
+- `GET /api/listen` - public, unauthenticated, memory-only snapshot of both Icecast mounts, the Nightride stations, and the YouTube queue; backs late-web's `/listen` page
 
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
 - `{ "event": "viz", "position_ms": u64, "bands": [f32; 8], "rms": f32 }`
-- `{ "event": "client_state", "client_kind": "browser" | "cli", "ssh_mode"?: "native" | "openssh" | "old", "platform"?: "android" | "linux" | "macos" | "windows", "muted": bool, "volume_percent": u8 }`
+- `{ "event": "client_state", "client_kind": "webview" | "cli", "ssh_mode"?: "native" | "openssh" | "old", "platform"?: "android" | "linux" | "macos" | "windows", "muted": bool, "volume_percent": u8 }` (helpers from older releases send `client_kind: "browser"` and an `ssh_mode` of `"webview"`; both still deserialize, see `client_state_test.rs`)
 
 **WS payloads (server → client):**
 - `{ "event": "toggle_mute" }`
@@ -751,7 +752,7 @@ Roadmap ideas:
 1. Nail one addictive loop: join -> listen -> chat -> vote -> return tomorrow.
 2. Pick a clear ICP first: solo devs at night vs remote teams during work hours.
 3. ~~Add one "reason to come back" mechanic~~ ✓ Daily puzzle wins, chips, and leaderboard. Next: daily room rituals, timed events.
-4. Keep friction near zero: ssh late.sh + optional browser pairing only when wanted.
+4. Keep friction near zero: ssh late.sh, with late.sh/listen for anyone who only wants the audio.
 5. Measure retention early: D1/D7 return, session length, messages/user, votes/session.
 
 ### Arcade And Game Roadmap [VOLATILE]
@@ -853,8 +854,8 @@ Currently the SSH app assumes a single process. These in-memory structures would
 
 **Paired client control + visualizer:**
 1. Trigger: SSH PTY request creates a session token plus the inbound `SessionRegistry` route.
-2. Processing: Browser or CLI connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
-3. Side effects: Browser pairs send `client_state`/`player_state`; CLI pairs send `client_state` plus real `viz` frames. Viz frames route through `SessionRegistry` to `App.tick()`, while `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
+2. Processing: The CLI or its webview helper connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
+3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
 5. Failure: If the paired client disconnects, paired state disappears. If the CLI viz source disconnects or goes silent, visualizer bars decay (rms * 0.96 per tick). If SSH disconnects, the session token unregisters on drop.
 
@@ -870,10 +871,10 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 - **SSH data timeout:** `handle.data` has 50ms timeout to avoid blocking render loop on backpressure
 - **SSH send failure is terminal for render task:** if `handle.data` returns `Err` (closed/broken channel), `render_once` now returns an error so the render loop stops and closes channel once, instead of logging warnings every 66ms forever
 - **All services are singletons** shared across SSH sessions. `ProfileService` snapshots are per-user channels keyed by `user_id`; events still require `user_id` filtering in UI state. Profile snapshots include the `Profile` projection plus a read-only `bonsai_trees` row when one exists, so viewing a profile can render bonsai without creating/mutating another user's tree. Per-user background refresh tasks are spawned on session init and aborted on `Drop`, and profile snapshot channels are pruned when receivers go away.
-- **Browser audio pairing status must not be stomped by WS:** WS `onclose`/`onerror` must check `status !== 'playing'` before setting `'disconnected'`, otherwise a WS drop kills the "streaming" UI while audio is still playing fine
-- **Paired-client control routing is latest-wins per token:** `PairedClientRegistry` stores one outbound sender/state entry per session token. If multiple browser/CLI clients pair against the same token, the most recent registration owns control/state until it disconnects.
-- **Web/CLI Audio and WS Resiliency:** Both paired clients use bounded retry loops for WebSocket disconnections and audio stream failures. The browser connect page uses an `HTMLAudioElement` with cache-busting `?t=` URLs and no Web Audio analyzer; CLI stream/audio specifics live in `late-cli/CONTEXT.md`.
-- **CLI owns real viz frames today:** Browser pairing leaves `viz` as a compatibility payload but the current connect page does not create a Web Audio analyzer or send analyzer frames. CLI sends `{ event: "viz", position_ms, bands, rms }` from an in-process Rust FFT over audible playback samples; browser-only playback uses the server-side procedural visualizer path documented in `late-ssh/src/app/audio/CONTEXT.md`.
+- **Paired-client control routing is latest-wins per token:** `PairedClientRegistry` stores one outbound sender/state entry per session token. If multiple clients pair against the same token, the most recent registration owns control/state until it disconnects.
+- **The `/listen` page is stateless and never pairs:** it polls `/listen/state` on an interval and holds no token, no WebSocket, and no per-user server state. Nothing there can be broken by a pairing regression, and nothing there may grow a per-viewer connection.
+- **CLI Audio and WS Resiliency:** The paired CLI uses bounded retry loops for WebSocket disconnections and audio stream failures; stream/audio specifics live in `late-cli/CONTEXT.md`.
+- **Nothing analyses audio:** `viz` is an accepted-but-unused compatibility payload. The sidebar equalizer is `viz::render_eq`, synthesized from the wall tick and reacting to no audio at all; see `late-ssh/src/app/audio/CONTEXT.md` §10.
 - **CLI invariants live locally:** SSH modes, token handshakes, identity generation, local audio pipeline, terminal resize forwarding, and pre-token input gating are documented in `late-cli/CONTEXT.md`.
 - **Activity feed broadcast timing:** `broadcast::Receiver` only sees messages sent AFTER subscription. The receiver must be created in `auth_publickey` (before login event is sent), stored on `ClientHandler`, then `.take()`'d into `SessionConfig` in `pty_request`. Creating the receiver later misses the user's own login event.
 - **Leaderboard refresh is async:** `LeaderboardService` refreshes every 5 minutes. Activity feed callouts are immediate, but leaderboard surfaces can lag until the next refresh. The session chip balance does NOT ride this loop: chip writes notify `chip_user_changed` and `ShopService` pushes the new balance per user, so balances stay live. Arcade-specific daily-win details live in `late-ssh/src/app/arcade/CONTEXT.md`.
@@ -1068,7 +1069,7 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 
 1. SSH won't connect → Check `LATE_SSH_OPEN`, connection limits/rate limits, SSH key path
 2. No audio → Check Icecast container, Liquidsoap container, `LATE_AUDIO_URL`. If streams are down, verify fallback music exists on the PVC (see below)
-3. Visualizer not updating → Check browser WS connection, token mismatch, SessionRegistry
+3. Paired controls not reaching the client → Check the pair WS connection, token mismatch, SessionRegistry
 4. Audio source not switching → Check pair WebSocket connectivity and the persisted user `audio_source`/stream settings
 5. Chat not syncing → Check DB connectivity, 10s refresh cadence, snapshot/event channels
 6. Now-playing shows "Unknown" → Check Icecast `/status-json.xsl`, metadata format: `"Artist - Title | Duration"` (duration is absent for internet streams — this is expected)
@@ -1183,7 +1184,7 @@ Toast notification is hidden by default (0 rows). When active, it appears as a 3
 
 ### Global guide (`?`) [STABLE]
 
-One global overlay owns general app help plus the former Pair, terminal FAQ, and Hub Guide content. `?` opens it globally when not composing, except Artboard and Pinstar keep their local page help. The default/first tab is Pair, so the session-specific browser pairing link and QR are always one key away from Home/dashboard hints.
+One global overlay owns general app help plus the former Pair, terminal FAQ, and Hub Guide content. `?` opens it globally when not composing, except Artboard and Pinstar keep their local page help. The default/first tab is Pair, which steers to the CLI first and carries the static late.sh/listen link and QR for listening without it.
 
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.

@@ -282,9 +282,6 @@ impl App {
                         "{message}: #{slug}"
                     )));
                 }
-                SessionMessage::BrowserPaired => {
-                    self.replay_paired_browser_source();
-                }
                 SessionMessage::UltimateCast {
                     ultimate_id,
                     seed,
@@ -1020,7 +1017,7 @@ impl App {
                 icecast_now_playing: icecast_now_playing.as_ref(),
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
-                source: self.paired_browser_source,
+                source: self.paired_source,
                 queue: Some(&queue),
             };
             changed |= crate::app::common::sidebar::sidebar_marquee_scrolling(&inputs);

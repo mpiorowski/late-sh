@@ -45,6 +45,23 @@ fn radio_station_url(station: RadioStation) -> &'static str {
     }
 }
 
+/// Public stream URL for a Nightride station keyed the way the `/meta` feed
+/// keys it, or None for a station late.sh does not offer. The feed carries
+/// more stations than we surface (darksynth, horrorsynth, ebsm), so this must
+/// stay strict: `RadioStation::from_settings_str` defaults unknown input to
+/// Chillsynth, which here would hand out the wrong stream.
+pub fn radio_station_url_by_key(key: &str) -> Option<&'static str> {
+    let station = match key {
+        "chillsynth" => RadioStation::Chillsynth,
+        "nightride" => RadioStation::Nightride,
+        "datawave" => RadioStation::Datawave,
+        "spacesynth" => RadioStation::Spacesynth,
+        "rektify" => RadioStation::Ambient,
+        _ => return None,
+    };
+    Some(radio_station_url(station))
+}
+
 /// Display labels for selector rows and selection banners. Settings keys
 /// (`as_str`) and display labels currently coincide, but they are separate
 /// concerns: renaming a label must not migrate persisted settings.
@@ -81,5 +98,28 @@ pub fn radio_station_by_index(index: u8) -> Option<RadioStation> {
         4 => Some(RadioStation::Spacesynth),
         5 => Some(RadioStation::Ambient),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn radio_station_url_by_key_is_strict_about_unknown_stations() {
+        assert_eq!(
+            radio_station_url_by_key("chillsynth"),
+            Some("https://stream.nightride.fm/chillsynth.mp3")
+        );
+        // The `ambient` label persists and keys as `rektify`.
+        assert_eq!(
+            radio_station_url_by_key("rektify"),
+            Some("https://stream.nightride.fm/rektify.mp3")
+        );
+        // Stations the /meta feed carries but late.sh does not offer must
+        // drop out, not silently resolve to the Chillsynth default.
+        assert_eq!(radio_station_url_by_key("darksynth"), None);
+        assert_eq!(radio_station_url_by_key("ambient"), None);
+        assert_eq!(radio_station_url_by_key(""), None);
     }
 }

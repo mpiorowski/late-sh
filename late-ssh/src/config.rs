@@ -55,7 +55,6 @@ pub struct Config {
     pub max_conns_per_ip: usize,
     pub ssh_idle_timeout: u64,
     pub server_key_path: PathBuf,
-    pub allowed_origins: Vec<String>,
     pub frame_drop_log_every: u64,
     pub ssh_max_attempts_per_ip: usize,
     pub ssh_rate_limit_window_secs: u64,
@@ -170,7 +169,7 @@ impl Config {
         tracing::info!(
             icecast_url = %self.icecast_url,
             web_url = %self.web_url,
-            "audio: Icecast status endpoint and web pairing URL"
+            "audio: Icecast status endpoint and public web URL"
         );
         tracing::info!(
             max_global = self.max_conns_global,
@@ -352,10 +351,6 @@ impl Config {
             max_conns_per_ip: required_parse("LATE_MAX_CONNS_PER_IP")?,
             ssh_idle_timeout: required_parse("LATE_SSH_IDLE_TIMEOUT")?,
             server_key_path: PathBuf::from(required("LATE_SSH_KEY_PATH")?),
-            allowed_origins: required("LATE_ALLOWED_ORIGINS")?
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect(),
             frame_drop_log_every: required_parse("LATE_FRAME_DROP_LOG_EVERY")?,
             ssh_max_attempts_per_ip: required_parse("LATE_SSH_MAX_ATTEMPTS_PER_IP")?,
             ssh_rate_limit_window_secs: required_parse("LATE_SSH_RATE_LIMIT_WINDOW_SECS")?,

@@ -1077,7 +1077,7 @@
     {
       "type": "timeseries",
       "title": "SSH Traffic",
-      "description": "SSH connections and successful browser pairings",
+      "description": "SSH connections and successful client pairings",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"

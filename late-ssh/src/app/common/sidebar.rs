@@ -81,7 +81,7 @@ pub(crate) struct SidebarProps<'a> {
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, cycled by v+x). Picks which source
     /// owns the music stage's detail area; the dock rows stay constant.
-    pub paired_browser_source: AudioSource,
+    pub paired_source: AudioSource,
     /// Per-user Icecast stream selection (`users.settings.icecast_stream`,
     /// v+1/2 while Icecast is active). The icecast dock row shows THIS
     /// stream's now-playing track.
@@ -219,7 +219,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         now_playing: props.now_playing,
                         paired_client: props.paired_client,
                         queue: props.queue_snapshot,
-                        source: props.paired_browser_source,
+                        source: props.paired_source,
                         selected_stream: props.selected_icecast_stream,
                         selected_station: props.selected_radio_station,
                         radio_now_playing: props.radio_now_playing,

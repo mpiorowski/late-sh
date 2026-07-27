@@ -134,7 +134,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         max_conns_per_ip: 3,
         ssh_idle_timeout: 60,
         server_key_path: std::env::temp_dir().join(format!("late-ssh-test-key-{}", Uuid::now_v7())),
-        allowed_origins: vec!["http://localhost:3000".to_string()],
         frame_drop_log_every: 100,
         ssh_max_attempts_per_ip: 30,
         ssh_rate_limit_window_secs: 60,

@@ -184,10 +184,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "LATE_WEB_URL"
             value = "https://${var.DOMAIN}"
           }
-          env {
-            name  = "LATE_ALLOWED_ORIGINS"
-            value = "https://${var.DOMAIN}"
-          }
 
           # --- Door games ---
           env {

@@ -6,12 +6,12 @@ use uuid::Uuid;
 
 use crate::authz::Permissions;
 
-// WebSocket → SSH session routing for browser-sent visualization data and
+// WebSocket → SSH session routing for client-sent visualization data and
 // other inbound SSH-side effects. The matching outbound channel (mute,
 // volume, clipboard request, source selection) lives in `paired_clients.rs`.
 //
 // Flow:
-//   Browser (WS) sends Heartbeat + Viz frames
+//   Paired client (WS) sends Heartbeat + Viz frames
 //     → API/WS handler looks up token
 //       → SessionRegistry sends SessionMessage over mpsc
 //         → ssh.rs receives and forwards into App
@@ -48,10 +48,6 @@ pub enum SessionMessage {
         slug: String,
         message: String,
     },
-    /// A browser just attached on this session token. The SSH side responds
-    /// by pushing the user's stored audio source so a refreshed page lands
-    /// in the right mode.
-    BrowserPaired,
     UltimateCast {
         ultimate_id: String,
         seed: u64,
