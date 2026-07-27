@@ -6939,6 +6939,174 @@ pub fn is_broceliande_room(id: RoomId) -> bool {
         .contains(&id)
 }
 
+/// Where a procedurally-generated room sits inside its own generator grid.
+/// `region`/`zone` name the grid it belongs to, `(x, y)` is its cell within
+/// that `zone_w` x `zone_h` grid, and `z` is the map level (0 surface, negative
+/// underground). Rooms are numbered `base [+ zone*stride] + cell` and cells are
+/// `(cell % w, cell / w)`, so this is a pure decode of the room id. Returns
+/// `None` for hand-authored rooms (the capitals, roads, villages, housing,
+/// archipelago) which have no grid and are laid out by walking exits instead.
+/// The overhead world map uses this to place each zone as an exact,
+/// collision-free block rather than flattening the whole world onto one plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionPlacement {
+    pub region: &'static str,
+    pub zone: u32,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub zone_w: i32,
+    pub zone_h: i32,
+}
+
+pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
+    // Single-grid regions: `id = base + cell`.
+    let single = |region, base: RoomId, w: usize, h: usize, z: i32| {
+        (base..base + (w * h) as u32).contains(&id).then(|| {
+            let cell = (id - base) as i32;
+            RegionPlacement {
+                region,
+                zone: 0,
+                x: cell % w as i32,
+                y: cell / w as i32,
+                z,
+                zone_w: w as i32,
+                zone_h: h as i32,
+            }
+        })
+    };
+    if let Some(p) = single("catacombs", CATACOMBS_BASE, CATACOMBS_W, CATACOMBS_H, -1) {
+        return Some(p);
+    }
+    if let Some(p) = single("thornwood", THORNWOOD_BASE, THORNWOOD_W, THORNWOOD_H, 0) {
+        return Some(p);
+    }
+    if let Some(p) = single("caverns", CAVERNS_BASE, CAVERNS_W, CAVERNS_H, -1) {
+        return Some(p);
+    }
+
+    // Multi-zone regions: `id = base + zone*stride + cell`, stride = w*h.
+    let multi = |region, base: RoomId, w: usize, h: usize, z: i32| {
+        let stride = (w * h) as u32;
+        let off = id - base;
+        let zone = off / stride;
+        let cell = (off % stride) as i32;
+        RegionPlacement {
+            region,
+            zone,
+            x: cell % w as i32,
+            y: cell / w as i32,
+            z,
+            zone_w: w as i32,
+            zone_h: h as i32,
+        }
+    };
+    if is_frontier_room(id) {
+        return Some(multi(
+            "frontier",
+            FRONTIER_BASE,
+            FRONTIER_W as usize,
+            FRONTIER_H as usize,
+            -1,
+        ));
+    }
+    if is_reaches_room(id) {
+        return Some(multi("reaches", REACHES_BASE, REACHES_W, REACHES_H, 0));
+    }
+    if is_kaelmyr_room(id) {
+        return Some(multi("kaelmyr", KAELMYR_BASE, KAELMYR_W, KAELMYR_H, 0));
+    }
+    if is_lakes_room(id) {
+        return Some(multi("lakes", LAKES_BASE, LAKES_W, LAKES_H, 0));
+    }
+    if is_broceliande_room(id) {
+        return Some(multi(
+            "broceliande",
+            BROCELIANDE_BASE,
+            BROCELIANDE_W,
+            BROCELIANDE_H,
+            0,
+        ));
+    }
+    None
+}
+
+/// A room's map biome, for colouring the overhead world map. Derived from its
+/// region, and for the mixed continents from whether its zone was carved as a
+/// cavern (`*_zone_is_cavern`) rather than open ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Biome {
+    /// The safe home fields around Embergate.
+    Heartland,
+    /// Open overworld between the capitals.
+    Plains,
+    /// Capitals, city districts, portal villages, player housing.
+    Urban,
+    /// Greenwood: Broceliande and the Thornwood.
+    Forest,
+    /// The Sunderlakes and open water.
+    Water,
+    /// The Shattered Archipelago.
+    Islands,
+    /// Kaelmyr, the Ashen Reach: ash and volcanic ground.
+    Ash,
+    /// Underground: the catacombs, the Drowned Caverns, and any cavern zone.
+    Cavern,
+    /// The Frontier and the Sundered Reaches: broken, hostile ground.
+    Badlands,
+}
+
+pub fn biome_of(id: RoomId) -> Biome {
+    if let Some(p) = region_layout(id) {
+        let cavern_zone = match p.region {
+            "reaches" => reaches_zone_is_cavern(p.zone as usize),
+            "kaelmyr" => kaelmyr_zone_is_cavern(p.zone as usize),
+            "lakes" => lakes_zone_is_cavern(p.zone as usize),
+            "broceliande" => broceliande_zone_is_cavern(p.zone as usize),
+            _ => false,
+        };
+        if cavern_zone {
+            return Biome::Cavern;
+        }
+        return match p.region {
+            "catacombs" | "caverns" => Biome::Cavern,
+            "thornwood" | "broceliande" => Biome::Forest,
+            "kaelmyr" => Biome::Ash,
+            "lakes" => Biome::Water,
+            "reaches" | "frontier" => Biome::Badlands,
+            _ => Biome::Plains,
+        };
+    }
+    // Hand-authored rooms, by id block.
+    if super::archipelago::is_archipelago_room(id) {
+        return Biome::Islands;
+    }
+    if super::archipelago::is_village_room(id) {
+        return Biome::Urban;
+    }
+    if (super::housing::HOUSING_BASE..super::housing::HOUSING_BASE + 1000).contains(&id) {
+        return Biome::Urban;
+    }
+    if (1..600).contains(&id) {
+        return Biome::Heartland;
+    }
+    if (3000..3100).contains(&id) {
+        return Biome::Urban;
+    }
+    Biome::Plains
+}
+
+/// The atlas entry (display name, danger tier) whose id range contains `id`.
+/// Powers the region-level badge on the overhead map. Tiers are the same
+/// vocabulary the text atlas uses: "safe / low", "wilds", "endgame", "brutal",
+/// "deadly", etc.
+pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
+    REGIONS
+        .iter()
+        .find(|(_, lo, hi, _, _)| (*lo..*hi).contains(&id))
+        .map(|&(name, _, _, tier, _)| (name, tier))
+}
+
 /// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
 /// feature, the creatures that haunt it, three regular mob names, the zone
 /// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies

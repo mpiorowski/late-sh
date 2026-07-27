@@ -1768,6 +1768,66 @@ fn equipping_a_weapon_raises_attack() {
 }
 
 #[test]
+fn taking_off_gear_returns_it_to_the_pack_and_drops_its_stats() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let base = s.players[&uid(1)].attack();
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006); // greatsword +16
+    s.equip(uid(1), 1006);
+    assert!(s.players[&uid(1)].attack() > base, "worn gear counts");
+
+    s.unequip(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert!(
+        p.inventory.contains(&1006),
+        "the greatsword goes back in the pack"
+    );
+    assert!(
+        p.equipped.values().all(|id| *id != 1006),
+        "and is no longer worn"
+    );
+    assert_eq!(p.attack(), base, "its attack bonus comes off with it");
+}
+
+#[test]
+fn taking_off_gear_you_are_not_wearing_does_nothing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let before = s.players[&uid(1)].inventory.clone();
+    s.unequip(uid(1), 1006); // in the pack, not on the body
+    assert_eq!(
+        s.players[&uid(1)].inventory,
+        before,
+        "a pack item is not duplicated by taking it off"
+    );
+}
+
+#[test]
+fn worn_gear_cannot_be_sold_out_from_under_you() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Stand at Embergate's merchant so the sell path gets past the shop gate.
+    s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    s.equip(uid(1), 1006);
+    let gold = s.players[&uid(1)].gold;
+
+    s.sell(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, gold, "no silent sale of worn gear");
+    assert!(p.equipped.values().any(|id| *id == 1006), "still worn");
+    assert!(
+        p.log.iter().any(|l| l.text.contains("take off")),
+        "and the refusal says why: {:?}",
+        p.log.iter().map(|l| &l.text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));

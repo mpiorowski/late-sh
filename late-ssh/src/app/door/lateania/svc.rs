@@ -681,6 +681,14 @@ pub struct PlayerView {
     pub level: i32,
     pub gold: i64,
     pub banked_gold: i64,
+    /// The player's current room id, for centring the overhead world map.
+    /// `None` only in the empty view (no character in the world yet).
+    pub room: Option<RoomId>,
+    /// Rooms the player has visited, for the overhead map's fog of war. Shared,
+    /// not copied: `view()` clones a PlayerView on every keystroke and every
+    /// frame, and a well-travelled character's explored set runs to thousands
+    /// of rooms.
+    pub visited: Arc<HashSet<RoomId>>,
     pub room_name: String,
     pub room_desc: String,
     pub zone: String,
@@ -762,6 +770,8 @@ impl PlayerView {
     fn empty() -> Self {
         Self {
             joined: false,
+            room: None,
+            visited: Arc::new(HashSet::new()),
             classed: false,
             class_name: String::new(),
             class_key: String::new(),
@@ -884,6 +894,10 @@ impl LateaniaService {
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
             character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
         };
+        // Build the overhead map's coordinate field and POI index now. Both are
+        // lazy statics costing a world-gen apiece, and their first caller is
+        // `draw_world_map`, which runs on the render task under the app mutex.
+        tokio::task::spawn_blocking(super::worldmap::warm);
         svc.load_world_state_task();
         svc.start_tick_loop();
         svc.start_autosave_loop();
@@ -1453,6 +1467,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.equip(user_id, item_id));
     }
 
+    pub fn unequip_task(&self, user_id: Uuid, item_id: u32) {
+        self.mutate(user_id, move |s| s.unequip(user_id, item_id));
+    }
+
     pub fn use_item_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.use_item(user_id, item_id));
     }
@@ -1688,8 +1706,10 @@ struct PlayerState {
     room: RoomId,
     /// Previous room entered from, for the highlighted minimap trail.
     previous_room: Option<RoomId>,
-    /// Every room this character has stood in, for the overhead map.
-    visited: HashSet<RoomId>,
+    /// Every room this character has stood in, for the overhead map. Shared
+    /// with the published views (`Arc::make_mut` on entry), so a snapshot costs
+    /// a refcount instead of a deep copy per player.
+    visited: Arc<HashSet<RoomId>>,
     target: Option<u32>,
     /// Another player this character auto-follows when they move (set with `f`).
     following: Option<Uuid>,
@@ -2408,7 +2428,7 @@ impl WorldState {
             banked_gold: 0,
             room: start,
             previous_room: None,
-            visited: HashSet::from([start]),
+            visited: Arc::new(HashSet::from([start])),
             target: None,
             following: None,
             opening_strike: false,
@@ -2612,8 +2632,8 @@ impl WorldState {
             p.base_attack = stats.attack;
             p.room = room;
             p.previous_room = None;
-            p.visited = saved.visited.iter().copied().collect();
-            p.visited.insert(room);
+            p.visited = Arc::new(saved.visited.iter().copied().collect());
+            Arc::make_mut(&mut p.visited).insert(room);
             p.inventory = saved
                 .inventory
                 .iter()
@@ -3020,7 +3040,7 @@ impl WorldState {
             player.frontier_descent_pending = false;
             player.previous_room = Some(from);
             player.room = dest;
-            player.visited.insert(dest);
+            Arc::make_mut(&mut player.visited).insert(dest);
         }
         self.describe_room(user_id);
         self.apply_critter_perks(user_id);
@@ -3204,7 +3224,7 @@ impl WorldState {
                 if let Some(p) = self.players.get_mut(&f) {
                     p.previous_room = Some(from);
                     p.room = dest;
-                    p.visited.insert(dest);
+                    Arc::make_mut(&mut p.visited).insert(dest);
                 }
                 self.log_to(
                     f,
@@ -3253,7 +3273,7 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.previous_room = Some(p.room);
             p.room = home;
-            p.visited.insert(home);
+            Arc::make_mut(&mut p.visited).insert(home);
         }
         self.log_to(
             user_id,
@@ -3344,7 +3364,7 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.previous_room = Some(p.room);
             p.room = haven;
-            p.visited.insert(haven);
+            Arc::make_mut(&mut p.visited).insert(haven);
         }
         self.log_to(
             user_id,
@@ -3998,7 +4018,7 @@ impl WorldState {
         if let Some(p) = self.players.get_mut(&user_id) {
             p.previous_room = Some(p.room);
             p.room = dest;
-            p.visited.insert(dest);
+            Arc::make_mut(&mut p.visited).insert(dest);
         }
         self.log_to(
             user_id,
@@ -4865,7 +4885,7 @@ impl WorldState {
                 if let Some(player) = self.players.get_mut(&user_id) {
                     player.previous_room = Some(room_id);
                     player.room = dest;
-                    player.visited.insert(dest);
+                    Arc::make_mut(&mut player.visited).insert(dest);
                 }
                 self.log_to(
                     user_id,
@@ -4944,6 +4964,35 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             format!("You equip {} ({}).", it.name, slot.label()),
+        );
+    }
+
+    /// Take off a worn item and put it back in the pack. The inventory panel
+    /// lists equipped gear alongside loose gear, so Enter on a worn row has to
+    /// mean "take this off"; without this it fell through to `equip`, which
+    /// found the item missing from the pack and returned in silence.
+    fn unequip(&mut self, user_id: Uuid, item_id: u32) {
+        let Some(it) = item(item_id) else { return };
+        let Some(slot) = it.slot() else { return };
+        let worn = self
+            .players
+            .get(&user_id)
+            .map(|p| p.equipped.get(&slot) == Some(&item_id))
+            .unwrap_or(false);
+        if !worn {
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.equipped.remove(&slot);
+            p.inventory.push(item_id);
+            // Losing the gear can lower max hp, so vitals follow it down.
+            let max = p.max_hp();
+            p.hp = p.hp.min(max);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("You take off {} ({}).", it.name, slot.label()),
         );
     }
 
@@ -5070,6 +5119,21 @@ impl WorldState {
         }
         let Some(it) = item(item_id) else { return };
         let price = it.sell_price();
+        // Worn gear is listed in the inventory panel but lives in `equipped`,
+        // so say why rather than doing nothing.
+        let worn = self
+            .players
+            .get(&user_id)
+            .map(|p| p.equipped.values().any(|id| *id == item_id))
+            .unwrap_or(false);
+        if worn {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You'd have to take off {} first.", it.name),
+            );
+            return;
+        }
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);
@@ -7172,6 +7236,8 @@ impl WorldState {
                 *user_id,
                 PlayerView {
                     joined: true,
+                    room: Some(player.room),
+                    visited: Arc::clone(&player.visited),
                     classed,
                     class_name,
                     class_key,

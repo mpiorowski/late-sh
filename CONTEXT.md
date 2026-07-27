@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-26 (tavern drinks now slur what you type: outgoing public-room messages get their word interiors scrambled by drunk level, stored not rendered, with first and last letters and every handle/link/code span left intact)
+- Last updated: 2026-07-27 (Lateania gained a graphical overhead world map on `m`: a derived, deterministic coordinate field per room, biome colouring, fog of war, boss/tameable markers, and a clamped pan/level camera; the text atlas is now its small-terminal fallback)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
