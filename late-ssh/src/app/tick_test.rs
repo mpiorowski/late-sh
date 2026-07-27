@@ -94,14 +94,24 @@ async fn settle_clean(app: &mut App) {
 
 /// The dirty gate's core promise: an untouched session on a static screen
 /// settles to clean ticks (the render loop skips those frames), and a single
-/// chat send flips it back to changed once the service events land.
+/// relevant event flips it back to changed once. These cases deliberately
+/// share one settled app: they exercise one adaptive-cadence contract, and
+/// session startup is much more expensive than any individual assertion.
 #[tokio::test]
-async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
+async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
     let (_test_db, mut app) = chat_compose_app("tick-gate").await;
     hide_sidebar(&mut app);
 
     settle_clean(&mut app).await;
 
+    // A settled static session requests the idle floor, while even ignored
+    // input opens the post-input hot window without changing app state.
+    app.last_input_at = Instant::now() - Duration::from_secs(10);
+    assert_eq!(app.wake_hint(), IDLE_TICK, "settled idle session");
+    app.handle_input(b"\x02");
+    assert_eq!(app.wake_hint(), HOT_TICK, "input opens the hot window");
+
+    // A service event dirties exactly the next observable frame.
     let mut chat_events = app.chat.service.subscribe_events();
     let user_id = app.user_id;
     app.handle_input(b"hello\r");
@@ -132,38 +142,9 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
     drain_frame(&mut app);
 
     settle_clean(&mut app).await;
-}
 
-/// The adaptive loop's cadence contract: a settled idle session on a
-/// static screen asks for the idle floor, and fresh input snaps it back to
-/// the hot tick (the post-input window that keeps request -> response
-/// interactions at typing latency).
-#[tokio::test]
-async fn wake_hint_idles_when_settled_and_heats_on_input() {
-    let (_test_db, mut app) = chat_compose_app("wake-hint").await;
-    hide_sidebar(&mut app);
-
-    settle_clean(&mut app).await;
-
-    // Age the app past the post-input hot window.
-    app.last_input_at = Instant::now() - Duration::from_secs(10);
-    assert_eq!(app.wake_hint(), IDLE_TICK, "settled idle session");
-
-    app.handle_input(b"j");
-    assert_eq!(app.wake_hint(), HOT_TICK, "input opens the hot window");
-}
-
-/// The ultimate modal's cooldown label is minute-granularity and rides the
-/// per-minute global frame, so an open modal with a running cooldown
-/// settles clean (no 1Hz cadence), and the running -> ready flip pays
-/// exactly one one-shot frame.
-#[tokio::test]
-async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
-    let (_test_db, mut app) = chat_compose_app("tick-gate-ultimate").await;
-    hide_sidebar(&mut app);
-
-    settle_clean(&mut app).await;
-
+    // The ultimate cooldown label is minute-granularity. A running cooldown
+    // stays clean, and its running -> ready edge pays one one-shot frame.
     app.ultimate_state.set_cooldown(
         crate::app::ultimates::UltimateKind::Wonderland.id(),
         Duration::from_secs(600),
@@ -189,43 +170,22 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     assert!(woke, "cooldown expiry never produced a changed tick");
 
     settle_clean(&mut app).await;
-}
 
-/// Phase-1 tightening: an open, untouched modal is static between async
-/// results, so it settles clean instead of paying a frame every tick (the
-/// pre-tightening behavior). Settings is the busiest converted modal: it
-/// fires a feed-list load on open and drains profile/feed events.
-#[tokio::test]
-async fn open_settings_modal_settles_clean() {
-    let (_test_db, mut app) = chat_compose_app("tick-gate-modal").await;
-    hide_sidebar(&mut app);
-
-    settle_clean(&mut app).await;
-
+    // Settings is the busiest converted static modal: opening it fires a
+    // feed-list load and drains profile/feed events, then it must settle.
+    app.show_ultimate_modal = false;
     app.handle_input(&[0x0F]); // Ctrl+O
     assert!(app.show_settings, "ctrl+o opens the settings modal");
     drain_frame(&mut app);
 
     settle_clean(&mut app).await;
-}
 
-/// The always-on ambient wave: a session showing the sidebar never goes
-/// idle. It holds the half-rate wake tier, and ticks pay frames only on
-/// anim_half edges (~every 132ms), not on every wake.
-#[tokio::test]
-async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
-    let (_test_db, mut app) = chat_compose_app("wave-cadence").await;
-
-    // Flush startup churn (prefetches, splash, first clock render).
-    let warmup = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < warmup {
-        if app.tick() {
-            drain_frame(&mut app);
-        }
-        sleep(Duration::from_millis(5)).await;
-    }
-
-    // Age past the post-input window so the hot tier can't mask the wave's.
+    // The ambient sidebar wave holds the half-rate tier. Drive the wall-clock
+    // frame counter across known phases instead of sleeping through several
+    // real animation periods: ticks inside a half-rate period stay clean, and
+    // the boundary itself paints.
+    app.show_settings = false;
+    app.profile_state.profile.right_sidebar_mode = RightSidebarMode::On;
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
@@ -233,25 +193,26 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
         "visible sidebar holds the half-rate tier for the wave"
     );
 
-    // 500ms of dense ticks spans at least three anim_half edges; the wave
-    // must pay those frames and only those.
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut changed = 0usize;
-    let mut total = 0usize;
-    while Instant::now() < deadline {
-        total += 1;
-        if app.tick() {
-            changed += 1;
-            drain_frame(&mut app);
-        }
-        sleep(Duration::from_millis(5)).await;
-    }
+    let even_tick = app.marquee_tick + app.marquee_tick % 2;
+    set_marquee_transition(&mut app, even_tick, even_tick + 1);
     assert!(
-        changed >= 2,
-        "wave never paid an edge frame ({changed}/{total})"
+        !app.tick(),
+        "wave paid a frame between anim_half boundaries"
     );
+    set_marquee_transition(&mut app, even_tick + 1, even_tick + 2);
     assert!(
-        changed < total / 2,
-        "wave must skip between edges ({changed}/{total})"
+        app.tick(),
+        "wave did not pay a frame on an anim_half boundary"
     );
+}
+
+/// Make the next `tick` observe an exact wall-clock frame transition. Both
+/// values remain forward of the app's natural startup phase; the small offset
+/// leaves enough room that the call cannot cross into the following frame.
+fn set_marquee_transition(app: &mut App, previous: usize, next: usize) {
+    debug_assert!(next > previous);
+    app.marquee_tick = previous;
+    app.started_at =
+        Instant::now() - Duration::from_millis(next as u64 * HOT_TICK.as_millis() as u64 + 5);
+    app.last_one_hz_index = Some(next / 15);
 }
