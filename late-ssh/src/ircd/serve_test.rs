@@ -244,7 +244,7 @@ impl IrcClient {
 }
 
 #[tokio::test]
-async fn authenticates_with_token_and_forces_lounge_join() {
+async fn authenticates_valid_token_and_rejects_bad_token() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-good-user").await;
     let mut client = server.connect(&user.token).await;
@@ -270,6 +270,22 @@ async fn authenticates_with_token_and_forces_lounge_join() {
     assert!(
         names_end.contains("#lounge"),
         "forced lounge join should end NAMES for #lounge: {names_end}"
+    );
+
+    let mut bad_client = server.connect("late-irc-NOTAREALTOKEN").await;
+    let passwd = bad_client.read_until(" 464 ").await;
+    assert!(
+        passwd.contains("Invalid IRC token"),
+        "bad token should get password mismatch detail: {passwd}"
+    );
+    let error = bad_client.read_until("ERROR :Authentication failed").await;
+    assert!(
+        error.contains("Authentication failed"),
+        "bad token should close with ERROR: {error}"
+    );
+    assert!(
+        bad_client.read_line().await.is_none(),
+        "bad-token connection should close after ERROR"
     );
 }
 
@@ -381,27 +397,6 @@ async fn projects_dotted_usernames_to_irc_nicks() {
     assert!(
         ison.contains(nick) && !ison.contains(&user.username),
         "ISON should return projected nick: {ison}"
-    );
-}
-
-#[tokio::test]
-async fn rejects_bad_token_without_registering() {
-    let server = IrcTestServer::start().await;
-    let mut client = server.connect("late-irc-NOTAREALTOKEN").await;
-
-    let passwd = client.read_until(" 464 ").await;
-    assert!(
-        passwd.contains("Invalid IRC token"),
-        "bad token should get password mismatch detail: {passwd}"
-    );
-    let error = client.read_until("ERROR :Authentication failed").await;
-    assert!(
-        error.contains("Authentication failed"),
-        "bad token should close with ERROR: {error}"
-    );
-    assert!(
-        client.read_line().await.is_none(),
-        "bad-token connection should close after ERROR"
     );
 }
 

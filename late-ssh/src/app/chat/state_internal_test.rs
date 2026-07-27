@@ -1901,17 +1901,16 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
     )
 }
 
-async fn refresh_and_drain(state: &mut ChatState) {
+async fn wait_for_snapshot(state: &mut ChatState) {
     crate::test_helpers::wait_until(
         || async { state.snapshot_rx.has_changed().unwrap_or(false) },
         "chat snapshot refresh",
     )
     .await;
-    state.drain_snapshot();
 }
 
 #[tokio::test]
-async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
+async fn snapshot_and_message_updates_preserve_row_cache_contract() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
     use late_core::models::chat_room_member::ChatRoomMember;
@@ -1921,9 +1920,15 @@ async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
     let user = late_core::test_utils::create_test_user(&test_db.db, "counter_user").await;
     let author = late_core::test_utils::create_test_user(&test_db.db, "counter_author").await;
     let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let other = ChatRoom::get_or_create_public_room(&client, "counter-other")
+        .await
+        .expect("other room");
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join user");
+    ChatRoomMember::join(&client, other.id, user.id)
+        .await
+        .expect("join other");
     ChatRoomMember::join(&client, lounge.id, author.id)
         .await
         .expect("join author");
@@ -1939,69 +1944,25 @@ async fn identical_snapshot_reapply_keeps_row_cache_counters_stable() {
     .expect("first message");
 
     let mut state = counter_test_state(&test_db, user.id);
-    refresh_and_drain(&mut state).await;
+    wait_for_snapshot(&mut state).await;
+    assert!(state.drain_snapshot(), "first snapshot populates state");
     assert!(!state.rooms.is_empty(), "initial snapshot loads rooms");
     let epoch = state.context_epoch();
     let version = state.room_version(lounge.id);
+    let other_version = state.room_version(other.id);
 
     // Snapshots arrive on a fixed cadence whether or not anything changed;
-    // an identical reapply must not move any counter, or every session
-    // rebuilds its row caches every 10 seconds for nothing.
+    // an identical reapply must report clean and leave every counter stable,
+    // or every session rebuilds its row caches every 10 seconds for nothing.
     state.refresh_tx.send(()).expect("force refresh");
-    refresh_and_drain(&mut state).await;
-    assert_eq!(state.context_epoch(), epoch);
-    assert_eq!(state.room_version(lounge.id), version);
-}
-
-#[tokio::test]
-async fn identical_snapshot_reapply_reports_clean() {
-    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
-    use late_core::models::chat_room::ChatRoom;
-    use late_core::models::chat_room_member::ChatRoomMember;
-
-    let test_db = crate::test_helpers::new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = late_core::test_utils::create_test_user(&test_db.db, "clean_user").await;
-    let author = late_core::test_utils::create_test_user(&test_db.db, "clean_author").await;
-    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join user");
-    ChatRoomMember::join(&client, lounge.id, author.id)
-        .await
-        .expect("join author");
-    ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: lounge.id,
-            user_id: author.id,
-            body: "first".to_string(),
-        },
-    )
-    .await
-    .expect("first message");
-
-    let mut state = counter_test_state(&test_db, user.id);
-    crate::test_helpers::wait_until(
-        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
-        "initial chat snapshot",
-    )
-    .await;
-    assert!(state.drain_snapshot(), "first snapshot populates state");
-    assert!(!state.rooms.is_empty(), "initial snapshot loads rooms");
-
-    // An unchanged snapshot re-publish must not cost a frame: the fixed
-    // 10s refresh cadence would otherwise dirty every idle session.
-    state.refresh_tx.send(()).expect("force refresh");
-    crate::test_helpers::wait_until(
-        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
-        "identical chat snapshot refresh",
-    )
-    .await;
+    wait_for_snapshot(&mut state).await;
     assert!(
         !state.drain_snapshot(),
         "identical snapshot reapply reports clean"
     );
+    assert_eq!(state.context_epoch(), epoch);
+    assert_eq!(state.room_version(lounge.id), version);
+    assert_eq!(state.room_version(other.id), other_version);
 
     // A snapshot carrying a new message must still dirty the frame.
     ChatMessage::create(
@@ -2015,38 +1976,11 @@ async fn identical_snapshot_reapply_reports_clean() {
     .await
     .expect("second message");
     state.refresh_tx.send(()).expect("force refresh");
-    crate::test_helpers::wait_until(
-        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
-        "chat snapshot with new message",
-    )
-    .await;
+    wait_for_snapshot(&mut state).await;
     assert!(
         state.drain_snapshot(),
         "snapshot with a new message reports changed"
     );
-}
-
-#[tokio::test]
-async fn push_message_bumps_only_its_room_version() {
-    use late_core::models::chat_room::ChatRoom;
-    use late_core::models::chat_room_member::ChatRoomMember;
-
-    let test_db = crate::test_helpers::new_test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = late_core::test_utils::create_test_user(&test_db.db, "bump_user").await;
-    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
-    let other = ChatRoom::get_or_create_public_room(&client, "bump-other")
-        .await
-        .expect("other room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge");
-    ChatRoomMember::join(&client, other.id, user.id)
-        .await
-        .expect("join other");
-
-    let mut state = counter_test_state(&test_db, user.id);
-    refresh_and_drain(&mut state).await;
     let lounge_version = state.room_version(lounge.id);
     let other_version = state.room_version(other.id);
 
