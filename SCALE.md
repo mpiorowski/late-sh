@@ -81,7 +81,7 @@ The render-cost program (see its own section below) removed both the fixed tick 
 - A dirty gate skips `terminal.draw()` entirely on clean frames; an idle session with the sidebar hidden settles to about 1 render/min.
 - The fixed 66 ms interval is replaced by an adaptive wake deadline (66 ms hot to 500 ms idle floor); an idle session costs 2 cheap channel-drain ticks/sec instead of 15 full renders/sec.
 - The per-frame constant factors from the 2026-07-22 audit are fixed (run-length clubhouse spans instead of per-cell `String`s, 1 Hz presence cache instead of a per-render `active_users` lock).
-- The floor by product decision: a session with the right sidebar visible paints the ambient equalizer at ~7.5 fps and never settles fully clean.
+- The floor by product decision: a session with the right sidebar visible paints at ~7.5 fps and never settles fully clean. Two panels hold that edge: the bonsai sway (always) and the ambient equalizer (only while a client is paired and unmuted).
 
 The memory failure mode is also closed: the 2026-07-22 OOM (full writeup in CONTEXT.md §10.5) was frames rendered into russh's uncapped per-channel output queue for clients that had stopped reading. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
 
@@ -92,7 +92,7 @@ Measured in prod 2026-07-24 (v0.41.0, single `service-ssh` pod, 60 live sessions
 - Render loop: about 5.3 draws/session/sec, **~20% clean-skip ratio**. Sessions sit in the `ANIM_HALF_TICK` (~7.5 fps) tier, not the 500 ms idle floor, because almost everyone keeps the right sidebar visible and the ambient eq paints there. The documented "1 render/min idle" case is real but rare in the wild.
 - Stall guard never fired (`late_ssh_render_stall_*` has no series); 0 frame drops on this pod.
 
-Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 sessions on the current shared node and about 300 on a dedicated 8-core node** (memory ceiling is ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. The named knob if the eq reads expensive: move it to the quarter edge (~3.8 fps), which roughly doubles the ceiling again, not reintroducing audio-state gating.
+Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 sessions on the current shared node and about 300 on a dedicated 8-core node** (memory ceiling is ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. The named knob if this reads expensive: move both the eq and the sway to the quarter edge (~3.8 fps), which roughly doubles the ceiling again. Not gating the render edge on audio state: the eq's *content* is now pairing-aware (`EqState`), but the `anim_half` edge itself must stay unconditional while the bonsai sway rides it.
 
 ### 2. `service-ssh` cannot safely scale horizontally yet
 
@@ -243,7 +243,9 @@ Consolidated from RENDER_COST.md (deleted). The canonical description of the gat
 - **Phase 1 tightening + domain sweep (2026-07-22/23):** every domain state exposes `tick() -> bool` under the dirty contract ("rule of three", CONTEXT.md §2.6): chat snapshot drains report real change via full compares, modals are event-driven, house tables and door games report their watch peeks and go quiet between rounds, the ultimate cooldown became minute-granularity riding the per-minute global frame. The FFT audio visualizer was replaced by a stateless synthetic ambient equalizer (`viz::render_eq`), so no audio state drives rendering at all.
 - **Phase 2, adaptive world tick (2026-07-23):** the fixed 66 ms interval is gone. Each render pass returns `App::wake_hint() -> Duration` and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Tiers (`app/tick.rs` consts): `HOT_TICK` 66 ms (splash, 2 s post-input window, active ultimate effect, house tables, open arcade game, bonsai modals), `ANIM_HALF_TICK` 132 ms (Clubhouse, visible sidebar, pet), `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces), `IDLE_TICK` 500 ms floor. Floor ticks only drain channels; worst-case latency for an unprompted event while idle is one floor interval. Enablers: `marquee_tick` is wall-clock-derived, every frame edge is a period-index compare, and bonsai passive growth was removed entirely (product decision) so no wall-time accumulator depends on tick cadence.
 
-Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sidebar-visible session holds ~7.5 fps (about 37 draws per 5 s) by product decision: the ambient eq is always on. The knob if that reads expensive in prod is moving the eq to the quarter edge, not reintroducing audio-state gating.
+Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sidebar-visible session holds ~7.5 fps (about 37 draws per 5 s) by product decision: the bonsai sway animates unconditionally, and the ambient eq animates while a client is paired and unmuted.
+
+Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and would freeze the bonsai sway for the plain-`ssh` majority. A correct gate is `sidebar_visible && (eq_animating || bonsai_panel_enabled)`, and since Bonsai ships enabled by default, it would buy almost nothing. The real knob if this reads expensive in prod is moving both to the quarter edge.
 
 ### Design rules (do not violate)
 

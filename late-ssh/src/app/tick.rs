@@ -983,11 +983,15 @@ impl App {
         }
 
         let sidebar_visible = self.right_sidebar_visible();
-        // Ambient wave + bonsai sway: both are stateless, derived from the
-        // wall clock at draw time (viz::render_wave, the bonsai sway sines),
+        // Ambient equalizer + bonsai sway: both are stateless, derived from
+        // the wall clock at draw time (viz::render_eq, the bonsai sway sines),
         // so there is nothing to advance here — the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
-        // sidebar carries the wave and both bonsai panels; the modals sway).
+        // sidebar carries the eq strip and both bonsai panels; the modals
+        // sway). Deliberately NOT narrowed to sessions whose eq is actually
+        // animating: the bonsai sway holds this edge on its own, and Bonsai
+        // is enabled by default. An unpaired session repaints a static eq
+        // strip, which the frame diff then drops.
         changed |=
             anim_half && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
 

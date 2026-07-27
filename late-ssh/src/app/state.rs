@@ -2291,11 +2291,6 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired entries. Called
-    /// when a browser registers so every playback surface reflects the
-    /// persisted choice plus the current surface policy: browser Icecast only
-    /// when no CLI is paired, and embedded CLI webview only when no real
-    /// browser is paired.
     /// Flip the per-user audio source preference. Persisted server-side; the
     /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
     /// paired entry for this user. Meaningful with only a CLI paired: the CLI

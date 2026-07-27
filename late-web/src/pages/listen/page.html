@@ -238,6 +238,10 @@
             // Follow whatever the server says is current. A listener joining
             // mid-track seeks in using started_at_ms rather than restarting it.
             syncYoutube() {
+                // The IFrame API loads asynchronously, so onReady can fire
+                // after the listener has already moved to a stream. Without
+                // this guard the player would autoplay on top of it.
+                if (this.playing !== 'youtube') return;
                 if (!this.ytReady || !this.current) return;
                 if (this.ytLoadedVideo === this.current.video_id) return;
                 let startSeconds = 0;
