@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels)
+- Last updated: 2026-07-27 (bartender only ever pours for the patron who mentions him: the `gift` action and the `@bartender round` house-round command are removed, since both forced the drunk-text shuffle onto someone who never chose to drink; he now points anyone buying for someone else at `/gift @user <n>` instead, which moves chips only, not a buzz)
 - Status: Active
 
 ## 1. Summary

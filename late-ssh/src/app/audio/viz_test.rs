@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 const TEST_WIDTH: u16 = 24;
 const TEST_HEIGHT: u16 = 3;
 
-fn render_eq_state(wall_tick: usize, muted: bool) -> String {
+fn render_eq_state(wall_tick: usize, state: EqState) -> String {
     let backend = TestBackend::new(TEST_WIDTH, TEST_HEIGHT);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
@@ -13,7 +13,7 @@ fn render_eq_state(wall_tick: usize, muted: bool) -> String {
                 frame,
                 Rect::new(0, 0, TEST_WIDTH, TEST_HEIGHT),
                 wall_tick,
-                muted,
+                state,
             )
         })
         .expect("draw");
@@ -29,7 +29,7 @@ fn render_eq_state(wall_tick: usize, muted: bool) -> String {
 }
 
 fn render_eq_at(wall_tick: usize) -> String {
-    render_eq_state(wall_tick, false)
+    render_eq_state(wall_tick, EqState::Playing)
 }
 
 #[test]
@@ -107,11 +107,32 @@ fn sub_edge_ticks_render_identically() {
 fn muted_client_flattens_the_band_to_a_steady_line() {
     // Mute is the meter at rest: a flat line that ignores the animation
     // frame entirely, so consecutive frames diff to nothing.
-    let rendered = render_eq_state(6, true);
+    let rendered = render_eq_state(6, EqState::Muted);
     assert!(rendered.contains("─".repeat(TEST_WIDTH as usize).as_str()));
     assert!(
         BLOCKS[1..].iter().all(|glyph| !rendered.contains(*glyph)),
         "muted band must not show bars"
     );
-    assert_eq!(render_eq_state(6, true), render_eq_state(20, true));
+    assert_eq!(
+        render_eq_state(6, EqState::Muted),
+        render_eq_state(20, EqState::Muted)
+    );
+}
+
+#[test]
+fn unpaired_session_points_at_the_guide_instead_of_dancing() {
+    // Nothing is paired, so no audio can be playing for this session. A
+    // dancing band would be claiming playback that does not exist.
+    let rendered = render_eq_state(6, EqState::Unpaired);
+    assert!(rendered.contains("no audio here yet"));
+    assert!(rendered.contains("press ? to listen"));
+    assert!(
+        BLOCKS[1..].iter().all(|glyph| !rendered.contains(*glyph)),
+        "unpaired band must not show bars"
+    );
+    // Static, like the muted flatline: the animation frame must not leak in.
+    assert_eq!(
+        render_eq_state(6, EqState::Unpaired),
+        render_eq_state(20, EqState::Unpaired)
+    );
 }

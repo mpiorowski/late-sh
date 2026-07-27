@@ -19,10 +19,11 @@ const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
 /// nextest's 5-minute terminate-after.
 const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The ambient sidebar wave paints on anim_half edges whenever the right
-/// sidebar is visible, so a session showing it never settles by design.
-/// Settle-based tests turn the sidebar off to exercise the gate beneath;
-/// `sidebar_wave_holds_half_rate_and_paints_on_edges` covers the wave path.
+/// The sidebar's animated panels (eq strip + bonsai sway) paint on anim_half
+/// edges whenever the right sidebar is visible, so a session showing it never
+/// settles by design. Settle-based tests turn the sidebar off to exercise the
+/// gate beneath; the tail of `idle_ticks_settle_clean_and_wake_for_relevant_events`
+/// turns it back on to cover the visible-sidebar path.
 ///
 /// This writes the per-device rails rather than the profile. `ProfileState::
 /// drain_snapshot` replaces the whole profile every time a `ProfileService`
@@ -30,7 +31,7 @@ const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// session's first profile prefetch arrives. That prefetch is async: on an
 /// unloaded machine it lands before the settle loop starts, but under load it
 /// lands mid-settle, silently restores the account's `On`, and switches the
-/// wave back on -- at which point the app dirties every anim_half edge
+/// sidebar back on -- at which point the app dirties every anim_half edge
 /// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
 /// takes precedence over the profile in `device_rails_or_profile` and nothing
 /// async overwrites it, so the sidebar stays off for the whole test.
@@ -41,10 +42,10 @@ fn hide_sidebar(app: &mut App) {
     });
 }
 
-/// Undo [`hide_sidebar`] for the wave case, which shares the settled app. It
-/// has to go back through the rails for the same reason: they outrank the
-/// profile in `device_rails_or_profile`, so writing the profile alone would
-/// leave the sidebar off and the wave silent.
+/// Undo [`hide_sidebar`] for the visible-sidebar case, which shares the settled
+/// app. It has to go back through the rails for the same reason: they outrank
+/// the profile in `device_rails_or_profile`, so writing the profile alone would
+/// leave the sidebar off and its animated panels silent.
 fn show_sidebar(app: &mut App) {
     app.device_rails = Some(KeyLayout {
         room_list_mode: app.rail_modes().0,
@@ -206,29 +207,29 @@ async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
 
     settle_clean(&mut app).await;
 
-    // The ambient sidebar wave holds the half-rate tier. Drive the wall-clock
-    // frame counter across known phases instead of sleeping through several
-    // real animation periods: ticks inside a half-rate period stay clean, and
-    // the boundary itself paints.
+    // The sidebar's animated panels hold the half-rate tier. Drive the
+    // wall-clock frame counter across known phases instead of sleeping through
+    // several real animation periods: ticks inside a half-rate period stay
+    // clean, and the boundary itself paints.
     app.show_settings = false;
     show_sidebar(&mut app);
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "visible sidebar holds the half-rate tier for the wave"
+        "visible sidebar holds the half-rate tier for its animated panels"
     );
 
     let even_tick = app.marquee_tick + app.marquee_tick % 2;
     set_marquee_transition(&mut app, even_tick, even_tick + 1);
     assert!(
         !app.tick(),
-        "wave paid a frame between anim_half boundaries"
+        "sidebar paid a frame between anim_half boundaries"
     );
     set_marquee_transition(&mut app, even_tick + 1, even_tick + 2);
     assert!(
         app.tick(),
-        "wave did not pay a frame on an anim_half boundary"
+        "sidebar did not pay a frame on an anim_half boundary"
     );
 }
 

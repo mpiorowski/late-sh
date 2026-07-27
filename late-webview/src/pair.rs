@@ -1,10 +1,9 @@
 //! Pair-WS relay task used by the `late-webview` helper binary (Linux) and
 //! the in-process `late webview-pair` subcommand (Windows/macOS).
 //!
-//! Connects to /api/ws/pair?token=..., registers as `client_kind = "browser"`
-//! with `ssh_mode = "webview"`, relays inbound `load_video` / `source_changed`
-//! server messages to the webview, and forwards `player_state` events back to
-//! the server.
+//! Connects to /api/ws/pair?token=..., registers as `client_kind = "webview"`,
+//! relays inbound `load_video` / `source_changed` server messages to the
+//! webview, and forwards `player_state` events back to the server.
 //!
 //! The relay reconnects on WebSocket drops instead of exiting: the helper
 //! process (and with it the window position and mute/volume state) must
@@ -26,9 +25,12 @@ use tracing::{debug, info, warn};
 use super::commands::{WebviewCommand, WebviewEvent};
 use crate::client_platform_label;
 
-/// Tag the webview sends on the wire. Server-side still treats the helper as a
-/// browser, but distinguishes it from a real browser through `ssh_mode`.
-const CLIENT_KIND: &str = "browser";
+/// Tag the webview sends on the wire. This used to be `"browser"` alongside an
+/// `ssh_mode` of `"webview"`, back when a real browser could pair too and the
+/// server needed to tell the two apart. Browser pairing is gone, so the helper
+/// names itself directly; the server still accepts the old `"browser"` value
+/// from helpers shipped in earlier `late` releases.
+const CLIENT_KIND: &str = "webview";
 const DEFAULT_VOLUME_PERCENT: u8 = 30;
 
 /// Reconnect policy, mirroring the parent CLI's pair-WS loop: retry with a
@@ -60,8 +62,6 @@ enum ServerMessage {
     },
     SetPlaybackSource {
         source: PairAudioSource,
-        #[serde(default)]
-        web_icecast_enabled: bool,
     },
 }
 
@@ -576,13 +576,9 @@ fn handle_server_text(
                 ServerTextResult::default()
             }
         }
-        ServerMessage::SetPlaybackSource {
-            source,
-            web_icecast_enabled,
-        } => {
+        ServerMessage::SetPlaybackSource { source } => {
             debug!(
                 ?source,
-                web_icecast_enabled,
                 "server requested playback source (ignored by embedded webview)"
             );
             ServerTextResult::default()
@@ -755,7 +751,6 @@ async fn send_client_state(
     let payload = json!({
         "event": "client_state",
         "client_kind": CLIENT_KIND,
-        "ssh_mode": "webview",
         "platform": client_platform_label(),
         "capabilities": ["youtube"],
         "muted": audio_settings.muted,

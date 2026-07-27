@@ -26,7 +26,7 @@ async fn guide_routing_preserves_dashboard_content_input_and_lateania_context() 
 
     app.handle_input(b"\x12");
     let frame = render_plain(&mut app);
-    assert!(!frame.contains("Install `late` / Pair Browser"));
+    assert!(!frame.contains("Install `late` / Listen Anywhere"));
     assert!(!frame.contains("Browser pairing"));
 
     // The old terminal FAQ byte no longer opens a standalone modal; those
@@ -39,12 +39,12 @@ async fn guide_routing_preserves_dashboard_content_input_and_lateania_context() 
 
     app.handle_input(b"b");
     assert!(
-        !render_plain(&mut app).contains("Install `late` / Pair Browser"),
+        !render_plain(&mut app).contains("Install `late` / Listen Anywhere"),
         "lowercase b should not open the guide"
     );
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "Install `late` / Listen Anywhere").await;
     wait_for_render_contains(&mut app, "https://cli.late.sh/install.sh | bash").await;
     wait_for_render_contains(&mut app, "https://cli.late.sh/install.ps1 | iex").await;
     wait_for_render_contains(&mut app, "What `late` unlocks").await;
@@ -52,25 +52,25 @@ async fn guide_routing_preserves_dashboard_content_input_and_lateania_context() 
     wait_for_render_contains(&mut app, "?/Esc/q close").await;
 
     app.handle_input(b"\x1b[<35;20;5M");
-    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "Install `late` / Listen Anywhere").await;
 
     app.handle_input(b"?");
     assert!(
-        !render_plain(&mut app).contains("Install `late` / Pair Browser"),
+        !render_plain(&mut app).contains("Install `late` / Listen Anywhere"),
         "? should close the guide"
     );
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "Install `late` / Listen Anywhere").await;
     for _ in 0..30 {
         app.handle_input(b"j");
     }
-    wait_for_render_contains(&mut app, "Open this link on any device").await;
+    wait_for_render_contains(&mut app, "Listen without the CLI").await;
     wait_for_render_contains(&mut app, "█▀▀▀▀▀█").await;
 
     app.handle_input(b"q");
     assert!(
-        !render_plain(&mut app).contains("Open this link on any device"),
+        !render_plain(&mut app).contains("Listen without the CLI"),
         "q should close the guide"
     );
 
@@ -84,7 +84,7 @@ async fn guide_routing_preserves_dashboard_content_input_and_lateania_context() 
     app.handle_input(b"?");
     wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world").await;
     assert!(
-        !render_plain(&mut app).contains("Install `late` / Pair Browser"),
+        !render_plain(&mut app).contains("Install `late` / Listen Anywhere"),
         "Lateania should select its own guide section"
     );
 }

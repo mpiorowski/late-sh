@@ -83,6 +83,7 @@ async fn two_sessions(
             username: Some((*name).to_string()),
             active_users: Some(active.clone()),
             scratchpad_registry: Some(registry.clone()),
+            ..SessionWorld::default()
         };
         let mut app = make_app_in_world(
             test_db.db.clone(),
@@ -213,7 +214,7 @@ async fn question_mark_types_into_the_scratchpad_instead_of_opening_the_guide() 
     wait_for_render_contains(&mut bob, "what does this do?").await;
     let frame = render_plain(&mut alice);
     assert!(
-        !frame.contains("Install `late` / Pair Browser"),
+        !frame.contains("Install `late` / Listen Anywhere"),
         "the global guide must not have opened; frame={frame:?}"
     );
 }

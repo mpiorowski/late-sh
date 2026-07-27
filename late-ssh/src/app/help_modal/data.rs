@@ -108,10 +108,10 @@ impl HelpTopic {
 pub(crate) fn lines_for(
     topic: HelpTopic,
     keep_composer_focused: bool,
-    pair_url: &str,
+    listen_url: &str,
 ) -> Vec<String> {
     match topic {
-        HelpTopic::Pair => pair_help_lines(pair_url),
+        HelpTopic::Pair => pair_help_lines(listen_url),
         HelpTopic::Overview => overview_lines(),
         HelpTopic::Architecture => architecture_lines(),
         HelpTopic::Chat => chat_help_lines(keep_composer_focused),
@@ -153,8 +153,7 @@ pub(crate) fn bot_app_context() -> String {
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
-        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free.\n\
-        - \"@bartender round\" (or \"@bartender round for everyone\") buys the whole house a round: a flat 5000 chips on the buyer's tab pours an ale to every human online, payer included.\n\
+        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 334 points an hour, so reaching wasted wears off in about six hours and even a maxed-out binge is fully sober again half a day later.\n\
         - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus the occasional *hic*. Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
@@ -220,15 +219,15 @@ const NIX_COMMAND: &str = "nix run github:mpiorowski/late-sh#late";
 const SOURCE_URL: &str = "https://github.com/mpiorowski/late-sh";
 const QR_QUIET_ZONE: i32 = 4;
 
-fn pair_help_lines(pair_url: &str) -> Vec<String> {
-    let pair_url = pair_url.trim();
-    let pair_url = if pair_url.is_empty() {
-        "your pairing link appears here in-session"
+fn pair_help_lines(listen_url: &str) -> Vec<String> {
+    let listen_url = listen_url.trim();
+    let listen_url = if listen_url.is_empty() {
+        "late.sh/listen"
     } else {
-        pair_url
+        listen_url
     };
     let mut lines = vec![
-        "Install `late` / Pair Browser".to_string(),
+        "Install `late` / Listen Anywhere".to_string(),
         "".to_string(),
         "Recommended: install the native CLI and run `late` instead of `ssh late.sh`.".to_string(),
         "That gives one process for SSH, local Icecast audio, YouTube webview fallback, voice rooms, and OS clipboard image reads.".to_string(),
@@ -247,17 +246,19 @@ fn pair_help_lines(pair_url: &str) -> Vec<String> {
         "  voice       talk in voice rooms with your mic (linux + windows; plain SSH only shows status)".to_string(),
         "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
         "".to_string(),
-        "Browser pairing".to_string(),
-        "  Open this link on any device, or scan the QR below.".to_string(),
-        "  The browser plays your selected source, including YouTube.".to_string(),
-        "  A real browser takes over YouTube from the CLI webview helper while it is paired.".to_string(),
+        "Listen without the CLI".to_string(),
+        "  Open the link below on any device, or scan the QR.".to_string(),
+        "  It plays the house streams, Nightride, and the community YouTube".to_string(),
+        "  queue in a plain browser tab. No pairing, no session, nothing to".to_string(),
+        "  install, so it works from a phone or a locked-down laptop.".to_string(),
+        "  Listening only: chat, games and the rest stay in the terminal.".to_string(),
         "".to_string(),
     ];
 
-    lines.extend(qr_lines(pair_url));
+    lines.extend(qr_lines(listen_url));
     lines.extend([
         "".to_string(),
-        pair_url.to_string(),
+        listen_url.to_string(),
         "scan with your phone or open the link on any device".to_string(),
         "".to_string(),
         "Trouble?".to_string(),
@@ -268,11 +269,11 @@ fn pair_help_lines(pair_url: &str) -> Vec<String> {
     lines
 }
 
-fn qr_lines(pair_url: &str) -> Vec<String> {
-    if !(pair_url.starts_with("https://") || pair_url.starts_with("http://")) {
+fn qr_lines(listen_url: &str) -> Vec<String> {
+    if !(listen_url.starts_with("https://") || listen_url.starts_with("http://")) {
         return Vec::new();
     }
-    let Ok(qr) = QrCode::encode_text(pair_url, QrCodeEcc::Low) else {
+    let Ok(qr) = QrCode::encode_text(listen_url, QrCodeEcc::Low) else {
         return Vec::new();
     };
     let size = qr.size();
@@ -922,7 +923,7 @@ fn architecture_lines() -> Vec<String> {
         "  Icecast has chill and classical house streams",
         "  Radio has Nightride guest stations",
         "  Liquidsoap manages the house playlists",
-        "  paired browser or CLI clients handle actual audio output and visualizer data",
+        "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
         "User-facing areas",
         "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Artboard, Directory, and the persistent bonsai sidebar",
