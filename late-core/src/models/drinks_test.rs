@@ -2,8 +2,8 @@ use crate::{
     models::{
         chips::{CHIP_FLOOR, DRINK_PURCHASE_REASON, DRINK_PURCHASE_SOURCE_KIND, UserChips},
         drinks::{
-            DRUNK_DECAY_PER_HOUR, MAX_DRUNK_POINTS, UserDrinks, WELCOME_DRINK_POINTS,
-            decayed_points, drunk_label_word, drunk_level,
+            DRUNK_DECAY_PER_HOUR, DRUNK_SOBER_UP_HOURS, MAX_DRUNK_POINTS, UserDrinks,
+            WELCOME_DRINK_POINTS, decayed_points, drunk_label_word, drunk_level,
         },
     },
     test_utils::{create_test_user, test_db},
@@ -13,11 +13,25 @@ use uuid::Uuid;
 
 #[test]
 fn decayed_points_wears_off_linearly() {
-    assert_eq!(decayed_points(600, 0), 600);
-    assert_eq!(decayed_points(600, 3600), 450);
-    assert_eq!(decayed_points(600, 7200), 300);
-    assert_eq!(decayed_points(600, 14400), 0);
-    assert_eq!(decayed_points(600, 36000), 0);
+    assert_eq!(decayed_points(2_000, 0), 2_000);
+    assert_eq!(decayed_points(2_000, 3600), 2_000 - DRUNK_DECAY_PER_HOUR);
+    assert_eq!(
+        decayed_points(2_000, 3 * 3600),
+        2_000 - 3 * DRUNK_DECAY_PER_HOUR
+    );
+    assert_eq!(decayed_points(2_000, 24 * 3600), 0);
+}
+
+#[test]
+fn a_full_binge_sobers_up_in_half_a_day() {
+    // The product dial: a maxed-out night is gone by the next evening, not a
+    // full day later, and merely reaching "wasted" clears in half of that.
+    assert!(decayed_points(MAX_DRUNK_POINTS, (DRUNK_SOBER_UP_HOURS - 1) * 3600) > 0);
+    assert_eq!(
+        decayed_points(MAX_DRUNK_POINTS, DRUNK_SOBER_UP_HOURS * 3600),
+        0
+    );
+    assert_eq!(decayed_points(2_000, DRUNK_SOBER_UP_HOURS / 2 * 3600), 0);
 }
 
 #[test]
@@ -59,9 +73,9 @@ fn drunk_label_word_starts_at_level_one() {
 
 #[test]
 fn max_cap_dries_out_within_active_window() {
-    // The 36h window in all_active must cover the slowest sober-up.
+    // The 18h window in all_active must cover the slowest sober-up.
     let hours_to_sober = (MAX_DRUNK_POINTS + DRUNK_DECAY_PER_HOUR - 1) / DRUNK_DECAY_PER_HOUR;
-    assert!(hours_to_sober <= 36);
+    assert!(hours_to_sober <= 18);
     assert_eq!(decayed_points(MAX_DRUNK_POINTS, hours_to_sober * 3600), 0);
 }
 
@@ -75,8 +89,8 @@ fn effective_points_uses_last_drink_at() {
         drink_count: 1,
         last_drink_at: now - chrono::Duration::hours(1),
     };
-    assert_eq!(drinks.effective_points(now), 450);
-    assert_eq!(drinks.level(now), 2);
+    assert_eq!(drinks.effective_points(now), 600 - DRUNK_DECAY_PER_HOUR);
+    assert_eq!(drinks.level(now), 1);
 }
 
 #[tokio::test]

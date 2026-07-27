@@ -296,9 +296,9 @@ fn drunk_levels_decay_and_prune() {
     assert_eq!(lobby.drunk_levels().get(&id), Some(&3));
 
     // A drink from hours ago has partially worn off.
-    lobby.record_drink(id, 1_500, now - chrono::Duration::hours(5));
+    lobby.record_drink(id, 1_500, now - chrono::Duration::hours(2));
     let level = lobby.snapshot().find(id).unwrap().drunk_level;
-    assert_eq!(level, 2, "5h decay of 1500 points should read buzzed");
+    assert_eq!(level, 2, "2h decay of 1500 points should read buzzed");
 
     // Fully sober entries drop out of the chat-facing map entirely.
     lobby.record_drink(id, 100, now - chrono::Duration::hours(10));

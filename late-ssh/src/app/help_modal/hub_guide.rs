@@ -89,7 +89,7 @@ fn bar_sections() -> Vec<GuideSection> {
                 "Drinks build a buzz: tipsy, buzzed, sloshed, wasted.".to_string(),
                 "Your level shows beside your name wherever you talk.".to_string(),
                 format!(
-                    "It wears off on its own at {DRUNK_DECAY_PER_HOUR} points an hour, so a big night is gone by morning."
+                    "It wears off at {DRUNK_DECAY_PER_HOUR} points an hour, online or not, so a big night is gone by morning."
                 ),
                 "Wasted is last call: water and coffee only after that.".to_string(),
                 "A buzz also comes out in your typing, in public rooms only.".to_string(),

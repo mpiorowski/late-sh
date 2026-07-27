@@ -19,11 +19,18 @@ pub const DRINK_PRICE_MAX: i64 = 1_000;
 /// Buzz comped to a newcomer on their first walk up to the bar. Sized to land
 /// exactly on the first drunk level so the welcome round already glows.
 pub const WELCOME_DRINK_POINTS: i64 = 100;
-/// How fast the buzz wears off, in drunk points (= chips) per hour.
-pub const DRUNK_DECAY_PER_HOUR: i64 = 150;
-/// Hard cap on stored points so one binge can't glow for days. At the decay
-/// rate above a maxed-out patron is fully sober in about 27 hours.
+/// Hard cap on stored points so one binge can't glow for days.
 pub const MAX_DRUNK_POINTS: i64 = 4_000;
+/// How long a patron sitting on the cap takes to come back to fully sober.
+/// This is the dial to turn when the bar feels too forgiving or too punishing;
+/// the per-hour rate below follows from it. Half a day means a big night is
+/// gone by the next evening, and entering "wasted" (2000) clears in six hours.
+pub const DRUNK_SOBER_UP_HOURS: i64 = 12;
+/// How fast the buzz wears off, in drunk points (= chips) per hour. Derived
+/// from the cap and [`DRUNK_SOBER_UP_HOURS`], rounded up so the last hour
+/// finishes the job instead of leaving a point of buzz behind.
+pub const DRUNK_DECAY_PER_HOUR: i64 =
+    (MAX_DRUNK_POINTS + DRUNK_SOBER_UP_HOURS - 1) / DRUNK_SOBER_UP_HOURS;
 
 /// Level thresholds on effective (decayed) points. Level 0 renders nothing;
 /// level 1 ("tipsy", the welcome round) already earns its printed label;
@@ -191,14 +198,15 @@ impl UserDrinks {
     }
 
     /// Rows that can still be drunk right now: anything that drank recently
-    /// enough that the cap hasn't fully decayed. Callers compute per-user
+    /// enough that the cap hasn't fully decayed (the window sits above
+    /// [`DRUNK_SOBER_UP_HOURS`] with room to spare). Callers compute per-user
     /// levels from these with [`UserDrinks::level`].
     pub async fn all_active(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 "SELECT * FROM user_drinks
                  WHERE drunk_points > 0
-                   AND last_drink_at > current_timestamp - interval '36 hours'",
+                   AND last_drink_at > current_timestamp - interval '18 hours'",
                 &[],
             )
             .await?;
