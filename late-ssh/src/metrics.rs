@@ -84,7 +84,7 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_ws_pair_success_total")
-                .with_description("Successful browser websocket pair connections")
+                .with_description("Successful CLI/webview websocket pair connections")
                 .build()
         })
     }

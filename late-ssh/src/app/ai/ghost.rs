@@ -19,7 +19,7 @@
 //! - `generate_json` — ungrounded JSON with a hard-enforced `responseSchema`
 //!   (only possible without a tool). The **@bartender mention** uses this: it
 //!   answers house Q&A from the injected app context and decides drink orders
-//!   (`pour`/`gift`/`offer`/`chat` + a priced drink) as guaranteed
+//!   (`pour`/`offer`/`chat` + a priced drink) as guaranteed
 //!   well-formed JSON.
 //!   It trades live web lookups for a reply shape that never breaks the parser.
 //! - `generate_short_reply` — ungrounded (no web lookup, so no grounded-call
@@ -147,15 +147,6 @@ const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);
 /// balance that was spent before the debit landed. No charge happens.
 const BARTENDER_TAB_BOUNCED_LINE: &str =
     "easy now, your tab just bounced. come back when your chips catch up to your thirst.";
-/// Flat price of a round for the house: one debit, a glass for every human
-/// online. Deliberately above [`DRINK_PRICE_MAX`] — only the deterministic
-/// `@bartender round` command can spend it, never the model.
-pub(crate) const BARTENDER_ROUND_PRICE: i64 = 5_000;
-/// Buzz each patron gets from a round; lands them squarely in "buzzed"
-/// (level 2 spans 300..1000).
-const BARTENDER_ROUND_POINTS: i64 = 600;
-/// Ledger label for the round debit.
-const BARTENDER_ROUND_DRINK: &str = "round of house ale";
 /// How often the DB-backed drunk levels are re-seeded into the shared lobby.
 const DRUNK_SEED_INTERVAL: Duration = Duration::from_secs(60);
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
@@ -679,21 +670,7 @@ impl GhostService {
             }
         }
 
-        if bartender_round_intent(&trigger_message.body, &bartender.username) {
-            let body = self.handle_bartender_round(&trigger_message).await?;
-            let mut rng = TinyRng::seeded();
-            let delay = rng.next_between_inclusive(1, 3) as u64;
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-            self.chat_service.send_bot_reply_task(
-                bartender.id,
-                trigger_message.room_id,
-                body,
-                Some(trigger_message.user_id),
-            );
-            return Ok(());
-        }
-
-        let (messages, balance, drunk_level, gift_recipients) = {
+        let (messages, balance, drunk_level) = {
             let client = self.db.get().await?;
             let messages = ChatMessage::list_recent(
                 &client,
@@ -706,9 +683,7 @@ impl GhostService {
                 .await?
                 .map(|drinks| drinks.level(chrono::Utc::now()))
                 .unwrap_or(0);
-            let gift_recipients =
-                mentioned_gift_recipients(&client, &trigger_message, &bartender.username).await?;
-            (messages, chips.balance, drunk_level, gift_recipients)
+            (messages, chips.balance, drunk_level)
         };
         if messages.is_empty() {
             return Ok(());
@@ -740,19 +715,15 @@ impl GhostService {
             - chip balance: {balance}\n\
             - spendable on drinks: {spendable} (house rule: a patron always keeps {floor} chips; you can only pour a price that fits inside spendable)\n\
             - current state: {drunk_word} ({serving_note})\n\n\
-            GIFT DRINKS:\n\
-            - If the patron clearly asks to buy, give, send, or pay for a drink for another user, use \"gift\" only when that recipient is explicitly mentioned in the latest message and appears in this candidate list: {gift_candidates}. Mentioning someone else by name in the same breath as an order is itself the trigger — no separate confirmation step exists.\n\
-            - For \"gift\", set recipient to that candidate's handle without @, invent the drink, and set a whole-number price between {price_min} and {price_max} that fits the payer's spendable chips. It is poured and charged immediately, so phrase the line as already served, not offered.\n\
-            - If they ask for a gift drink but no candidate is listed, use \"chat\" and ask who it is for. If they try to buy their own drink as a gift, use \"chat\".\n\n\
-            ROUND FOR THE HOUSE:\n\
-            - \"@{username} round\" is a fixed house command handled outside your hands: {round_price} chips buys every patron online a pour. If the patron asks in their own words to buy the whole bar a round, never pour or price it yourself; use \"chat\" and tell them to reply exactly \"@{username} round\".\n\n\
+            YOU ONLY POUR FOR THE PATRON IN FRONT OF YOU:\n\
+            - Drinking scrambles a patron's own typing, so never pour or charge a drink onto anyone but the patron who mentioned you, no matter how they phrase it (buying a friend a round, gifting a drink, a round for the whole house).\n\
+            - If they ask to buy, gift, or send a drink to someone else, or to buy the house a round, use \"chat\": decline pouring for anyone but themselves, and let them know they can send that person chips directly with \"/gift @user <amount>\".\n\n\
             Decide ONE action:\n\
             - \"pour\": ONLY when the patron themselves asked for a drink for themselves — read their intent generously, an order comes in many forms (\"get me a stout\", \"what's strong tonight\", \"the usual\", \"surprise me\", \"I'll take one\"). But a pour spends their chips, so if it is a greeting, a house question, banter, or you are at all unsure, do NOT pour. Invent the drink, set a whole-number price between {price_min} and {price_max} that fits the pour (ale cheap, top shelf dear), and hand it over. If you name the price in your line it MUST equal the price field exactly.\n\
-            - \"gift\": a clear request to buy a drink for a different mentioned user from the gift candidate list. Charges the payer immediately, no confirmation step.\n\
             - \"offer\": the patron asked for a drink but cannot afford it (or wants more than their spendable). Charge nothing; counter-offer something in their range, with its price, kindly.\n\
-            - \"chat\": everything else — greetings, house questions, banter, anything ambiguous. Answer exactly as you always do. No charge. When in doubt, chat; never charge on a maybe.\n\n\
+            - \"chat\": everything else — greetings, house questions, banter, requests to drink or pour for someone else, anything ambiguous. Answer exactly as you always do. No charge. When in doubt, chat; never charge on a maybe.\n\n\
             Return ONLY a JSON object, no markdown fences:\n\
-            {{\"action\": \"pour\" | \"gift\" | \"offer\" | \"chat\", \"recipient\": string or null, \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
+            {{\"action\": \"pour\" | \"offer\" | \"chat\", \"drink\": string or null, \"price\": integer or null, \"line\": string}}\n\
             \"line\" is your chat message: 1-3 short lines, no markdown, no emoji, never prefixed with your own username, never SKIP.",
             username = bartender.username,
             persona = BARTENDER_PERSONA,
@@ -760,8 +731,6 @@ impl GhostService {
             floor = CHIP_FLOOR,
             price_min = DRINK_PRICE_MIN,
             price_max = DRINK_PRICE_MAX,
-            round_price = BARTENDER_ROUND_PRICE,
-            gift_candidates = format_gift_recipient_candidates(&gift_recipients),
         );
 
         let history_with_prompt = format!(
@@ -791,8 +760,7 @@ impl GhostService {
             }
         };
 
-        let decision =
-            parse_bartender_order(&reply, spendable, &bartender.username, &gift_recipients);
+        let decision = parse_bartender_order(&reply, spendable, &bartender.username);
 
         let mut rng = TinyRng::seeded();
         let delay = rng.next_between_inclusive(2, 6) as u64;
@@ -800,40 +768,6 @@ impl GhostService {
         let body = match decision {
             BartenderDecision::Skip => return Ok(()),
             BartenderDecision::Say { line } => line,
-            BartenderDecision::Gift {
-                recipient_id,
-                recipient_handle,
-                drink,
-                price,
-                line,
-            } => {
-                match self
-                    .chip_service
-                    .buy_drink_for(trigger_message.user_id, recipient_id, price, &drink)
-                    .await?
-                {
-                    Some(purchase) => {
-                        self.clubhouse_lobby.record_drink(
-                            recipient_id,
-                            purchase.drunk_points,
-                            purchase.last_drink_at,
-                        );
-                        tracing::info!(
-                            payer_id = %trigger_message.user_id,
-                            recipient_id = %recipient_id,
-                            recipient_handle = %recipient_handle,
-                            price,
-                            drink = %drink,
-                            payer_balance = purchase.balance,
-                            "bartender poured a gift drink"
-                        );
-                        line
-                    }
-                    // The balance moved between the prompt and the debit; the
-                    // floor guard refused the pour. Never retry, never charge.
-                    None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
-                }
-            }
             BartenderDecision::Pour { drink, price, line } => {
                 match self
                     .chip_service
@@ -872,77 +806,6 @@ impl GhostService {
         );
 
         Ok(())
-    }
-
-    /// Pour a round for the house: a flat [`BARTENDER_ROUND_PRICE`] debit on
-    /// the caller buys [`BARTENDER_ROUND_POINTS`] of buzz for every human
-    /// currently online, the payer included. Fully deterministic — command
-    /// word, price, and buzz are all hardcoded, so the model never gets to
-    /// price a house-wide charge.
-    async fn handle_bartender_round(&self, trigger_message: &ChatMessage) -> Result<String> {
-        let client = self.db.get().await?;
-        let usernames = User::list_usernames_by_ids(&client, &[trigger_message.user_id]).await?;
-        let patron = mention_target_for_user(
-            usernames.get(&trigger_message.user_id).map(String::as_str),
-            trigger_message.user_id,
-        );
-        drop(client);
-
-        // Everyone human online gets a glass; the ghosts register with no
-        // fingerprint and don't drink on the clock.
-        let mut recipients: Vec<Uuid> = {
-            let active_users = self.active_users.lock_recover();
-            active_users
-                .iter()
-                .filter(|(_, user)| user.fingerprint.is_some())
-                .map(|(id, _)| *id)
-                .collect()
-        };
-        if !recipients.contains(&trigger_message.user_id) {
-            recipients.push(trigger_message.user_id);
-        }
-
-        if recipients.len() < 2 {
-            return Ok(format!(
-                "{patron} generous, but it's just you in here tonight. keep your chips until there's company."
-            ));
-        }
-
-        match self
-            .chip_service
-            .buy_round(
-                trigger_message.user_id,
-                &recipients,
-                BARTENDER_ROUND_PRICE,
-                BARTENDER_ROUND_POINTS,
-                BARTENDER_ROUND_DRINK,
-            )
-            .await?
-        {
-            Some(round) => {
-                for pour in &round.pours {
-                    self.clubhouse_lobby.record_drink(
-                        pour.user_id,
-                        pour.drunk_points,
-                        pour.last_drink_at,
-                    );
-                }
-                tracing::info!(
-                    payer_id = %trigger_message.user_id,
-                    pours = round.pours.len(),
-                    price = BARTENDER_ROUND_PRICE,
-                    new_balance = round.balance,
-                    "bartender poured a round for the house"
-                );
-                Ok(format!(
-                    "{patron} just bought the house a round. ale all around, {count} pours, {BARTENDER_ROUND_PRICE} chips on their tab. drink up, everyone.",
-                    count = round.pours.len(),
-                ))
-            }
-            None => Ok(format!(
-                "{patron} a round for the house runs {BARTENDER_ROUND_PRICE} chips, and your tab can't carry it tonight."
-            )),
-        }
     }
 
     /// Periodically mirror DB drunk state into the shared lobby so every
@@ -1100,14 +963,6 @@ enum BartenderDecision {
         price: i64,
         line: String,
     },
-    /// Charge the payer immediately and pour for `recipient_id` instead.
-    Gift {
-        recipient_id: Uuid,
-        recipient_handle: String,
-        drink: String,
-        price: i64,
-        line: String,
-    },
     /// Post `line`, charge nothing (chat, counter-offer, or a downgraded
     /// pour the server refused to price).
     Say { line: String },
@@ -1118,34 +973,26 @@ enum BartenderDecision {
 #[derive(serde::Deserialize)]
 struct BartenderOrderRaw {
     action: Option<String>,
-    recipient: Option<String>,
     drink: Option<String>,
     price: Option<i64>,
     line: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct BartenderGiftRecipient {
-    id: Uuid,
-    handle: String,
-}
-
 /// The response schema Gemini must conform the bartender's order to. Enforced
 /// server-side (only possible ungrounded), so the reply is always valid JSON in
 /// this exact shape — `action` is one of the bartender verbs, `line` is always
-/// present, and `recipient`/`drink`/`price` may be null for chat/offer.
+/// present, and `drink`/`price` may be null for chat/offer.
 fn bartender_order_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "properties": {
-            "action": { "type": "string", "enum": ["pour", "gift", "offer", "chat"] },
-            "recipient": { "type": "string", "nullable": true },
+            "action": { "type": "string", "enum": ["pour", "offer", "chat"] },
             "drink": { "type": "string", "nullable": true },
             "price": { "type": "integer", "nullable": true },
             "line": { "type": "string" }
         },
         "required": ["action", "line"],
-        "propertyOrdering": ["action", "recipient", "drink", "price", "line"]
+        "propertyOrdering": ["action", "drink", "price", "line"]
     })
 }
 
@@ -1215,7 +1062,6 @@ fn extract_json_int_field(raw: &str, field: &str) -> Option<i64> {
 fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
     Some(BartenderOrderRaw {
         action: extract_json_string_field(raw, "action"),
-        recipient: extract_json_string_field(raw, "recipient"),
         drink: extract_json_string_field(raw, "drink"),
         price: extract_json_int_field(raw, "price"),
         line: Some(extract_json_string_field(raw, "line")?),
@@ -1228,12 +1074,7 @@ fn recover_bartender_order(raw: &str) -> Option<BartenderOrderRaw> {
 /// so the amount charged always equals the amount the line quoted. Whether the
 /// patron actually ordered is the model's call — the prompt coaches it to pour
 /// only on a clear order and to chat/offer on anything ambiguous.
-fn parse_bartender_order(
-    raw: &str,
-    spendable: i64,
-    bot_username: &str,
-    gift_recipients: &[BartenderGiftRecipient],
-) -> BartenderDecision {
+fn parse_bartender_order(raw: &str, spendable: i64, bot_username: &str) -> BartenderDecision {
     let cleaned = strip_code_fence(raw);
     let order = match serde_json::from_str::<BartenderOrderRaw>(cleaned) {
         Ok(order) => order,
@@ -1263,7 +1104,7 @@ fn parse_bartender_order(
     };
 
     let action = order.action.as_deref();
-    if !matches!(action, Some("pour" | "gift")) {
+    if action != Some("pour") {
         return BartenderDecision::Say { line };
     }
 
@@ -1284,28 +1125,6 @@ fn parse_bartender_order(
         .map(|drink| drink.trim().to_string())
         .filter(|drink| !drink.is_empty())
         .unwrap_or_else(|| "house pour".to_string());
-    if action == Some("gift") {
-        let Some(recipient) = order
-            .recipient
-            .as_deref()
-            .map(|recipient| recipient.trim().trim_start_matches('@'))
-            .filter(|recipient| !recipient.is_empty())
-            .and_then(|recipient| {
-                gift_recipients
-                    .iter()
-                    .find(|candidate| candidate.handle.eq_ignore_ascii_case(recipient))
-            })
-        else {
-            return BartenderDecision::Say { line };
-        };
-        return BartenderDecision::Gift {
-            recipient_id: recipient.id,
-            recipient_handle: recipient.handle.clone(),
-            drink,
-            price,
-            line,
-        };
-    }
 
     BartenderDecision::Pour { drink, price, line }
 }
@@ -1372,55 +1191,6 @@ fn mention_handle_for_user(username: Option<&str>, user_id: Uuid) -> String {
         .unwrap_or_else(|| short_user_id(user_id))
 }
 
-async fn mentioned_gift_recipients(
-    client: &tokio_postgres::Client,
-    trigger_message: &ChatMessage,
-    bot_username: &str,
-) -> Result<Vec<BartenderGiftRecipient>> {
-    let bot_username = bot_username.trim_start_matches('@');
-    let mut recipients = Vec::new();
-    let mut seen = Vec::<String>::new();
-
-    for handle in extract_mention_handles(&trigger_message.body) {
-        if handle.eq_ignore_ascii_case(bot_username)
-            || seen
-                .iter()
-                .any(|seen_handle| seen_handle.eq_ignore_ascii_case(&handle))
-        {
-            continue;
-        }
-        seen.push(handle.clone());
-
-        let Some(user) = User::find_by_username(client, &handle).await? else {
-            continue;
-        };
-        if user.id == trigger_message.user_id {
-            continue;
-        }
-        let handle = sanitize_mention_handle(&user.username);
-        if handle.is_empty() {
-            continue;
-        }
-        recipients.push(BartenderGiftRecipient {
-            id: user.id,
-            handle,
-        });
-    }
-
-    Ok(recipients)
-}
-
-fn format_gift_recipient_candidates(recipients: &[BartenderGiftRecipient]) -> String {
-    if recipients.is_empty() {
-        return "none".to_string();
-    }
-    recipients
-        .iter()
-        .map(|recipient| format!("@{}", recipient.handle))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn sanitize_mention_handle(input: &str) -> String {
     input
         .chars()
@@ -1482,85 +1252,6 @@ fn contains_mention(text: &str, target_handle: &str) -> bool {
     }
 
     false
-}
-
-fn extract_mention_handles(text: &str) -> Vec<String> {
-    let text = text_for_mention_detection(text);
-    let mut handles = Vec::new();
-    let mut idx = 0;
-    while idx < text.len() {
-        let Some(ch) = text[idx..].chars().next() else {
-            break;
-        };
-
-        if ch == '@' && valid_mention_start(text, idx) {
-            let start = idx + ch.len_utf8();
-            let mut end = start;
-            while end < text.len() {
-                let Some(next) = text[end..].chars().next() else {
-                    break;
-                };
-                if !is_mention_char(next) {
-                    break;
-                }
-                end += next.len_utf8();
-            }
-
-            if end > start {
-                handles.push(text[start..end].to_string());
-            }
-
-            idx = end;
-            continue;
-        }
-
-        idx += ch.len_utf8();
-    }
-    handles
-}
-
-/// The lowercased non-mention words of a message that mentions the bartender,
-/// or None without a mention. The deterministic `round` command matches on
-/// this exact word list — no AI in the loop — so any extra word falls through
-/// to the model instead.
-fn bartender_command_words(body: &str, bartender_username: &str) -> Option<Vec<String>> {
-    if !contains_mention(body, bartender_username) {
-        return None;
-    }
-
-    let bartender_username = bartender_username
-        .trim()
-        .trim_start_matches('@')
-        .to_ascii_lowercase();
-    Some(
-        text_for_mention_detection(body)
-            .split(|c: char| {
-                !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '@')
-            })
-            .filter_map(|word| {
-                let word = word.trim().trim_start_matches('@');
-                (!word.is_empty()).then(|| word.to_ascii_lowercase())
-            })
-            .filter(|word| word != &bartender_username)
-            .collect(),
-    )
-}
-
-/// True for the fixed round-for-the-house command: "@bartender round" or the
-/// long forms "@bartender round for everyone" / "@bartender round for the
-/// house" (punctuation is a separator, so a trailing "!" is fine).
-fn bartender_round_intent(body: &str, bartender_username: &str) -> bool {
-    let Some(words) = bartender_command_words(body, bartender_username) else {
-        return false;
-    };
-    matches!(
-        words
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        ["round"] | ["round", "for", "everyone"] | ["round", "for", "the", "house"]
-    )
 }
 
 fn valid_mention_start(text: &str, at: usize) -> bool {

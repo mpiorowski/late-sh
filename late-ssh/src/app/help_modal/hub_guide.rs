@@ -6,8 +6,6 @@ use late_core::models::{
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 
-use crate::app::ai::ghost::BARTENDER_ROUND_PRICE;
-
 pub(crate) fn bot_context_lines() -> Vec<String> {
     let mut lines = Vec::new();
     for section in guide_sections() {
@@ -77,10 +75,8 @@ fn bar_sections() -> Vec<GuideSection> {
                     "{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."
                 ),
                 "Your first ever drink is on the house.".to_string(),
-                format!(
-                    "\"@bartender round\" buys every human online a pour for {BARTENDER_ROUND_PRICE} chips."
-                ),
-                "Name someone in your order to buy their drink instead.".to_string(),
+                "He only pours for you; use /gift @user <n> to send someone else chips."
+                    .to_string(),
             ],
         },
         GuideSection {

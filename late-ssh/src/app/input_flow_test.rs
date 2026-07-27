@@ -364,14 +364,14 @@ async fn question_mark_opens_guide_on_dashboard() {
     wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Install `late` / Pair Browser").await;
+    wait_for_render_contains(&mut app, "Install `late` / Listen Anywhere").await;
     wait_for_render_contains(&mut app, "?/Esc/q close").await;
 
     app.handle_input(b"?");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("Install `late` / Pair Browser"),
+        !frame.contains("Install `late` / Listen Anywhere"),
         "expected ? to close guide; frame={frame:?}"
     );
 }
@@ -395,7 +395,7 @@ async fn question_mark_opens_lateania_guide_on_lateania_screen() {
 
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("Install `late` / Pair Browser"),
+        !frame.contains("Install `late` / Listen Anywhere"),
         "expected Lateania guide tab instead of Pair tab; frame={frame:?}"
     );
 }

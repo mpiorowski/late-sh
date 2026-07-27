@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-07-20
+- Last updated: 2026-07-27 (leaderboard sessions seed from the published snapshot; a connect refreshes one that has aged past `REFRESH_INTERVAL`)
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -87,7 +87,12 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 ## Leaderboard Data
 
-`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the pass is eleven aggregate queries and was 13% of all DB execution time at the old 30s (SCALE.md DB Cost Ranking). Do not make it hot again without re-reading that ranking.
+`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the pass is fourteen aggregate queries and was 13% of all DB execution time at the old 30s (SCALE.md DB Cost Ranking). Do not make it hot again without re-reading that ranking.
+
+Two rules keep that coarse cadence from reading as a broken screen:
+
+- **Sessions seed, they do not wait.** `App::new` copies the currently published snapshot out of the receiver with `borrow()`. `watch::Sender::subscribe` marks the current value as already seen, so the `has_changed()` gate in `app/tick.rs` is false against a snapshot that is sitting right there — a session that only waited for the gate would render empty panels for up to a full `REFRESH_INTERVAL`. The seed deliberately does not touch `chip_balance`, which is loaded accurately at login and may be newer than the snapshot.
+- **A connect can buy one refresh.** `subscribe` wakes the refresh loop through a `Notify`, and `should_refresh` (a pure function, unit-tested in `svc_test.rs`) grants the pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This covers the quiet-server case, where the subscriber gate skipped every pass and the first session back would otherwise seed from whatever the last session left behind. The age bound is what keeps a connect storm on a busy server from putting the pass back on the hot path.
 
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
@@ -229,6 +234,6 @@ Future Events work:
 - `Events` is still a placeholder.
 - Hub Admin edits existing reward-template and marketplace item presentation/economy fields only; adding new quest templates or Shop SKUs, changing JSON params/payload/kind/cadence/slot/windows, and rerolling current assignments still require direct DB/migration work.
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
-- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
+- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the panels are never *empty* — just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Events-specific awards are not implemented.

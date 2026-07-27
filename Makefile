@@ -26,7 +26,6 @@ LATE_SSH_PROXY_PROTOCOL ?= 0                                # Parse PROXY protoc
 LATE_SSH_PROXY_TRUSTED_CIDRS ?=                             # Comma-separated trusted proxy CIDRs (e.g. 10.42.0.0/16)
 LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP ?= 30                      # Max WebSocket pair requests per IP before rate-limited
 LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS ?= 60                   # Rolling window for WS pair rate limiting
-LATE_ALLOWED_ORIGINS ?= http://localhost:$(LATE_WEB_PORT)   # Comma-separated list of allowed CORS origins
 
 # --- Database ---
 LATE_DB_HOST ?= postgres                                    # PostgreSQL hostname (docker service name)
@@ -95,7 +94,6 @@ LATE_BROGUE_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -t
 LATE_WEB_PORT ?= 3000                                       # Web server listen port
 LATE_WEB_URL ?= http://localhost:$(LATE_WEB_PORT)           # Public web URL (used by SSH server)
 LATE_SSH_INTERNAL_URL ?= http://service-ssh:$(LATE_API_PORT) # Internal SSH API URL (used by web server)
-LATE_SSH_PUBLIC_URL ?= localhost:$(LATE_API_PORT)           # Public SSH API URL (used by browser for WS)
 LATE_AUDIO_URL ?= http://icecast:8000                       # Upstream audio URL used by late-web /stream proxy
 LATE_YOUTUBE_API_KEY ?=
 
@@ -140,7 +138,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_SSH_PROXY_TRUSTED_CIDRS=$(LATE_SSH_PROXY_TRUSTED_CIDRS)" >> .env
 	@echo "LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP=$(LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP)" >> .env
 	@echo "LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS=$(LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS)" >> .env
-	@echo "LATE_ALLOWED_ORIGINS=$(LATE_ALLOWED_ORIGINS)" >> .env
 	@echo "LATE_DB_HOST=$(LATE_DB_HOST)" >> .env
 	@echo "LATE_DB_PORT=$(LATE_DB_PORT)" >> .env
 	@echo "LATE_DB_USER=$(LATE_DB_USER)" >> .env
@@ -197,7 +194,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_WEB_PORT=$(LATE_WEB_PORT)" >> .env
 	@echo "LATE_WEB_URL=$(LATE_WEB_URL)" >> .env
 	@echo "LATE_SSH_INTERNAL_URL=$(LATE_SSH_INTERNAL_URL)" >> .env
-	@echo "LATE_SSH_PUBLIC_URL=$(LATE_SSH_PUBLIC_URL)" >> .env
 	@echo "LATE_AUDIO_URL=$(LATE_AUDIO_URL)" >> .env
 	@echo "LATE_YOUTUBE_API_KEY=$(LATE_YOUTUBE_API_KEY)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env

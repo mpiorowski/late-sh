@@ -249,7 +249,7 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    pair_url: &'a str,
+    listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
     room_info_modal_open: bool,
@@ -261,7 +261,7 @@ struct DrawContext<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     radio_source_count: usize,
-    paired_browser_source: late_core::models::user::AudioSource,
+    paired_source: late_core::models::user::AudioSource,
     selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
@@ -587,10 +587,9 @@ impl App {
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
-        let web_base_url = self
-            .connect_url
-            .rsplit_once('/')
-            .map_or(&*self.connect_url, |p| p.0);
+        let web_base_url = self.web_url.as_str();
+        // Built before the frame borrows `self` mutably below.
+        let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
             selected_index: self.chat.work.selected_index(),
@@ -1038,7 +1037,7 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        pair_url: &self.connect_url,
+                        listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
                         room_info_modal_open: self.room_info_modal_state.is_open(),
@@ -1050,7 +1049,7 @@ impl App {
                         youtube_source_count: self.audio.youtube_source_count(),
                         icecast_source_count: self.audio.icecast_source_count(),
                         radio_source_count: self.audio.radio_source_count(),
-                        paired_browser_source: self.paired_browser_source,
+                        paired_source: self.paired_source,
                         selected_icecast_stream,
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
@@ -1473,7 +1472,7 @@ impl App {
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
                     radio_source_count: ctx.radio_source_count,
-                    paired_browser_source: ctx.paired_browser_source,
+                    paired_source: ctx.paired_source,
                     selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
@@ -1637,7 +1636,7 @@ impl App {
         }
 
         if ctx.show_help {
-            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
         }
 
         if ctx.show_ultimate_modal {

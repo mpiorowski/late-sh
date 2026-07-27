@@ -82,38 +82,6 @@ hey @bot what do you think",
 }
 
 #[test]
-fn extract_mention_handles_reads_only_live_reply_text() {
-    assert_eq!(
-        extract_mention_handles("> @alice old line\n@bartender buy @bob a drink"),
-        vec!["bartender".to_string(), "bob".to_string()]
-    );
-}
-
-#[test]
-fn bartender_round_intent_requires_exact_command() {
-    assert!(bartender_round_intent("@bartender round", "bartender"));
-    assert!(bartender_round_intent("@bartender ROUND!", "bartender"));
-    assert!(bartender_round_intent(
-        "@bartender round for everyone",
-        "bartender"
-    ));
-    assert!(bartender_round_intent(
-        "@bartender round for everyone!",
-        "bartender"
-    ));
-    assert!(!bartender_round_intent("round for everyone", "bartender"));
-    assert!(!bartender_round_intent(
-        "@bartender pour a round for everyone",
-        "bartender"
-    ));
-    assert!(bartender_round_intent(
-        "@bartender round for the house",
-        "bartender"
-    ));
-    assert!(!bartender_round_intent("@bartender confirm", "bartender"));
-}
-
-#[test]
 fn is_dm_room_matches_kind_or_visibility() {
     assert!(is_dm_room("dm", "dm"));
     assert!(is_dm_room("topic", "dm"));
@@ -167,7 +135,7 @@ fn should_handle_bot_mention_event_in_private_room_when_bot_is_not_yet_member() 
 fn parse_bartender_order_pours_within_spendable() {
     let raw = r#"{"action": "pour", "drink": "Segfault Sour", "price": 400, "line": "one segfault sour, that is 400 chips"}"#;
     assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &[]),
+        parse_bartender_order(raw, 900, "bartender"),
         BartenderDecision::Pour {
             drink: "Segfault Sour".to_string(),
             price: 400,
@@ -182,7 +150,7 @@ fn parse_bartender_order_refuses_out_of_range_price() {
     // uncharged rather than clamp to a number the receipt never quoted.
     let cheap = r#"{"action": "pour", "drink": "tap water", "price": 5, "line": "here"}"#;
     assert_eq!(
-        parse_bartender_order(cheap, 5000, "bartender", &[]),
+        parse_bartender_order(cheap, 5000, "bartender"),
         BartenderDecision::Say {
             line: "here".to_string()
         }
@@ -190,7 +158,7 @@ fn parse_bartender_order_refuses_out_of_range_price() {
 
     let dear = r#"{"action": "pour", "drink": "the vault", "price": 99999, "line": "here"}"#;
     assert_eq!(
-        parse_bartender_order(dear, 5000, "bartender", &[]),
+        parse_bartender_order(dear, 5000, "bartender"),
         BartenderDecision::Say {
             line: "here".to_string()
         }
@@ -202,7 +170,7 @@ fn parse_bartender_order_downgrades_unaffordable_pour() {
     // In range, but more than the patron can spend: no charge, just the line.
     let raw = r#"{"action": "pour", "drink": "top shelf", "price": 800, "line": "the good stuff"}"#;
     assert_eq!(
-        parse_bartender_order(raw, 300, "bartender", &[]),
+        parse_bartender_order(raw, 300, "bartender"),
         BartenderDecision::Say {
             line: "the good stuff".to_string()
         }
@@ -216,7 +184,7 @@ fn parse_bartender_order_chat_and_offer_never_charge() {
             r#"{{"action": "{action}", "drink": null, "price": null, "line": "welcome in"}}"#
         );
         assert_eq!(
-            parse_bartender_order(&raw, 900, "bartender", &[]),
+            parse_bartender_order(&raw, 900, "bartender"),
             BartenderDecision::Say {
                 line: "welcome in".to_string()
             }
@@ -225,41 +193,10 @@ fn parse_bartender_order_chat_and_offer_never_charge() {
 }
 
 #[test]
-fn parse_bartender_order_creates_gift_for_known_recipient() {
-    let alice_id = Uuid::from_u128(1);
-    let recipients = [BartenderGiftRecipient {
-        id: alice_id,
-        handle: "alice".to_string(),
-    }];
-    let raw = r#"{"action": "gift", "recipient": "alice", "drink": "Kernel Panic Punch", "price": 300, "line": "kernel panic punch for @alice, 300 chips."}"#;
-    assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &recipients),
-        BartenderDecision::Gift {
-            recipient_id: alice_id,
-            recipient_handle: "alice".to_string(),
-            drink: "Kernel Panic Punch".to_string(),
-            price: 300,
-            line: "kernel panic punch for @alice, 300 chips.".to_string(),
-        }
-    );
-}
-
-#[test]
-fn parse_bartender_order_refuses_gift_for_unknown_recipient() {
-    let raw = r#"{"action": "gift", "recipient": "mallory", "drink": "Kernel Panic Punch", "price": 300, "line": "who is that one for?"}"#;
-    assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &[]),
-        BartenderDecision::Say {
-            line: "who is that one for?".to_string()
-        }
-    );
-}
-
-#[test]
 fn parse_bartender_order_accepts_fenced_json_and_defaults_drink() {
     let raw = "```json\n{\"action\": \"pour\", \"price\": 200, \"line\": \"here you go\"}\n```";
     assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &[]),
+        parse_bartender_order(raw, 900, "bartender"),
         BartenderDecision::Pour {
             drink: "house pour".to_string(),
             price: 200,
@@ -271,20 +208,15 @@ fn parse_bartender_order_accepts_fenced_json_and_defaults_drink() {
 #[test]
 fn parse_bartender_order_skips_garbage_and_empty_lines() {
     assert_eq!(
-        parse_bartender_order("not json at all", 900, "bartender", &[]),
+        parse_bartender_order("not json at all", 900, "bartender"),
         BartenderDecision::Skip
     );
     assert_eq!(
-        parse_bartender_order(r#"{"action": "pour", "price": 200}"#, 900, "bartender", &[]),
+        parse_bartender_order(r#"{"action": "pour", "price": 200}"#, 900, "bartender"),
         BartenderDecision::Skip
     );
     assert_eq!(
-        parse_bartender_order(
-            r#"{"action": "chat", "line": "SKIP"}"#,
-            900,
-            "bartender",
-            &[]
-        ),
+        parse_bartender_order(r#"{"action": "chat", "line": "SKIP"}"#, 900, "bartender"),
         BartenderDecision::Skip
     );
 }
@@ -296,7 +228,7 @@ fn parse_bartender_order_recovers_from_stray_trailing_quote() {
     // chat line instead of leaving the bartender mute.
     let raw = "{\n  \"action\": \"chat\",\n  \"drink\": null,\n  \"price\": null,\n  \"line\": \"The top shelf is closed for you tonight, friend. Here is ice water.\"\n\"\n}";
     assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &[]),
+        parse_bartender_order(raw, 900, "bartender"),
         BartenderDecision::Say {
             line: "The top shelf is closed for you tonight, friend. Here is ice water.".to_string()
         }
@@ -309,7 +241,7 @@ fn parse_bartender_order_recovers_pour_fields_when_json_is_broken() {
     // price all survive the hand-rolled recovery.
     let raw = "{\"action\": \"pour\", \"drink\": \"Kernel Panic Punch\", \"price\": 250, \"line\": \"one Kernel Panic Punch, 250 chips.\"\"}";
     assert_eq!(
-        parse_bartender_order(raw, 900, "bartender", &[]),
+        parse_bartender_order(raw, 900, "bartender"),
         BartenderDecision::Pour {
             drink: "Kernel Panic Punch".to_string(),
             price: 250,

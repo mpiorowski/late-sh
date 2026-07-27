@@ -13,7 +13,7 @@ use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
     svc::{QueueItemView, QueueSnapshot},
-    viz::render_eq,
+    viz::{EqState, render_eq},
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
@@ -27,10 +27,11 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-// Ambient equalizer strip pinned above the dock: a small always-on
-// decorative band (`viz::render_eq`) synthesized from the wall tick, not
-// audio. Its one audio nod is the muted flatline. The band scales to
-// whatever height it's given; the stage pins 3.
+// Ambient equalizer strip pinned above the dock: a decorative band
+// (`viz::render_eq`) synthesized from the wall tick, not audio. It only
+// dances while a client is actually paired; muted flatlines it, and an
+// unpaired session gets a pointer to the guide instead. The band scales
+// to whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock + detail portion of the stage (unchanged by the visualizer merge):
 // volume rows (2) + three dock entries (title + now-playing, 6) + labeled
@@ -81,7 +82,7 @@ pub(crate) struct SidebarProps<'a> {
     /// Per-user paired-browser audio source preference (mirrors
     /// `users.settings.audio_source`, cycled by v+x). Picks which source
     /// owns the music stage's detail area; the dock rows stay constant.
-    pub paired_browser_source: AudioSource,
+    pub paired_source: AudioSource,
     /// Per-user Icecast stream selection (`users.settings.icecast_stream`,
     /// v+1/2 while Icecast is active). The icecast dock row shows THIS
     /// stream's now-playing track.
@@ -219,7 +220,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                         now_playing: props.now_playing,
                         paired_client: props.paired_client,
                         queue: props.queue_snapshot,
-                        source: props.paired_browser_source,
+                        source: props.paired_source,
                         selected_stream: props.selected_icecast_stream,
                         selected_station: props.selected_radio_station,
                         radio_now_playing: props.radio_now_playing,
@@ -560,7 +561,7 @@ struct MusicStageProps<'a> {
 
 /// Music stage: a small ambient equalizer strip pinned on top, then the
 /// fixed dock and fixed detail area. Rows 0-2 the eq band (borderless,
-/// always dancing, no audio data), rows 3-4 volume, rows 5-10 a
+/// dancing only while a client is paired and unmuted), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
 /// source for new users), row 11 a labeled rule naming the active source,
@@ -587,8 +588,12 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    let muted = props.paired_client.is_some_and(|client| client.muted);
-    render_eq(frame, viz_area, props.marquee_tick, muted);
+    let eq_state = match props.paired_client {
+        None => EqState::Unpaired,
+        Some(client) if client.muted => EqState::Muted,
+        Some(_) => EqState::Playing,
+    };
+    render_eq(frame, viz_area, props.marquee_tick, eq_state);
 
     let lines = music_stage_lines(dock_area.width, props);
     frame.render_widget(Paragraph::new(lines), dock_area);

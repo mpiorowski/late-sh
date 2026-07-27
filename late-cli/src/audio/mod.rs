@@ -21,7 +21,6 @@ pub(super) struct AudioRuntime {
     pub(super) stop: Arc<AtomicBool>,
     pub(super) muted: Arc<AtomicBool>,
     pub(super) volume_percent: Arc<AtomicU8>,
-    pub(super) icecast_output_available: Arc<AtomicBool>,
     /// True when the user's audio_source preference is a direct stream the
     /// CLI can decode locally (Icecast or Radio). False when the user picked
     /// YouTube, so we silence the output without touching the user-controlled
@@ -85,13 +84,13 @@ impl AudioRuntime {
                 if profile == AudioBackendProfile::Wsl {
                     eprintln!(
                         "late: local WSL audio could not start; continuing without CLI audio.\n\
-                         late: use browser pairing or the Windows-native late.exe for audio.\n\
+                         late: use the Windows-native late.exe, or listen at late.sh/listen.\n\
                          late: {err:#}\n\n{hint}"
                     );
                 } else {
                     eprintln!(
                         "late: local audio could not start; continuing without CLI audio.\n\
-                         late: use browser pairing for audio.\n\
+                         late: listen at late.sh/listen instead.\n\
                          late: {err:#}\n\n{hint}"
                     );
                 }
@@ -125,7 +124,6 @@ impl AudioRuntime {
         // unmutes us if the user's preference is "play on connect".
         let muted = Arc::new(AtomicBool::new(true));
         let volume_percent = Arc::new(AtomicU8::new(30));
-        let icecast_output_available = Arc::new(AtomicBool::new(true));
         // Default to Icecast (play). The server's pair-WS connect always
         // sends SetPlaybackSource right after register, which flips this if
         // the user's persisted preference is Youtube.
@@ -142,7 +140,6 @@ impl AudioRuntime {
             Arc::clone(&played_samples),
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
-            Arc::clone(&icecast_output_available),
             Arc::clone(&source_is_icecast),
             Arc::clone(&stream_generation),
             Arc::clone(&stream_flushed_generation),
@@ -178,7 +175,6 @@ impl AudioRuntime {
             stop,
             muted,
             volume_percent,
-            icecast_output_available,
             source_is_icecast,
             native_source_selected,
             stream_url,
@@ -197,7 +193,6 @@ impl AudioRuntime {
             stop: Arc::new(AtomicBool::new(false)),
             muted: Arc::new(AtomicBool::new(false)),
             volume_percent: Arc::new(AtomicU8::new(0)),
-            icecast_output_available: Arc::new(AtomicBool::new(false)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
             native_source_selected: Arc::new(AtomicBool::new(true)),
             stream_url: Arc::new(Mutex::new(String::new())),

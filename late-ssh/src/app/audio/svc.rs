@@ -330,6 +330,13 @@ impl AudioService {
         self.snapshot_tx.subscribe()
     }
 
+    /// The last published queue snapshot, straight from memory. Unlike
+    /// [`Self::snapshot`] this never touches the DB, so it is safe to call on
+    /// every request of a public HTTP route.
+    pub fn current_snapshot(&self) -> QueueSnapshot {
+        self.snapshot_tx.borrow().clone()
+    }
+
     /// True once the YouTube Data API key is configured. Server-side YouTube
     /// metadata is required for both booth submissions and staff `/audio`.
     pub fn booth_submit_enabled(&self) -> bool {

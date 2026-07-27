@@ -54,8 +54,8 @@ impl HelpModalState {
         self.selected_topic
     }
 
-    pub(crate) fn current_lines(&self, pair_url: &str) -> Vec<String> {
-        lines_for(self.selected_topic, self.keep_composer_focused, pair_url)
+    pub(crate) fn current_lines(&self, listen_url: &str) -> Vec<String> {
+        lines_for(self.selected_topic, self.keep_composer_focused, listen_url)
     }
 
     pub(crate) fn current_scroll(&self) -> u16 {

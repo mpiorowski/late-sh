@@ -19,10 +19,11 @@ const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
 /// nextest's 5-minute terminate-after.
 const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The ambient sidebar wave paints on anim_half edges whenever the right
-/// sidebar is visible, so a session showing it never settles by design.
-/// Settle-based tests turn the sidebar off to exercise the gate beneath;
-/// `sidebar_wave_holds_half_rate_and_paints_on_edges` covers the wave path.
+/// The sidebar's animated panels (eq strip + bonsai sway) paint on anim_half
+/// edges whenever the right sidebar is visible, so a session showing it never
+/// settles by design. Settle-based tests turn the sidebar off to exercise the
+/// gate beneath; `sidebar_holds_half_rate_and_paints_on_edges` covers the
+/// visible-sidebar path.
 ///
 /// This writes the per-device rails rather than the profile. `ProfileState::
 /// drain_snapshot` replaces the whole profile every time a `ProfileService`
@@ -30,7 +31,7 @@ const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// session's first profile prefetch arrives. That prefetch is async: on an
 /// unloaded machine it lands before the settle loop starts, but under load it
 /// lands mid-settle, silently restores the account's `On`, and switches the
-/// wave back on -- at which point the app dirties every anim_half edge
+/// sidebar back on -- at which point the app dirties every anim_half edge
 /// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
 /// takes precedence over the profile in `device_rails_or_profile` and nothing
 /// async overwrites it, so the sidebar stays off for the whole test.
@@ -224,12 +225,12 @@ async fn open_settings_modal_settles_clean() {
     settle_clean(&mut app).await;
 }
 
-/// The always-on ambient wave: a session showing the sidebar never goes
+/// The always-on sidebar edge: a session showing the sidebar never goes
 /// idle. It holds the half-rate wake tier, and ticks pay frames only on
 /// anim_half edges (~every 132ms), not on every wake.
 #[tokio::test]
-async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
-    let (_test_db, mut app) = chat_compose_app("wave-cadence").await;
+async fn sidebar_holds_half_rate_and_paints_on_edges() {
+    let (_test_db, mut app) = chat_compose_app("sidebar-cadence").await;
 
     // Flush startup churn (prefetches, splash, first clock render).
     let warmup = Instant::now() + Duration::from_secs(1);
@@ -240,15 +241,16 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Age past the post-input window so the hot tier can't mask the wave's.
+    // Age past the post-input window so the hot tier can't mask the
+    // sidebar's own tier.
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "visible sidebar holds the half-rate tier for the wave"
+        "visible sidebar holds the half-rate tier for its animated panels"
     );
 
-    // 500ms of dense ticks spans at least three anim_half edges; the wave
+    // 500ms of dense ticks spans at least three anim_half edges; the sidebar
     // must pay those frames and only those.
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut changed = 0usize;
@@ -263,10 +265,10 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
     }
     assert!(
         changed >= 2,
-        "wave never paid an edge frame ({changed}/{total})"
+        "sidebar never paid an edge frame ({changed}/{total})"
     );
     assert!(
         changed < total / 2,
-        "wave must skip between edges ({changed}/{total})"
+        "sidebar must skip between edges ({changed}/{total})"
     );
 }
