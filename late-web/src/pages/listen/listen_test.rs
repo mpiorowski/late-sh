@@ -86,6 +86,14 @@ async fn listen_page_renders_without_a_token() {
     // The page must keep steering people at the terminal first.
     assert!(body.contains("ssh late.sh"), "listen page: {body}");
 
+    // Product rule: the house stream sits last. Guest stations and the
+    // community queue lead, our own playlist is the fallback option.
+    let nightride = body.find("nightride fm").expect("nightride section");
+    let community = body.find("community queue").expect("community section");
+    let house = body.find("house radio").expect("house section");
+    assert!(nightride < house, "house radio must not lead the page");
+    assert!(community < house, "house radio must sit below the queue");
+
     let _ = shutdown_tx.send(());
 }
 

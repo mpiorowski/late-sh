@@ -561,7 +561,7 @@ struct MusicStageProps<'a> {
 
 /// Music stage: a small ambient equalizer strip pinned on top, then the
 /// fixed dock and fixed detail area. Rows 0-2 the eq band (borderless,
-/// always dancing, no audio data), rows 3-4 volume, rows 5-10 a
+/// dancing only while a client is paired and unmuted), rows 3-4 volume, rows 5-10 a
 /// three-source dock in order radio → youtube → icecast (title bar +
 /// now-playing line per source; radio leads because it is the default
 /// source for new users), row 11 a labeled rule naming the active source,

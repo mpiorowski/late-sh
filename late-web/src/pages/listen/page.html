@@ -20,28 +20,6 @@
         </p>
     </div>
 
-    <!-- house radio -->
-    <section class="mb-8">
-        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">house radio</h2>
-        <template x-for="mount in ['chill', 'classical']" :key="mount">
-            <button type="button" @click="playStream(mount)"
-                class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
-                :class="playing === 'stream:' + mount ? 'border-green-500 bg-gray-900' : ''">
-                <div class="flex items-baseline justify-between gap-3">
-                    <span class="text-green-400" x-text="mount"></span>
-                    <span class="text-xs text-gray-500"
-                        x-text="playing === 'stream:' + mount ? 'playing' : 'play'"></span>
-                </div>
-                <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(streams[mount])"></div>
-            </button>
-        </template>
-        <p class="text-xs text-gray-500 mt-2">
-            every track CC0 or CC-BY.
-            <a href="https://github.com/mpiorowski/late-sh/blob/main/MUSIC.md" rel="noopener"
-                class="text-green-400 hover:text-green-300 underline underline-offset-2">full credits</a>
-        </p>
-    </section>
-
     <!-- nightride -->
     <section class="mb-8">
         <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">nightride fm</h2>
@@ -99,6 +77,28 @@
 
         <p class="text-xs text-gray-500 mt-2" x-show="playing === 'youtube'">
             queue something yourself from the terminal with <span class="text-gray-400">v+v</span>
+        </p>
+    </section>
+
+    <!-- house radio -->
+    <section class="mb-8">
+        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">house radio</h2>
+        <template x-for="mount in ['chill', 'classical']" :key="mount">
+            <button type="button" @click="playStream(mount)"
+                class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
+                :class="playing === 'stream:' + mount ? 'border-green-500 bg-gray-900' : ''">
+                <div class="flex items-baseline justify-between gap-3">
+                    <span class="text-green-400" x-text="mount"></span>
+                    <span class="text-xs text-gray-500"
+                        x-text="playing === 'stream:' + mount ? 'playing' : 'play'"></span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(streams[mount])"></div>
+            </button>
+        </template>
+        <p class="text-xs text-gray-500 mt-2">
+            every track CC0 or CC-BY.
+            <a href="https://github.com/mpiorowski/late-sh/blob/main/MUSIC.md" rel="noopener"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">full credits</a>
         </p>
     </section>
 

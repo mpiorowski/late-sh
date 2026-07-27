@@ -207,7 +207,7 @@ YouTube item without entering the switching/playback path.
 
 ### Client → server `WsPayload` (`api.rs:39-68`)
 - `heartbeat`
-- `viz { position_ms, bands[8], rms }` — legacy/compat payload; the current web page does not send it
+- `viz { position_ms, bands[8], rms }` — legacy/compat payload; nothing sends it any more and it drives nothing
 - `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }` — older CLIs also send `icecast_output_available`, which the server now ignores: it only ever gated the browser Icecast takeover.
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
 - `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
@@ -230,6 +230,13 @@ carries no surface-policy flags:
 
 Anyone without the CLI listens at late-web's public `/listen` page, which is a
 read-only follower of the same global state and pairs with nothing.
+
+Because the message depends only on the persisted source, **who else is paired
+cannot change what a client should be playing**. `client_state` therefore does
+not rebroadcast a source: the only sends are the pair-WS connect replay, a
+`v+x` source change, and unregistration. The old CLI-presence /
+`icecast_output_available` rebroadcast existed to flip the browser's Icecast
+takeover and was removed with it.
 
 Mechanics:
 - `PairControlMessage::SetPlaybackSource { source, stream_url, station }` is
@@ -353,6 +360,9 @@ TUI sees, and it holds no per-user server state at all.
   stations from the `stream_url` in the response, YouTube through the official
   IFrame player. The IFrame API script is only fetched once someone actually
   picks YouTube.
+- **Source order is a product rule.** Nightride first, then the community
+  queue, then house radio last. Our own playlist is the fallback option, not
+  the headline. `listen_test.rs` asserts the ordering.
 - **Joining mid-track.** The page seeks in using `started_at_ms` rather than
   restarting the current song. That is the same one-shot-seek idea the webview
   helper uses, and it does not reintroduce drift correction: after the initial
@@ -369,9 +379,22 @@ TUI sees, and it holds no per-user server state at all.
 There is no audio analysis anywhere in the product, and no `VizFrame` pipeline
 left in this domain. `viz.rs` is one function, `render_eq`, which draws a
 purely decorative equalizer synthesized from the wall tick (see root
-`CONTEXT.md` §2.6). It reacts to nothing: not to Icecast, not to YouTube, not
-to whether anything is playing at all. Its only input beyond the tick is
-`muted`.
+`CONTEXT.md` §2.6). It reacts to no audio: not to Icecast, not to YouTube,
+not to what is actually coming out of a speaker.
+
+Its one input beyond the tick is `EqState`, which is about whether audio is
+*possible*, not about what it sounds like:
+
+| `EqState` | When | Renders |
+|---|---|---|
+| `Playing` | a client is paired and unmuted | the synthesized band |
+| `Muted` | a client is paired and muted | a flat line, the meter at rest |
+| `Unpaired` | nothing is paired at all | `no audio here yet` / `press ? to listen` |
+
+`Unpaired` is the raw-`ssh` case: the session has no audio surface, so a
+dancing band would be claiming playback that cannot exist. The strip points
+at the `?` guide instead, which is where both the CLI install and
+`late.sh/listen` live. The sibling volume row already rendered `—` here.
 
 This was already true before browser pairing was removed; the browser page
 never created a Web Audio `AudioContext` or sent analyzer frames either. The
@@ -402,6 +425,7 @@ Renders the audio domain into the right rail as a **fixed dock + detail layout**
 **Two product rules (user requirements):**
 1. **Every source always shows its now-playing line, even when inactive.** The dock exists so users can see what's on the other sources and judge whether switching is worth it. Never collapse a source to a title-only row. Only controls (progress, skip meter, queue, selectors) belong exclusively to the active detail area.
 2. **Chrome must not move between states.** Title bars, the rule, the detail area, and the footer sit on the same rows for all three sources and all data states. No variable-height accordion; see `feedback_stable_chrome.md` in auto-memory.
+3. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (§10).
 
 ### Layout (rows 0-15)
 
@@ -675,8 +699,8 @@ A single trait inside `late-cli/src/audio/` abstracts the platform-specific capt
 ### What it unlocks
 
 - Real reactive bars in YouTube mode — no procedural placeholder needed once embedded-CLI playback is the default surface.
-- Single viz pipeline regardless of source. `procedural_indicator_bands` (§10) stays meaningful only for the **browser-pair** YouTube path — i.e. for users who haven't moved to the embedded CLI yet.
-- Server no longer needs a procedural browser fallback for CLI-hosted YouTube playback. Each CLI generates its own frames.
+- Single viz pipeline regardless of source. The procedural band (§10) would stay meaningful only as the unpaired/never-installed placeholder.
+- Server no longer needs a procedural fallback for CLI-hosted YouTube playback. Each CLI generates its own frames.
 
 ### Open questions
 
