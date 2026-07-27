@@ -354,6 +354,11 @@ pub struct SessionWorld {
     pub username: Option<String>,
     pub active_users: Option<crate::state::ActiveUsers>,
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
+    /// A leaderboard snapshot the session should find already published, as
+    /// `LeaderboardService` leaves one for every session after its first
+    /// refresh. Unset means the session gets no leaderboard channel at all.
+    pub leaderboard_rx:
+        Option<watch::Receiver<Arc<late_core::models::leaderboard::LeaderboardData>>>,
 }
 
 pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
@@ -479,7 +484,7 @@ fn make_app_with_chat_service_and_permissions(
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         initial_chip_balance: 0,
-        leaderboard_rx: None,
+        leaderboard_rx: world.leaderboard_rx,
         web_url: "http://localhost:3000".to_string(),
         rebels_enabled: true,
         rebels_host: "frittura.org".to_string(),

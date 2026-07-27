@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-07-26 (first `pg_stat_statements` cost ranking of the whole DB workload, then the top two items fixed. `unread_counts_for_user` was 43% of all database execution time on its own; capping the count and dropping its per-message `users` join took a worst-case user from 578 ms to 11.8 ms. The leaderboard refresh loop was 13% for a timer nobody was watching; it is now 5-minutely and skips when no session is subscribed. The work-feed fan-out that Pain Point 6 called the biggest stall is 0.5% of DB time and is a correctness bug, not a capacity one. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-07-27 (the leaderboard's 300s cadence exposed a latent seeding bug: sessions rendered *empty* panels rather than stale ones, because `watch::Sender::subscribe` marks the current value seen and the `has_changed()` gate never fired for it. Sessions now seed from `borrow()`, and a connect refreshes a snapshot already older than `REFRESH_INTERVAL`. Cadence and subscriber gate unchanged. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -307,6 +307,7 @@ All shipped together, no migration, no schema change, no new infrastructure. Per
 |---|---|---|
 | `unread_counts_for_user`: count capped at 100, per-message `users` join replaced by a UUID compare | 43% | ~1% |
 | Leaderboard loop: 30 s to 300 s, skipped entirely with no subscribers | 13.1% | ~1.3% |
+| Leaderboard connect refresh (added 2026-07-27, see below) | — | bounded by the same 300 s |
 | `list_for_user` + `last_message_at_for_rooms` + `unread_counts_for_user` merged into `ChatRoom::list_for_user_with_state` | 12.6% + the unread row above | ~8% |
 | Mention-autocomplete list: read the in-memory `UsernameDirectory` instead of re-scanning `users` | 1.9% | 0 |
 | `User::friend_and_ignored_user_ids`: one `SELECT settings` per snapshot instead of two | 0.9% | 0.45% |
@@ -314,6 +315,17 @@ All shipped together, no migration, no schema change, no new infrastructure. Per
 Plus one change with no `pg_stat_statements` line of its own: `build_chat_snapshot` now issues its remaining queries as **two pipelined `tokio::join!` rounds instead of a serial chain**, which cuts per-snapshot latency without changing server CPU. That is what raises the ceiling on the sequential session loop (item 3 below).
 
 Roughly **60% of the total workload**, projected. Not yet verified in prod: reset `pg_stat_statements` after the deploy and re-run this ranking before trusting these numbers or planning against them.
+
+### Follow-up 2026-07-27: the staleness the leaderboard cut bought
+
+Widening the loop to 300 s was correct on cost and wrong on one consumer nobody checked. The PR cleared the change against the per-session chip balance, which is event-driven and fine. It did not check the leaderboard panels themselves, and they had a latent bug that the wider interval turned from invisible into a product complaint: `watch::Sender::subscribe` marks the current value as **seen**, so the `has_changed()` gate in `app/tick.rs` never fired for the snapshot a session was handed at bootstrap. Sessions rendered *empty* panels — not stale ones — until the next timer pass, which at 30 s nobody noticed and at 300 s reads as broken.
+
+Two fixes, neither of which touches the interval or the subscriber gate:
+
+- `App::new` seeds `leaderboard` from `rx.borrow()` instead of `LeaderboardData::default()`.
+- `subscribe` wakes the loop, and `should_refresh` grants that wake a pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This handles the quiet-server case, where the subscriber gate skipped every pass and the first session back seeded from whatever the last session left behind — potentially hours old. The age bound is load-bearing: unbounded, this would fire once per connect and undo the cut above.
+
+Added DB cost is at most one extra pass per 300 s window, and only on a process that was idle. **The lesson for the next timer that gets widened: check every consumer of the data, not just the one with a known latency requirement.** A cadence change is a correctness change for anything that was quietly relying on the old rate.
 
 ### Remaining DB work, ranked by impact
 

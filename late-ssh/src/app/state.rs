@@ -1242,8 +1242,19 @@ impl App {
             ),
             settings_modal_state,
             sheet_modal_state: sheet_modal::state::SheetModalState::new(),
+            // Seed from what is already published. `watch::Sender::subscribe`
+            // marks the current value as seen, so the `has_changed()` gate in
+            // `tick.rs` is false against a snapshot sitting right there: without
+            // this the session renders empty leaderboard panels until the next
+            // refresh lands, up to `REFRESH_INTERVAL` later. Deliberately does
+            // not touch `chip_balance` — that is loaded accurately at login, and
+            // this snapshot may predate it.
+            leaderboard: config
+                .leaderboard_rx
+                .as_ref()
+                .map(|rx| rx.borrow().clone())
+                .unwrap_or_default(),
             leaderboard_rx: config.leaderboard_rx,
-            leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
