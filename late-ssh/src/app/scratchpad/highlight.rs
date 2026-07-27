@@ -21,8 +21,9 @@ use crate::app::common::theme;
 /// bundles ~200 syntaxes, far too many to cycle through one at a time, so
 /// this is the handful an actual pairing session would reach for. Rust is
 /// first to match this app's own audience.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Language {
+    #[default]
     Plain,
     Rust,
     Python,
@@ -53,12 +54,6 @@ const CYCLE: &[Language] = &[
     Language::Json,
     Language::Yaml,
 ];
-
-impl Default for Language {
-    fn default() -> Self {
-        Language::Plain
-    }
-}
 
 impl Language {
     fn cycle_index(self) -> usize {
