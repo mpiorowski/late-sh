@@ -25,12 +25,18 @@ use std::sync::LazyLock;
 
 use super::world::{Dir, RoomId, World, region_layout, seed_world};
 
-/// The world's coordinate field, derived once. The world is deterministic, so
-/// these are stable for the whole process and shared by every session's map.
-static WORLD_COORDS: LazyLock<HashMap<RoomId, Coord>> =
-    LazyLock::new(|| derive_coords(&seed_world()));
+/// The world graph, built once. Deterministic, so it is stable for the whole
+/// process and shared by every session's map (coords, exits, POIs all read it).
+static WORLD: LazyLock<World> = LazyLock::new(seed_world);
 
-/// The process-wide coordinate field. First call builds it (one world-gen).
+/// The world's coordinate field, derived once from the shared world.
+static WORLD_COORDS: LazyLock<HashMap<RoomId, Coord>> = LazyLock::new(|| derive_coords(&WORLD));
+
+fn world() -> &'static World {
+    &WORLD
+}
+
+/// The process-wide coordinate field. First call builds the world once.
 pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
     &WORLD_COORDS
 }
@@ -411,7 +417,7 @@ pub struct Poi {
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
 
 fn build_pois() -> HashMap<RoomId, Poi> {
-    let world = seed_world();
+    let world = world();
     let mut map: HashMap<RoomId, Poi> = HashMap::new();
     for spawn in &world.spawns {
         let e = map.entry(spawn.home).or_default();
@@ -441,6 +447,168 @@ pub fn pois() -> &'static HashMap<RoomId, Poi> {
 /// The points of interest at a single room, if any.
 pub fn poi(room: RoomId) -> Option<&'static Poi> {
     POIS.get(&room)
+}
+
+/// One cell of the rendered map. Rooms sit on even offsets from the centre and
+/// the corridors between them on the odd offsets in between, so the map shows
+/// which rooms are actually linked (walkable), not just spatially near.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tile {
+    Empty,
+    Room(RoomId),
+    /// A horizontal corridor (east/west exit) between two rooms.
+    LinkH,
+    /// A vertical corridor (north/south exit) between two rooms.
+    LinkV,
+}
+
+/// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
+/// (even cells) with the corridors between linked rooms (odd cells). Fog of
+/// war: a room shows only if visited (or it's the player); a corridor shows
+/// only when BOTH its rooms are visited, so paths into the unknown stay hidden.
+/// Up/down exits are not drawn on a flat level. The player's room wins any
+/// cell collision so `@` never vanishes under a stacked hand-authored room.
+pub fn map_canvas(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+    visited: &HashSet<RoomId>,
+    player_room: RoomId,
+) -> Vec<Vec<Tile>> {
+    let (w, h) = (cols.max(0) as usize, rows.max(0) as usize);
+    let mut canvas = vec![vec![Tile::Empty; w]; h];
+    if cols <= 0 || rows <= 0 {
+        return canvas;
+    }
+    let cx = cols / 2;
+    let cy = rows / 2;
+    let seen = |id: RoomId| id == player_room || visited.contains(&id);
+    let put = |canvas: &mut Vec<Vec<Tile>>, sc: i32, sr: i32, t: Tile| {
+        if !(0..cols).contains(&sc) || !(0..rows).contains(&sr) {
+            return;
+        }
+        // The player's room outranks a collided room on the same cell.
+        if let Tile::Room(existing) = canvas[sr as usize][sc as usize]
+            && existing == player_room
+        {
+            return;
+        }
+        canvas[sr as usize][sc as usize] = t;
+    };
+
+    // Each room spans two screen cells, so a `cols`-wide view is cols/2 rooms;
+    // pull a slightly wider window so corridors reaching in are covered.
+    let rxw = cols / 4 + 2;
+    let ryw = rows / 4 + 2;
+    for (id, c) in visible(coords, center, rxw, ryw) {
+        if c.z != center.z || !seen(id) {
+            continue;
+        }
+        let sc = cx + 2 * (c.x - center.x);
+        let sr = cy + 2 * (c.y - center.y);
+        put(&mut canvas, sc, sr, Tile::Room(id));
+
+        let Some(room) = world().rooms.get(&id) else {
+            continue;
+        };
+        for (dir, dest) in &room.exits {
+            if !seen(*dest) {
+                continue;
+            }
+            let Some(&dc) = coords.get(dest) else {
+                continue;
+            };
+            if dc.z != c.z {
+                continue; // stairs: not drawn on a flat level
+            }
+            match (dir, dc.x - c.x, dc.y - c.y) {
+                (Dir::East, 1, 0) => put(&mut canvas, sc + 1, sr, Tile::LinkH),
+                (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
+                (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
+                (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
+                _ => {} // linked but not spatially adjacent (cross-region seam)
+            }
+        }
+    }
+    canvas
+}
+
+/// An off-screen point of interest, projected to the map border as a direction
+/// arrow. Points the way without revealing the room, so an unexplored boss is a
+/// "that way" hint, not a spoiler.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MapArrow {
+    pub row: usize,
+    pub col: usize,
+    pub glyph: char,
+    pub boss: bool,
+}
+
+fn arrow_glyph(dx: i32, dy: i32) -> char {
+    match (dx.signum(), dy.signum()) {
+        (0, -1) => '\u{2191}',  // ↑
+        (0, 1) => '\u{2193}',   // ↓
+        (-1, 0) => '\u{2190}',  // ←
+        (1, 0) => '\u{2192}',   // →
+        (-1, -1) => '\u{2196}', // ↖
+        (1, -1) => '\u{2197}',  // ↗
+        (-1, 1) => '\u{2199}',  // ↙
+        (1, 1) => '\u{2198}',   // ↘
+        _ => '\u{2022}',        // • (shouldn't happen for off-screen)
+    }
+}
+
+/// Border arrows for every boss / tameable POI that is off-screen on the viewed
+/// level. On-screen POIs are left to the canvas (a marker if visited, or hidden
+/// by fog if not). Deduplicated per border cell, with bosses taking priority.
+pub fn poi_arrows(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+) -> Vec<MapArrow> {
+    if cols <= 0 || rows <= 0 {
+        return Vec::new();
+    }
+    let cx = cols / 2;
+    let cy = rows / 2;
+    let mut by_cell: BTreeMap<(usize, usize), (char, bool)> = BTreeMap::new();
+    for (room, poi) in pois() {
+        let is_boss = poi.boss.is_some();
+        if !is_boss && poi.tameable.is_none() {
+            continue;
+        }
+        let Some(&c) = coords.get(room) else {
+            continue;
+        };
+        if c.z != center.z {
+            continue;
+        }
+        let sc = cx + 2 * (c.x - center.x);
+        let sr = cy + 2 * (c.y - center.y);
+        if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
+            continue; // on-screen: the canvas (or fog) handles it
+        }
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
+        let key = (
+            sr.clamp(0, rows - 1) as usize,
+            sc.clamp(0, cols - 1) as usize,
+        );
+        let entry = by_cell.entry(key).or_insert((glyph, is_boss));
+        if is_boss && !entry.1 {
+            *entry = (glyph, true); // a boss outranks a tame arrow on the same cell
+        }
+    }
+    by_cell
+        .into_iter()
+        .map(|((row, col), (glyph, boss))| MapArrow {
+            row,
+            col,
+            glyph,
+            boss,
+        })
+        .collect()
 }
 
 /// Every coordinate shared by more than one room, with the room ids that land

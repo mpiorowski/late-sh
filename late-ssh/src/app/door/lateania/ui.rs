@@ -192,7 +192,7 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
 /// camera and Enter re-centres (handled in input.rs).
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
-    use super::worldmap::{viewport_explored, world_coords};
+    use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
 
     let coords = world_coords();
     let Some(player_room) = view.room else {
@@ -254,15 +254,17 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     }
     frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
 
-    // Body: the viewport grid. Fog of war means only visited rooms draw. Boss
-    // and taming rooms show a marker over their biome; `@` is the player; the
-    // viewport centre is the inspector crosshair (reverse-highlighted).
+    // Body: the interleaved canvas - rooms with the corridors between linked
+    // rooms drawn in, so paths are visible. Fog hides unvisited rooms and any
+    // corridor into the unknown. Boss/taming rooms show a marker; off-screen
+    // bosses/POIs get a border arrow pointing the way (no location spoiler).
     let body = rows[1];
     let cols = body.width as i32;
     let height = body.height as i32;
-    let grid = viewport_explored(coords, center, cols, height, &view.visited, player_room);
     let cx = (cols / 2) as usize;
     let cy = (height / 2) as usize;
+    let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
+
     let player_style = Style::default()
         .fg(Color::Rgb(250, 240, 140))
         .add_modifier(Modifier::BOLD);
@@ -272,40 +274,61 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let tame_style = Style::default()
         .fg(Color::Rgb(230, 140, 160))
         .add_modifier(Modifier::BOLD);
-    let lines: Vec<Line> = grid
+    let link_style = Style::default().fg(theme::BORDER_DIM());
+
+    let mut cells: Vec<Vec<(String, Style)>> = canvas
         .iter()
-        .enumerate()
-        .map(|(r, row)| {
-            let spans: Vec<Span> = row
-                .iter()
-                .enumerate()
-                .map(|(c, cell)| {
-                    let (ch, mut style): (String, Style) = match cell {
-                        Some(id) if *id == player_room => ("@".to_string(), player_style),
-                        Some(id) => match super::worldmap::poi(*id) {
-                            Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
-                            Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
-                            _ => {
-                                let (g, color) = biome_style(super::world::biome_of(*id));
-                                (g.to_string(), Style::default().fg(color))
-                            }
-                        },
-                        None => (" ".to_string(), Style::default()),
-                    };
-                    if r == cy && c == cx {
-                        style = style.add_modifier(Modifier::REVERSED);
-                    }
-                    Span::styled(ch, style)
+        .map(|row| {
+            row.iter()
+                .map(|tile| match tile {
+                    Tile::Empty => (" ".to_string(), Style::default()),
+                    Tile::LinkH => ("\u{2500}".to_string(), link_style), // ─
+                    Tile::LinkV => ("\u{2502}".to_string(), link_style), // │
+                    Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
+                    Tile::Room(id) => match poi(*id) {
+                        Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
+                        Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                        _ => {
+                            let (g, color) = biome_style(super::world::biome_of(*id));
+                            (g.to_string(), Style::default().fg(color))
+                        }
+                    },
                 })
-                .collect();
-            Line::from(spans)
+                .collect()
+        })
+        .collect();
+
+    // Off-screen POI direction arrows on the border.
+    for arrow in poi_arrows(coords, center, cols, height) {
+        if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+            let style = if arrow.boss { boss_style } else { tame_style };
+            *cell = (arrow.glyph.to_string(), style);
+        }
+    }
+
+    // Crosshair at the viewport centre (the inspector target).
+    if let Some(cell) = cells.get_mut(cy).and_then(|r| r.get_mut(cx)) {
+        cell.1 = cell.1.add_modifier(Modifier::REVERSED);
+    }
+
+    let lines: Vec<Line> = cells
+        .into_iter()
+        .map(|row| {
+            Line::from(
+                row.into_iter()
+                    .map(|(ch, style)| Span::styled(ch, style))
+                    .collect::<Vec<_>>(),
+            )
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), body);
 
-    // Inspector: what sits under the crosshair (viewport centre). Fog already
-    // blanked unvisited cells, so a room here is one the player has seen.
-    let cursor_room = grid.get(cy).and_then(|row| row.get(cx)).copied().flatten();
+    // Inspector: the room under the crosshair (canvas centre). Fog already
+    // blanked unvisited rooms, so a room here is one the player has seen.
+    let cursor_room = match canvas.get(cy).and_then(|r| r.get(cx)) {
+        Some(Tile::Room(id)) => Some(*id),
+        _ => None,
+    };
     let mut inspect: Vec<Line> = Vec::new();
     if let Some(id) = cursor_room {
         let (rn, rt) = region_atlas_entry(id).unwrap_or(("The wilds", ""));
@@ -364,7 +387,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
             Span::styled(" boss  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" tame  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" off-map", Style::default().fg(theme::TEXT_DIM())),
         ])),
         rows[3],
     );

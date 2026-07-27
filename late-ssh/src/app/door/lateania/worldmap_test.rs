@@ -498,3 +498,71 @@ fn pois_index_bosses_tameables_and_monsters() {
         );
     }
 }
+
+#[test]
+fn map_canvas_draws_corridors_between_visited_rooms_and_fogs_the_rest() {
+    use super::Tile;
+    use std::collections::HashSet;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let start = world.start_room;
+    let center = coords[&start];
+    let (cols, rows) = (41, 21);
+    let (cx, cy) = (cols as usize / 2, rows as usize / 2);
+
+    // Everything visited: the centre is the start room, and corridors render.
+    let all: HashSet<_> = world.rooms.keys().copied().collect();
+    let canvas = super::map_canvas(&coords, center, cols, rows, &all, start);
+    assert!(matches!(canvas[cy][cx], Tile::Room(id) if id == start));
+    assert!(
+        canvas
+            .iter()
+            .flatten()
+            .any(|t| matches!(t, Tile::LinkH | Tile::LinkV)),
+        "linked rooms should show corridors"
+    );
+
+    // Nothing visited: only the player shows, and no corridors leak the layout.
+    let empty = HashSet::new();
+    let fogged = super::map_canvas(&coords, center, cols, rows, &empty, start);
+    let visible_rooms: Vec<_> = fogged
+        .iter()
+        .flatten()
+        .filter_map(|t| match t {
+            Tile::Room(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(visible_rooms, vec![start], "only the player under full fog");
+    assert!(
+        !fogged
+            .iter()
+            .flatten()
+            .any(|t| matches!(t, Tile::LinkH | Tile::LinkV)),
+        "no corridors into the unknown"
+    );
+}
+
+#[test]
+fn poi_arrows_point_off_screen_pois_to_the_border() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+    let arrows = super::poi_arrows(&coords, center, cols, rows);
+
+    assert!(!arrows.is_empty(), "distant POIs produce border arrows");
+    assert!(
+        arrows.iter().any(|a| a.boss),
+        "at least one off-map boss arrow"
+    );
+    for a in &arrows {
+        assert!(a.row < rows as usize && a.col < cols as usize);
+        let on_border =
+            a.row == 0 || a.row == rows as usize - 1 || a.col == 0 || a.col == cols as usize - 1;
+        assert!(on_border, "arrow {a:?} must sit on the viewport border");
+        assert!(
+            "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(a.glyph)
+        );
+    }
+}
