@@ -1909,6 +1909,25 @@ async fn wait_for_snapshot(state: &mut ChatState) {
     .await;
 }
 
+/// Pump the chat event stream until `ready` holds, the way the app tick loop
+/// drains events every frame. `wait_until` cannot serve here: its predicate
+/// borrows immutably, and draining needs `&mut ChatState`.
+async fn drain_events_until(
+    state: &mut ChatState,
+    label: &str,
+    ready: impl Fn(&ChatState) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        state.drain_events();
+        if ready(state) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for condition: {label}");
+}
+
 #[tokio::test]
 async fn snapshot_and_message_updates_preserve_row_cache_contract() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
@@ -2008,6 +2027,54 @@ async fn snapshot_and_message_updates_preserve_row_cache_contract() {
     edited.updated = Utc::now();
     state.replace_message(edited);
     assert_eq!(state.room_version(lounge.id), lounge_version + 2);
+}
+
+#[tokio::test]
+async fn stale_snapshot_does_not_roll_back_a_newer_ignore_list() {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "stale_ignore_viewer").await;
+    let target = late_core::test_utils::create_test_user(&test_db.db, "stale_ignore_target").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, target.id)
+        .await
+        .expect("join target");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    refresh_and_drain(&mut state).await;
+
+    // A snapshot whose read ran before the ignore was written, held back
+    // undrained: every live session has one of these in flight, and a slow
+    // host delivers it after the ignore lands.
+    state.refresh_tx.send(()).expect("force refresh");
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "pre-ignore chat snapshot",
+    )
+    .await;
+
+    state
+        .service
+        .ignore_user_task(viewer.id, target.username.clone());
+    let target_id = target.id;
+    drain_events_until(&mut state, "ignore list updated", |state| {
+        state.ignored_user_ids().contains(&target_id)
+    })
+    .await;
+
+    // The stale read is older than the write it would overwrite, so it must
+    // not un-ignore the target and let their next message through.
+    state.drain_snapshot();
+    assert!(
+        state.ignored_user_ids().contains(&target_id),
+        "stale snapshot must not roll back the ignore list"
+    );
 }
 
 #[test]
