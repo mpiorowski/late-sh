@@ -435,6 +435,13 @@ impl App {
             let greendragon_changed = state.tick();
             changed |= greendragon_changed && self.screen == Screen::GreenDragon;
         }
+        if let Some(state) = self.darkroom_state.as_mut() {
+            // The village keeps growing while the player is elsewhere on
+            // late.sh, so this ticks off-screen too — it just doesn't dirty a
+            // frame nobody is looking at.
+            let darkroom_changed = state.tick();
+            changed |= darkroom_changed && self.screen == Screen::Darkroom;
+        }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;
         // NetHack does the same but first holds a short input grace (so a dying

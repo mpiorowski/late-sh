@@ -298,7 +298,7 @@ fn step_population(game: &mut Game, rng: &mut impl Rng, messages: &mut Vec<Strin
         return;
     }
     let half = f64::from(space) / 2.0;
-    let num = ((rng.gen::<f64>() * half + half).floor() as u32).max(1);
+    let num = ((rng.r#gen::<f64>() * half + half).floor() as u32).max(1);
     messages.push(arrival_message(num).to_string());
     game.population += num;
 }
@@ -323,7 +323,7 @@ fn arrival_message(num: u32) -> &'static str {
 pub fn roll_traps(game: &Game, rng: &mut impl Rng) -> Vec<(Resource, i64)> {
     let mut drops: Vec<(Resource, i64)> = Vec::new();
     for _ in 0..game.trap_rolls() {
-        let roll = rng.gen::<f64>();
+        let roll = rng.r#gen::<f64>();
         let Some((_, resource, _)) = data::TRAP_DROPS.iter().find(|(under, _, _)| roll < *under)
         else {
             continue;

@@ -193,6 +193,7 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -531,10 +532,12 @@ pub struct App {
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub(crate) darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
+    pub(crate) darkroom_state: Option<crate::app::door::darkroom::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
     /// PTY.
@@ -1282,8 +1285,10 @@ impl App {
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             greendragon_service: config.greendragon_service,
+            darkroom_service: config.darkroom_service,
             lateania_state: None,
             greendragon_state: None,
+            darkroom_state: None,
             rebels_state: None,
             rebels_term: config.term.clone(),
             rebels_enabled: config.rebels_enabled,
@@ -1450,6 +1455,26 @@ impl App {
 
     pub(crate) fn leave_greendragon(&mut self) {
         self.greendragon_state = None;
+    }
+
+    pub(crate) fn enter_darkroom(&mut self) {
+        if self.darkroom_state.is_some() {
+            return;
+        }
+        // The session's connect time is what bounds how much elapsed time the
+        // game may credit, so the door has to be told when the session began,
+        // not when the door was opened.
+        let session_start = chrono::Utc::now()
+            - chrono::Duration::from_std(self.started_at.elapsed()).unwrap_or_default();
+        self.darkroom_state = Some(crate::app::door::darkroom::state::State::new(
+            self.darkroom_service.clone(),
+            self.user_id,
+            session_start,
+        ));
+    }
+
+    pub(crate) fn leave_darkroom(&mut self) {
+        self.darkroom_state = None;
     }
 
     /// Store the active transport's render-loop wakeup so the rebels proxy can

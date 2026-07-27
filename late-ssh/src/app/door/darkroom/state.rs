@@ -103,15 +103,19 @@ impl State {
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
         if self.game.is_none() && self.load.has_changed().unwrap_or(false) {
-            if let GameLoad::Ready(game) = self.load.borrow_and_update().clone() {
+            // Bind the clone before touching `self` again: the watch guard
+            // holds a borrow for as long as it is alive.
+            let loaded = match self.load.borrow_and_update().clone() {
+                GameLoad::Ready(game) => Some(game),
+                GameLoad::Loading => None,
+            };
+            if let Some(game) = loaded {
+                // The opening lines, exactly as upstream prints them on init.
+                let (fire, room) = (game.fire.text(), game.temperature.text());
                 self.game = Some(*game);
                 changed = true;
-                // The opening lines, exactly as upstream prints them on init.
-                if let Some(game) = self.game.as_ref() {
-                    let (fire, room) = (game.fire.text(), game.temperature.text());
-                    self.push_log(format!("the room is {room}"));
-                    self.push_log(format!("the fire is {fire}"));
-                }
+                self.push_log(format!("the room is {room}"));
+                self.push_log(format!("the fire is {fire}"));
             }
         }
         // Not `||`: the settle must run whether or not the load just landed.
@@ -231,6 +235,16 @@ impl State {
             Row::Leave => return Acted::Leave,
         }
         Acted::Stay
+    }
+
+    /// Move a villager onto the selected trade. Same as selecting a worker
+    /// row, but safe to bind to an arrow key: it does nothing anywhere else,
+    /// so right-arrow can never trip an action the player did not aim at.
+    pub fn assign_selected(&mut self) {
+        self.settle();
+        if let Row::Worker(job) = self.selected() {
+            self.assign(job, 1);
+        }
     }
 
     /// Move a villager off the selected trade (the inverse of selecting it).
