@@ -123,3 +123,26 @@ fn partner_left_reports_true_once_the_other_side_drops() {
     drop(bob);
     assert!(alice.partner_left());
 }
+
+#[test]
+fn cycle_language_is_visible_to_the_partner_without_a_separate_sync_step() {
+    // language() always reads the shared buffer live (see its doc comment),
+    // so unlike content there is no local copy to go stale.
+    let (mut alice, bob) = paired(Uuid::from_u128(1), Uuid::from_u128(2));
+    assert_eq!(
+        alice.language(),
+        crate::app::scratchpad::highlight::Language::Plain
+    );
+
+    alice.cycle_language();
+
+    assert_eq!(
+        alice.language(),
+        crate::app::scratchpad::highlight::Language::Rust
+    );
+    assert_eq!(
+        bob.language(),
+        crate::app::scratchpad::highlight::Language::Rust,
+        "both sides share one buffer, so bob sees alice's cycle immediately"
+    );
+}

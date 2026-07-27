@@ -157,6 +157,21 @@ fn freeform_escape_reports_cancel() {
 }
 
 #[test]
+fn freeform_inserts_a_plain_ascii_byte_not_just_a_parsed_char() {
+    // Regression test: '?' (and other plain punctuation) can arrive as
+    // ParsedInput::Byte rather than Char depending on the terminal, and this
+    // function had no byte fallback (unlike handle_single_line_edit), so it
+    // silently ignored the key -- letting it fall through to whatever global
+    // shortcut happens to share that byte instead of being typed.
+    let mut input = ta("");
+    assert_eq!(
+        handle_freeform_edit(&mut input, &ParsedInput::Byte(b'?'), 8),
+        EditOutcome::Handled
+    );
+    assert_eq!(text(&input), "?");
+}
+
+#[test]
 fn freeform_tab_indents_instead_of_falling_through() {
     // Regression test: an unhandled Tab reaches the global page cycle, which
     // on the scratchpad changes screen and so ends the pairing.

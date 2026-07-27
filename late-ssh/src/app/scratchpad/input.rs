@@ -25,6 +25,13 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     let Some(state) = app.scratchpad.as_mut() else {
         return false;
     };
+    // Ctrl+L cycles the shared highlighting language. Unbound anywhere else
+    // in this app (root CONTEXT.md notes it's no longer a global help key),
+    // so it's free to use here without colliding with a reserved chord.
+    if matches!(event, ParsedInput::Byte(0x0C)) {
+        state.cycle_language();
+        return true;
+    }
     let max_chars = state.max_chars();
     match handle_freeform_edit(&mut state.editor, event, max_chars) {
         EditOutcome::Handled => {

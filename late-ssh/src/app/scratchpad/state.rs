@@ -1,9 +1,12 @@
 use late_core::MutexRecover;
+use ratatui::text::Line;
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
+use std::cell::RefCell;
 use uuid::Uuid;
 
 use crate::app::common::composer::new_themed_textarea;
 
+use super::highlight::{HighlightCache, Language};
 use super::registry::{SharedScratchpad, SharedScratchpadRegistry};
 
 /// Small on purpose: a scratchpad, not a file editor (no DB persistence, no
@@ -27,6 +30,11 @@ pub(crate) struct ScratchpadState {
     /// Partner's last-known cursor, presence-only (never used to merge
     /// edits), refreshed on every `sync_from_shared`.
     pub(crate) partner_cursor: (usize, usize),
+    /// Last highlight result. `RefCell` because `ui::draw` only gets `&self`
+    /// (the render context hands out shared borrows of every domain state at
+    /// once), and the app is only ever touched under its own mutex, so there
+    /// is no contention to speak of.
+    highlight_cache: RefCell<HighlightCache>,
 }
 
 impl ScratchpadState {
@@ -56,6 +64,7 @@ impl ScratchpadState {
             editor,
             last_seen_revision,
             partner_cursor,
+            highlight_cache: RefCell::new(HighlightCache::default()),
         }
     }
 
@@ -110,6 +119,30 @@ impl ScratchpadState {
 
     pub(crate) fn partner_left(&self) -> bool {
         self.shared.lock_recover().left.is_some()
+    }
+
+    /// Read fresh from the shared buffer on every call rather than caching a
+    /// local copy: there's nothing to go stale, since whichever side
+    /// last cycled it already bumped `revision`, and the render path calls
+    /// this every frame anyway.
+    pub(crate) fn language(&self) -> Language {
+        self.shared.lock_recover().language
+    }
+
+    /// Styled body lines for the viewport, served from [`HighlightCache`] so
+    /// only a real text change pays for syntect.
+    pub(crate) fn highlighted_body(
+        &self,
+        language: Language,
+        visible_end: usize,
+    ) -> Vec<Line<'static>> {
+        self.highlight_cache
+            .borrow_mut()
+            .body(self.editor.lines(), language, visible_end)
+    }
+
+    pub(crate) fn cycle_language(&mut self) {
+        self.shared.lock_recover().cycle_language();
     }
 
     pub(crate) fn max_chars(&self) -> usize {

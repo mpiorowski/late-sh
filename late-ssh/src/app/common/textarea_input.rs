@@ -193,6 +193,9 @@ pub fn handle_freeform_edit(
             insert_multiline_limited(ta, &cleaned, max_chars);
         }
         ParsedInput::Char(ch) if !ch.is_control() => push_char_limited(ta, *ch, max_chars),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
+            push_char_limited(ta, *byte as char, max_chars)
+        }
         _ => return EditOutcome::Ignored,
     }
     EditOutcome::Handled

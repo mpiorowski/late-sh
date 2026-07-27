@@ -122,9 +122,25 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         rows[0],
     );
     // While composing a chat line, reserve the bottom row for the say prompt.
-    if let Some(text) = state.chat_text() {
-        let body = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
-        draw_game(frame, body[0], state, usernames);
+    // The body above it keeps drawing whatever panel is open, map included, so
+    // pressing `'` never swaps the view out from under you.
+    let chat = state.chat_text();
+    let (body, prompt) = match chat.is_some() {
+        true => {
+            let split =
+                Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(rows[1]);
+            (split[0], Some(split[1]))
+        }
+        false => (rows[1], None),
+    };
+    if view.classed && state.map_open() && map_fits(body) {
+        draw_world_map(frame, body, state, &view);
+    } else {
+        // Below the graphical map's minimum, Panel::Map falls back to the text
+        // atlas in the side panel (see `draw_side`).
+        draw_game(frame, body, state, usernames);
+    }
+    if let (Some(text), Some(prompt)) = (chat, prompt) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -142,11 +158,216 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
             ])),
-            body[1],
+            prompt,
         );
-    } else {
-        draw_game(frame, rows[1], state, usernames);
     }
+}
+
+/// The smallest area the graphical world map is worth drawing in. Header,
+/// inspector, and footer cost 4 rows before a single cell of map, and the
+/// legend needs the width. Below this, `draw_game` takes over: the text atlas
+/// in the side panel down to 50x9, then compact mode.
+fn map_fits(area: Rect) -> bool {
+    area.width >= 50 && area.height >= 12
+}
+
+/// Per-biome map glyph and colour for the overhead world map.
+fn biome_style(biome: super::world::Biome) -> (char, Color) {
+    use super::world::Biome;
+    match biome {
+        Biome::Heartland => ('"', Color::Rgb(120, 180, 90)),
+        Biome::Plains => ('.', Color::Rgb(150, 160, 80)),
+        Biome::Urban => ('#', Color::Rgb(175, 175, 175)),
+        Biome::Forest => ('\u{2663}', Color::Rgb(60, 145, 70)), // ♣
+        Biome::Water => ('\u{2248}', Color::Rgb(70, 120, 205)), // ≈
+        Biome::Islands => ('~', Color::Rgb(90, 175, 185)),
+        Biome::Ash => ('%', Color::Rgb(165, 85, 70)),
+        Biome::Cavern => ('\u{00b7}', Color::Rgb(125, 115, 135)), // ·
+        Biome::Badlands => (':', Color::Rgb(165, 125, 80)),
+    }
+}
+
+/// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
+/// centred on the player. `@` is the player's room; arrows / wasd pan the
+/// camera and Enter re-centres (handled in input.rs).
+fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    use super::world::region_atlas_entry;
+    use super::worldmap::{viewport_explored, world_coords};
+
+    let coords = world_coords();
+    let Some(player_room) = view.room else {
+        return;
+    };
+    let Some(&player) = coords.get(&player_room) else {
+        frame.render_widget(
+            Paragraph::new("No map for this place.").style(Style::default().fg(theme::TEXT_DIM())),
+            area,
+        );
+        return;
+    };
+    let camera = state.map_camera();
+    let level_offset = camera.level_offset();
+    let panned = camera.scroll() != (0, 0) || level_offset != 0;
+    let center = camera.center(player);
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // header
+        Constraint::Min(1),    // map body
+        Constraint::Length(2), // cell inspector (crosshair target)
+        Constraint::Length(1), // controls + legend
+    ])
+    .split(area);
+
+    // Header: region name + danger tier, and the current level (z).
+    let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
+    let level = match center.z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    };
+    let mut header = vec![Span::styled(
+        region_name.to_string(),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !tier.is_empty() {
+        header.push(Span::styled(
+            format!("  ·  {tier}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    let level_style = if level_offset == 0 {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        // Viewing a different floor than the one you stand on.
+        Style::default().fg(theme::AMBER())
+    };
+    header.push(Span::styled(format!("  ·  {level}"), level_style));
+    if panned {
+        // The header names where the player stands; the inspector below names
+        // the crosshair. Say so, or a panned map reads as two contradictions.
+        header.push(Span::styled(
+            "  ·  panned (Enter re-centres)",
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
+
+    // Body: the viewport grid. Fog of war means only visited rooms draw. Boss
+    // and taming rooms show a marker over their biome; `@` is the player; the
+    // viewport centre is the inspector crosshair (reverse-highlighted).
+    let body = rows[1];
+    let cols = body.width as i32;
+    let height = body.height as i32;
+    let grid = viewport_explored(coords, center, cols, height, &view.visited, player_room);
+    let cx = (cols / 2) as usize;
+    let cy = (height / 2) as usize;
+    let player_style = Style::default()
+        .fg(Color::Rgb(250, 240, 140))
+        .add_modifier(Modifier::BOLD);
+    let boss_style = Style::default()
+        .fg(Color::Rgb(250, 210, 90))
+        .add_modifier(Modifier::BOLD);
+    let tame_style = Style::default()
+        .fg(Color::Rgb(230, 140, 160))
+        .add_modifier(Modifier::BOLD);
+    let lines: Vec<Line> = grid
+        .iter()
+        .enumerate()
+        .map(|(r, row)| {
+            let spans: Vec<Span> = row
+                .iter()
+                .enumerate()
+                .map(|(c, cell)| {
+                    let (ch, mut style): (String, Style) = match cell {
+                        Some(id) if *id == player_room => ("@".to_string(), player_style),
+                        Some(id) => match super::worldmap::poi(*id) {
+                            Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
+                            Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                            _ => {
+                                let (g, color) = biome_style(super::world::biome_of(*id));
+                                (g.to_string(), Style::default().fg(color))
+                            }
+                        },
+                        None => (" ".to_string(), Style::default()),
+                    };
+                    if r == cy && c == cx {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    Span::styled(ch, style)
+                })
+                .collect();
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body);
+
+    // Inspector: what sits under the crosshair (viewport centre). Fog already
+    // blanked unvisited cells, so a room here is one the player has seen.
+    let cursor_room = grid.get(cy).and_then(|row| row.get(cx)).copied().flatten();
+    let mut inspect: Vec<Line> = Vec::new();
+    if let Some(id) = cursor_room {
+        let (rn, rt) = region_atlas_entry(id).unwrap_or(("The wilds", ""));
+        let mut top = vec![
+            Span::styled("\u{25ce} ", Style::default().fg(theme::AMBER())), // ◎
+            Span::styled(rn.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
+        ];
+        if !rt.is_empty() {
+            top.push(Span::styled(
+                format!("  ·  {rt}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        inspect.push(Line::from(top));
+
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(p) = super::worldmap::poi(id) {
+            if let Some(boss) = p.boss {
+                if p.reward.is_empty() {
+                    parts.push(format!("boss {boss}"));
+                } else {
+                    parts.push(format!("boss {boss} (drops {})", p.reward.join(", ")));
+                }
+            }
+            if let Some(t) = p.tameable {
+                parts.push(format!("tame {t}"));
+            }
+            if !p.monsters.is_empty() {
+                parts.push(format!("foes {}", p.monsters.join(", ")));
+            }
+        }
+        let poi_text = if parts.is_empty() {
+            "no notable sites here".to_string()
+        } else {
+            parts.join("  ·  ")
+        };
+        inspect.push(Line::from(Span::styled(
+            poi_text,
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        inspect.push(Line::from(Span::styled(
+            "unexplored",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+    frame.render_widget(Paragraph::new(inspect), rows[2]);
+
+    // Footer: controls + marker legend.
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "wasd/arrows pan · <> level · Enter re-centre · m close    ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+            Span::styled(" boss  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+            Span::styled(" tame", Style::default().fg(theme::TEXT_DIM())),
+        ])),
+        rows[3],
+    );
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
@@ -1120,7 +1341,15 @@ fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     lines
 }
 
-/// Right column: combat numbers, revives, earned titles, and the XP meter.
+/// Earned titles shown inline on the character sheet before the list is
+/// summarised. The full list is browsable in the Titles panel (`k`); the sheet
+/// is a fixed-height column with no scroll of its own, so an unbounded list
+/// here used to push the XP meter clean off the bottom.
+const SHEET_TITLES_SHOWN: usize = 4;
+
+/// Right column: combat numbers, revives, the XP meter, then earned titles.
+/// Experience comes first on purpose: it is the number you always want, and
+/// titles are the section that grows without limit.
 fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
     // Combat rated by level; attack reads as offence (green), armour as
     // defence (blue), split for clarity.
@@ -1143,20 +1372,6 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         ));
     }
     lines.push(Line::raw(""));
-    lines.push(section("Titles"));
-    if view.titles.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  none yet",
-            Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-    for title in &view.titles {
-        lines.push(Line::from(Span::styled(
-            format!("  {title}"),
-            Style::default().fg(theme::BADGE_GOLD()),
-        )));
-    }
-    lines.push(Line::raw(""));
     lines.push(section("Experience"));
     if view.xp_for_next > 0 {
         lines.push(Line::from(Span::styled(
@@ -1174,6 +1389,27 @@ fn sheet_derived(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(
             "  max level reached",
             Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(section("Titles"));
+    if view.titles.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  none yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for title in view.titles.iter().take(SHEET_TITLES_SHOWN) {
+        lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    let rest = view.titles.len().saturating_sub(SHEET_TITLES_SHOWN);
+    if rest > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  +{rest} more (k)"),
+            Style::default().fg(theme::TEXT_DIM()),
         )));
     }
     lines.push(Line::raw(""));

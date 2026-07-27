@@ -63,10 +63,13 @@ INSERT INTO seed_names (idx, username) VALUES
     (47, 'staticriver'),
     (48, 'longname_for_truncation');
 
+-- Usernames are prefixed: users has a UNIQUE index on LOWER(username), so
+-- seeding bare handles aborts the whole transaction on any database where a
+-- real account already holds one.
 INSERT INTO users (fingerprint, username, settings, created, updated, last_seen)
 SELECT
     'seed:leaderboard:v2:' || lpad(idx::text, 2, '0'),
-    username,
+    'lb_' || username,
     jsonb_build_object('leaderboard_seed', true, 'seed_version', 2),
     current_timestamp - (idx || ' days')::interval,
     current_timestamp,
@@ -78,7 +81,7 @@ ON CONFLICT (fingerprint) DO UPDATE SET
     updated = current_timestamp;
 
 CREATE TEMP TABLE seed_players ON COMMIT DROP AS
-SELECT n.idx, n.username, u.id AS user_id
+SELECT n.idx, u.username, u.id AS user_id
 FROM seed_names n
 JOIN users u
   ON u.fingerprint = 'seed:leaderboard:v2:' || lpad(n.idx::text, 2, '0');

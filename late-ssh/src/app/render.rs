@@ -1956,6 +1956,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         }
     }
 
+    if screen == Screen::Scratchpad {
+        spans.push(Span::styled(
+            "by github.com/minavtafreshi ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+
     if screen == Screen::Pinstar {
         let hints: &[(&str, &str)] = match ctx.directory_tab {
             crate::app::directory::state::DirectoryTab::Profiles => &[
@@ -2083,6 +2090,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
         ("Hub", ctrl_hint("G", use_caret)),
         ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
+        ("Exit", "qq"),
     ];
 
     let mut spans = Vec::new();

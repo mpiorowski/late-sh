@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 use late_core::MutexRecover;
 use uuid::Uuid;
 
+use super::highlight::Language;
+
 /// How long a one-sided `/pair` intent (and its notice) stays live before it
 /// is pruned. Long enough to read the banner, finish what you were doing and
 /// still answer; short enough that a forgotten intent cannot pair you with
@@ -87,6 +89,12 @@ pub struct ScratchpadBuffer {
     /// Set to the user_id of whichever side left first. Once both sides have
     /// left, the registry drops the pairing entirely.
     pub left: Option<Uuid>,
+    /// The highlighting language, shared so both sides always see the same
+    /// one. Lives here rather than on a `/pair @user <language>` command arg
+    /// because pairing is a mutual handshake between two independent
+    /// commands: a per-command language could have the two sides disagree,
+    /// where a shared field on the buffer they already both read cannot.
+    pub(crate) language: Language,
 }
 
 impl ScratchpadBuffer {
@@ -101,6 +109,7 @@ impl ScratchpadBuffer {
             joined_a: false,
             joined_b: false,
             left: None,
+            language: Language::default(),
         }
     }
 
@@ -138,6 +147,14 @@ impl ScratchpadBuffer {
         } else {
             self.joined_b = true;
         }
+    }
+
+    /// Advance the shared highlighting language and bump `revision` so the
+    /// partner's next `sync_from_shared` picks it up promptly, same as the
+    /// `left` bump above.
+    pub fn cycle_language(&mut self) {
+        self.language = self.language.next();
+        self.revision += 1;
     }
 
     fn joined(&self, user_id: Uuid) -> bool {
