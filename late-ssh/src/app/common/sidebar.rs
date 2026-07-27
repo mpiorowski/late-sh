@@ -13,7 +13,7 @@ use crate::app::audio::{
     client_state::ClientAudioState,
     stations,
     svc::{QueueItemView, QueueSnapshot},
-    viz::render_eq,
+    viz::{EqState, render_eq},
 };
 use crate::app::bonsai::state::BonsaiState;
 use crate::app::bonsai_v2::state::BonsaiV2State;
@@ -27,10 +27,11 @@ use late_core::models::user::{
 // changes.
 const TIME_HEIGHT: u16 = 2;
 const RULE_HEIGHT: u16 = 1;
-// Ambient equalizer strip pinned above the dock: a small always-on
-// decorative band (`viz::render_eq`) synthesized from the wall tick, not
-// audio. Its one audio nod is the muted flatline. The band scales to
-// whatever height it's given; the stage pins 3.
+// Ambient equalizer strip pinned above the dock: a decorative band
+// (`viz::render_eq`) synthesized from the wall tick, not audio. It only
+// dances while a client is actually paired; muted flatlines it, and an
+// unpaired session gets a pointer to the guide instead. The band scales
+// to whatever height it's given; the stage pins 3.
 const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock + detail portion of the stage (unchanged by the visualizer merge):
 // volume rows (2) + three dock entries (title + now-playing, 6) + labeled
@@ -587,8 +588,12 @@ fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) 
 
     let [viz_area, dock_area] =
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    let muted = props.paired_client.is_some_and(|client| client.muted);
-    render_eq(frame, viz_area, props.marquee_tick, muted);
+    let eq_state = match props.paired_client {
+        None => EqState::Unpaired,
+        Some(client) if client.muted => EqState::Muted,
+        Some(_) => EqState::Playing,
+    };
+    render_eq(frame, viz_area, props.marquee_tick, eq_state);
 
     let lines = music_stage_lines(dock_area.width, props);
     frame.render_widget(Paragraph::new(lines), dock_area);
