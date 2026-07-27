@@ -1112,7 +1112,8 @@ impl App {
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so roaming and the strip ride the half tier they paint on. Bonsai
         // modals stay hot: the care watering animation still counts per
-        // tick call. A visible sidebar always carries the ambient wave.
+        // tick call. A visible sidebar always carries the eq strip and
+        // bonsai sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
             || self.pet_state.roaming_active()
