@@ -83,6 +83,7 @@ async fn two_sessions(
             username: Some((*name).to_string()),
             active_users: Some(active.clone()),
             scratchpad_registry: Some(registry.clone()),
+            ..SessionWorld::default()
         };
         let mut app = make_app_in_world(
             test_db.db.clone(),
