@@ -35,6 +35,53 @@ fn rust_snippet_produces_more_than_one_style() {
 }
 
 #[test]
+fn cache_reparses_only_when_the_text_or_language_changes() {
+    let mut cache = HighlightCache::default();
+    let lines = vec!["fn main() {".to_string(), "    let x = 1;".to_string()];
+
+    let first = cache.body(&lines, Language::Rust, 2);
+    assert_eq!(cache.parses(), 1);
+
+    // A cursor move, a scroll, a resize, a partner cursor update: same text,
+    // same language, no syntect.
+    let second = cache.body(&lines, Language::Rust, 2);
+    assert_eq!(cache.parses(), 1, "unchanged text must not re-parse");
+    assert_eq!(first, second);
+
+    cache.body(&lines, Language::Python, 2);
+    assert_eq!(cache.parses(), 2, "a language cycle re-parses");
+
+    let edited = vec!["fn main() {".to_string(), "    let x = 2;".to_string()];
+    let after_edit = cache.body(&edited, Language::Python, 2);
+    assert_eq!(cache.parses(), 3, "a keystroke re-parses");
+    assert!(after_edit[1].spans.iter().any(|s| s.content.contains('2')));
+}
+
+#[test]
+fn cache_styles_only_down_to_the_viewport() {
+    let mut cache = HighlightCache::default();
+    let lines: Vec<String> = (0..100).map(|n| format!("let x{n} = {n};")).collect();
+
+    // A 10-row viewport at the top of a 100-line buffer: the 90 lines below
+    // the fold are never styled, which is where the cost lives.
+    let body = cache.body(&lines, Language::Rust, 10);
+    assert_eq!(body.len(), 10);
+
+    // Scrolling further down needs lines the cached render stopped short of.
+    cache.body(&lines, Language::Rust, 40);
+    assert_eq!(cache.parses(), 2);
+
+    // Scrolling back up is served from the deeper render already in hand.
+    let back_up = cache.body(&lines, Language::Rust, 10);
+    assert_eq!(cache.parses(), 2, "a shorter viewport is still covered");
+    assert_eq!(back_up.len(), 40);
+
+    // A viewport past the end of the buffer is clamped, not padded.
+    cache.body(&lines, Language::Rust, 500);
+    assert_eq!(cache.body(&lines, Language::Rust, 500).len(), 100);
+}
+
+#[test]
 fn gutter_width_matches_total_line_count_digits() {
     let rendered = gutter_lines(150);
     let first_span_text = rendered[0].spans[0].content.as_ref();

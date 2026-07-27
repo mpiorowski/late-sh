@@ -49,8 +49,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ScratchpadState) {
     };
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
-    let lines = state.editor.lines();
-    let total_lines = lines.len();
+    let total_lines = state.editor.lines().len();
     let gutter_width = gutter_prefix_width(total_lines);
 
     // The gutter gets its own fixed column, never scrolled horizontally.
@@ -74,8 +73,13 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ScratchpadState) {
         Paragraph::new(super::highlight::gutter_lines(total_lines)).scroll((vscroll as u16, 0)),
         gutter_area,
     );
+    // Only the lines down to the bottom of the viewport are worth styling, and
+    // only when the text actually changed since the last frame -- syntect over
+    // a full buffer costs more than the render loop's entire frame budget (see
+    // `highlight::HighlightCache`).
+    let visible_end = vscroll.saturating_add(visible_height);
     frame.render_widget(
-        Paragraph::new(super::highlight::highlighted_lines(lines, language))
+        Paragraph::new(state.highlighted_body(language, visible_end))
             .scroll((vscroll as u16, hscroll as u16)),
         content_area,
     );

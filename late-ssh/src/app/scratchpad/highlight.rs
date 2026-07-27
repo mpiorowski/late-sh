@@ -153,10 +153,91 @@ pub(crate) fn gutter_lines(total_lines: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// The rendered body, kept between frames so a render that changed nothing
+/// about the text does not re-run syntect over the whole buffer.
+///
+/// Highlighting is by far the most expensive thing this app draws: measured on
+/// a release build, a full 8000-char buffer (`MAX_CHARS`, ~200 lines) costs
+/// ~23ms per frame against ~15us for the plain-text path, and the render loop's
+/// whole input-to-frame budget is 15ms. Nearly all of that is syntect's parse,
+/// not the span building, so there is no cheap way to redo part of it: the win
+/// is not redoing it at all. Cursor moves, scrolling, resizes, and partner
+/// cursor updates all re-render without touching the text, and arrow keys
+/// publish (bumping `revision`) without changing content, which is why this
+/// keys on the lines themselves rather than the revision.
+#[derive(Default)]
+pub(crate) struct HighlightCache {
+    entry: Option<CacheEntry>,
+    /// How many times syntect has actually run. Not used in the render path;
+    /// caching is this type's entire behavior, so the tests assert on it.
+    parses: u64,
+}
+
+struct CacheEntry {
+    lines: Vec<String>,
+    language: Language,
+    /// Exclusive line index this render stops at.
+    parsed_through: usize,
+    rendered: Vec<Line<'static>>,
+}
+
+impl CacheEntry {
+    fn build(lines: &[String], language: Language, visible_end: usize) -> Self {
+        let parsed_through = visible_end.min(lines.len());
+        Self {
+            lines: lines.to_vec(),
+            language,
+            parsed_through,
+            rendered: highlighted_lines(&lines[..parsed_through], language),
+        }
+    }
+
+    fn covers(&self, lines: &[String], language: Language, visible_end: usize) -> bool {
+        // Reaching further down the buffer than the viewport needs is still a
+        // hit: `Paragraph` draws only what fits, so the extra tail is inert.
+        self.language == language
+            && self.parsed_through >= visible_end.min(lines.len())
+            && self.lines.as_slice() == lines
+    }
+}
+
+impl HighlightCache {
+    /// Styled body lines for the current buffer, down to `visible_end`
+    /// (exclusive). Cloned out because `Paragraph` takes its text by value;
+    /// cloning finished spans is three orders of magnitude cheaper than
+    /// re-running syntect.
+    pub(crate) fn body(
+        &mut self,
+        lines: &[String],
+        language: Language,
+        visible_end: usize,
+    ) -> Vec<Line<'static>> {
+        let entry = match self.entry.take() {
+            Some(entry) if entry.covers(lines, language, visible_end) => entry,
+            _ => {
+                self.parses += 1;
+                CacheEntry::build(lines, language, visible_end)
+            }
+        };
+        let rendered = entry.rendered.clone();
+        self.entry = Some(entry);
+        rendered
+    }
+
+    pub(crate) fn parses(&self) -> u64 {
+        self.parses
+    }
+}
+
 /// Turn the editor's current lines into styled `Line`s, content only (no
 /// gutter prefix -- see `gutter_lines`). `Language::Plain` never touches
 /// syntect: every line becomes one theme-colored span, same cost as the old
 /// plain-text render.
+///
+/// Callers pass only the lines down to the bottom of the viewport: syntect
+/// parses from the first line regardless (multi-line strings and comments
+/// carry state across lines), so the tail is what can be trimmed, never the
+/// head.
 pub(crate) fn highlighted_lines(lines: &[String], language: Language) -> Vec<Line<'static>> {
     let plain = |line: &String| {
         Line::from(Span::styled(
