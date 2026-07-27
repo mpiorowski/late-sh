@@ -10,7 +10,7 @@ ignore_command_hides_messages_and_persists_across_refresh,5.978508771929820,1,1,
 chat_reaction_leader_second_f_shows_reaction_owners_modal,5.85628813559322,1,1,5,1,yes,no,Unique reaction-owner overlay coverage; direct overlay state replaced 750ms of passive absence polling across its three close routes.
 app::input_flow_test::unrelated_settings_edits_do_not_republish_this_device_rails,5.355571428571430,1,5,5,2,yes,no,Renamed and combined with authenticating-key persistence so one app verifies the full device-layout boundary.
 app::tick_test::wake_hint_idles_when_settled_and_heats_on_input,5.3432692307692300,5,5,4,0,yes,no,Merged into idle_ticks_settle_clean_and_wake_for_relevant_events; an ignored input preserves state while proving the hot-window transition.
-chat_reaction_leader_cancels_and_consumes_non_digit_input,5.308525423728810,,,,
+chat_reaction_leader_cancels_and_consumes_non_digit_input,5.308525423728810,2,5,5,2,no,yes,Unique cancellation assertion within a repeated reaction-leader fixture; merge with normal and extended digit flows and replace the 250ms absence poll with state checks.
 app::input_flow_test::cycling_rails_persists_onto_the_authenticating_key,5.292214285714290,5,5,5,2,yes,no,Merged into cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings; both key isolation and later settings persistence remain asserted.
 app::input_flow_test::the_lounge_renders_its_own_topic_header,5.268769230769230,0,1,4,4,no,no,Unique coverage for the Lounge-only dashboard chat-card renderer; database and app startup dominate and no safe local optimization was found.
 app::input_flow_test::clicking_the_mentions_hud_text_opens_mentions,5.265,1,1,5,4,no,no,Unique mouse-hit routing with a negative chips click and positive mentions click after an asynchronous mention; no safe local optimization was found.
@@ -19,47 +19,47 @@ members_command_shows_room_members_without_persisting_message,5.054052631578950,
 chat_compose_treats_screen_hotkeys_as_text,5.01864406779661,5,5,4,1,yes,no,Merged into chat_compose_preserves_screen_digits_and_non_ascii_text so the digit paths share one app startup.
 app::input_flow_test::rules_command_shows_every_line_in_an_overlay,4.996076923076920,5,5,4,1,yes,no,Merged into client_side_chat_commands_render_without_persisting_messages with all multiline rule assertions retained.
 case_3_latin_diacritic,4.956203389830510,5,5,4,0,yes,no,Merged into chat_compose_preserves_screen_digits_and_non_ascii_text; Ctrl+U resets the same composer between Unicode cases.
-chat_reaction_leader_persists_extended_reaction_digits,4.938118644067800,,,,
-prefixed_mod_command_in_chat_points_to_modal,4.926122807017540,,,,
+chat_reaction_leader_persists_extended_reaction_digits,4.938118644067800,4,5,4,1,no,yes,Mostly repeats the normal reaction-digit setup; one shared reaction-leader flow can retain the unique digit-to-fire mapping assertion.
+prefixed_mod_command_in_chat_points_to_modal,4.926122807017540,2,5,4,0,no,yes,Unique prefixed-command rejection but the same composing app as the bare /mod test; run both command forms in one app.
 case_2_han,4.886474576271190,5,5,4,0,yes,no,Merged into chat_compose_preserves_screen_digits_and_non_ascii_text; Ctrl+U resets the same composer between Unicode cases.
 case_4_greek,4.885864406779660,5,5,4,0,yes,no,Merged into chat_compose_preserves_screen_digits_and_non_ascii_text; Ctrl+U resets the same composer between Unicode cases.
-split_read_alt_backspace_deletes_word_without_wedging_parser,4.848175438596490,,,,
-chat_reaction_leader_uses_digits_without_switching_screens,4.807033898305090,,,,
-c_on_dashboard_copies_selected_message,4.7824285714285700,,,,
-sheet_command_opens_character_sheet_modal_in_dnd_room,4.7609122807017500,,,,
-exit_command_opens_quit_confirm_and_stays_client_side,4.757421052631580,,,,
+split_read_alt_backspace_deletes_word_without_wedging_parser,4.848175438596490,2,5,5,1,no,yes,Valuable split-read parser regression; fold into the existing consolidated composer flow after resetting the composer.
+chat_reaction_leader_uses_digits_without_switching_screens,4.807033898305090,3,5,5,2,no,yes,Core reaction-leader integration path; share its database app and selected message with the extended-digit and cancellation cases.
+c_on_dashboard_copies_selected_message,4.7824285714285700,1,1,5,4,no,no,Unique dashboard selection-to-clipboard integration; the seeded message and clipboard behavior do not form a clean lifecycle with nearby tests.
+sheet_command_opens_character_sheet_modal_in_dnd_room,4.7609122807017500,1,2,4,4,no,no,Unique room-scoped /sheet integration requires a seeded dnd room and modal assertion; merging would add unrelated setup to simpler command tests.
+exit_command_opens_quit_confirm_and_stays_client_side,4.757421052631580,3,5,4,1,no,yes,The /exit wiring and non-persistence assertion fit the same app flow as q opening the quit modal and Ctrl+C remaining inert.
 dashboard_chat_compose_treats_screen_hotkeys_as_text,4.726,1,5,4,1,yes,no,Renamed to chat_compose_preserves_screen_digits_and_non_ascii_text and expanded to cover both digit paths plus four Unicode inputs in one app.
-app::chat::state::state_internal_test::identical_snapshot_reapply_reports_clean,4.71109375,,,,
-dashboard_chat_compose_blocks_quit_shortcut,4.700982456140350,,,,
+app::chat::state::state_internal_test::identical_snapshot_reapply_reports_clean,4.71109375,4,5,5,1,no,yes,Duplicates the row-cache fixture used by the stable-counter test; merge both snapshot assertions and room-version mutation into one cache-contract test.
+dashboard_chat_compose_blocks_quit_shortcut,4.700982456140350,3,5,5,1,no,yes,Unique composer-priority assertion but the setup is already covered by the consolidated composer test; add q text handling to that flow.
 help_command_renders_chat_feedback_without_persisting_message,4.7008245614035100,1,5,4,1,yes,no,Renamed to client_side_chat_commands_render_without_persisting_messages and now shares one app with the members and rules command checks.
-chat_room_list_is_mouse_clickable,4.620389830508480,,,,
+chat_room_list_is_mouse_clickable,4.620389830508480,1,2,5,3,no,no,Unique room-rail mouse hit test with a seeded second room; combining it with Ctrl-key wrapping changes the ordering that the wrap assertion depends on.
 case_1_cyrillic,4.6075423728813600,5,5,4,0,yes,no,Merged into chat_compose_preserves_screen_digits_and_non_ascii_text; Ctrl+U resets the same composer between Unicode cases.
-app::scratchpad::pair::pair_test::both_sides_running_pair_lands_them_in_the_shared_scratchpad,4.5765,,,,
-account_delete_confirmation_rejects_wrong_username_in_dialog,4.56405,,,,
-app::chat::state::state_internal_test::identical_snapshot_reapply_keeps_row_cache_counters_stable,4.5234250000000000,,,,
-chat_room_switch_ctrl_keys_wrap,4.5205,,,,
-app::chat::state::state_internal_test::push_message_bumps_only_its_room_version,4.47445,,,,
-rejects_bad_token_without_registering,4.4452181818181800,,,,
-bare_mod_command_opens_moderation_modal,4.421508474576270,,,,
-app::scratchpad::pair::pair_test::a_one_sided_ask_leaves_the_targets_session_alone,4.390750000000000,,,,
-app::scratchpad::pair::pair_test::esc_leaves_the_pairing_and_tells_the_partner,4.33425,,,,
-q_opens_quit_confirm_and_escape_dismisses_it,4.2740175438596500,,,,
-artboard_ban_locks_user_in_view_mode,4.212383333333330,,,,
-question_mark_opens_guide_on_dashboard,4.191614035087720,,,,
-app::scratchpad::pair::pair_test::typing_in_the_scratchpad_reaches_the_partner,4.16,,,,
-active_artboard_blocks_screen_number_hotkeys_until_escape,4.150216666666670,,,,
+app::scratchpad::pair::pair_test::both_sides_running_pair_lands_them_in_the_shared_scratchpad,4.5765,3,5,5,2,no,yes,Valuable two-session handshake integration overlaps registry units and the other pair flows; use it as the central phase of one complete pairing lifecycle.
+account_delete_confirmation_rejects_wrong_username_in_dialog,4.56405,1,5,4,1,no,yes,Unique wrong-username dialog validation; absorb the simpler global Ctrl+O open-and-close check into this settings flow.
+app::chat::state::state_internal_test::identical_snapshot_reapply_keeps_row_cache_counters_stable,4.5234250000000000,4,5,5,1,no,yes,Nearly identical fixture and refresh sequence to identical_snapshot_reapply_reports_clean; assert cleanliness and exact counters together.
+chat_room_switch_ctrl_keys_wrap,4.5205,1,2,4,3,no,no,Unique wrap-order assertion depends on having no extra channel after the Core section; the mouse-room fixture would change that ordering.
+app::chat::state::state_internal_test::push_message_bumps_only_its_room_version,4.47445,2,5,5,1,no,yes,Distinct mutation checks within the same row-cache contract and fixture; append them after the consolidated snapshot assertions.
+rejects_bad_token_without_registering,4.4452181818181800,1,5,5,1,no,yes,Unique negative wire-level authentication behavior; reuse one IrcTestServer for this and the successful token-and-lounge registration path.
+bare_mod_command_opens_moderation_modal,4.421508474576270,2,5,4,0,no,yes,Unique bare-command modal routing but the same composing-app fixture as the prefixed /mod rejection; run both sequentially.
+app::scratchpad::pair::pair_test::a_one_sided_ask_leaves_the_targets_session_alone,4.390750000000000,2,5,5,1,no,yes,Unique nonintrusive one-sided invite phase; it naturally precedes reciprocal pairing typing synchronization and departure in one lifecycle.
+app::scratchpad::pair::pair_test::esc_leaves_the_pairing_and_tells_the_partner,4.33425,2,5,5,1,no,yes,Unique pairing teardown phase but repeats the full two-app handshake; make it the final phase of the shared lifecycle.
+q_opens_quit_confirm_and_escape_dismisses_it,4.2740175438596500,3,5,5,1,no,yes,The quit modal and Esc route share one app cleanly with the /exit opener and global Ctrl+C negative assertion.
+artboard_ban_locks_user_in_view_mode,4.212383333333330,2,5,5,2,no,yes,Unique authorization gate but part of the same Artboard view-active lifecycle; test the ban after deactivating the shared active-mode flow.
+question_mark_opens_guide_on_dashboard,4.191614035087720,4,5,4,1,no,yes,Overlaps question_mark_opens_pair_guide_first; consolidate dashboard guide copy close behavior QR content legacy keys and screen-specific routing.
+app::scratchpad::pair::pair_test::typing_in_the_scratchpad_reaches_the_partner,4.16,2,5,5,1,no,yes,Unique cross-session editing assertion after a handshake; it is a middle phase of the same pairing lifecycle rather than a separate setup.
+active_artboard_blocks_screen_number_hotkeys_until_escape,4.150216666666670,3,5,5,1,no,yes,One input-priority branch in the broader Artboard view-active flow; share the app with active Ctrl+C question-mark and ban behavior.
 non_echo_client_does_not_receive_own_reaction_tagmsg,4.107083333333330,,,,
-legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard,4.082017543859650,,,,
-global_ctrl_o_opens_settings_on_dashboard,4.059912280701750,,,,
+legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard,4.082017543859650,3,5,3,0,no,yes,Small negative legacy-key assertion followed by opening the same dashboard guide; include it in the consolidated guide-routing flow.
+global_ctrl_o_opens_settings_on_dashboard,4.059912280701750,4,5,3,0,no,yes,The account-delete flow already proves Ctrl+O reaches Settings; retain the ordinary close assertion there instead of provisioning another app.
 separate_apps_render_independently,4.051321428571430,,,,
 global_ctrl_g_opens_hub_on_dashboard,4.0365438596491200,,,,
 privmsg_lounge_persists_to_chat,3.9969636363636400,,,,
 splash_hint_disappears_after_splash_is_skipped,3.9755818181818200,5,5,4,0,yes,no,Merged into splash_screen_renders_selected_hint_with_existing_copy_and_dismisses; direct state and render assertions replace a 150ms absence poll.
 cap_negotiation_advertises_acks_lists_and_naks_tier1_caps,3.957875,,,,
-ctrl_c_does_not_quit_the_app,3.92459649122807,,,,
+ctrl_c_does_not_quit_the_app,3.92459649122807,3,5,5,0,no,yes,Valuable global input-priority regression but it belongs beside q and /exit in one quit-routing flow; the 60ms post-input sleep is unnecessary for synchronous Ctrl+C.
 tagged_reaction_toggles_late_reaction_without_storing_fallback_body,3.9209090909090900,,,,
 echo_message_client_receives_own_privmsg_with_time_and_msgid,3.8989166666666700,,,,
-active_artboard_ctrl_c_copies_without_quitting,3.8981333333333300,,,,
+active_artboard_ctrl_c_copies_without_quitting,3.8981333333333300,3,5,5,1,no,yes,Context-specific Ctrl+C ownership complements active number and question-mark routing; merge into the shared Artboard active-mode flow.
 connect4_full_board_draws_and_pays_nobody,3.8834000000000000,,,,
 outbound_reaction_delta_projects_tagmsg,3.8825833333333300,,,,
 tab_cycles_screens_forward_through_all_including_pinstar,3.876333333333330,,,,
@@ -72,36 +72,36 @@ tag_unaware_client_does_not_receive_reaction_noise,3.7930434782608700,,,,
 replacement_reaction_projects_unreact_then_react,3.7812916666666700,,,,
 projects_dotted_usernames_to_irc_nicks,3.780181818181820,,,,
 profile_username_change_projects_to_live_irc_session,3.774672727272730,,,,
-mouse_move_does_not_close_pair_guide,3.7645555555555600,,,,
+mouse_move_does_not_close_pair_guide,3.7645555555555600,2,5,4,0,no,yes,Unique mouse passthrough assertion after opening the Pair guide but no distinct setup is needed; include it in the dashboard guide lifecycle.
 stale_match_chat_rooms_are_reaped_after_30_days,3.7618979591836700,,,,
 app::audio::svc_test::submitting_a_track_already_in_the_queue_is_rejected,3.7429655172413800,,,,
 late_payload_mentions_are_rewritten_to_irc_nicks,3.7358363636363600,,,,
 refuses_part_lounge_and_rejoins,3.711181818181820,,,,
 concurrent_connections,3.703521739130440,,,,
 plus_and_minus_send_volume_controls_to_paired_client,3.7007777777777800,,,,
-guide_pair_section_contains_pairing_qr_on_home,3.698380952380950,,,,
-artboard_help_modal_tab_switches_help_tabs_instead_of_pages,3.677322033898310,,,,
+guide_pair_section_contains_pairing_qr_on_home,3.698380952380950,1,5,5,1,no,yes,Valuable deep guide-content assertion; scroll to the QR in the same dashboard guide instance used for open copy mouse and close behavior.
+artboard_help_modal_tab_switches_help_tabs_instead_of_pages,3.677322033898310,3,5,4,1,no,yes,Unique help-modal Tab ownership but shares the Artboard view-mode entry and help state with the local-help routing test.
 connect4_turns_alternate_and_connecting_four_pays,3.66654,,,,
 tag_unaware_client_receives_plain_tui_privmsg_fallback,3.6644347826087000,,,,
 tagged_reaction_without_dm_room_is_rejected_and_creates_none,3.6603636363636400,,,,
 irc_payload_mentions_are_rewritten_to_late_usernames,3.651127272727270,,,,
 concurrent_water_attempts_only_grant_growth_once,3.6504202898550700,,,,
 app::chat::svc_test::opening_a_new_public_room_asks_the_creator_and_reports_to_moderators,3.6447333333333300,,,,
-authenticates_with_token_and_forces_lounge_join,3.644709090909090,,,,
+authenticates_with_token_and_forces_lounge_join,3.644709090909090,3,5,5,1,no,yes,Many IRC tests authenticate successfully but this uniquely asserts the baseline welcome and forced Lounge join; share its server with bad-token rejection.
 global_w_keeps_old_bonsai_without_dynamic_selection,3.6443684210526300,,,,
 m_on_dashboard_sends_toggle_to_paired_client,3.6436825396825400,,,,
-question_mark_opens_pair_guide_first,3.640095238095240,,,,
+question_mark_opens_pair_guide_first,3.640095238095240,4,5,4,1,no,yes,Substantially overlaps question_mark_opens_guide_on_dashboard while adding install copy and lowercase-b behavior; consolidate all Pair-guide assertions.
 screen_number_keys_switch_between_pages_including_pinstar,3.633315789473680,,,,
 stream_proxy_falls_back_to_silence_when_upstream_is_down,3.631134615384620,,,,
-artboard_view_mode_allows_cursor_movement_and_screen_hotkeys,3.606762711864410,,,,
+artboard_view_mode_allows_cursor_movement_and_screen_hotkeys,3.606762711864410,3,5,4,1,no,yes,The view-mode half of the same Artboard routing contract; use it to enter and later return from the consolidated active-mode flow.
 tui_reply_projects_reply_tag_to_tag_aware_client,3.604227272727270,,,,
-question_mark_opens_lateania_guide_on_lateania_screen,3.602438596491230,,,,
-ctrl_r_no_longer_opens_pairing_qr_on_home,3.600650793650790,,,,
+question_mark_opens_lateania_guide_on_lateania_screen,3.602438596491230,2,5,5,1,no,yes,Unique screen-specific guide selection but the dashboard guide can be closed before navigating to Lateania in the same app.
+ctrl_r_no_longer_opens_pairing_qr_on_home,3.600650793650790,2,5,4,0,no,yes,Small negative legacy-shortcut assertion on the same dashboard state; run it before opening and scrolling the Pair guide.
 irc_only_connection_counts_as_active_until_disconnect,3.5743636363636400,,,,
 checkmate_finishes_match_and_pays_the_winner,3.5487600000000000,,,,
-active_artboard_question_mark_types_into_canvas_instead_of_opening_help,3.5473833333333300,,,,
+active_artboard_question_mark_types_into_canvas_instead_of_opening_help,3.5473833333333300,3,5,5,1,no,yes,Important active-mode input priority complements view-mode local help; assert both contexts during one Artboard lifecycle.
 token_revoke_disconnects_live_connection,3.52377358490566,,,,
-artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell,3.5218305084745800,,,,
+artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell,3.5218305084745800,3,5,4,1,no,yes,Natural transition between view and active phases; use the click to enter the consolidated active-mode assertions instead of a separate app.
 migrations_apply_and_track,3.5184202898550700,,,,
 app::pet::state::state_test::sparse_ticks_expire_feedback_on_the_wall_clock,3.5169600000000000,,,,
 r_refresh_on_dashboard_keeps_dashboard_visible,3.5033333333333300,,,,
@@ -109,7 +109,7 @@ renders_non_empty_frames_when_input_and_ticks_are_processed,3.485767857142860,,,
 sweeper_forfeits_matches_past_their_deadline,3.4810400000000000,,,,
 shared_service_refresh_tasks_publish_per_session_snapshots,3.4657,,,,
 finished_results_linger_until_each_player_acks,3.4638,,,,
-artboard_view_mode_question_mark_opens_local_help,3.449576271186440,,,,
+artboard_view_mode_question_mark_opens_local_help,3.449576271186440,3,5,4,1,no,yes,View-mode help ownership shares setup with the help Tab test and contrasts directly with active-mode question-mark typing.
 discover_task_lists_public_rooms_user_has_not_joined,3.44775,,,,
 saving_existing_profile_updates_and_preserves_public_slug,3.4342166666666700,,,,
 admin_delete_removes_other_users_work_profile_and_refreshes_snapshot,3.3900833333333300,,,,
