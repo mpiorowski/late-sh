@@ -1663,6 +1663,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 ParsedInput::Arrow(key) => {
                     crate::app::door::lateania::screen::GAME.handle_arrow(app, *key);
                 }
+                ParsedInput::Mouse(mouse) => {
+                    crate::app::door::lateania::screen::GAME.handle_mouse(app, *mouse);
+                }
                 _ => {}
             }
             return true;

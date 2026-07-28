@@ -18,7 +18,7 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{Panel, State},
+    state::{ClickAction, Panel, State},
     svc::{LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
@@ -91,6 +91,109 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_side(frame, cols[1], state, &view, usernames);
 }
 
+/// One chip on the combat action bar: its label, the action a click triggers,
+/// and whether it is ready (dim when a spell can't be paid for right now).
+struct Chip {
+    label: String,
+    action: ClickAction,
+    ready: bool,
+}
+
+/// Build the action-bar chips left to right within `max_width`: Attack first,
+/// then as many ability slots as fit, always keeping room for Quaff and Flee on
+/// the end (the two a wounded player reaches for most). Kept pure so the layout
+/// is unit-testable.
+fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
+    let width_of = |s: &str| UnicodeWidthStr::width(s) as u16;
+    let attack = Chip {
+        label: "\u{2694} Atk".to_string(), // ⚔
+        action: ClickAction::Attack,
+        ready: true,
+    };
+    let quaff = Chip {
+        label: "\u{2665} Quaff".to_string(), // ♥
+        action: ClickAction::Quaff,
+        ready: true,
+    };
+    let flee = Chip {
+        label: "\u{2691} Flee".to_string(), // ⚑
+        action: ClickAction::Flee,
+        ready: true,
+    };
+    // Reserve the trailing Quaff/Flee (plus a space before each) so abilities in
+    // the middle never crowd them off the row.
+    let reserved = width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
+    let mut chips = vec![attack];
+    let mut used = width_of(&chips[0].label);
+    for a in &view.abilities {
+        // Slot 10 is cast with `0`, matching the keybind; show that digit.
+        let key = if a.slot == 10 { 0 } else { a.slot };
+        let label = format!("{key} {}", truncate_chars(&a.name, 7));
+        let w = width_of(&label) + 1; // leading space between chips
+        if used + w + reserved > max_width {
+            break;
+        }
+        used += w;
+        chips.push(Chip {
+            label,
+            action: ClickAction::Ability(a.slot),
+            ready: a.ready,
+        });
+    }
+    chips.push(quaff);
+    chips.push(flee);
+    chips
+}
+
+/// The clickable combat action bar: a single row of chips whose absolute rects
+/// are recorded so a click resolves to the same action as its key.
+fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let chips = combat_chips(view, area.width);
+    let mut spans: Vec<Span> = Vec::new();
+    let mut col = area.x;
+    for (i, chip) in chips.iter().enumerate() {
+        if i > 0 && col < area.x.saturating_add(area.width) {
+            spans.push(Span::raw(" "));
+            col += 1;
+        }
+        let w = UnicodeWidthStr::width(chip.label.as_str()) as u16;
+        state.record_combat_hit(
+            Rect {
+                x: col,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+            chip.action,
+        );
+        let style = match chip.action {
+            ClickAction::Attack => Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+            ClickAction::Quaff => Style::default().fg(theme::SUCCESS()),
+            ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
+            ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
+            ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
+        };
+        spans.push(Span::styled(chip.label.clone(), style));
+        col += w;
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Truncate to `max` display columns, adding a trailing dot when clipped.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('.');
+    out
+}
+
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     if area.height < 4 {
         draw_game(frame, area, state, usernames);
@@ -133,12 +236,25 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         }
         false => (rows[1], None),
     };
+    // Last frame's clickable chips are stale now; a bar that isn't drawn this
+    // frame (map open, cramped view) must leave nothing behind to click.
+    state.clear_combat_hits();
     if view.classed && state.map_open() && map_fits(body) {
         draw_world_map(frame, body, state, &view);
     } else {
+        // A classed adventurer gets a clickable action bar on the bottom row -
+        // attack, ability slots, quaff, flee - so a fight can be run with the
+        // mouse without leaving the view. Keyboard keeps working unchanged.
+        let game_area = if view.classed && body.height >= 6 {
+            let split = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(body);
+            draw_action_bar(frame, split[1], state, &view);
+            split[0]
+        } else {
+            body
+        };
         // Below the graphical map's minimum, Panel::Map falls back to the text
         // atlas in the side panel (see `draw_side`).
-        draw_game(frame, body, state, usernames);
+        draw_game(frame, game_area, state, usernames);
     }
     if let (Some(text), Some(prompt)) = (chat, prompt) {
         frame.render_widget(

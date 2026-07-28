@@ -232,3 +232,83 @@ fn the_xp_meter_stays_on_the_character_sheet_under_a_pile_of_titles() {
         "the title list is summarised rather than unbounded: {text:?}"
     );
 }
+
+// ---- combat action bar (mouse) --------------------------------------------
+
+fn view_with_abilities(slots: &[u8]) -> super::PlayerView {
+    use super::super::svc::AbilityView;
+    let mut view = super::super::svc::empty_player_view();
+    view.classed = true;
+    view.abilities = slots
+        .iter()
+        .map(|&slot| AbilityView {
+            slot,
+            name: format!("Ability{slot}"),
+            cost: 5,
+            ready: true,
+            effect: String::new(),
+        })
+        .collect();
+    view
+}
+
+#[test]
+fn action_bar_always_offers_attack_quaff_and_flee() {
+    use super::super::state::ClickAction;
+    let view = view_with_abilities(&[1, 2, 3]);
+    let chips = super::combat_chips(&view, 80);
+    let actions: Vec<ClickAction> = chips.iter().map(|c| c.action).collect();
+    assert_eq!(
+        actions.first(),
+        Some(&ClickAction::Attack),
+        "attack leads the bar"
+    );
+    // Quaff then Flee anchor the end - the two a wounded player reaches for.
+    assert_eq!(actions[actions.len() - 2], ClickAction::Quaff);
+    assert_eq!(actions[actions.len() - 1], ClickAction::Flee);
+    assert!(
+        actions.contains(&ClickAction::Ability(2)),
+        "an ability slot in the middle is clickable"
+    );
+}
+
+#[test]
+fn action_bar_slot_ten_is_labelled_with_the_zero_key() {
+    let view = view_with_abilities(&[10]);
+    let chips = super::combat_chips(&view, 80);
+    let slot_chip = chips
+        .iter()
+        .find(|c| c.action == super::super::state::ClickAction::Ability(10))
+        .expect("slot 10 chip present");
+    assert!(
+        slot_chip.label.starts_with("0 "),
+        "slot 10 casts with `0`, so its chip shows 0: {:?}",
+        slot_chip.label
+    );
+}
+
+#[test]
+fn action_bar_drops_abilities_before_crowding_out_quaff_and_flee() {
+    use super::super::state::ClickAction;
+    // A narrow bar can't fit every ability, but Quaff and Flee must survive.
+    let view = view_with_abilities(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let chips = super::combat_chips(&view, 24);
+    let actions: Vec<ClickAction> = chips.iter().map(|c| c.action).collect();
+    assert_eq!(actions.first(), Some(&ClickAction::Attack));
+    assert!(
+        actions.contains(&ClickAction::Quaff),
+        "quaff kept on a narrow bar"
+    );
+    assert!(
+        actions.contains(&ClickAction::Flee),
+        "flee kept on a narrow bar"
+    );
+    let abilities = actions
+        .iter()
+        .filter(|a| matches!(a, ClickAction::Ability(_)))
+        .count();
+    assert!(
+        abilities < 8,
+        "some abilities are dropped when they don't fit"
+    );
+}

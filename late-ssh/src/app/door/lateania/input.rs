@@ -37,6 +37,17 @@ pub enum InputAction {
     Leave,
 }
 
+/// Route a mouse event to the combat action bar. A left click on a chip runs the
+/// same action its key would; everything else (other buttons, scroll, clicks off
+/// a chip) is ignored so the keyboard-driven view is untouched.
+pub fn handle_mouse(state: &mut State, mouse: crate::app::input::MouseEvent) -> bool {
+    use crate::app::input::{MouseButton, MouseEventKind};
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    state.click_combat(mouse.x, mouse.y)
+}
+
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     // While composing a chat line, keys feed the line until Enter (send) or Esc
     // (cancel). This runs before the Esc-leaves check so Esc cancels compose

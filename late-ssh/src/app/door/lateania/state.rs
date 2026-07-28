@@ -6,9 +6,10 @@
 // list panels. All real actions delegate to the service's *_task methods; this
 // struct never blocks and never mutates world truth.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
+use ratatui::layout::Rect;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -60,6 +61,32 @@ pub enum Panel {
     Map,
 }
 
+/// A combat action a player can trigger by clicking its on-screen chip, mapping
+/// one-to-one to a key: [`ClickAction::Attack`] is space/x, [`ClickAction::Quaff`]
+/// is Q, [`ClickAction::Flee`] is z, and [`ClickAction::Ability`] is the digit of
+/// that action-bar slot. The mouse handler resolves a click to one of these and
+/// then calls the very same method the key would.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickAction {
+    Attack,
+    Quaff,
+    Flee,
+    Ability(u8),
+}
+
+/// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
+/// geometry can be unit-tested without standing up a whole `State`.
+fn hit_at(hits: &[(Rect, ClickAction)], x: u16, y: u16) -> Option<ClickAction> {
+    hits.iter()
+        .find(|(r, _)| {
+            x >= r.x
+                && x < r.x.saturating_add(r.width)
+                && y >= r.y
+                && y < r.y.saturating_add(r.height)
+        })
+        .map(|(_, action)| *action)
+}
+
 pub struct State {
     user_id: Uuid,
     session_id: Uuid,
@@ -73,6 +100,10 @@ pub struct State {
     /// (which only holds `&State`) can keep the highlighted row inside a
     /// scroll-off margin. Reset whenever the panel changes.
     list_scroll: Cell<usize>,
+    /// Absolute screen rects of the combat action-bar chips, recorded fresh each
+    /// draw so a mouse click can resolve to the same action as its key. Interior-
+    /// mutable because the render pass only holds `&State`.
+    combat_hits: RefCell<Vec<(Rect, ClickAction)>>,
     /// Category headers the player has folded in the collapsible list panels
     /// (crafting / inventory / shop), by prefixed key (e.g. `"inv:Weapons"`).
     /// Session-only; folds a long list down to its category headers.
@@ -112,6 +143,7 @@ impl State {
             panel: Panel::Room,
             cursor: 0,
             list_scroll: Cell::new(0),
+            combat_hits: RefCell::new(Vec::new()),
             collapsed: std::collections::HashSet::new(),
             joined: true,
             join_pending: true,
@@ -560,6 +592,37 @@ impl State {
         if self.ensure_player_present() {
             self.svc.quaff_task(self.user_id);
         }
+    }
+
+    /// Drop last frame's action-bar hit-map. Called at the top of every draw so a
+    /// bar that isn't shown this frame (map open, etc.) leaves nothing clickable.
+    pub fn clear_combat_hits(&self) {
+        self.combat_hits.borrow_mut().clear();
+    }
+
+    /// Record the absolute screen rect of one action-bar chip during draw.
+    pub fn record_combat_hit(&self, rect: Rect, action: ClickAction) {
+        self.combat_hits.borrow_mut().push((rect, action));
+    }
+
+    /// The action whose chip covers cell `(x, y)`, if a click landed on one.
+    pub fn combat_hit_at(&self, x: u16, y: u16) -> Option<ClickAction> {
+        hit_at(&self.combat_hits.borrow(), x, y)
+    }
+
+    /// Perform a click-resolved combat action (routes to the same method its key
+    /// does). Returns whether a chip was actually hit.
+    pub fn click_combat(&mut self, x: u16, y: u16) -> bool {
+        let Some(action) = self.combat_hit_at(x, y) else {
+            return false;
+        };
+        match action {
+            ClickAction::Attack => self.attack(),
+            ClickAction::Quaff => self.quaff(),
+            ClickAction::Flee => self.flee(),
+            ClickAction::Ability(slot) => self.use_ability(slot),
+        }
+        true
     }
 
     /// Release a fallen spirit to the temple instead of waiting for a rez.
