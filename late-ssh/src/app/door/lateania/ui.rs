@@ -172,6 +172,14 @@ fn map_fits(area: Rect) -> bool {
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
+/// A short land name for the map overlay: the atlas carries full titles like
+/// "Embergate & the King's Road", but a map label wants just "Embergate". Drop
+/// any " & ..." or ", ..." tail so the name fits a clear run and reads at a glance.
+fn land_label(name: &str) -> &str {
+    let name = name.split(" & ").next().unwrap_or(name);
+    name.split(", ").next().unwrap_or(name)
+}
+
 fn biome_style(biome: super::world::Biome) -> (char, Color) {
     use super::world::Biome;
     match biome {
@@ -214,7 +222,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Constraint::Length(1), // header
         Constraint::Min(1),    // map body
         Constraint::Length(2), // cell inspector (crosshair target)
-        Constraint::Length(1), // controls + legend
+        Constraint::Length(1), // controls + marker legend
+        Constraint::Length(1), // terrain key (biomes in view)
     ])
     .split(area);
 
@@ -274,6 +283,12 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let tame_style = Style::default()
         .fg(Color::Rgb(230, 140, 160))
         .add_modifier(Modifier::BOLD);
+    let gather_style = Style::default()
+        .fg(Color::Rgb(150, 200, 120))
+        .add_modifier(Modifier::BOLD);
+    let elite_style = Style::default()
+        .fg(Color::Rgb(210, 120, 90))
+        .add_modifier(Modifier::BOLD);
     let link_style = Style::default().fg(theme::BORDER_DIM());
 
     let mut cells: Vec<Vec<(String, Style)>> = canvas
@@ -289,6 +304,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                         Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                        Some(p) if p.elite_foe.is_some() => ("\u{25c6}".to_string(), elite_style),
+                        Some(p) if p.gather.is_some() => ("\u{2692}".to_string(), gather_style),
                         _ => {
                             let (g, color) = biome_style(super::world::biome_of(*id));
                             (g.to_string(), Style::default().fg(color))
@@ -304,6 +321,72 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
             let style = if arrow.boss { boss_style } else { tame_style };
             *cell = (arrow.glyph.to_string(), style);
+        }
+    }
+
+    // Land labels: name each explored region once, near the centroid of its
+    // rooms in view, so you can see which land is which at a glance. Only lands
+    // you've set foot in are drawn (canvas already holds only seen rooms), and
+    // the text lands only in empty cells so it never hides a room or a marker.
+    let mut land_centroids: std::collections::HashMap<&'static str, (i32, i32, i32)> =
+        std::collections::HashMap::new();
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            if let Tile::Room(id) = tile
+                && let Some((name, _)) = region_atlas_entry(*id)
+            {
+                let e = land_centroids.entry(name).or_insert((0, 0, 0));
+                e.0 += r as i32;
+                e.1 += c as i32;
+                e.2 += 1;
+            }
+        }
+    }
+    let label_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::ITALIC);
+    let rows_n = cells.len();
+    for (name, (sum_r, sum_c, count)) in land_centroids {
+        // A stray room or two shouldn't plant a label; wait for a real presence.
+        if count < 3 {
+            continue;
+        }
+        let text: Vec<char> = land_label(name).chars().collect();
+        let len = text.len();
+        let mid_r = sum_r / count;
+        let ideal_c = ((sum_c / count) - (len as i32) / 2).max(0);
+
+        // Find a clear horizontal run of `len` cells near the centroid so the
+        // name reads whole rather than being chopped up by rooms and corridors.
+        // Scan rows outward from the centroid, nudging left/right a little; if
+        // nothing clear turns up, drop the label - better absent than garbled.
+        let is_clear = |cells: &[Vec<(String, Style)>], r: usize, c0: usize| {
+            c0 + len <= cols as usize && (0..len).all(|i| cells[r][c0 + i].0 == " ")
+        };
+        let mut spot = None;
+        'search: for dr in 0..=5i32 {
+            for r in [mid_r - dr, mid_r + dr] {
+                if r < 0 || r as usize >= rows_n {
+                    continue;
+                }
+                let r = r as usize;
+                for dc in 0..=10i32 {
+                    for c in [ideal_c + dc, ideal_c - dc] {
+                        if c >= 0 && is_clear(&cells, r, c as usize) {
+                            spot = Some((r, c as usize));
+                            break 'search;
+                        }
+                    }
+                }
+                if dr == 0 {
+                    break; // mid_r - 0 == mid_r + 0; don't scan it twice
+                }
+            }
+        }
+        if let Some((r, c0)) = spot {
+            for (i, ch) in text.iter().enumerate() {
+                cells[r][c0 + i] = (ch.to_string(), label_style);
+            }
         }
     }
 
@@ -357,6 +440,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             if let Some(t) = p.tameable {
                 parts.push(format!("tame {t}"));
             }
+            if let Some(g) = p.gather {
+                parts.push(format!("gather {g}"));
+            }
             if !p.monsters.is_empty() {
                 parts.push(format!("foes {}", p.monsters.join(", ")));
             }
@@ -378,24 +464,66 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     }
     frame.render_widget(Paragraph::new(inspect), rows[2]);
 
-    // Footer: controls + marker legend.
+    // Footer line 1: controls + marker legend.
+    let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                "wasd/arrows pan · <> level · Enter re-centre · m close    ",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
+            Span::styled("wasd pan · <> level · Enter re-centre · m close   ", dim),
             Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-            Span::styled(" boss  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" boss ", dim),
             Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" tame ", dim),
+            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+            Span::styled(" foe ", dim),
+            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+            Span::styled(" gather ", dim),
             Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" off-map  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" off-map ", dim),
             Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" path", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" path", dim),
         ])),
         rows[3],
     );
+
+    // Footer line 2: terrain key, showing only the biomes actually in view so it
+    // stays legible instead of listing every biome in the world.
+    use super::world::Biome;
+    let mut present: Vec<Biome> = Vec::new();
+    for row in &canvas {
+        for tile in row {
+            if let Tile::Room(id) = tile {
+                let b = super::world::biome_of(*id);
+                if !present.contains(&b) {
+                    present.push(b);
+                }
+            }
+        }
+    }
+    // Fixed order so the key doesn't reshuffle as you pan.
+    const BIOME_ORDER: [(Biome, &str); 9] = [
+        (Biome::Heartland, "heartland"),
+        (Biome::Plains, "plains"),
+        (Biome::Urban, "town"),
+        (Biome::Forest, "forest"),
+        (Biome::Water, "water"),
+        (Biome::Islands, "isles"),
+        (Biome::Ash, "ash"),
+        (Biome::Cavern, "caves"),
+        (Biome::Badlands, "badlands"),
+    ];
+    let mut key: Vec<Span> = vec![Span::styled(
+        "terrain  ",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )];
+    for (biome, label) in BIOME_ORDER {
+        if !present.contains(&biome) {
+            continue;
+        }
+        let (glyph, color) = biome_style(biome);
+        key.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
+        key.push(Span::styled(format!(" {label}  "), dim));
+    }
+    frame.render_widget(Paragraph::new(Line::from(key)), rows[4]);
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
