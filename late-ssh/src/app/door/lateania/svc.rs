@@ -706,6 +706,8 @@ pub struct PlayerView {
     /// Rooms near you that hold another adventurer, so the field shows where
     /// other players are. Same window as `nearby_foes`.
     pub nearby_players: Vec<RoomId>,
+    /// The live-map RPG view preference, persisted with the character.
+    pub rpg_mode: bool,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -810,6 +812,7 @@ impl PlayerView {
             mobs: Vec::new(),
             nearby_foes: Vec::new(),
             nearby_players: Vec::new(),
+            rpg_mode: true,
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -1496,6 +1499,15 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.quaff_best(user_id));
     }
 
+    pub fn toggle_rpg_mode_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| {
+            if let Some(p) = s.players.get_mut(&user_id) {
+                p.rpg_mode = !p.rpg_mode;
+                s.dirty = true; // persist the preference
+            }
+        });
+    }
+
     pub fn buy_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.buy(user_id, item_id));
     }
@@ -1783,6 +1795,9 @@ struct PlayerState {
     /// Total Animal Taming xp (the beastmaster trade). Its level is a pure
     /// function of this, on the same 1..=50 curve. Persisted (schema v14).
     taming_xp: i64,
+    /// Whether the live walk-around field (RPG mode) is on for this character.
+    /// A rendering preference, but persisted so it survives across sessions.
+    rpg_mode: bool,
     /// A weapon coated with poison: (damage per tick, strikes remaining). Each
     /// landed melee hit leaves a poison DoT and spends one charge. Transient.
     weapon_poison: Option<(i32, u8)>,
@@ -2477,6 +2492,7 @@ impl WorldState {
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
             taming_xp: 0,
+            rpg_mode: true,
             weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
@@ -2694,6 +2710,7 @@ impl WorldState {
                 .collect();
             // Restore Animal Taming xp (0 for pre-taming saves).
             p.taming_xp = saved.taming_xp.max(0);
+            p.rpg_mode = saved.rpg_mode;
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2797,6 +2814,7 @@ impl WorldState {
                 .map(|(s, xp)| (s.key().to_string(), *xp))
                 .collect(),
             taming_xp: p.taming_xp,
+            rpg_mode: p.rpg_mode,
         }))
     }
 
@@ -7423,6 +7441,7 @@ impl WorldState {
                     mobs,
                     nearby_foes,
                     nearby_players,
+                    rpg_mode: player.rpg_mode,
                     occupants,
                     following: player.following,
                     wildlife,

@@ -91,7 +91,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Below this width there isn't room for three columns, so the field folds
     // away and the classic log + side view stands in (the minimap still rides in
     // the side panel there).
-    if state.panel() == Panel::Room && state.rpg_mode() && area.width >= 96 {
+    if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
         let cols = Layout::horizontal([
             Constraint::Length(24),     // log
             Constraint::Min(24),        // live field (fills the middle)

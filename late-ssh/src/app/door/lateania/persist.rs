@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 15;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -48,6 +48,7 @@ pub struct SavedCharacterInit {
     pub skills: Vec<(String, i64)>,
     pub craft_skills: Vec<(String, i64)>,
     pub taming_xp: i64,
+    pub rpg_mode: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +139,10 @@ pub struct SavedCharacter {
     /// simply start the trade untrained at level 1.
     #[serde(default)]
     pub taming_xp: i64,
+    /// The live-map RPG view preference. Defaults on, so saves from before this
+    /// field come back with the map enabled.
+    #[serde(default = "enabled")]
+    pub rpg_mode: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -179,6 +184,10 @@ fn one() -> i32 {
     1
 }
 
+fn enabled() -> bool {
+    true
+}
+
 fn world_schema_version() -> u32 {
     WORLD_SCHEMA_VERSION
 }
@@ -218,6 +227,7 @@ impl SavedCharacter {
             skills: init.skills,
             craft_skills: init.craft_skills,
             taming_xp: init.taming_xp,
+            rpg_mode: init.rpg_mode,
         }
     }
 

@@ -37,9 +37,11 @@ fn round_trips_through_json() {
         skills: vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)],
         craft_skills: vec![("smithing".to_string(), 300)],
         taming_xp: 1500,
+        rpg_mode: false,
     });
     let json = c.to_json();
     let back = SavedCharacter::from_json(&json).expect("parses");
+    assert!(!back.rpg_mode, "the RPG-mode preference round-trips");
     assert_eq!(back.class(), Some(Class::Rogue));
     assert_eq!(back.xp, 1234);
     assert_eq!(back.level, 7);
