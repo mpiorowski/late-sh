@@ -490,6 +490,13 @@ pub struct App {
     /// mouse is live; editable in settings. `None` at load means the user has
     /// never chosen (first run); resolved to the default here.
     pub(crate) interaction_mode: late_core::models::user::InteractionMode,
+    /// True until the user picks a mode for the first time: shows the one-time
+    /// onboarding prompt over the app after they enter.
+    pub(crate) needs_interaction_onboarding: bool,
+    /// Highlighted row in that prompt, and the on-screen rect of each option
+    /// (recorded by the renderer so a click can pick one).
+    pub(crate) onboarding_selected: usize,
+    pub(crate) onboarding_option_rects: std::cell::Cell<[Option<ratatui::layout::Rect>; 3]>,
 
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
@@ -1246,6 +1253,9 @@ impl App {
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
             interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
+            needs_interaction_onboarding: config.initial_interaction_mode.is_none(),
+            onboarding_selected: 0,
+            onboarding_option_rects: std::cell::Cell::new([None; 3]),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
             afk: None,
