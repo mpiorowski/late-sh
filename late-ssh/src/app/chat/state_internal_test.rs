@@ -2047,7 +2047,8 @@ async fn stale_snapshot_does_not_roll_back_a_newer_ignore_list() {
         .expect("join target");
 
     let mut state = counter_test_state(&test_db, viewer.id);
-    refresh_and_drain(&mut state).await;
+    wait_for_snapshot(&mut state).await;
+    state.drain_snapshot();
 
     // A snapshot whose read ran before the ignore was written, held back
     // undrained: every live session has one of these in flight, and a slow
