@@ -323,6 +323,89 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
     }
 }
 
+/// One artistic ground tile for the live field: the biome's terrain drawn as a
+/// scatter of little glyphs (grass tufts, trees, waves, ash, rock) picked by a
+/// hash of the world cell, so the ground looks hand-strewn and varied yet stays
+/// perfectly stable as you walk (no shimmer) instead of a flat wash of one char.
+/// `(hx, hy)` are stable per-world-location coordinates. Every biome has its own
+/// palette so a forest, a lake, an ash waste, and a cavern each read at a glance.
+fn field_ground(biome: super::world::Biome, hx: i32, hy: i32) -> (char, Color) {
+    use super::world::Biome;
+    // Cheap stable spatial hash -> a bucket 0..15. Low buckets are the rarer
+    // decorations (trees/flowers/rocks); the rest is base ground, so features
+    // sprinkle in sparsely.
+    let h = (hx.wrapping_mul(73_856_093) ^ hy.wrapping_mul(19_349_663)) as u32;
+    let b = (h >> 4) % 16;
+    match biome {
+        // Home fields: lush grass with the odd wildflower.
+        Biome::Heartland => match b {
+            0 => ('*', Color::Rgb(230, 205, 90)),
+            1 => ('\u{2740}', Color::Rgb(225, 130, 150)), // ❀
+            2..=3 => ('"', Color::Rgb(105, 165, 80)),
+            4..=6 => (',', Color::Rgb(95, 155, 72)),
+            _ => ('.', Color::Rgb(80, 140, 66)),
+        },
+        // Open overworld: drier, wind-combed grass.
+        Biome::Plains => match b {
+            0 => ('\'', Color::Rgb(180, 175, 95)),
+            1..=2 => ('"', Color::Rgb(160, 160, 85)),
+            3..=5 => (',', Color::Rgb(150, 150, 78)),
+            _ => ('.', Color::Rgb(135, 138, 72)),
+        },
+        // Capitals and villages: flagstone and cobble.
+        Biome::Urban => match b {
+            0 => ('#', Color::Rgb(150, 150, 155)),
+            1 => ('=', Color::Rgb(140, 140, 145)),
+            2..=3 => (':', Color::Rgb(120, 120, 128)),
+            _ => ('.', Color::Rgb(105, 105, 114)),
+        },
+        // Greenwood: dark undergrowth studded with trees.
+        Biome::Forest => match b {
+            0 => ('\u{2660}', Color::Rgb(40, 105, 48)), // ♠ tree
+            1 => ('\u{2663}', Color::Rgb(46, 120, 55)), // ♣ tree
+            2..=3 => ('"', Color::Rgb(58, 118, 62)),
+            4..=6 => (',', Color::Rgb(52, 105, 58)),
+            _ => ('.', Color::Rgb(44, 92, 52)),
+        },
+        // Open water: rolling waves.
+        Biome::Water => match b {
+            0..=1 => ('\u{2248}', Color::Rgb(90, 140, 220)), // ≈
+            2..=4 => ('~', Color::Rgb(70, 120, 205)),
+            _ => ('~', Color::Rgb(58, 105, 190)),
+        },
+        // Archipelago: pale shore and shallows.
+        Biome::Islands => match b {
+            0 => ('\u{2248}', Color::Rgb(95, 180, 190)),
+            1..=2 => ('~', Color::Rgb(85, 170, 182)),
+            3..=4 => ('.', Color::Rgb(205, 195, 150)), // sand
+            _ => (',', Color::Rgb(120, 175, 165)),
+        },
+        // Ashen Reach: cinders and cooling embers.
+        Biome::Ash => match b {
+            0 => ('%', Color::Rgb(180, 90, 70)),
+            1 => ('*', Color::Rgb(205, 110, 60)), // ember
+            2..=3 => ('"', Color::Rgb(120, 80, 78)),
+            4..=5 => (',', Color::Rgb(105, 72, 70)),
+            _ => ('.', Color::Rgb(88, 66, 66)),
+        },
+        // Caverns: rock floor with the odd boulder.
+        Biome::Cavern => match b {
+            0 => ('\u{2593}', Color::Rgb(120, 112, 128)), // ▓ rock
+            1 => ('#', Color::Rgb(108, 100, 118)),
+            2..=3 => ('\u{00b7}', Color::Rgb(130, 122, 140)), // ·
+            4..=5 => (',', Color::Rgb(102, 96, 112)),
+            _ => ('.', Color::Rgb(88, 84, 98)),
+        },
+        // Badlands: cracked hardpan and scrub.
+        Biome::Badlands => match b {
+            0 => ('\u{25b2}', Color::Rgb(150, 110, 70)), // ▲ mesa
+            1..=2 => (':', Color::Rgb(165, 125, 80)),
+            3..=5 => (',', Color::Rgb(150, 115, 74)),
+            _ => ('.', Color::Rgb(135, 104, 68)),
+        },
+    }
+}
+
 /// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
 /// centred on the player. `@` is the player's room; arrows / wasd pan the
 /// camera and Enter re-centres (handled in input.rs).
@@ -404,29 +487,73 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let tame_style = Style::default()
         .fg(Color::Rgb(230, 140, 160))
         .add_modifier(Modifier::BOLD);
-    let link_style = Style::default().fg(theme::BORDER_DIM());
+    // Trodden paths between rooms: a warm dim so they read as trails cut through
+    // the terrain rather than fences.
+    let path_style = Style::default().fg(Color::Rgb(150, 120, 82));
 
-    let mut cells: Vec<Vec<(String, Style)>> = canvas
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|tile| match tile {
-                    Tile::Empty => (" ".to_string(), Style::default()),
-                    Tile::LinkH => ("\u{2500}".to_string(), link_style),
-                    Tile::LinkV => ("\u{2502}".to_string(), link_style),
-                    Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
-                    Tile::Room(id) => match poi(*id) {
-                        Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
-                        Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
-                        _ => {
-                            let (g, color) = biome_style(super::world::biome_of(*id));
-                            (g.to_string(), Style::default().fg(color))
-                        }
-                    },
-                })
-                .collect()
-        })
-        .collect();
+    // Rooms sit on even offsets from the centre cell; `(hx, hy)` are stable
+    // world coordinates for a cell so the ground scatter never shimmers as you
+    // walk. The biome under an empty cell is borrowed from the nearest drawn
+    // room, so terrain fills the gaps between explored rooms and simply stops at
+    // the fog (an empty cell with no drawn neighbour stays black = unknown).
+    let (cx, cy) = (cols / 2, height / 2);
+    let biome_at = |sr: i32, sc: i32| -> Option<super::world::Biome> {
+        for (dr, dc) in [
+            (0, 0),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (-1, 1),
+            (1, -1),
+            (1, 1),
+        ] {
+            let (r, c) = (sr + dr, sc + dc);
+            if r >= 0
+                && r < height
+                && c >= 0
+                && c < cols
+                && let Tile::Room(id) = canvas[r as usize][c as usize]
+            {
+                return Some(super::world::biome_of(id));
+            }
+        }
+        None
+    };
+    let ground_cell = |sr: i32, sc: i32, biome: super::world::Biome| {
+        let hx = 2 * center.x + (sc - cx);
+        let hy = 2 * center.y + (sr - cy);
+        let (g, color) = field_ground(biome, hx, hy);
+        (g.to_string(), Style::default().fg(color))
+    };
+
+    let mut cells: Vec<Vec<(String, Style)>> =
+        vec![
+            vec![(" ".to_string(), Style::default()); cols.max(0) as usize];
+            height.max(0) as usize
+        ];
+    for sr in 0..height {
+        for sc in 0..cols {
+            let cell = match canvas[sr as usize][sc as usize] {
+                // Rooms melt into the terrain (the ground scatter carries the
+                // biome); only the player, landmarks, and paths stand proud.
+                Tile::Room(id) if id == player_room => ("@".to_string(), player_style),
+                Tile::Room(id) => match poi(id) {
+                    Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
+                    Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                    _ => ground_cell(sr, sc, super::world::biome_of(id)),
+                },
+                Tile::LinkH => ("\u{2500}".to_string(), path_style),
+                Tile::LinkV => ("\u{2502}".to_string(), path_style),
+                Tile::Empty => match biome_at(sr, sc) {
+                    Some(biome) => ground_cell(sr, sc, biome),
+                    None => (" ".to_string(), Style::default()),
+                },
+            };
+            cells[sr as usize][sc as usize] = cell;
+        }
+    }
 
     // Off-field bosses/tameables get a border arrow pointing the way (no spoiler).
     for arrow in poi_arrows(coords, center, cols, height) {
