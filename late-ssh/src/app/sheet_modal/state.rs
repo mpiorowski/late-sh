@@ -33,6 +33,9 @@ pub(crate) struct SheetModalState {
     /// Last committed name, restored when a name edit is cancelled.
     committed_name: String,
     pending_save: Option<SheetSaveRequest>,
+    /// Screen rects of the Name and Body fields, recorded each frame so a click
+    /// can focus the field under the pointer.
+    field_rects: std::cell::Cell<[Option<ratatui::layout::Rect>; 2]>,
 }
 
 impl SheetModalState {
@@ -47,7 +50,35 @@ impl SheetModalState {
             body_input: new_body_textarea(),
             committed_name: String::new(),
             pending_save: None,
+            field_rects: std::cell::Cell::new([None; 2]),
         }
+    }
+
+    /// Record a field's screen rect during draw (for click-to-focus).
+    pub(crate) fn record_field_rect(&self, field: SheetField, rect: ratatui::layout::Rect) {
+        let mut rects = self.field_rects.get();
+        rects[field as usize] = Some(rect);
+        self.field_rects.set(rects);
+    }
+
+    /// The field whose rect contains `(x, y)`, if a click landed on one.
+    pub(crate) fn field_at(&self, x: u16, y: u16) -> Option<SheetField> {
+        let rects = self.field_rects.get();
+        for (i, rect) in rects.iter().enumerate() {
+            if let Some(r) = rect
+                && x >= r.x
+                && x < r.x + r.width
+                && y >= r.y
+                && y < r.y + r.height
+            {
+                return Some(if i == 0 {
+                    SheetField::Name
+                } else {
+                    SheetField::Body
+                });
+            }
+        }
+        None
     }
 
     pub(crate) fn open(&mut self, request: SheetOpenRequest) {
