@@ -1,0 +1,158 @@
+# A Dark Room door (`late-ssh/src/app/door/darkroom`)
+
+A native, in-process door game: a terminal port of Michael Townsend's
+minimalist incremental. Single-player, DB-persisted (one save per user). It
+uses the **Green Dragon integration pattern** (native ratatui + a service + a
+`DoorGame` impl), not the nethack/rebels PTY-proxy pattern, because upstream is
+a browser game with no terminal to proxy.
+
+This is the first game on late.sh's **incremental shelf**: not a run you die
+out of (NetHack, Brogue, DCSS) and not a daily-turn RPG (Green Dragon,
+Usurper), but a save that grows. See root `DOOR.md` for why that shape was
+wanted.
+
+## Upstream source of truth
+
+Everything mechanical is transcribed from the open-source **web version**:
+
+- **`doublespeakgames/adarkroom`** — <https://github.com/doublespeakgames/adarkroom>.
+  Key files ported: `script/room.js` (fire, temperature, the builder arc,
+  craftables), `script/outside.js` (gathering, traps, population, workers,
+  income table), `script/state_manager.js` (`collectIncome`, the store model).
+
+A local clone lives at **`upstream-adarkroom/`** in the repo root (gitignored;
+re-fetch with `git clone --depth 1 https://github.com/doublespeakgames/adarkroom upstream-adarkroom`).
+Verify against those files directly, never from memory.
+
+**Not** the source: the iOS/Android port (Amir Rajan, RubyMotion), the Steam
+release, and the prequel *The Ensign* are separate closed products.
+
+## Licensing (read before touching any file here)
+
+Upstream is **MPL-2.0** with the Exhibit B "Incompatible With Secondary
+Licenses" notice. MPL is **file-level** copyleft with no network clause, so the
+arrangement is:
+
+| Files | License | Why |
+|---|---|---|
+| `data.rs`, `model.rs`, `sim.rs` | **MPL-2.0** (header + Exhibit B on each) | Carry upstream balance tables, timing constants, rules and notification prose. Text is copied verbatim, which the MPL permits precisely because these files stay MPL. |
+| `pace.rs`, `persist.rs`, `svc.rs`, `state.rs`, `ui.rs`, `screen.rs` | FSL-1.1-MIT (repo default) | Our own work: the pacing design, persistence, the TUI. |
+
+MPL §3.3 is what lets the larger work ship under our terms. **If you move
+upstream-derived logic into one of the FSL files, you have broken this**; move
+the file under MPL instead, and update `NOTICE` + `LICENSING.md`.
+
+MPL §2.3 grants **no trademark rights**. The door currently ships under
+upstream's title via `data::TITLE`, which is deliberately a single constant:
+renaming is a one-line change if the author would rather we did not use it.
+Michael Townsend was emailed about the name before the port shipped.
+
+## The pacing model (`pace.rs`) — the one real design change
+
+Upstream has **no offline progress at all**: every timer is wall clock while
+the browser tab is open, and the whole arc is 2-4 hours. Ported faithfully that
+would mean "idle in an SSH session", which is the opposite of what a clubhouse
+door should be. Three rules reshape it, and they are the only intentional
+deviation from upstream behavior:
+
+1. **Credit accrues while the SSH session is connected**, not while this screen
+   is focused. The village grows while the player is in the lounge; it does not
+   grow while they are logged out. `State::new` is handed the session's connect
+   time (from `App::started_at`), and `sim::settle` never credits back past it.
+2. **The village runs at `SLOWDOWN` (5×) slower.** Applied to worker income and
+   population growth **only**. Cooldowns, the fire, and room temperature stay at
+   upstream speed: the opening act is a click loop, and stretching it produces
+   dead air rather than a longer game.
+3. **`DAILY_CREDIT_SECS` (3h) of village time per UTC day.** Without this,
+   "the session must be connected" is not pacing, it just rewards whoever parks
+   a terminal on a spare monitor.
+
+The footer always shows the remaining allowance, and says so plainly when it is
+spent. **A village that has stopped growing must never look like a bug.**
+
+## The clock (`sim.rs`) — there are no timers
+
+Upstream runs on live `setTimeout`/`setInterval` handles funneled through
+`Engine.setTimeout`. This port has none. `sim::settle` advances the game to
+`now` on demand: on load, on every action, and on leave. Elapsed time inside a
+live session *is* connected time, so advancing is a subtraction, and gaps
+between sessions contribute nothing without any bookkeeping.
+
+- Stepping is **one second at a time** because the clocks interact (fire cools
+  → room cools → the stranger stops progressing). Bounded by the daily cap, so
+  a settle is at most 10,800 cheap iterations. Do not "optimize" this into a
+  closed form without handling those interactions.
+- **Two clocks, deliberately different.** Village time is credited, capped and
+  slowed. Cooldowns run on plain wall clock, uncapped and unslowed, so a pacing
+  rule can never leave a button stuck.
+- Fractional income (a hunter earns 0.5 fur) lands in `Game::carry`, which
+  holds the remainder in `[0, 1)`; whole units move into `stores`.
+- Nothing here runs on the render loop.
+
+## Module map (flat)
+
+| File | Owns |
+|---|---|
+| `data.rs` | **MPL.** Closed `Resource`/`Building`/`Job`/`Fire`/`Temperature` sets, build costs (with the per-unit escalation on traps and huts), the income yield table, the trap drop table, every timing constant, and the notification prose. `TITLE` is the door's display name, in one place. |
+| `pace.rs` | The pacing layer: `Pace` (the persisted daily credit counter), `SLOWDOWN`, `DAILY_CREDIT_SECS`, `slowed()`. The only module that knows the port is paced differently from upstream. |
+| `model.rs` | **MPL.** The persistent `Game` (stores, carry, buildings, workers, population, the latched `seen_buildings`/`seen_jobs`, the room, every countdown) and the rules on it: `light_fire`/`stoke_fire` (whole-refusal on short wood, the first fire is free), `build` (whole-refusal), `gather_wood`, trap collection, worker assignment, `refresh_build_options` (upstream's half-the-wood-and-seen-the-rest unlock rule, latched). `Builder` is upstream's -1..4 level as a closed enum. |
+| `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
+| `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
+| `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order. No shared world, no tick loop, no published snapshot. |
+| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside), the cursor over `Row`s, the capped notification log. `tick()` drains the load channel and settles; every action settles first, so the world is current when the player acts on it. |
+| `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance) and the Games-hub landing card (which credits upstream). |
+| `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, and `leave` (settle, save, return to the Games hub). |
+
+## Persistence
+
+`darkroom_saves` (migration `127`, model `late-core/src/models/darkroom_save.rs`)
+is one JSONB blob per user, exactly like `greendragon_characters` — the save
+shape evolves without new migrations. Every `Game` field carries a serde
+default.
+
+## Integration points (mirror Green Dragon)
+
+`Screen::Darkroom`, `HubGame::Darkroom`, `DoorGameId::Darkroom`,
+`App::{darkroom_service, darkroom_state, enter_darkroom, leave_darkroom}`,
+`SessionConfig`/server-`State` service injection
+(main/ssh/session_bootstrap/test-helpers), render draw arm, input dispatch +
+Esc, tick drain, and the hub launch/landing/reset.
+
+`enter_darkroom` is the one that differs: it derives the session's connect time
+from `App::started_at` and hands it to `State::new`, because that is what
+bounds how much elapsed time may be credited.
+
+## Scope: what is and is not ported
+
+**In (the room and the village):** the fire and its levels, room temperature,
+the full builder arc, the forest unlock, gathering (with the cart), traps and
+their drop table, huts and population, the worker/income economy, and the
+buildings through the smokehouse.
+
+**Not yet:** the wasteland (`world.js`), the path/outfitting screen
+(`path.js`), combat and events (`events.js`), the workshop crafting tier, the
+trading post's buy menu, the ship and the endgame (`ship.js`, `space.js`).
+The workshop tier is gated on the wasteland supplying its materials, so it
+follows the wasteland rather than preceding it.
+
+**Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /
+`audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets) — roughly
+1,100 lines that the terminal replaces rather than translates.
+
+## Gotchas
+
+- **The Sleeping → Helping transition is view-gated.** Upstream fires it in
+  `onArrival` when you click back to the Room tab, not on a timer. `settle`
+  takes the current `View` for exactly this. Every other room clock keeps
+  running while the player is outside.
+- **`refresh_build_options` latches.** Once an option has been offered it stays
+  offered, even after the materials are spent (upstream's `Room.buttons`).
+- **The first fire is free.** Upstream lets you light it with no stores at all,
+  because `stores.wood` does not exist yet; the port keys that off
+  `has_seen(Wood)` rather than the balance.
+- **The builder's auto-stoke runs before the cool in the same step**, so a
+  tended fire holds its level instead of climbing. That is upstream's ordering,
+  not an accident.
+- **Do not tick this from the render loop.** `tick()` settles, but the settle is
+  a subtraction against the wall clock; it is correct at any cadence and must
+  stay that way.
