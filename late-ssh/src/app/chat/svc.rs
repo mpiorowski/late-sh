@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -541,6 +541,12 @@ impl Drop for ChatRefreshSessionGuard {
 #[derive(Clone, Default)]
 pub struct ChatSnapshot {
     pub user_id: Option<Uuid>,
+    /// When this snapshot's reads began. Its friend and ignore lists are only
+    /// as fresh as that instant, so a session that has already applied a newer
+    /// `IgnoreListUpdated`/`FriendListUpdated` must not take them back.
+    /// `None` only on the placeholder snapshot the watch channel starts with,
+    /// which never carries a user id and so is never applied.
+    pub read_started_at: Option<Instant>,
     pub chat_rooms: Vec<(ChatRoom, Vec<ChatMessage>)>,
     pub voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     pub message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
@@ -1151,6 +1157,9 @@ impl ChatService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id))]
     async fn build_chat_snapshot(&self, user_id: Uuid) -> Result<ChatSnapshot> {
+        // Stamped before the permit wait, not after: time spent queueing for a
+        // read slot is time this snapshot spends going stale.
+        let read_started_at = Some(Instant::now());
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
 
@@ -1224,6 +1233,7 @@ impl ChatService {
 
         Ok(ChatSnapshot {
             user_id: Some(user_id),
+            read_started_at,
             chat_rooms: rooms,
             voice_channels_by_room_id,
             message_reactions: HashMap::new(),

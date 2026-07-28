@@ -1431,3 +1431,27 @@ fn yssgar_out_toughens_and_out_earns_the_frontier_king() {
     );
     assert!(yssgar.xp > king.xp, "Yssgar should out-reward the King");
 }
+
+#[test]
+fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
+    let world = seed_world();
+    let hp_of = |pred: fn(RoomId) -> bool| -> Vec<i32> {
+        world
+            .spawns
+            .iter()
+            .filter(|s| !s.boss && pred(s.home))
+            .map(|s| s.max_hp)
+            .collect()
+    };
+    let lakes = hp_of(is_lakes_room);
+    let kaelmyr = hp_of(is_kaelmyr_room);
+    assert!(!lakes.is_empty() && !kaelmyr.is_empty());
+    // The Sunderlakes are peaceful mid-game: their toughest regular mob must be
+    // weaker than the softest Kaelmyr (endgame) mob, i.e. no scaling overlap.
+    let lakes_max = *lakes.iter().max().unwrap();
+    let kaelmyr_min = *kaelmyr.iter().min().unwrap();
+    assert!(
+        lakes_max < kaelmyr_min,
+        "toughest Sunderlakes mob ({lakes_max} hp) should be weaker than the softest Kaelmyr mob ({kaelmyr_min} hp)"
+    );
+}

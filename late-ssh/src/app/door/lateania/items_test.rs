@@ -378,3 +378,21 @@ fn frontier_relics_state_they_are_not_combat_items() {
         );
     }
 }
+
+#[test]
+fn generated_loot_covers_the_previously_dropped_gear_slots() {
+    // Offsets 3/5/7 in each tier block are Legs/Feet/Trinket; the old loot table
+    // skipped them, so those two-plus slots never progressed from drops. Guard
+    // that every tier now drops the full gear block (offsets 0..=7).
+    let tables = super::generated_loot_tables(super::FRONTIER_ITEM_BASE, super::FRONTIER_TIERS);
+    assert_eq!(tables.len(), super::FRONTIER_TIERS);
+    for (t, table) in tables.iter().enumerate() {
+        let base = super::FRONTIER_ITEM_BASE + t as u32 * 10;
+        for offset in 0u32..8 {
+            assert!(
+                table.contains(&(base + offset)),
+                "tier {t} loot table missing gear offset {offset}"
+            );
+        }
+    }
+}

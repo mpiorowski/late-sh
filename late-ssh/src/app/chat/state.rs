@@ -442,6 +442,11 @@ pub struct ChatState {
     pub(crate) countries: HashMap<Uuid, String>,
     ignored_user_ids: HashSet<Uuid>,
     friend_user_ids: HashSet<Uuid>,
+    /// When the last `IgnoreListUpdated`/`FriendListUpdated` was applied. Both
+    /// lists also arrive on every chat snapshot, and a snapshot read that began
+    /// before this write would roll the lists back to what the database held
+    /// before it committed.
+    friend_ignore_applied_at: Option<Instant>,
     /// Derived owner per private room, from the chat snapshot. Ownership is not
     /// stored on the room (a creator who leaves hands it on), so this is the
     /// session's view of who currently holds each private room.
@@ -667,6 +672,7 @@ impl ChatState {
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
+            friend_ignore_applied_at: None,
             room_owner_ids: HashMap::new(),
             username_rx,
             overlay: None,
@@ -3646,6 +3652,18 @@ impl ChatState {
     /// anything changed, so every write below detects real change before
     /// reporting; an unchanged snapshot must not invalidate caches or pay a
     /// frame.
+    /// The friend and ignore lists have two writers: the snapshot, a database
+    /// read taken at some instant, and the list events, writes confirmed after
+    /// they commit. A read that began before the last applied write predates
+    /// it and must not win.
+    fn snapshot_lists_are_current(&self, read_started_at: Option<Instant>) -> bool {
+        match (read_started_at, self.friend_ignore_applied_at) {
+            (_, None) => true,
+            (Some(read_started_at), Some(applied_at)) => read_started_at > applied_at,
+            (None, Some(_)) => false,
+        }
+    }
+
     fn drain_snapshot(&mut self) -> bool {
         if !self.snapshot_rx.has_changed().unwrap_or(false) {
             return false;
@@ -3681,15 +3699,17 @@ impl ChatState {
             self.countries = snapshot.countries;
             context_changed = true;
         }
-        let ignored_user_ids: HashSet<Uuid> = snapshot.ignored_user_ids.into_iter().collect();
-        if self.ignored_user_ids != ignored_user_ids {
-            self.ignored_user_ids = ignored_user_ids;
-            context_changed = true;
-        }
-        let friend_user_ids: HashSet<Uuid> = snapshot.friend_user_ids.into_iter().collect();
-        if self.friend_user_ids != friend_user_ids {
-            self.friend_user_ids = friend_user_ids;
-            context_changed = true;
+        if self.snapshot_lists_are_current(snapshot.read_started_at) {
+            let ignored_user_ids: HashSet<Uuid> = snapshot.ignored_user_ids.into_iter().collect();
+            if self.ignored_user_ids != ignored_user_ids {
+                self.ignored_user_ids = ignored_user_ids;
+                context_changed = true;
+            }
+            let friend_user_ids: HashSet<Uuid> = snapshot.friend_user_ids.into_iter().collect();
+            if self.friend_user_ids != friend_user_ids {
+                self.friend_user_ids = friend_user_ids;
+                context_changed = true;
+            }
         }
         if self.room_owner_ids != snapshot.room_owner_ids {
             self.room_owner_ids = snapshot.room_owner_ids;
@@ -4243,6 +4263,7 @@ impl ChatState {
                     message,
                 } if self.user_id == user_id => {
                     self.ignored_user_ids = ignored_user_ids.into_iter().collect();
+                    self.friend_ignore_applied_at = Some(Instant::now());
                     self.refilter_local_messages();
                     self.notifications.list();
                     self.notifications.refresh_unread_count();
@@ -4259,6 +4280,7 @@ impl ChatState {
                     message,
                 } if self.user_id == user_id => {
                     let friend_user_ids: HashSet<Uuid> = friend_user_ids.into_iter().collect();
+                    self.friend_ignore_applied_at = Some(Instant::now());
                     if self.friend_user_ids != friend_user_ids {
                         self.friend_user_ids = friend_user_ids;
                         self.context_epoch += 1;

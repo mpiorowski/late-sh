@@ -11,8 +11,9 @@
 //     cooldown on a failed tame).
 //   * The taming success mechanic (`tame_chance`), driven by how far the tamer's
 //     Animal Taming level exceeds the beast's required level.
-//   * The pet **auto-skills** - abilities keyed to a pet's level (by size class)
-//     that fire automatically in the combat round (see `svc.rs`).
+//   * The pet **auto-skills** - abilities keyed to a pet's level, firing
+//     automatically in the combat round (see `svc.rs`). Their raw power scales
+//     with the pet's own attack, so a bigger beast hits harder on the same rung.
 //
 // The world wiring (the taming action, the panel, and the pet auto-skill combat
 // step) lives in `svc.rs` / `state.rs` / `ui.rs`; only the data and the pure
@@ -582,11 +583,12 @@ pub fn tame_xp(beast: &PetSpecies) -> i32 {
 // ---- Pet auto-skills ------------------------------------------------------
 //
 // A companion (bought or tamed) unlocks abilities as it gains levels, and they
-// fire automatically in the combat round on their own cooldowns. The set a pet
-// gets is keyed to its **size class** (derived from base health), so a hare
-// learns light, quick tricks and a wyrm learns devastating ones - but every pet
-// walks the same unlock ladder (L3 / L8 / L15 / L22 / L30) surfaced in the pet
-// view so the player sees what is coming.
+// fire automatically in the combat round on their own cooldowns. Every pet walks
+// the same unlock ladder, keyed to its **level** (L2 / L4 / L6 / L8 / L10,
+// surfaced in the pet view so the player sees what is coming). The skills aren't
+// varied by species; instead each one's power scales with the pet's own attack
+// in `svc.rs`, so a wyrm's Savage Bite lands far harder than a hare's on the
+// same rung.
 
 /// What an auto-skill does when it fires in the combat round. Resolved in
 /// `svc.rs` against the existing combat machinery (bonus damage, mob DoTs via
@@ -619,40 +621,41 @@ pub struct PetSkill {
     pub power: i32,
 }
 
-/// The unlock ladder shared by every companion. The five rungs unlock at L3, L8,
-/// L15, L22 and L30. (Pets currently cap at level 10 via loyalty, so the higher
-/// rungs reward the most-fed, most-loyal companions.)
+/// The unlock ladder shared by every companion. The five rungs unlock at L2, L4,
+/// L6, L8 and L10, so a well-fed, loyal companion reaches all five within the
+/// `PET_MAX_LEVEL` (10) loyalty cap. (They previously unlocked at 3/8/15/22/30,
+/// which left the top three rungs dead content behind the cap.)
 pub const PET_SKILLS: &[PetSkill] = &[
     PetSkill {
-        level: 3,
+        level: 2,
         name: "Savage Bite",
         effect: PetSkillEffect::SavageBite,
         cooldown: 3,
         power: 6,
     },
     PetSkill {
-        level: 8,
+        level: 4,
         name: "Rend",
         effect: PetSkillEffect::Rend,
         cooldown: 4,
         power: 4,
     },
     PetSkill {
-        level: 15,
+        level: 6,
         name: "Intimidating Roar",
         effect: PetSkillEffect::Roar,
         cooldown: 6,
         power: 5,
     },
     PetSkill {
-        level: 22,
+        level: 8,
         name: "Loyal Guard",
         effect: PetSkillEffect::Guard,
         cooldown: 6,
         power: 12,
     },
     PetSkill {
-        level: 30,
+        level: 10,
         name: "Killing Pounce",
         effect: PetSkillEffect::Pounce,
         cooldown: 7,

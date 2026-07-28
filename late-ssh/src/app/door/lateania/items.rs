@@ -1648,18 +1648,15 @@ pub fn kaelmyr_loot(tier: usize) -> &'static [u32] {
 }
 
 fn generated_loot_tables(base_id: u32, tiers: usize) -> Vec<Vec<u32>> {
+    // Each tier's 10 ids are the 8 gear pieces (offsets 0-7, in WEARABLE order:
+    // Weapon, Head, Chest, Legs, Hands, Feet, Ring, Trinket) plus a draught (8)
+    // and a sellable relic (9). Drop the whole block so every slot can progress -
+    // the earlier hand-picked subset skipped offsets 3/5/7, which are exactly
+    // Legs/Feet/Trinket, leaving those slots stuck on their starting gear.
     (0..tiers as u32)
         .map(|t| {
             let base = base_id + t * 10;
-            vec![
-                base,
-                base + 1,
-                base + 2,
-                base + 4,
-                base + 6,
-                base + 8,
-                base + 9,
-            ]
+            (0..10).map(|i| base + i).collect()
         })
         .collect()
 }

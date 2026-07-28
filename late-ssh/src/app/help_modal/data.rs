@@ -1,5 +1,10 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 use crate::app::common::qr::{Barcode, HalfBlock};
+use late_core::models::{
+    asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
+    chips::{CHIP_FLOOR, INITIAL_CHIP_BALANCE, difficulty_bonus},
+    quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
+};
 use qrcodegen::{QrCode, QrCodeEcc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,6 +26,7 @@ pub enum HelpTopic {
     TerminalSelection,
     TerminalNotifications,
     TerminalCliYoutube,
+    Chips,
     Economy,
     Bonsai,
     Settings,
@@ -28,7 +34,7 @@ pub enum HelpTopic {
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 21] = [
+    pub const ALL: [HelpTopic; 22] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -45,6 +51,7 @@ impl HelpTopic {
         HelpTopic::TerminalSelection,
         HelpTopic::TerminalNotifications,
         HelpTopic::TerminalCliYoutube,
+        HelpTopic::Chips,
         HelpTopic::Economy,
         HelpTopic::Bonsai,
         HelpTopic::Settings,
@@ -71,6 +78,7 @@ impl HelpTopic {
             HelpTopic::TerminalSelection => "Selection",
             HelpTopic::TerminalNotifications => "Notifications",
             HelpTopic::TerminalCliYoutube => "CLI YouTube",
+            HelpTopic::Chips => "Chips",
             HelpTopic::Economy => "Economy",
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
@@ -96,11 +104,12 @@ impl HelpTopic {
             HelpTopic::TerminalSelection => 13,
             HelpTopic::TerminalNotifications => 14,
             HelpTopic::TerminalCliYoutube => 15,
-            HelpTopic::Economy => 16,
-            HelpTopic::Bonsai => 17,
-            HelpTopic::Settings => 18,
-            HelpTopic::Voice => 19,
-            HelpTopic::Architecture => 20,
+            HelpTopic::Chips => 16,
+            HelpTopic::Economy => 17,
+            HelpTopic::Bonsai => 18,
+            HelpTopic::Settings => 19,
+            HelpTopic::Voice => 20,
+            HelpTopic::Architecture => 21,
         }
     }
 }
@@ -140,6 +149,7 @@ pub(crate) fn lines_for(
         HelpTopic::TerminalCliYoutube => terminal_faq_topic_lines(
             crate::app::help_modal::terminal_faq::TerminalHelpTopic::CliYoutube,
         ),
+        HelpTopic::Chips => chips_help_lines(),
         HelpTopic::Economy => economy_lines(),
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
@@ -311,6 +321,116 @@ fn terminal_faq_topic_lines(
 
 fn economy_lines() -> Vec<String> {
     crate::app::help_modal::hub_guide::bot_context_lines()
+}
+
+/// Every way Late Chips enter or leave an account, in one place. "How do I
+/// earn chips" is the single most asked question, so this tab is the one
+/// source of truth: the Economy tab keeps ranking and per-game rules, and the
+/// payout numbers live here. Amounts pull from constants where one exists;
+/// the rest come from the seeded reward templates in `late-core/migrations`,
+/// so update both together when a payout changes.
+fn chips_help_lines() -> Vec<String> {
+    let start = INITIAL_CHIP_BALANCE;
+    let floor = CHIP_FLOOR;
+    let easy = difficulty_bonus("easy");
+    let medium = difficulty_bonus("medium");
+    let hard = difficulty_bonus("hard");
+    let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
+    let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
+    let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
+    let streak_max = i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL) * streak_step;
+
+    vec![
+        "Late Chips".to_string(),
+        "".to_string(),
+        "Late Chips are the single currency: one balance per account, spent in the Hub Shop and at the bar, and ranked monthly on the Top Chips board.".to_string(),
+        format!("You start with {start} chips."),
+        format!("You can never end up below {floor} chips: after a losing settlement at a betting table the floor is restored for you, so going broke is not a thing."),
+        "This tab lists every way to earn chips. If something is not on this list, it does not pay chips.".to_string(),
+        "".to_string(),
+        "1. Arcade dailies (page 2)".to_string(),
+        "  Every daily puzzle pays once per board per UTC day, for everyone who solves it.".to_string(),
+        format!("  easy               {easy} chips"),
+        format!("  medium             {medium} chips"),
+        format!("  hard               {hard} chips"),
+        "  Sudoku, Nonograms, and Minesweeper each have all three difficulties.".to_string(),
+        format!("  Solitaire draw-1   {medium} chips"),
+        format!("  Solitaire draw-3   {hard} chips"),
+        format!(
+            "  Le Word daily      {} chips",
+            crate::app::arcade::le_word::state::DAILY_WIN_REWARD_CHIPS
+        ),
+        format!(
+            "  Rubik's Cube daily {} chips",
+            crate::app::arcade::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS
+        ),
+        "  Personal (non-daily) boards pay nothing; only the daily board pays.".to_string(),
+        "  The high-score games (2048, Lateris, Snake, Traffic) pay no chips for a run on their own. They pay through Quests, and they rank you on the monthly leaderboards.".to_string(),
+        "".to_string(),
+        "2. Quests (Ctrl+G, Quests tab)".to_string(),
+        "  Two daily quests and one weekly quest are drawn for you on UTC boundaries.".to_string(),
+        "  Every quest currently drawn is an Arcade quest: daily slot 1 easy, daily slot 2 medium, the weekly slot hard, all from the Arcade pool (daily puzzles plus score runs).".to_string(),
+        "  easy daily         150 chips".to_string(),
+        "  medium daily       375 chips".to_string(),
+        "  hard weekly        750 chips".to_string(),
+        "  Rewards pay automatically the moment the target completes; there is nothing to claim.".to_string(),
+        "  A quest reward stacks with the daily-puzzle payout above, so one solve can pay twice.".to_string(),
+        format!("  Finishing any one daily quest advances your daily streak: +{streak_step} chips on the second consecutive day, climbing by {streak_step} per day up to +{streak_max}."),
+        "  Weekly quests do not advance the daily streak.".to_string(),
+        "".to_string(),
+        "3. Bonsai (w)".to_string(),
+        format!("  Watering pays {water} chips once per UTC day."),
+        "  Classic and Dynamic Bonsai pay the same; you only get it once per day either way.".to_string(),
+        "".to_string(),
+        "4. The Lobby (Ctrl+Q)".to_string(),
+        "  Nothing in the Lobby except Poker and Blackjack risks your chips. Everywhere else the winner is paid out of the house and the losers lose nothing: you cannot go down by playing.".to_string(),
+        "".to_string(),
+        "  Daily correspondence matches (/challenge), paid per match won, no limit:".to_string(),
+        "    Chess            500 chips".to_string(),
+        "    Connect Four     400 chips".to_string(),
+        "    Reversi          400 chips".to_string(),
+        "    Checkers         400 chips".to_string(),
+        "    Backgammon       400 chips".to_string(),
+        "    Battleship       300 chips".to_string(),
+        "    A draw pays nobody. Only the winner is paid, and each match pays once.".to_string(),
+        "".to_string(),
+        "  House tables:".to_string(),
+        format!("    Asterion         {asterion} chips for escaping the last maze, once per UTC day"),
+        format!("    Super Snake      {} chips per win, one payout per 10 minutes", crate::app::lobby::house::ssnake::svc::SSNAKE_WIN_CHIPS),
+        format!("    Tron             {} chips per win, one payout per 5 minutes", crate::app::lobby::house::tron::svc::TRON_WIN_CHIPS),
+        "    Poker, Blackjack these are real betting: you put chips in and can lose them.".to_string(),
+        "                     Winnings come from the pot or the dealer, not from a fixed payout,".to_string(),
+        format!("                     and the {floor}-chip floor is restored if you bust."),
+        "".to_string(),
+        "5. Games hub (page 3)".to_string(),
+        "  Door games pay for one-off feats, once per account, and they are the biggest payouts in the app:".to_string(),
+        "    Lateania: defeat the Archdemon Mal'gareth      10,000 chips".to_string(),
+        "    Lateania: defeat the King Who Was Promised Nothing".to_string(),
+        "                                                  20,000 chips".to_string(),
+        "    NetHack: claim the Amulet of Yendor           10,000 chips".to_string(),
+        "    NetHack: ascend                               20,000 chips".to_string(),
+        "    Green Dragon: slay the Green Dragon           10,000 chips".to_string(),
+        "  Lateania's deeper crowns, Yssgar the Sundering Deep and Kaethyr Ascendant, pay no chips: the profile badge is the whole prize.".to_string(),
+        "  Lateania gold is its own in-world currency and never converts to chips.".to_string(),
+        "  DCSS, Brogue, Usurper, dopewars, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
+        "".to_string(),
+        "6. Gifts".to_string(),
+        "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
+        format!("  A gift only goes through while it leaves you at or above {floor} chips."),
+        "  Gifts move chips between players; they do not create new ones.".to_string(),
+        "".to_string(),
+        "What does not pay chips".to_string(),
+        "  Chatting, posting News, RSS, showcases, profiles, voice, and the Artboard pay nothing.".to_string(),
+        "  Leaderboard badges and profile awards are prestige only, never chips.".to_string(),
+        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, and quests.".to_string(),
+        "".to_string(),
+        "Where chips go".to_string(),
+        "  Hub Shop (Ctrl+G) for badges, flags, effects, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
+        "  @bartender drinks in the Clubhouse.".to_string(),
+        "  Poker and Blackjack bets.".to_string(),
+        "  Gifts you send.".to_string(),
+        "  Monthly Top Chips ranks net chip delta, so Shop spending never lowers your rank; betting losses do.".to_string(),
+    ]
 }
 
 pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {

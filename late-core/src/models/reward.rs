@@ -10,8 +10,10 @@ pub const REWARD_CLAIM_POLICY_COOLDOWN: &str = "cooldown";
 pub const REWARD_CLAIM_POLICY_PER_EVENT: &str = "per_event";
 pub const REWARD_CLAIM_POLICY_UTC_DAY: &str = "utc_day";
 
+// `chess_win_payout` and `sshattrick_win_payout` used to live here. Their
+// games are gone (rooms-era chess table, ssHattrick) and migration 127
+// deactivated the templates, so there is no key left to look up.
 pub const ASTERION_DAILY_ESCAPE_REWARD_KEY: &str = "asterion_daily_escape";
-pub const CHESS_WIN_REWARD_KEY: &str = "chess_win_payout";
 pub const DAILY_BACKGAMMON_WIN_REWARD_KEY: &str = "daily_backgammon_win_payout";
 pub const DAILY_BATTLESHIP_WIN_REWARD_KEY: &str = "daily_battleship_win_payout";
 pub const DAILY_CHECKERS_WIN_REWARD_KEY: &str = "daily_checkers_win_payout";
@@ -23,7 +25,6 @@ pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defe
 pub const GREENDRAGON_DRAGON_REWARD_KEY: &str = "greendragon_dragon_slain";
 pub const NETHACK_AMULET_REWARD_KEY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_REWARD_KEY: &str = "nethack_ascension";
-pub const SSHATTRICK_WIN_REWARD_KEY: &str = "sshattrick_win_payout";
 pub const SSNAKE_WIN_REWARD_KEY: &str = "ssnake_win";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
