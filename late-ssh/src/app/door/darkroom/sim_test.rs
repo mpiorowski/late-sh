@@ -81,8 +81,9 @@ fn a_warm_room_walks_the_stranger_to_her_feet() {
     game.light_fire();
 
     // Long enough for the room to warm and both shivering steps to land, but
-    // well short of the fire burning out.
-    advance(&mut game, View::Room, &mut now, session_start, 200);
+    // well short of the fire burning out. The room's clocks keep running while
+    // the player is outside, exactly as upstream's timers do.
+    advance(&mut game, View::Outside, &mut now, session_start, 200);
     assert_eq!(game.builder, Builder::Sleeping);
 
     // She only gets up when somebody is in the room to see it.

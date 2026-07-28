@@ -248,3 +248,48 @@ GPLv2 compliance notes:
     pinned "Source" pointer above (the exact upstream tarball we compile) and
     the Dockerfile build recipe with the distribution so recipients can obtain
     and rebuild that source.
+
+
+A Dark Room
+-----------
+
+late.sh hosts a terminal port of A Dark Room as a door game (the "A Dark Room"
+screen). Unlike the other door games listed here, no upstream binary is run:
+this is a reimplementation in Rust, written against upstream's open-source web
+version, and it lives in this repository under
+late-ssh/src/app/door/darkroom/.
+
+  Program:    A Dark Room (web version)
+  License:    Mozilla Public License, version 2.0 (MPL-2.0), with the
+              Exhibit B "Incompatible With Secondary Licenses" notice
+              https://mozilla.org/MPL/2.0/
+  Copyright:  Copyright (c) Michael Townsend / Doublespeak Games
+  Upstream:   https://github.com/doublespeakgames/adarkroom
+              https://doublespeakgames.com/
+  Installed:  Not installed or bundled. The port is our own source; upstream's
+              balance data, timing constants and notification text were
+              transcribed from script/room.js, script/outside.js and
+              script/state_manager.js.
+  Modified:   Yes. The port reimplements the game for a terminal, covers the
+              room and village acts only, and deliberately changes the pacing:
+              upstream has no offline progress and runs on wall clock while the
+              browser tab is open, while this port credits time only while a
+              player's SSH session is connected, runs the village at a fraction
+              of upstream speed, and caps how much game time lands per day.
+
+MPL-2.0 compliance notes:
+
+  - MPL-2.0 is file-level copyleft. The files in this port that carry material
+    derived from upstream (late-ssh/src/app/door/darkroom/data.rs, model.rs and
+    sim.rs) each carry the MPL-2.0 header and the Exhibit B notice, and remain
+    under MPL-2.0. The rest of the port (pace.rs, persist.rs, svc.rs, state.rs,
+    ui.rs, screen.rs) is our own work under the repository's FSL-1.1-MIT.
+  - MPL §3.3 permits distributing the Larger Work (late.sh) under our own terms
+    provided the covered files stay under MPL-2.0, which is the arrangement
+    above.
+  - The source-availability obligation for the covered files is satisfied by
+    this repository being public. If you redistribute a build of late.sh, keep
+    those files' source available under MPL-2.0.
+  - MPL §2.3 grants no trademark rights. "A Dark Room" is Michael Townsend's;
+    the name is used here to credit the original, and the paid iOS, Android and
+    Steam versions are separate products we have no rights in.

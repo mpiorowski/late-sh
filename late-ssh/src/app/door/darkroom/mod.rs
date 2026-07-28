@@ -44,3 +44,6 @@ mod pace_test;
 
 #[cfg(test)]
 mod sim_test;
+
+#[cfg(test)]
+mod state_test;

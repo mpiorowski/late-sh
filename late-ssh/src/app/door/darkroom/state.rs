@@ -102,6 +102,9 @@ impl State {
     /// the player can see changed (the render loop's dirty contract).
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
+        // Read the value, never `has_changed()`: the loader drops its sender as
+        // soon as it has sent, which makes `has_changed()` return `Err` and
+        // would strand the session on "loading" forever.
         if self.game.is_none() && self.load.has_changed().unwrap_or(false) {
             // Bind the clone before touching `self` again: the watch guard
             // holds a borrow for as long as it is alive.

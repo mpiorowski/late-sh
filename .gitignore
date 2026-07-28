@@ -39,6 +39,12 @@ chat_dumps/
 # DragonPrime 1.1.2). CC BY-NC-SA source: consult, never copy or commit.
 # Re-fetch: git clone --depth 1 https://github.com/jimlunsford/lotgd upstream-lotgd
 upstream-lotgd/
+
+# Local clone of the A Dark Room port reference (doublespeakgames/adarkroom,
+# MPL-2.0). We transcribe from it into MPL-headered files; the clone itself
+# stays out of the repo.
+# Re-fetch: git clone --depth 1 https://github.com/doublespeakgames/adarkroom upstream-adarkroom
+upstream-adarkroom/
 upstream-adarkroom/
 
 # Symlink to personal AI guidelines (canonical copy in dotfiles).
