@@ -15,7 +15,7 @@ wanted.
 
 Everything mechanical is transcribed from the open-source **web version**:
 
-- **`doublespeakgames/adarkroom`** — <https://github.com/doublespeakgames/adarkroom>.
+- **`doublespeakgames/adarkroom`**: <https://github.com/doublespeakgames/adarkroom>.
   Key files ported: `script/room.js` (fire, temperature, the builder arc,
   craftables), `script/outside.js` (gathering, traps, population, workers,
   income table), `script/state_manager.js` (`collectIncome`, the store model).
@@ -47,7 +47,7 @@ upstream's title via `data::TITLE`, which is deliberately a single constant:
 renaming is a one-line change if the author would rather we did not use it.
 Michael Townsend was emailed about the name before the port shipped.
 
-## The pacing model (`pace.rs`) — the one real design change
+## The pacing model (`pace.rs`): the one real design change
 
 Upstream has **no offline progress at all**: every timer is wall clock while
 the browser tab is open, and the whole arc is 2-4 hours. Ported faithfully that
@@ -70,7 +70,23 @@ deviation from upstream behavior:
 The footer always shows the remaining allowance, and says so plainly when it is
 spent. **A village that has stopped growing must never look like a bug.**
 
-## The clock (`sim.rs`) — there are no timers
+### Leaving and coming back (what the floor actually means)
+
+`settle` credits from `floor = max(session_start, last_settled)`, and leaving
+the door stamps `last_settled` before dropping the state. Three consequences,
+none of them obvious from the code:
+
+- **Leaving the door while staying connected banks time.** Re-entering twenty
+  minutes later credits all twenty at once. Sitting in the door and leaving it
+  are worth exactly the same, which is the whole point: nobody should have to
+  park on this screen.
+- **Disconnecting does not.** A new session's `session_start` wins over the
+  older `last_settled`, so the logged-out gap is worth nothing.
+- **Connected-but-outside-the-door time is lost if you disconnect before
+  returning**, because the new `session_start` jumps over it. Known and
+  accepted; fixing it would mean persisting a per-session connect time.
+
+## The clock (`sim.rs`): there are no timers
 
 Upstream runs on live `setTimeout`/`setInterval` handles funneled through
 `Engine.setTimeout`. This port has none. `sim::settle` advances the game to
@@ -106,7 +122,7 @@ between sessions contribute nothing without any bookkeeping.
 ## Persistence
 
 `darkroom_saves` (migration `127`, model `late-core/src/models/darkroom_save.rs`)
-is one JSONB blob per user, exactly like `greendragon_characters` — the save
+is one JSONB blob per user, exactly like `greendragon_characters`: the save
 shape evolves without new migrations. Every `Game` field carries a serde
 default.
 
@@ -122,12 +138,13 @@ Esc, tick drain, and the hub launch/landing/reset.
 from `App::started_at` and hands it to `State::new`, because that is what
 bounds how much elapsed time may be credited.
 
-## Scope: what is and is not ported
+## Scope: what v1 is, and what is still missing
 
-**In (the room and the village):** the fire and its levels, room temperature,
-the full builder arc, the forest unlock, gathering (with the cart), traps and
-their drop table, huts and population, the worker/income economy, and the
-buildings through the smokehouse.
+**v1 is the room and the village**, the half of upstream that works as a slow
+multi-day game. In: the fire and its levels, room temperature, the full builder
+arc, the forest unlock, gathering (with the cart), traps and their drop table,
+huts and population, the worker/income economy, and the buildings through the
+smokehouse.
 
 **Not yet:** the wasteland (`world.js`), the path/outfitting screen
 (`path.js`), combat and events (`events.js`), the workshop crafting tier, the
@@ -135,8 +152,22 @@ trading post's buy menu, the ship and the endgame (`ship.js`, `space.js`).
 The workshop tier is gated on the wasteland supplying its materials, so it
 follows the wasteland rather than preceding it.
 
+The cut is not arbitrary. Everything above the line is a clock you can leave
+running; everything below it is an expedition you either survive or do not, and
+that wants a live session. **Whether the wasteland belongs on the incremental
+shelf at all is an open design question**, not merely unbuilt work.
+
+**Nothing decays except the fire.** Stores, buildings, population and unlocked
+trades only ever go up: no starvation, no raids, nothing built can be lost.
+Absence costs progress, never possessions. That bites early (the builder arc
+stalls whenever the room is below Warm, so a dead fire freezes her), and stops
+biting entirely once she is Helping, because she stokes the fire herself and
+out-earns what she burns. Past that point the daily cap is the only brake. If
+v1 turns out to need a reason to check in, the fire is the only lever that
+exists; play a week before adding one.
+
 **Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /
-`audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets) — roughly
+`audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets), roughly
 1,100 lines that the terminal replaces rather than translates.
 
 ## Gotchas
@@ -156,3 +187,12 @@ follows the wasteland rather than preceding it.
 - **Do not tick this from the render loop.** `tick()` settles, but the settle is
   a subtraction against the wall clock; it is correct at any cadence and must
   stay that way.
+- **Never gate the load pickup on `watch::Receiver::has_changed()`.** The loader
+  drops its sender the instant it has sent, and tokio reports `Err` on a closed
+  channel, so `has_changed().unwrap_or(false)` is permanently false and the
+  session sits on "the dark is quiet..." forever. `tick()` reads the value while
+  `game` is `None`, which is what `state_test` exercises.
+- **A lone Esc never reaches the keymap.** It is held as `pending_escape` and
+  dispatched by `flush_pending_escape` in `app/input.rs`, which has one explicit
+  arm per screen. Wiring `handle_key` alone leaves Esc dead: the door needs its
+  own arm there (next to Green Dragon's) to be leavable at all.

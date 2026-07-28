@@ -2584,6 +2584,16 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::greendragon::screen::GAME.handle_key(app, 0x1B);
         return;
     }
+    // Esc in A Dark Room settles the clock, saves, and returns to the hub. Same
+    // shape as Green Dragon: the game owns the leave, so forward it.
+    if ctx.screen == Screen::Darkroom {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+            return;
+        }
+        crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
     // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
     // back to Home.
     if ctx.screen == Screen::Games {

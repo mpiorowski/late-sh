@@ -105,7 +105,7 @@ impl State {
         // Read the value, never `has_changed()`: the loader drops its sender as
         // soon as it has sent, which makes `has_changed()` return `Err` and
         // would strand the session on "loading" forever.
-        if self.game.is_none() && self.load.has_changed().unwrap_or(false) {
+        if self.game.is_none() {
             // Bind the clone before touching `self` again: the watch guard
             // holds a borrow for as long as it is alive.
             let loaded = match self.load.borrow_and_update().clone() {

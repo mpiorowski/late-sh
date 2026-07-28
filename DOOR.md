@@ -1,9 +1,9 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research notes.** Last updated 2026-07-27 (A Dark Room moved from
-candidate to in-progress: the room and village acts are built, the pacing
-question is resolved, and the door has its own context file). Previous cut 2026-07-21: Brogue CE
+Status: **research notes.** Last updated 2026-07-28 (A Dark Room v1 is playable
+end to end: the room and village acts, the pacing decision, and the door's own
+context file). Previous cut 2026-07-21: Brogue CE
 is the next door, one marketing beat before the Green Dragon push (see root
 `DRAGON.md`); TradeWars/twclone re-parked as future season/event content
 despite a green spike; museum wing passed on.
@@ -426,7 +426,7 @@ lands harder on an SSH server than it ever did on the web.
    the dragon ships**: a fresh small universe per season (`bigbang` makes
    regeneration cheap), a daily turn ration, "highest net worth by Sunday",
    #lounge coronation, universe dies. Do not build the always-on version.
-7. **A Dark Room** - **in progress, room + village acts built 2026-07-27.**
+7. **A Dark Room** - **v1 playable 2026-07-28, room + village acts.**
    Native Rust port (pattern 1), the first game on the incremental shelf.
    Both gates are closed: Townsend was emailed about **the name** (the MPL
    covers the code, so the email is etiquette plus trademark, not permission),
