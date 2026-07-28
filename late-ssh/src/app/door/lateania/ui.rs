@@ -284,6 +284,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     Tile::Empty => (" ".to_string(), Style::default()),
                     Tile::LinkH => ("\u{2500}".to_string(), link_style), // ─
                     Tile::LinkV => ("\u{2502}".to_string(), link_style), // │
+                    Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
                     Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
@@ -389,7 +390,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
             Span::styled(" tame  ", Style::default().fg(theme::TEXT_DIM())),
             Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" off-map", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" off-map  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" path", Style::default().fg(theme::TEXT_DIM())),
         ])),
         rows[3],
     );

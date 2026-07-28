@@ -566,3 +566,53 @@ fn poi_arrows_point_off_screen_pois_to_the_border() {
         );
     }
 }
+
+// A discovered room whose neighbours are all still fog must not read as a
+// stranded island: each exit into the unknown gets a faint direction arrow so
+// the player can see a path continues that way (direction only, no spoiler).
+#[test]
+fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
+    use super::Tile;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+
+    // Find a room with at least one flat (N/S/E/W) exit whose neighbour sits in
+    // the adjacent cell, so the hint has an empty cell to land in.
+    let (&anchor, _) = world
+        .rooms
+        .iter()
+        .find(|(id, room)| {
+            let c = coords[*id];
+            room.exits.iter().any(|(_dir, dst)| {
+                coords
+                    .get(dst)
+                    .is_some_and(|dc| dc.z == c.z && (dc.x - c.x).abs() + (dc.y - c.y).abs() == 1)
+            })
+        })
+        .expect("world has a room with a unit-adjacent flat exit");
+
+    // Only the anchor is explored - every neighbour is fog.
+    let visited: std::collections::HashSet<_> = std::iter::once(anchor).collect();
+    let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
+
+    let hints = canvas
+        .iter()
+        .flatten()
+        .filter(|t| matches!(t, Tile::Hint(_)))
+        .count();
+    assert!(
+        hints > 0,
+        "a discovered room surrounded by fog must sprout at least one exit hint"
+    );
+    // Hints are direction glyphs, never overwriting the player's own cell.
+    for row in &canvas {
+        for tile in row {
+            if let Tile::Hint(g) = tile {
+                assert!(
+                    "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(*g),
+                    "hint glyph {g:?} is not a direction arrow"
+                );
+            }
+        }
+    }
+}

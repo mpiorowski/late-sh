@@ -460,6 +460,11 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
+    /// A path-continuation hint: this room links to a visited room that the map
+    /// can't draw right beside it (the hand-authored core doesn't lay perfectly
+    /// flat, so some branches scatter). The arrow points the way the exit runs,
+    /// so no reachable room ever reads as a stranded island.
+    Hint(char),
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
@@ -514,6 +519,24 @@ pub fn map_canvas(
         };
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
+                // An exit into the fog: draw a faint arrow pointing the way the
+                // path runs so a discovered room (a boss you've found, the edge
+                // of your exploration) never reads as stranded. Direction only,
+                // into an empty adjacent cell - no spoiler of what waits there.
+                let (dx, dy) = match dir {
+                    Dir::East => (1, 0),
+                    Dir::West => (-1, 0),
+                    Dir::North => (0, -1),
+                    Dir::South => (0, 1),
+                    _ => continue, // up/down: no flat direction to point
+                };
+                let (hx, hy) = (sc + dx, sr + dy);
+                if (0..cols).contains(&hx)
+                    && (0..rows).contains(&hy)
+                    && canvas[hy as usize][hx as usize] == Tile::Empty
+                {
+                    canvas[hy as usize][hx as usize] = Tile::Hint(arrow_glyph(dx, dy));
+                }
                 continue;
             }
             let Some(&dc) = coords.get(dest) else {
@@ -527,7 +550,25 @@ pub fn map_canvas(
                 (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
                 (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
-                _ => {} // linked but not spatially adjacent (cross-region seam)
+                _ if dc.z == c.z => {
+                    // Linked on the same level but not in the adjacent cell (the
+                    // hand-authored core scatters some branches). Point toward the
+                    // neighbour on the dominant axis, into an empty cell only, so
+                    // no reachable room reads as a stranded island.
+                    let glyph = arrow_glyph(dc.x - c.x, dc.y - c.y);
+                    let (hx, hy) = if (dc.x - c.x).abs() >= (dc.y - c.y).abs() {
+                        (sc + (dc.x - c.x).signum(), sr)
+                    } else {
+                        (sc, sr + (dc.y - c.y).signum())
+                    };
+                    if (0..cols).contains(&hx)
+                        && (0..rows).contains(&hy)
+                        && canvas[hy as usize][hx as usize] == Tile::Empty
+                    {
+                        canvas[hy as usize][hx as usize] = Tile::Hint(glyph);
+                    }
+                }
+                _ => {} // stairs (up/down): not drawn on a flat level
             }
         }
     }
