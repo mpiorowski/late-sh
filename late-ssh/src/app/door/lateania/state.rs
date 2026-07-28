@@ -123,6 +123,10 @@ pub struct State {
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
     map_camera: MapCamera,
+    /// RPG mode: on, a wide terminal shows the live walk-around field beside the
+    /// room; off, it's a plain text MUD (log + side panel). Toggled with `M`.
+    /// Session-only for now. Defaults on so the map is there when there's room.
+    rpg_mode: bool,
 }
 
 impl State {
@@ -154,6 +158,7 @@ impl State {
             reset_elsewhere: false,
             chat_buffer: None,
             map_camera: MapCamera::default(),
+            rpg_mode: true,
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -256,6 +261,16 @@ impl State {
     /// True when the graphical overhead world map is the active panel.
     pub fn map_open(&self) -> bool {
         self.panel == Panel::Map
+    }
+
+    /// Whether the live walk-around field is enabled (RPG mode). Off = plain MUD.
+    pub fn rpg_mode(&self) -> bool {
+        self.rpg_mode
+    }
+
+    /// Flip between the live-map RPG view and the plain text MUD view.
+    pub fn toggle_rpg_mode(&mut self) {
+        self.rpg_mode = !self.rpg_mode;
     }
 
     /// Where the world map is looking, relative to the player.

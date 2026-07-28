@@ -2351,3 +2351,69 @@ fn no_fighting_in_a_safe_haven_even_by_click() {
         "no target taken in a safe haven"
     );
 }
+
+#[test]
+fn nearby_foes_lists_foes_in_neighbouring_rooms() {
+    const HERE: RoomId = 2001; // Frontier interior
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit to a neighbour");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = there;
+    }
+    let snap = s.snapshot();
+    let view = &snap.players[&uid(1)];
+    assert!(
+        view.nearby_foes.contains(&there),
+        "a foe in the next room shows on the live field"
+    );
+    assert!(
+        !view.nearby_foes.contains(&HERE),
+        "your own room is not listed as a nearby foe (that's the @ tile)"
+    );
+}
+
+#[test]
+fn a_hidden_foe_is_not_leaked_onto_the_field() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // Clear the field so the only foe near us is the one we control.
+    for m in s.mobs.values_mut() {
+        m.alive = false;
+    }
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = false; // still hidden in the fog
+        m.current_room = there;
+    }
+    assert!(
+        !s.snapshot().players[&uid(1)].nearby_foes.contains(&there),
+        "an unrevealed foe must not be spoiled on the field"
+    );
+    // Once revealed, it shows.
+    s.mobs.get_mut(&mob_id).unwrap().revealed = true;
+    assert!(
+        s.snapshot().players[&uid(1)].nearby_foes.contains(&there),
+        "a revealed foe next door shows on the field"
+    );
+}

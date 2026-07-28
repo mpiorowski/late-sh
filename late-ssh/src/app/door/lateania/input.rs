@@ -11,6 +11,8 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
+//   - Map: m overview atlas (pan around); M toggles RPG mode (the live
+//     walk-around field beside the room) on/off - off is a plain text MUD.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
@@ -278,9 +280,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'm' | b'M' => {
-            // Toggle the whole-world atlas.
+        b'm' => {
+            // Toggle the whole-world overview atlas (pan-around map).
             state.toggle_panel(Panel::Map);
+            InputAction::Handled
+        }
+        b'M' => {
+            // Toggle RPG mode: the live walk-around field beside the room, or a
+            // plain text MUD when off.
+            state.toggle_rpg_mode();
             InputAction::Handled
         }
         b'o' | b'O' => {

@@ -91,7 +91,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Below this width there isn't room for three columns, so the field folds
     // away and the classic log + side view stands in (the minimap still rides in
     // the side panel there).
-    if state.panel() == Panel::Room && area.width >= 96 {
+    if state.panel() == Panel::Room && state.rpg_mode() && area.width >= 96 {
         let cols = Layout::horizontal([
             Constraint::Length(24),     // log
             Constraint::Min(24),        // live field (fills the middle)
@@ -437,6 +437,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let rows = Layout::vertical([
         Constraint::Length(1), // where-am-i header
         Constraint::Min(1),    // the field itself
+        Constraint::Length(1), // colour key
     ])
     .split(area);
 
@@ -528,6 +529,32 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         (g.to_string(), Style::default().fg(color))
     };
 
+    // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
+    // the static atlas; a red dagger marks a room holding a live foe (from the
+    // snapshot's nearby list); a gem marks a harvestable resource room (static).
+    let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
+    let foe_style = Style::default()
+        .fg(Color::Rgb(235, 90, 80))
+        .add_modifier(Modifier::BOLD);
+    let node_style = Style::default().fg(Color::Rgb(210, 180, 110));
+    let room_glyph = |id: u32, sr: i32, sc: i32| -> (String, Style) {
+        if let Some(p) = poi(id) {
+            if p.boss.is_some() {
+                return ("\u{2605}".to_string(), boss_style); // ★
+            }
+            if p.tameable.is_some() {
+                return ("\u{2665}".to_string(), tame_style); // ♥
+            }
+        }
+        if foes.contains(&id) {
+            return ("\u{2020}".to_string(), foe_style); // † a foe lairs here
+        }
+        if !super::world::nodes_at(id).is_empty() {
+            return ("\u{2666}".to_string(), node_style); // ♦ a resource to gather
+        }
+        ground_cell(sr, sc, super::world::biome_of(id))
+    };
+
     let mut cells: Vec<Vec<(String, Style)>> =
         vec![
             vec![(" ".to_string(), Style::default()); cols.max(0) as usize];
@@ -539,11 +566,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 // Rooms melt into the terrain (the ground scatter carries the
                 // biome); only the player, landmarks, and paths stand proud.
                 Tile::Room(id) if id == player_room => ("@".to_string(), player_style),
-                Tile::Room(id) => match poi(id) {
-                    Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
-                    Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
-                    _ => ground_cell(sr, sc, super::world::biome_of(id)),
-                },
+                Tile::Room(id) => room_glyph(id, sr, sc),
                 Tile::LinkH => ("\u{2500}".to_string(), path_style),
                 Tile::LinkV => ("\u{2502}".to_string(), path_style),
                 Tile::Empty => match biome_at(sr, sc) {
@@ -574,6 +597,24 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), body);
+
+    // Colour key, so every marker on the field reads at a glance.
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("@", player_style),
+            Span::styled(" you ", dim),
+            Span::styled("\u{2020}", foe_style),
+            Span::styled(" foe ", dim),
+            Span::styled("\u{2605}", boss_style),
+            Span::styled(" boss ", dim),
+            Span::styled("\u{2665}", tame_style),
+            Span::styled(" tame ", dim),
+            Span::styled("\u{2666}", node_style),
+            Span::styled(" node", dim),
+        ])),
+        rows[2],
+    );
 }
 
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
