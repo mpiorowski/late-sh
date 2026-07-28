@@ -605,13 +605,47 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 /// was one of the two rail rows. The modal owns the account default; the device
 /// layout is the app's, so the sync lives here rather than inside the modal.
 fn toggle_tweak(app: &mut App) {
+    if apply_interaction_mode_row(app, true) {
+        return;
+    }
     app.settings_modal_state.toggle_selected_tweak();
     app.sync_device_rails_from_settings();
 }
 
 fn cycle_tweak(app: &mut App, forward: bool) {
+    if apply_interaction_mode_row(app, forward) {
+        return;
+    }
     app.settings_modal_state.cycle_selected_tweak(forward);
     app.sync_device_rails_from_settings();
+}
+
+/// If the Input row is selected, cycle the interaction mode on the app (which
+/// flips the mouse live and persists) and mirror it into the modal for display.
+/// Returns whether it handled the row.
+fn apply_interaction_mode_row(app: &mut App, forward: bool) -> bool {
+    use late_core::models::user::InteractionMode;
+    if app.settings_modal_state.selected_tweak_row() != TweakRow::InteractionMode {
+        return false;
+    }
+    let order = [
+        InteractionMode::Keyboard,
+        InteractionMode::Mouse,
+        InteractionMode::Hybrid,
+    ];
+    let cur = order
+        .iter()
+        .position(|m| *m == app.interaction_mode)
+        .unwrap_or(0);
+    let next = if forward {
+        (cur + 1) % order.len()
+    } else {
+        (cur + order.len() - 1) % order.len()
+    };
+    app.set_interaction_mode(order[next]);
+    app.settings_modal_state
+        .set_interaction_mode_display(order[next]);
+    true
 }
 
 #[cfg(test)]

@@ -1948,6 +1948,29 @@ impl App {
         self.pending_terminal_commands.push(sequence.to_vec());
     }
 
+    /// Change the interaction mode: flip terminal mouse reporting live if the
+    /// mouse-enabled state changed (so keyboard mode restores native selection
+    /// immediately), and persist the choice. No-op if the mode is unchanged.
+    pub(crate) fn set_interaction_mode(&mut self, mode: late_core::models::user::InteractionMode) {
+        if self.interaction_mode == mode {
+            return;
+        }
+        let was_mouse = self.interaction_mode.mouse_enabled();
+        self.interaction_mode = mode;
+        if mode.mouse_enabled() != was_mouse {
+            // 1000/1003/1006 h = enable, l = disable the mouse-tracking triplet.
+            let seq: &[u8] = if mode.mouse_enabled() {
+                b"\x1b[?1000h\x1b[?1003h\x1b[?1006h"
+            } else {
+                b"\x1b[?1006l\x1b[?1003l\x1b[?1000l"
+            };
+            self.pending_terminal_commands.push(seq.to_vec());
+        }
+        self.profile_state
+            .service()
+            .set_interaction_mode(self.user_id, mode);
+    }
+
     pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_env_hint(name, value));
         if self.terminal_images_disabled {

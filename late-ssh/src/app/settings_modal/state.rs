@@ -106,10 +106,12 @@ pub(crate) enum TweakRow {
     StartWithMusicMuted,
     FlagFallback,
     LandOnHome,
+    // Input group.
+    InteractionMode,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 10] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -119,6 +121,7 @@ impl TweakRow {
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
+        TweakRow::InteractionMode,
     ];
 }
 
@@ -486,6 +489,11 @@ pub(crate) struct SettingsModalState {
     /// scroll-wheel events to the body, so the wheel doesn't move the
     /// row cursor when the pointer is hovering over the tab strip or footer.
     body_area: Cell<Rect>,
+    /// The live interaction mode (keyboard / mouse / hybrid), mirrored here for
+    /// the Input row to display. Seeded from the app when the modal opens; the
+    /// input handler applies changes on the app itself (they persist + flip the
+    /// mouse there), so this is display-only.
+    interaction_mode: late_core::models::user::InteractionMode,
 }
 
 impl SettingsModalState {
@@ -535,7 +543,21 @@ impl SettingsModalState {
             gem: GemState::new(),
             tab_rects: Cell::new([None; Tab::ALL.len()]),
             body_area: Cell::new(Rect::new(0, 0, 0, 0)),
+            interaction_mode: late_core::models::user::InteractionMode::default(),
         }
+    }
+
+    /// The interaction mode shown on the Input row.
+    pub(crate) fn interaction_mode(&self) -> late_core::models::user::InteractionMode {
+        self.interaction_mode
+    }
+
+    /// Sync the displayed interaction mode from the app (on open and on change).
+    pub(crate) fn set_interaction_mode_display(
+        &mut self,
+        mode: late_core::models::user::InteractionMode,
+    ) {
+        self.interaction_mode = mode;
     }
 
     /// The rail modes the two Appearance rows are editing: this device's, not
@@ -801,6 +823,11 @@ impl SettingsModalState {
             }
             TweakRow::LandOnHome => {
                 self.draft.land_on_home ^= true;
+            }
+            TweakRow::InteractionMode => {
+                // Applied on the app (it flips the mouse live and persists on its
+                // own), so there's nothing to save through the profile draft.
+                return;
             }
         }
         self.save();
