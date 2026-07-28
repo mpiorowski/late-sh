@@ -2417,3 +2417,30 @@ fn a_hidden_foe_is_not_leaked_onto_the_field() {
         "a revealed foe next door shows on the field"
     );
 }
+
+#[test]
+fn nearby_players_lists_adventurers_in_neighbouring_rooms() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // A second adventurer standing in the next room.
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(2)).unwrap().room = there;
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].nearby_players.contains(&there),
+        "another adventurer next door shows on the field"
+    );
+    assert!(
+        !snap.players[&uid(1)].nearby_players.contains(&HERE),
+        "you don't count yourself"
+    );
+}

@@ -703,6 +703,9 @@ pub struct PlayerView {
     /// mark where danger is without you having to step into it. Same-level and
     /// within the field's reach only; fog still hides rooms you've never seen.
     pub nearby_foes: Vec<RoomId>,
+    /// Rooms near you that hold another adventurer, so the field shows where
+    /// other players are. Same window as `nearby_foes`.
+    pub nearby_players: Vec<RoomId>,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -806,6 +809,7 @@ impl PlayerView {
             exits: Vec::new(),
             mobs: Vec::new(),
             nearby_foes: Vec::new(),
+            nearby_players: Vec::new(),
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -6907,6 +6911,31 @@ impl WorldState {
                     None => Vec::new(),
                 }
             };
+            // Other adventurers in nearby rooms, same window, so the field shows
+            // where people are.
+            let nearby_players: Vec<RoomId> = {
+                let coords = super::worldmap::world_coords();
+                match coords.get(&player.room) {
+                    Some(&pc) => {
+                        let mut rooms: std::collections::HashSet<RoomId> =
+                            std::collections::HashSet::new();
+                        for other in self.players.values() {
+                            if other.user_id == *user_id || other.room == player.room {
+                                continue;
+                            }
+                            if let Some(c) = coords.get(&other.room)
+                                && c.z == pc.z
+                                && (c.x - pc.x).abs() <= 16
+                                && (c.y - pc.y).abs() <= 12
+                            {
+                                rooms.insert(other.room);
+                            }
+                        }
+                        rooms.into_iter().collect()
+                    }
+                    None => Vec::new(),
+                }
+            };
             let occupants: Vec<OccupantView> = self
                 .players
                 .values()
@@ -7393,6 +7422,7 @@ impl WorldState {
                     exits,
                     mobs,
                     nearby_foes,
+                    nearby_players,
                     occupants,
                     following: player.following,
                     wildlife,

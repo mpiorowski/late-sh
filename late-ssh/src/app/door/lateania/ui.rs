@@ -406,6 +406,27 @@ fn field_ground(biome: super::world::Biome, hx: i32, hy: i32) -> (char, Color) {
     }
 }
 
+/// Whether a room offers a service worth marking on the field: a merchant, a
+/// crafting station, or an actionable feature (stable, portal, bank, quest
+/// board, housing clerk, fountain). All static, so this costs no snapshot data.
+fn is_service_room(id: u32) -> bool {
+    use super::world::FeatureKind;
+    super::items::shop_at(id).is_some()
+        || !super::world::craft_stations_at(id).is_empty()
+        || super::world::features_at(id).iter().any(|f| {
+            matches!(
+                f.kind,
+                FeatureKind::Fountain
+                    | FeatureKind::Bank
+                    | FeatureKind::Board
+                    | FeatureKind::Stable
+                    | FeatureKind::Housing
+                    | FeatureKind::Portal
+                    | FeatureKind::CraftStation(_)
+            )
+        })
+}
+
 /// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
 /// centred on the player. `@` is the player's room; arrows / wasd pan the
 /// camera and Enter re-centres (handled in input.rs).
@@ -533,11 +554,19 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     // the static atlas; a red dagger marks a room holding a live foe (from the
     // snapshot's nearby list); a gem marks a harvestable resource room (static).
     let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
+    let players: std::collections::HashSet<u32> = view.nearby_players.iter().copied().collect();
     let foe_style = Style::default()
         .fg(Color::Rgb(235, 90, 80))
         .add_modifier(Modifier::BOLD);
+    let player_near_style = Style::default()
+        .fg(Color::Rgb(120, 210, 235))
+        .add_modifier(Modifier::BOLD);
+    let service_style = Style::default().fg(Color::Rgb(180, 160, 235));
     let node_style = Style::default().fg(Color::Rgb(210, 180, 110));
     let room_glyph = |id: u32, sr: i32, sc: i32| -> (String, Style) {
+        if foes.contains(&id) {
+            return ("\u{2020}".to_string(), foe_style); // † a foe lairs here
+        }
         if let Some(p) = poi(id) {
             if p.boss.is_some() {
                 return ("\u{2605}".to_string(), boss_style); // ★
@@ -546,8 +575,11 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 return ("\u{2665}".to_string(), tame_style); // ♥
             }
         }
-        if foes.contains(&id) {
-            return ("\u{2020}".to_string(), foe_style); // † a foe lairs here
+        if players.contains(&id) {
+            return ("\u{263a}".to_string(), player_near_style); // ☺ another adventurer
+        }
+        if is_service_room(id) {
+            return ("\u{2302}".to_string(), service_style); // ⌂ a shop / stable / station / portal
         }
         if !super::world::nodes_at(id).is_empty() {
             return ("\u{2666}".to_string(), node_style); // ♦ a resource to gather
@@ -606,10 +638,14 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled(" you ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
+            Span::styled("\u{263a}", player_near_style),
+            Span::styled(" player ", dim),
             Span::styled("\u{2605}", boss_style),
             Span::styled(" boss ", dim),
             Span::styled("\u{2665}", tame_style),
             Span::styled(" tame ", dim),
+            Span::styled("\u{2302}", service_style),
+            Span::styled(" town ", dim),
             Span::styled("\u{2666}", node_style),
             Span::styled(" node", dim),
         ])),
