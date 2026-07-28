@@ -2284,3 +2284,70 @@ fn quaff_at_full_health_drinks_nothing() {
         "a full-health quaff must not waste a potion"
     );
 }
+
+#[test]
+fn clicking_a_foe_locks_onto_that_exact_foe() {
+    const ROOM: RoomId = 2001; // Frontier interior: non-safe, so fighting is allowed
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Put two distinct foes in the room.
+    let ids: Vec<u32> = s.mobs.keys().copied().take(2).collect();
+    assert_eq!(ids.len(), 2, "world seeds at least two mobs to place");
+    for &id in &ids {
+        let m = s.mobs.get_mut(&id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+        m.leash_home = ROOM;
+    }
+    s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+    // A click on the second foe's row locks onto that exact foe, not the first.
+    s.engage_mob(uid(1), ids[1]);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        Some(ids[1]),
+        "targets the clicked foe"
+    );
+}
+
+#[test]
+fn clicking_a_vanished_foe_falls_back_to_whatever_is_here() {
+    const ROOM: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let present = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&present).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+        m.leash_home = ROOM;
+    }
+    s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+    // Clicking a foe id that isn't here (slain, fled, stale row) still engages
+    // whatever is present rather than dead-ending.
+    s.engage_mob(uid(1), 424_242);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        Some(present),
+        "falls back to the foe that's actually here"
+    );
+}
+
+#[test]
+fn no_fighting_in_a_safe_haven_even_by_click() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Start room is a safe haven; a click must not start a fight there.
+    let start = s.players[&uid(1)].room;
+    assert!(s.world.room(start).is_some_and(|r| r.safe), "start is safe");
+    s.engage_mob(uid(1), 424_242);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        None,
+        "no target taken in a safe haven"
+    );
+}

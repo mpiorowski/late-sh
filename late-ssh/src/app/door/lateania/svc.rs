@@ -295,6 +295,8 @@ pub enum LogKind {
 
 #[derive(Clone, Debug)]
 pub struct MobView {
+    /// Spawn id, so a click on this foe's row can target this exact foe.
+    pub id: u32,
     pub name: String,
     pub hp: i32,
     pub max_hp: i32,
@@ -302,6 +304,8 @@ pub struct MobView {
     /// Rarity rank for colouring the name: common/uncommon/rare/epic/legendary.
     pub rank: String,
     pub boss: bool,
+    /// True when this is the foe you're currently locked onto.
+    pub targeted: bool,
 }
 
 /// One quest row in the journal.
@@ -1449,6 +1453,10 @@ impl LateaniaService {
 
     pub fn attack_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.engage(user_id));
+    }
+
+    pub fn engage_mob_task(&self, user_id: Uuid, mob_id: u32) {
+        self.mutate(user_id, move |s| s.engage_mob(user_id, mob_id));
     }
 
     pub fn ability_task(&self, user_id: Uuid, slot: u8) {
@@ -4300,23 +4308,7 @@ impl WorldState {
             .find(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.id);
         match target {
-            Some(mob_id) => {
-                let mob_name = self
-                    .mobs
-                    .get(&mob_id)
-                    .map(|m| m.spawn.name.to_string())
-                    .unwrap_or_default();
-                if let Some(player) = self.players.get_mut(&user_id) {
-                    player.target = Some(mob_id);
-                    // Opportunist: the Rogue's first strike of a fight always crits.
-                    player.opening_strike = player.class == Some(Class::Rogue);
-                }
-                self.log_to(
-                    user_id,
-                    LogKind::Combat,
-                    format!("You close with {mob_name}!"),
-                );
-            }
+            Some(mob_id) => self.set_target(user_id, mob_id),
             None => {
                 // No foe: if there's small game about, hunt it instead.
                 if !self.try_hunt(user_id, room_id) {
@@ -4328,6 +4320,60 @@ impl WorldState {
                 }
             }
         }
+    }
+
+    /// Lock onto a specific foe (a click on its roster row), then let the combat
+    /// tick trade blows with it. Falls back to [`Self::engage`] if the clicked
+    /// foe is already gone - slain, fled, or a stale row - so a click never dead-
+    /// ends when there's still something else to fight.
+    fn engage_mob(&mut self, user_id: Uuid, mob_id: u32) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            return;
+        }
+        let room_id = player.room;
+        if self.world.room(room_id).is_some_and(|r| r.safe) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "This is a safe haven. No fighting here.".to_string(),
+            );
+            return;
+        }
+        let valid = self
+            .mobs
+            .get(&mob_id)
+            .is_some_and(|m| m.alive && m.revealed && m.current_room == room_id);
+        if valid {
+            self.set_target(user_id, mob_id);
+        } else {
+            self.engage(user_id);
+        }
+    }
+
+    /// Point the player at `mob_id` and announce it. Shared by the auto-target
+    /// [`Self::engage`] and the click-to-target [`Self::engage_mob`].
+    fn set_target(&mut self, user_id: Uuid, mob_id: u32) {
+        let mob_name = self
+            .mobs
+            .get(&mob_id)
+            .map(|m| m.spawn.name.to_string())
+            .unwrap_or_default();
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.target = Some(mob_id);
+            // Opportunist: the Rogue's first strike of a fight always crits.
+            player.opening_strike = player.class == Some(Class::Rogue);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("You close with {mob_name}!"),
+        );
     }
 
     /// Cast/use the ability in the given action-bar slot (1-based).
@@ -6820,12 +6866,14 @@ impl WorldState {
                 .values()
                 .filter(|m| m.alive && m.revealed && m.current_room == player.room)
                 .map(|m| MobView {
+                    id: m.spawn.id,
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
                     max_hp: m.spawn.max_hp,
                     level: m.spawn.level(),
                     rank: m.spawn.rank().to_string(),
                     boss: m.spawn.boss,
+                    targeted: player.target == Some(m.spawn.id),
                 })
                 .collect();
             let occupants: Vec<OccupantView> = self

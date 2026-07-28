@@ -72,6 +72,8 @@ pub enum ClickAction {
     Quaff,
     Flee,
     Ability(u8),
+    /// Lock onto the foe with this spawn id (a click on its roster row).
+    AttackMob(u32),
 }
 
 /// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
@@ -621,8 +623,17 @@ impl State {
             ClickAction::Quaff => self.quaff(),
             ClickAction::Flee => self.flee(),
             ClickAction::Ability(slot) => self.use_ability(slot),
+            ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),
         }
         true
+    }
+
+    /// Lock onto a specific foe (a click on its roster row) and start trading
+    /// blows; the combat tick carries it from there, same as a plain attack.
+    pub fn attack_mob(&mut self, mob_id: u32) {
+        if self.ensure_player_present() {
+            self.svc.engage_mob_task(self.user_id, mob_id);
+        }
     }
 
     /// Release a fallen spirit to the temple instead of waiting for a rez.

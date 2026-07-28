@@ -177,6 +177,8 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
+            // Foe rows carry AttackMob, never the action bar; kept for exhaustiveness.
+            ClickAction::AttackMob(_) => Style::default().fg(theme::TEXT_DIM()),
         };
         spans.push(Span::styled(chip.label.clone(), style));
         col += w;
@@ -720,7 +722,7 @@ fn draw_side(
     usernames: &UsernameLookup<'_>,
 ) {
     if state.panel() == Panel::Room {
-        draw_room_side(frame, area, view, usernames);
+        draw_room_side(frame, area, state, view, usernames);
         return;
     }
 
@@ -873,25 +875,38 @@ fn wrapped_rows(text: &str, width: usize) -> usize {
 fn draw_room_side(
     frame: &mut Frame,
     area: Rect,
+    state: &State,
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
 ) {
     let map = minimap_lines(&view.minimap);
-    if map.is_empty() {
-        frame.render_widget(
-            Paragraph::new(room_panel(view, usernames, area.width as usize)),
-            area,
-        );
-        return;
-    }
+    let panel_area = if map.is_empty() {
+        area
+    } else {
+        let map_h = map.len().min(area.height as usize) as u16;
+        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
+        frame.render_widget(Paragraph::new(map), rows[1]);
+        rows[0]
+    };
 
-    let map_h = map.len().min(area.height as usize) as u16;
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
-    frame.render_widget(
-        Paragraph::new(room_panel(view, usernames, rows[0].width as usize)),
-        rows[0],
-    );
-    frame.render_widget(Paragraph::new(map), rows[1]);
+    let (lines, foe_hits) = room_panel(view, usernames, panel_area.width as usize);
+    // Make each visible foe row clickable: its rect is where the panel (drawn
+    // from the top, one pre-wrapped line per row) places that line. Rows scrolled
+    // off the bottom just aren't recorded, so they aren't clickable.
+    for (idx, mob_id) in foe_hits {
+        if (idx as u16) < panel_area.height {
+            state.record_combat_hit(
+                Rect {
+                    x: panel_area.x,
+                    y: panel_area.y + idx as u16,
+                    width: panel_area.width,
+                    height: 1,
+                },
+                ClickAction::AttackMob(mob_id),
+            );
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), panel_area);
 }
 
 /// Titles panel: a selectable list of earned titles with their levels. Enter
@@ -1033,11 +1048,15 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+/// The room side panel. Returns the lines plus, for each foe, the line index of
+/// its roster row and its spawn id, so the caller can record a clickable rect
+/// over each foe (click a foe to lock onto it).
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>) {
+    let mut foe_hits: Vec<(usize, u32)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
@@ -1139,12 +1158,23 @@ fn room_panel(
         // get whatever width is left in the panel.
         let name_w = (width.saturating_sub(13)).clamp(6, 16);
         for mob in &view.mobs {
-            let (marker, weight) = if mob.boss {
-                ("‡ ", Modifier::BOLD)
+            let mut weight = if mob.boss {
+                Modifier::BOLD
             } else {
-                ("  ", Modifier::empty())
+                Modifier::empty()
+            };
+            // The foe you're locked onto gets a » marker so a click's effect is
+            // visible; a boss keeps its ‡. The target is always bold.
+            let marker = if mob.targeted {
+                weight |= Modifier::BOLD;
+                "\u{00bb} " // »
+            } else if mob.boss {
+                "\u{2021} " // ‡
+            } else {
+                "  "
             };
             let labelled = format!("Lv{:<2} {}", mob.level, mob.name);
+            foe_hits.push((lines.len(), mob.id));
             lines.push(roster_row(
                 marker,
                 &labelled,
@@ -1257,7 +1287,7 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    lines
+    (lines, foe_hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,

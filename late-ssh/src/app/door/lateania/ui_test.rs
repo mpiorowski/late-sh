@@ -312,3 +312,43 @@ fn action_bar_drops_abilities_before_crowding_out_quaff_and_flee() {
         "some abilities are dropped when they don't fit"
     );
 }
+
+#[test]
+fn room_panel_makes_each_foe_a_clickable_row() {
+    use super::super::svc::{MobView, empty_player_view};
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let foe = |id: u32, name: &str, targeted: bool| MobView {
+        id,
+        name: name.to_string(),
+        hp: 5,
+        max_hp: 10,
+        level: 3,
+        rank: "common".to_string(),
+        boss: false,
+        targeted,
+    };
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.mobs = vec![foe(11, "Goblin", false), foe(22, "Ogre", true)];
+
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let (lines, hits) = super::room_panel(&view, &usernames, 30);
+
+    assert_eq!(hits.len(), 2, "one clickable row per foe");
+    for (idx, id) in &hits {
+        let want = if *id == 11 { "Goblin" } else { "Ogre" };
+        assert!(
+            line_text(&lines[*idx]).contains(want),
+            "recorded row {idx} should be the {want} row"
+        );
+    }
+    // The foe you're locked onto is flagged with » so a click's effect shows.
+    let ogre_row = hits.iter().find(|(_, id)| *id == 22).unwrap().0;
+    assert!(
+        line_text(&lines[ogre_row]).contains('\u{00bb}'),
+        "the targeted foe is marked with »"
+    );
+}
