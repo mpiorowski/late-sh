@@ -2221,3 +2221,66 @@ fn ability_scores_change_derived_stats() {
     );
     assert!(s.players[&uid(1)].max_hp() > base_hp, "CON raises max HP");
 }
+
+#[test]
+fn quaff_drinks_the_smallest_potion_that_covers_the_wound() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let (small, mid, big) = (potion_id(0), potion_id(2), potion_id(4)); // heal 25 / 75 / 180
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.base_max_hp = 200;
+        p.inventory.extend([small, mid, big]);
+        let max = p.max_hp();
+        p.hp = max - 60; // missing 60: 25 is too small, 75 and 180 both cover
+    }
+    s.quaff_best(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(
+        !p.inventory.contains(&mid),
+        "should drink the 75 potion (smallest that covers 60)"
+    );
+    assert!(
+        p.inventory.contains(&small) && p.inventory.contains(&big),
+        "should leave the too-small and the oversized potion untouched"
+    );
+}
+
+#[test]
+fn quaff_falls_back_to_the_biggest_when_nothing_covers() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let (small, big) = (potion_id(0), potion_id(3)); // heal 25 / 120
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.base_max_hp = 400;
+        p.inventory.extend([small, big]);
+        p.hp = 1; // missing ~399: neither potion covers it, so take the biggest
+    }
+    s.quaff_best(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(
+        !p.inventory.contains(&big),
+        "should drink the biggest available potion"
+    );
+    assert!(p.inventory.contains(&small), "should keep the small one");
+}
+
+#[test]
+fn quaff_at_full_health_drinks_nothing() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let potion = potion_id(2);
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(potion);
+    s.quaff_best(uid(1));
+    assert!(
+        s.players[&uid(1)].inventory.contains(&potion),
+        "a full-health quaff must not waste a potion"
+    );
+}

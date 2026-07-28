@@ -554,6 +554,14 @@ impl State {
         }
     }
 
+    /// Quaff the best healing potion without leaving the combat view, so you can
+    /// keep an eye on both health bars instead of opening the inventory panel.
+    pub fn quaff(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.quaff_task(self.user_id);
+        }
+    }
+
     /// Release a fallen spirit to the temple instead of waiting for a rez.
     pub fn release(&mut self) {
         if self.ensure_player_present() {

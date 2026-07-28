@@ -5,7 +5,8 @@
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
-//     slot 10; deeper rosters cast from the Abilities panel); z flee.
+//     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
+//     healing potion without leaving the view; z flee.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
@@ -243,11 +244,19 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'q' | b'Q' => {
+        b'q' => {
             // The Animal Taming panel opens where a tameable wild beast roams.
             if view.taming.is_some() {
                 state.open_taming();
             }
+            InputAction::Handled
+        }
+        b'Q' => {
+            // Quaff the best healing potion in one keystroke - meant for combat,
+            // so you never leave the view (and lose sight of the health bars)
+            // just to drink. Works anywhere; a beast-taming room still tames on
+            // lowercase `q`.
+            state.quaff();
             InputAction::Handled
         }
         b'i' | b'I' => {

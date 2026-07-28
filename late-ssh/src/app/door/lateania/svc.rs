@@ -1475,6 +1475,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.use_item(user_id, item_id));
     }
 
+    pub fn quaff_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.quaff_best(user_id));
+    }
+
     pub fn buy_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.buy(user_id, item_id));
     }
@@ -4994,6 +4998,52 @@ impl WorldState {
             LogKind::Loot,
             format!("You take off {} ({}).", it.name, slot.label()),
         );
+    }
+
+    /// Drink the best healing potion in one keystroke, for use mid-fight. Picks
+    /// the *smallest* potion that still fills the health you're missing so a big
+    /// draught isn't wasted on a scratch; if none is large enough, drinks the
+    /// biggest you have. Only healing (heal > 0) consumables count - mana
+    /// draughts and poisons are left alone.
+    fn quaff_best(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let missing = p.max_hp() - p.hp;
+        if missing <= 0 {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You are already at full health.".to_string(),
+            );
+            return;
+        }
+        // Smallest heal that covers the gap, else the largest heal available.
+        let mut covering: Option<(u32, i32)> = None;
+        let mut biggest: Option<(u32, i32)> = None;
+        for &id in &p.inventory {
+            let Some(it) = item(id) else { continue };
+            let ItemKind::Consumable { heal, .. } = it.kind else {
+                continue;
+            };
+            if heal <= 0 {
+                continue;
+            }
+            if heal >= missing && covering.is_none_or(|(_, h)| heal < h) {
+                covering = Some((id, heal));
+            }
+            if biggest.is_none_or(|(_, h)| heal > h) {
+                biggest = Some((id, heal));
+            }
+        }
+        match covering.or(biggest) {
+            Some((id, _)) => self.use_item(user_id, id),
+            None => self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no potion to drink.".to_string(),
+            ),
+        }
     }
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
