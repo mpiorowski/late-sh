@@ -632,6 +632,9 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 Tile::Room(id) => room_glyph(id, sr, sc),
                 Tile::LinkH => ("\u{2500}".to_string(), path_style),
                 Tile::LinkV => ("\u{2502}".to_string(), path_style),
+                // A path running off into the unknown: a faint arrow pointing the
+                // way, so a discovered spot never looks stranded (no spoiler).
+                Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
                 Tile::Empty => match biome_at(sr, sc) {
                     Some(biome) => terrain_cell(sr, sc, biome, false),
                     None => (" ".to_string(), Style::default()),
