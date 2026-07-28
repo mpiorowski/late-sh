@@ -1021,6 +1021,9 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
+            initial_interaction_mode: late_core::models::user::extract_interaction_mode(
+                &user.settings,
+            ),
             initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
             initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
             initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
@@ -1163,7 +1166,11 @@ impl russh::server::Handler for ClientHandler {
                 .await;
             }
 
-            let init = App::enter_alt_screen();
+            // Keyboard-only sessions never turn on mouse reporting, so the
+            // terminal keeps its own selection/copy. First-run (unchosen) users
+            // default to mouse-on so the onboarding prompt itself is clickable.
+            let mouse_on = app.lock().await.interaction_mode.mouse_enabled();
+            let init = App::enter_alt_screen(mouse_on);
             let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;
 
             let app = Arc::clone(app);

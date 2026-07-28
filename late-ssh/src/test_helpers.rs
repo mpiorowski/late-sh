@@ -542,6 +542,7 @@ fn make_app_with_chat_service_and_permissions(
         land_on_home: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
@@ -730,6 +731,7 @@ pub fn make_app_with_paired_client(
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");

@@ -57,7 +57,7 @@ fn leave_alt_screen_resets_cursor_shape() {
 
 #[test]
 fn alt_screen_boundaries_recover_terminal_string_state() {
-    assert!(App::enter_alt_screen().starts_with(terminal_string_terminator()));
+    assert!(App::enter_alt_screen(true).starts_with(terminal_string_terminator()));
     assert!(App::leave_alt_screen().starts_with(terminal_string_terminator()));
 }
 
@@ -104,4 +104,23 @@ fn voice_toggle_intent_switches_to_active_voice_room() {
         voice_toggle_intent(Some(joined), Some(active)),
         VoiceToggleIntent::JoinOrSwitch
     );
+}
+
+#[test]
+fn enter_alt_screen_withholds_mouse_tracking_in_keyboard_mode() {
+    let with_mouse = App::enter_alt_screen(true);
+    let no_mouse = App::enter_alt_screen(false);
+    // The mouse-tracking DECSET triplet appears only when mouse is enabled.
+    let has = |buf: &[u8], seq: &[u8]| buf.windows(seq.len()).any(|w| w == seq);
+    assert!(
+        has(&with_mouse, b"\x1b[?1000h"),
+        "mouse mode enables tracking"
+    );
+    assert!(
+        !has(&no_mouse, b"\x1b[?1000h"),
+        "keyboard mode leaves it off"
+    );
+    // Bracketed paste stays on in both so paste still works.
+    assert!(has(&with_mouse, b"\x1b[?2004h"));
+    assert!(has(&no_mouse, b"\x1b[?2004h"));
 }

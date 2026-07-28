@@ -313,6 +313,9 @@ pub struct SessionConfig {
 
     /// Display config
     pub initial_theme_id: String,
+    /// The user's saved interaction mode (keyboard / mouse / hybrid), or `None`
+    /// if they've never chosen one - which triggers the first-run prompt.
+    pub initial_interaction_mode: Option<late_core::models::user::InteractionMode>,
     /// Initial audio source for the paired client, loaded from
     /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
     /// persists the new value.
@@ -482,6 +485,11 @@ pub struct App {
     pub(crate) paired_source: late_core::models::user::AudioSource,
     pub(crate) selected_icecast_stream: late_core::models::user::IcecastStream,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
+
+    /// How this session is driven (keyboard / mouse / hybrid). Gates whether the
+    /// mouse is live; editable in settings. `None` at load means the user has
+    /// never chosen (first run); resolved to the default here.
+    pub(crate) interaction_mode: late_core::models::user::InteractionMode,
 
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
@@ -1237,6 +1245,7 @@ impl App {
             paired_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
+            interaction_mode: config.initial_interaction_mode.unwrap_or_default(),
             music_prefix_armed: false,
             room_section_prefix_armed: false,
             afk: None,
@@ -2609,7 +2618,10 @@ impl App {
         self.terminal_image_render_state = TerminalImageRenderState::default();
     }
 
-    pub fn enter_alt_screen() -> Vec<u8> {
+    /// Terminal setup bytes. `mouse` gates the mouse-tracking DECSET sequences:
+    /// in keyboard-only mode they're withheld so the terminal keeps its own text
+    /// selection and copy. Bracketed paste stays on regardless.
+    pub fn enter_alt_screen(mouse: bool) -> Vec<u8> {
         let mut buf = Vec::new();
         // If a prior session was killed mid-OSC image payload, recover the
         // terminal parser before sending normal alt-screen setup.
@@ -2628,8 +2640,12 @@ impl App {
         // 1003h = any-event mouse tracking (motion reports with or without a
         // button held). Dartboard needs drag + hover parity with standalone.
         // 1006h = SGR extended encoding (ESC[< sequences instead of legacy X11)
-        // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~)
-        buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h");
+        // Withheld in keyboard-only mode so native terminal selection survives.
+        if mouse {
+            buf.extend_from_slice(b"\x1b[?1000h\x1b[?1003h\x1b[?1006h");
+        }
+        // 2004h = bracketed paste mode (ESC[200~ ... ESC[201~) - always on.
+        buf.extend_from_slice(b"\x1b[?2004h");
         buf.extend_from_slice(&crate::app::files::terminal_image::xtversion_probe());
         buf.extend_from_slice(&iterm2_capabilities_probe());
         // DA1 last: nearly every terminal answers it, and replies arrive in
