@@ -1922,7 +1922,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

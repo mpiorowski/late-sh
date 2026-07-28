@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
-use super::{clear_canvas_black, clear_letterbox, grid_rect};
+use super::{clear_canvas_black, grid_rect, reset_door_area};
 
 fn buf_with_bg(area: Rect, bg: Color) -> Buffer {
     let mut buf = Buffer::empty(area);
@@ -64,12 +64,12 @@ fn only_touches_cells_inside_the_area() {
 }
 
 #[test]
-fn letterbox_resets_the_page_background() {
-    // The root paints the page over BG_CANVAS; after the clear, every cell in
-    // the door area must be back to the terminal-default canvas.
+fn door_area_resets_to_the_shared_canvas() {
+    // Whatever the frame left in the door area, the clear puts every cell back
+    // to `Reset`, which the app's OSC 11 push resolves to the theme background.
     let area = Rect::new(0, 0, 6, 3);
     let mut buf = buf_with_bg(area, Color::Rgb(70, 75, 95));
-    clear_letterbox(&mut buf, area);
+    reset_door_area(&mut buf, area);
     assert_eq!(buf[(0, 0)].style().bg, Some(Color::Reset));
     assert_eq!(buf[(5, 2)].style().bg, Some(Color::Reset));
     assert_eq!(buf[(3, 1)].symbol(), " ");
