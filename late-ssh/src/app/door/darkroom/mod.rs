@@ -15,9 +15,11 @@
 //! **Pacing.** Upstream has no offline progress at all: it runs on wall clock
 //! while the tab is open, so the arc takes a couple of sittings. This port
 //! credits time while the SSH session is connected (anywhere on late.sh, not
-//! just on this screen), runs the village at a fraction of upstream speed, and
-//! caps how much lands per day, so the same arc spans weeks. The whole of that
-//! design lives in `pace`; nothing else knows about it.
+//! just on this screen), runs the village at a fraction of upstream speed,
+//! caps how much lands per day, and floors the first settle of each day once
+//! the village stands, so the same arc spans weeks whether the player idles
+//! or just checks in. The whole of that design lives in `pace`; nothing else
+//! knows about it.
 //!
 //! Module map (flat, like the other door domains):
 //! - `data`    — upstream balance tables, prose, and timing constants
@@ -38,6 +40,9 @@ pub mod sim;
 pub mod state;
 pub mod svc;
 pub mod ui;
+
+#[cfg(test)]
+mod model_test;
 
 #[cfg(test)]
 mod pace_test;

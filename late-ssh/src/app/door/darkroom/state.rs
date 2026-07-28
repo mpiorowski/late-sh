@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::data::{Building, Fire, Job, Resource};
+use super::data::{self, Building, Fire, Job, Resource};
 use super::model::{BuildOutcome, GatherOutcome, Game, LightFire, StokeFire, View};
 use super::pace;
 use super::sim;
@@ -220,6 +220,16 @@ impl State {
             (View::Outside, _) => View::Room,
         };
         self.cursor = 0;
+        // The one-time line for stepping outside (upstream `onArrival`).
+        let first_visit = self.view == View::Outside
+            && self
+                .game
+                .as_mut()
+                .is_some_and(|game| !std::mem::replace(&mut game.seen_forest, true));
+        if first_visit {
+            self.push_log(data::MSG_SEEN_FOREST.to_string());
+            self.save();
+        }
     }
 
     // ---- actions ----
@@ -240,21 +250,22 @@ impl State {
         Acted::Stay
     }
 
-    /// Move a villager onto the selected trade. Same as selecting a worker
-    /// row, but safe to bind to an arrow key: it does nothing anywhere else,
-    /// so right-arrow can never trip an action the player did not aim at.
-    pub fn assign_selected(&mut self) {
+    /// Move `count` villagers onto the selected trade. Same as selecting a
+    /// worker row, but safe to bind to an arrow key: it does nothing anywhere
+    /// else, so right-arrow can never trip an action the player did not aim
+    /// at. Upstream's up/upMany buttons move 1 and 10.
+    pub fn assign_selected(&mut self, count: u32) {
         self.settle();
         if let Row::Worker(job) = self.selected() {
-            self.assign(job, 1);
+            self.assign(job, count as i32);
         }
     }
 
-    /// Move a villager off the selected trade (the inverse of selecting it).
-    pub fn unassign_selected(&mut self) {
+    /// Move `count` villagers off the selected trade (the inverse).
+    pub fn unassign_selected(&mut self, count: u32) {
         self.settle();
         if let Row::Worker(job) = self.selected() {
-            self.assign(job, -1);
+            self.assign(job, -(count as i32));
         }
     }
 
@@ -269,9 +280,7 @@ impl State {
                 self.announce_builder_seen(drew_builder);
                 self.save();
             }
-            LightFire::NotEnoughWood => {
-                self.push_log("not enough wood to get the fire going".to_string())
-            }
+            LightFire::NotEnoughWood => self.push_log(data::MSG_NOT_ENOUGH_WOOD.to_string()),
             LightFire::OnCooldown => {}
         }
     }
@@ -287,7 +296,7 @@ impl State {
                 self.announce_builder_seen(drew_builder);
                 self.save();
             }
-            StokeFire::OutOfWood => self.push_log("the wood has run out".to_string()),
+            StokeFire::OutOfWood => self.push_log(data::MSG_WOOD_RUN_OUT.to_string()),
             StokeFire::OnCooldown => {}
         }
     }
@@ -296,9 +305,7 @@ impl State {
     /// from outside. Upstream prints it inside `onFireChange`.
     fn announce_builder_seen(&mut self, drew_builder: bool) {
         if drew_builder {
-            self.push_log(
-                "the light from the fire spills from the windows, out into the dark".to_string(),
-            );
+            self.push_log(data::MSG_FIRE_SPILLS.to_string());
         }
     }
 
@@ -314,6 +321,7 @@ impl State {
                 .to_string(),
             BuildOutcome::Missing(resource) => format!("not enough {}", resource.label()),
             BuildOutcome::NoBuilder => "there's no one to build it".to_string(),
+            BuildOutcome::TooCold => data::MSG_BUILDER_SHIVERS.to_string(),
         };
         self.push_log(message);
         self.save();
@@ -325,7 +333,9 @@ impl State {
         };
         match game.gather_wood() {
             GatherOutcome::Gathered(_) => {
-                self.push_log("dry brush and dead branches litter the forest floor".to_string())
+                self.push_log(data::MSG_GATHER_WOOD.to_string());
+                // Persist: a dropped connection must not lose gathered wood.
+                self.save();
             }
             GatherOutcome::OnCooldown => {}
         }
@@ -343,14 +353,11 @@ impl State {
         game.collect_traps(&drops);
         if drops.is_empty() {
             self.push_log("the traps are empty".to_string());
-            return;
+        } else {
+            self.push_log(sim::haul_message(&drops));
         }
-        let haul = drops
-            .iter()
-            .map(|(resource, _)| sim::trap_message(*resource))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.push_log(format!("the traps contain {haul}"));
+        // Persist either way: bait was spent and the cooldown restarted.
+        self.save();
     }
 
     fn assign(&mut self, job: Job, delta: i32) {

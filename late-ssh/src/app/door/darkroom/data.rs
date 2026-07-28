@@ -389,8 +389,11 @@ pub const INCOME_DELAY: u32 = 10;
 /// Villagers one hut sleeps (`_HUT_ROOM`).
 pub const HUT_ROOM: u32 = 4;
 
-/// The window new arrivals are drawn from, in seconds (`_POP_DELAY`, minutes).
-pub const POP_DELAY_SECS: (u32, u32) = (30, 180);
+/// The window new arrivals are drawn from (`_POP_DELAY`), in minutes. Upstream
+/// draws `floor(random * (high - low)) + low`, which lands on exactly 0.5, 1.5
+/// or 2.5 minutes; the sim reproduces that draw rather than smoothing it into
+/// a uniform range.
+pub const POP_DELAY_MINUTES: (f64, f64) = (0.5, 3.0);
 
 /// Wood a bare gathering trip brings back, and the same trip with the cart.
 pub const GATHER_WOOD: i64 = 10;
@@ -402,3 +405,27 @@ pub const STOKE_FIRE_COST: i64 = 1;
 
 /// What the forest holds the moment the wood runs out.
 pub const UNLOCK_FOREST_WOOD: i64 = 4;
+
+// ---------------------------------------------------------------------------
+// Notification prose, verbatim from upstream. Kept here (under the MPL) rather
+// than at the call sites in `state.rs`, which is an FSL file.
+// ---------------------------------------------------------------------------
+
+/// `Room.lightFire` on short wood.
+pub const MSG_NOT_ENOUGH_WOOD: &str = "not enough wood to get the fire going";
+
+/// `Room.stokeFire` on empty stores.
+pub const MSG_WOOD_RUN_OUT: &str = "the wood has run out";
+
+/// `Room.onFireChange`, the moment the fire first draws the stranger.
+pub const MSG_FIRE_SPILLS: &str =
+    "the light from the fire spills from the windows, out into the dark";
+
+/// `Room.build` while the room is Cold or worse.
+pub const MSG_BUILDER_SHIVERS: &str = "builder just shivers";
+
+/// `Outside.gatherWood`.
+pub const MSG_GATHER_WOOD: &str = "dry brush and dead branches litter the forest floor";
+
+/// `Outside.onArrival`, printed once on the first visit outside.
+pub const MSG_SEEN_FOREST: &str = "the sky is grey and the wind blows relentlessly";

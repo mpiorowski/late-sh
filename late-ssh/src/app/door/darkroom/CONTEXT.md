@@ -52,7 +52,7 @@ Michael Townsend was emailed about the name before the port shipped.
 Upstream has **no offline progress at all**: every timer is wall clock while
 the browser tab is open, and the whole arc is 2-4 hours. Ported faithfully that
 would mean "idle in an SSH session", which is the opposite of what a clubhouse
-door should be. Three rules reshape it, and they are the only intentional
+door should be. Four rules reshape it, and they are the only intentional
 deviation from upstream behavior:
 
 1. **Credit accrues while the SSH session is connected**, not while this screen
@@ -66,6 +66,14 @@ deviation from upstream behavior:
 3. **`DAILY_CREDIT_SECS` (3h) of village time per UTC day.** Without this,
    "the session must be connected" is not pacing, it just rewards whoever parks
    a terminal on a spare monitor.
+4. **`DAILY_CREDIT_FLOOR_SECS` (45m) on the first settle of each UTC day, once
+   the village stands.** Rules 1 and 3 alone spread the arc from ~a week (for
+   whoever idles into the cap) to months (for a fifteen-minute daily visit).
+   The floor compresses that spread: a short daily check-in banks at least 45
+   minutes, landing as a visible welcome-back burst in the log. It counts
+   against the same daily cap, so idlers gain nothing from it, and it does not
+   apply before the first hut: fast-forwarding a bare room would burn allowance
+   on a world where nothing moves.
 
 The footer always shows the remaining allowance, and says so plainly when it is
 spent. **A village that has stopped growing must never look like a bug.**
@@ -109,9 +117,9 @@ between sessions contribute nothing without any bookkeeping.
 
 | File | Owns |
 |---|---|
-| `data.rs` | **MPL.** Closed `Resource`/`Building`/`Job`/`Fire`/`Temperature` sets, build costs (with the per-unit escalation on traps and huts), the income yield table, the trap drop table, every timing constant, and the notification prose. `TITLE` is the door's display name, in one place. |
-| `pace.rs` | The pacing layer: `Pace` (the persisted daily credit counter), `SLOWDOWN`, `DAILY_CREDIT_SECS`, `slowed()`. The only module that knows the port is paced differently from upstream. |
-| `model.rs` | **MPL.** The persistent `Game` (stores, carry, buildings, workers, population, the latched `seen_buildings`/`seen_jobs`, the room, every countdown) and the rules on it: `light_fire`/`stoke_fire` (whole-refusal on short wood, the first fire is free), `build` (whole-refusal), `gather_wood`, trap collection, worker assignment, `refresh_build_options` (upstream's half-the-wood-and-seen-the-rest unlock rule, latched). `Builder` is upstream's -1..4 level as a closed enum. |
+| `data.rs` | **MPL.** Closed `Resource`/`Building`/`Job`/`Fire`/`Temperature` sets, build costs (with the per-unit escalation on traps and huts), the income yield table, the trap drop table, every timing constant, and the notification prose, including the `MSG_*` action lines `state.rs` prints (they live here, not in the FSL file, precisely because they are upstream's sentences). `TITLE` is the door's display name, in one place. |
+| `pace.rs` | The pacing layer: `Pace` (the persisted daily credit counter and floor latch), `SLOWDOWN`, `DAILY_CREDIT_SECS`, `DAILY_CREDIT_FLOOR_SECS`, `slowed()`. The only module that knows the port is paced differently from upstream (`sim::settle` passes the floor in, zeroed until the village stands, because pace deliberately knows nothing about the game). |
+| `model.rs` | **MPL.** The persistent `Game` (stores, carry, buildings, workers, population, the latched `seen_buildings`/`seen_jobs`, the room, every countdown) and the rules on it: `light_fire`/`stoke_fire` (whole-refusal on short wood, the first fire is free), `build` (whole-refusal, and refused outright while the room is Cold or worse: upstream's "builder just shivers"), `gather_wood`, trap collection, worker assignment, `refresh_build_options` (upstream's half-the-wood-and-seen-the-rest unlock rule, latched), plus the display helpers (`outside_title` hut ladder, `trap_rows` bare/baited split, `income_per_tick`). `Builder` is upstream's -1..4 level as a closed enum. |
 | `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
 | `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
 | `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order. No shared world, no tick loop, no published snapshot. |
@@ -160,10 +168,12 @@ shelf at all is an open design question**, not merely unbuilt work.
 **Nothing decays except the fire.** Stores, buildings, population and unlocked
 trades only ever go up: no starvation, no raids, nothing built can be lost.
 Absence costs progress, never possessions. That bites early (the builder arc
-stalls whenever the room is below Warm, so a dead fire freezes her), and stops
-biting entirely once she is Helping, because she stokes the fire herself and
-out-earns what she burns. Past that point the daily cap is the only brake. If
-v1 turns out to need a reason to check in, the fire is the only lever that
+stalls whenever the room is below Warm, so a dead fire freezes her; and she
+refuses to build at all while the room is Cold or worse), and mostly stops
+biting once she is Helping, because she stokes the fire herself and out-earns
+what she burns. Past that point the daily cap is the only brake, and the cold
+gate on building is the one residual reason a cold room still costs anything.
+If v1 turns out to need a reason to check in, the fire is the only lever that
 exists; play a week before adding one.
 
 **Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /

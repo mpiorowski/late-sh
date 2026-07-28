@@ -77,6 +77,9 @@ pub struct Game {
     /// Jobs whose building has been raised.
     pub seen_jobs: BTreeSet<Job>,
     pub forest_unlocked: bool,
+    /// Whether the player has stepped outside yet (upstream's `seenForest`),
+    /// which is what gates the one-time sky-is-grey line.
+    pub seen_forest: bool,
 
     // ---- the room ----
     pub fire: Fire,
@@ -127,6 +130,8 @@ pub enum BuildOutcome {
     Missing(Resource),
     /// The builder is not on her feet yet.
     NoBuilder,
+    /// The room is Cold or worse; upstream's builder just shivers.
+    TooCold,
 }
 
 /// What a gathering trip did.
@@ -259,6 +264,18 @@ impl Game {
         }
     }
 
+    /// The outside title tracks the hut count (upstream `Outside.setTitle`).
+    pub fn outside_title(&self) -> &'static str {
+        match self.building_count(Building::Hut) {
+            0 => "A Silent Forest",
+            1 => "A Lonely Hut",
+            2..=4 => "A Tiny Village",
+            5..=8 => "A Modest Village",
+            9..=14 => "A Large Village",
+            _ => "A Raucous Village",
+        }
+    }
+
     // ---- the forest ----
 
     /// Walk out and pick up what the forest floor offers.
@@ -281,6 +298,14 @@ impl Game {
         let traps = self.building_count(Building::Trap);
         let bait = self.store(Resource::Bait).max(0) as u32;
         traps + bait.min(traps)
+    }
+
+    /// Standing traps split into `(bare, baited)`, the way upstream's village
+    /// panel lists "trap" and "baited trap" as separate rows.
+    pub fn trap_rows(&self) -> (u32, u32) {
+        let traps = self.building_count(Building::Trap);
+        let baited = (self.store(Resource::Bait).max(0) as u32).min(traps);
+        (traps - baited, baited)
     }
 
     /// Bank what the traps caught and spend the bait that drew it in.
@@ -345,6 +370,11 @@ impl Game {
         if self.builder != Builder::Helping {
             return BuildOutcome::NoBuilder;
         }
+        // Upstream refuses outright while the room is Cold or worse, before it
+        // even looks at costs: a shivering builder builds nothing.
+        if self.temperature <= Temperature::Cold {
+            return BuildOutcome::TooCold;
+        }
         let built = self.building_count(building);
         if building.maximum().is_some_and(|max| built + 1 > max) {
             return BuildOutcome::AtMaximum(building);
@@ -383,5 +413,34 @@ impl Game {
             self.workers.insert(job, current - moved);
         }
         moved
+    }
+
+    // ---- income ----
+
+    /// Net movement per income tick for every resource, all sources summed:
+    /// upstream's per-store income tooltip. Display only; the actual payout in
+    /// `sim` runs source by source so a starved trade stalls alone.
+    pub fn income_per_tick(&self) -> BTreeMap<Resource, f64> {
+        let mut totals: BTreeMap<Resource, f64> = BTreeMap::new();
+        if self.builder == Builder::Helping {
+            let (resource, amount) = data::BUILDER_YIELD;
+            *totals.entry(resource).or_insert(0.0) += amount;
+        }
+        let gatherers = f64::from(self.gatherers());
+        if gatherers > 0.0 {
+            let (resource, amount) = data::GATHERER_YIELD;
+            *totals.entry(resource).or_insert(0.0) += amount * gatherers;
+        }
+        for job in Job::ALL {
+            let workers = f64::from(self.worker_count(job));
+            if workers == 0.0 {
+                continue;
+            }
+            for (resource, amount) in job.yields() {
+                *totals.entry(*resource).or_insert(0.0) += amount * workers;
+            }
+        }
+        totals.retain(|_, amount| *amount != 0.0);
+        totals
     }
 }

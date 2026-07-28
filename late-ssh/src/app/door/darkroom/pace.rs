@@ -19,6 +19,15 @@
 //!    Without this, "the session must be connected" is not pacing, it just
 //!    rewards whoever parks a terminal on a spare monitor. With it, the arc
 //!    spans weeks whatever anyone does with their idle sessions.
+//! 4. **The first settle of each UTC day credits at least
+//!    [`DAILY_CREDIT_FLOOR_SECS`] once the village stands.** Rules 1 and 3
+//!    alone spread the arc from days (for whoever idles into the cap) to
+//!    months (for a fifteen-minute daily visit). The floor compresses that: a
+//!    short daily check-in still banks a meaningful slice, it lands as a
+//!    visible welcome-back burst, and it counts against the same daily cap so
+//!    idling gains nothing from it. The room half is exempt (no village, no
+//!    floor): the opening act is a click loop and fast-forwarding it would
+//!    burn allowance on a world where nothing moves.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -29,6 +38,10 @@ pub const SLOWDOWN: u32 = 5;
 
 /// Village time credited per UTC day, in seconds (3 hours).
 pub const DAILY_CREDIT_SECS: u32 = 3 * 60 * 60;
+
+/// The least village time the first settle of a UTC day yields once the
+/// village stands (45 minutes), counted against [`DAILY_CREDIT_SECS`].
+pub const DAILY_CREDIT_FLOOR_SECS: u32 = 45 * 60;
 
 /// Seconds in a day, for the UTC day number the cap resets on.
 const SECS_PER_DAY: i64 = 24 * 60 * 60;
@@ -42,23 +55,38 @@ pub struct Pace {
     /// Village seconds already credited on `day`.
     #[serde(default)]
     spent: u32,
+    /// Whether `day`'s floor (rule 4) has been applied.
+    #[serde(default)]
+    floored: bool,
 }
 
 impl Pace {
     /// Grant up to `elapsed` seconds of village time, capped by what is left
-    /// in today's allowance. Returns what the sim may actually advance.
+    /// in today's allowance. Returns what the sim may actually advance, which
+    /// can exceed `elapsed` when the day's floor tops it up.
+    ///
+    /// `floor_secs` is rule 4's minimum for the first grant of the day; the
+    /// caller passes zero while the game has no village yet, because that is
+    /// game knowledge this module deliberately does not have.
     ///
     /// A session that spans midnight UTC rolls onto the new day's full
     /// allowance rather than trying to split the elapsed span across two
     /// counters: the player was present for all of it, and erring generous at
     /// a boundary is cheaper to reason about than a proportional split.
-    pub fn grant(&mut self, now: DateTime<Utc>, elapsed: u32) -> u32 {
+    pub fn grant(&mut self, now: DateTime<Utc>, elapsed: u32, floor_secs: u32) -> u32 {
         let today = day_number(now);
         if self.day != today {
             self.day = today;
             self.spent = 0;
+            self.floored = false;
         }
-        let granted = elapsed.min(DAILY_CREDIT_SECS - self.spent);
+        let want = if floor_secs > 0 && !self.floored {
+            self.floored = true;
+            elapsed.max(floor_secs)
+        } else {
+            elapsed
+        };
+        let granted = want.min(DAILY_CREDIT_SECS - self.spent);
         self.spent += granted;
         granted
     }

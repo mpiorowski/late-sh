@@ -64,8 +64,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 fn title_for(state: &State, game: &Game) -> String {
     match state.view {
         View::Room => game.room_title().to_string(),
-        View::Outside if game.has_village() => "A Village".to_string(),
-        View::Outside => "A Silent Forest".to_string(),
+        View::Outside => game.outside_title().to_string(),
     }
 }
 
@@ -139,7 +138,9 @@ fn cost_hint(state: &State, row: Row) -> Option<String> {
 }
 
 /// The stores column. Only resources the player has actually seen appear,
-/// which is how the game reveals itself.
+/// which is how the game reveals itself. Each row carries its net income per
+/// tick, the terminal stand-in for upstream's hover tooltip, so wood quietly
+/// climbing (the builder, the gatherers) is visible and attributable.
 fn stores_lines(game: &Game) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(Span::styled(
         "stores",
@@ -147,15 +148,22 @@ fn stores_lines(game: &Game) -> Vec<Line<'static>> {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     ))];
+    let income = game.income_per_tick();
+    let tick = pace::slowed(data::INCOME_DELAY);
     for resource in Resource::ALL {
         if !game.has_seen(resource) {
             continue;
         }
-        lines.push(landing::stat(
-            resource.label(),
-            &game.store(resource).to_string(),
-            12,
-        ));
+        let value = match income.get(&resource) {
+            Some(rate) => format!(
+                "{} {}/{}s",
+                game.store(resource),
+                fmt_income(*rate),
+                tick
+            ),
+            None => game.store(resource).to_string(),
+        };
+        lines.push(landing::stat(resource.label(), &value, 12));
     }
     let standing: Vec<&Building> = Building::ALL
         .iter()
@@ -170,6 +178,17 @@ fn stores_lines(game: &Game) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )));
         for building in standing {
+            // Traps list bare and baited separately, like upstream's village.
+            if *building == Building::Trap {
+                let (bare, baited) = game.trap_rows();
+                if bare > 0 {
+                    lines.push(landing::stat("trap", &bare.to_string(), 12));
+                }
+                if baited > 0 {
+                    lines.push(landing::stat("baited trap", &baited.to_string(), 12));
+                }
+                continue;
+            }
             lines.push(landing::stat(
                 building.label(),
                 &game.building_count(*building).to_string(),
@@ -178,6 +197,16 @@ fn stores_lines(game: &Game) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+/// A signed income rate, whole when it is whole ("+2", "-3"), one decimal when
+/// it is not ("+0.5").
+fn fmt_income(rate: f64) -> String {
+    if rate.fract() == 0.0 {
+        format!("{:+}", rate as i64)
+    } else {
+        format!("{rate:+.1}")
+    }
 }
 
 /// The notification log, newest last, filling the space it has.
@@ -203,9 +232,14 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
         Span::styled(" do   ", Style::default().fg(theme::TEXT_DIM())),
     ];
     if matches!(state.view, View::Outside) {
-        spans.push(Span::styled("-", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled("+/-", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
-            " unassign   ",
+            " worker   ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("</>", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(
+            " x10   ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
@@ -267,6 +301,14 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             &format!(
                 "{}h of village time a day, so it lasts weeks",
                 pace::DAILY_CREDIT_SECS / 3600
+            ),
+            10,
+        ),
+        landing::hint(
+            "floor",
+            &format!(
+                "even a short visit banks {}m once the village stands",
+                pace::DAILY_CREDIT_FLOOR_SECS / 60
             ),
             10,
         ),

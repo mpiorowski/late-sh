@@ -28,7 +28,7 @@
 use chrono::{DateTime, Utc};
 use rand::Rng;
 
-use super::data::{self, Building, Fire, Job, Resource, Temperature};
+use super::data::{self, Fire, Job, Resource, Temperature};
 use super::model::{Builder, Game, View};
 
 /// What a settle did, for the caller's log and status line.
@@ -70,10 +70,18 @@ pub fn settle(
     // stuck.
     tick_cooldowns(game, elapsed);
 
-    let credited = game.pace.grant(now, elapsed);
+    // The daily floor only applies once the village stands: fast-forwarding a
+    // bare room burns allowance on a world where nothing moves.
+    let floor = if game.has_village() {
+        super::pace::DAILY_CREDIT_FLOOR_SECS
+    } else {
+        0
+    };
+    let credited = game.pace.grant(now, elapsed, floor);
     let mut settled = Settled {
         credited,
-        withheld: elapsed - credited,
+        // The floor can credit more than elapsed, hence saturating.
+        withheld: elapsed.saturating_sub(credited),
         ..Settled::default()
     };
     for _ in 0..credited {
@@ -304,8 +312,11 @@ fn step_population(game: &mut Game, rng: &mut impl Rng, messages: &mut Vec<Strin
 }
 
 fn next_arrival_delay(rng: &mut impl Rng) -> u32 {
-    let (low, high) = data::POP_DELAY_SECS;
-    super::pace::slowed(rng.gen_range(low..=high))
+    // Upstream: `floor(random * (high - low)) + low` minutes, which lands on
+    // exactly 0.5, 1.5 or 2.5 (and never on the nominal 3-minute high).
+    let (low, high) = data::POP_DELAY_MINUTES;
+    let minutes = (rng.r#gen::<f64>() * (high - low)).floor() + low;
+    super::pace::slowed((minutes * 60.0) as u32)
 }
 
 fn arrival_message(num: u32) -> &'static str {
@@ -336,16 +347,28 @@ pub fn roll_traps(game: &Game, rng: &mut impl Rng) -> Vec<(Resource, i64)> {
     drops
 }
 
-/// The message a trap haul prints, built from the same table.
-pub fn trap_message(resource: Resource) -> &'static str {
+/// The line a trap haul prints: upstream's `checkTraps` join, commas between
+/// finds and an "and" before the last.
+pub fn haul_message(drops: &[(Resource, i64)]) -> String {
+    let finds: Vec<&str> = drops
+        .iter()
+        .map(|(resource, _)| trap_message(*resource))
+        .collect();
+    let mut message = String::from("the traps contain ");
+    for (i, find) in finds.iter().enumerate() {
+        if i > 0 {
+            message.push_str(if i == finds.len() - 1 { " and " } else { ", " });
+        }
+        message.push_str(find);
+    }
+    message
+}
+
+/// The message for one trap find, from the same table as the drops.
+fn trap_message(resource: Resource) -> &'static str {
     data::TRAP_DROPS
         .iter()
         .find(|(_, r, _)| *r == resource)
         .map(|(_, _, message)| *message)
         .unwrap_or("something")
-}
-
-/// Whether the traps are worth checking at all.
-pub fn traps_ready(game: &Game) -> bool {
-    game.building_count(Building::Trap) > 0 && game.traps_cooldown == 0
 }

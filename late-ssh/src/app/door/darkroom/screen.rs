@@ -102,8 +102,22 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
                 state.toggle_view();
                 Acted::Stay
             }
+            // Worker rows: +/- move one villager, </> move ten (upstream's
+            // up/dn and upMany/dnMany buttons).
+            b'+' | b'=' => {
+                state.assign_selected(1);
+                Acted::Stay
+            }
             b'-' | b'_' => {
-                state.unassign_selected();
+                state.unassign_selected(1);
+                Acted::Stay
+            }
+            b'>' | b'.' => {
+                state.assign_selected(10);
+                Acted::Stay
+            }
+            b'<' | b',' => {
+                state.unassign_selected(10);
                 Acted::Stay
             }
             b'\r' | b'\n' | b' ' => state.select(),
@@ -124,8 +138,8 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
     match key {
         b'A' => state.move_cursor(-1),
         b'B' => state.move_cursor(1),
-        b'D' => state.unassign_selected(),
-        b'C' => state.assign_selected(),
+        b'D' => state.unassign_selected(1),
+        b'C' => state.assign_selected(1),
         _ => {}
     }
     true
