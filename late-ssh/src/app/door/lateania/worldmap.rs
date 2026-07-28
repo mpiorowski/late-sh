@@ -410,8 +410,13 @@ pub struct Poi {
     pub reward: Vec<&'static str>,
     /// Names of the mobs that spawn (can be slain) here.
     pub monsters: Vec<&'static str>,
+    /// A notable non-boss foe lairing here (epic/legendary rank), if any - the
+    /// hunt-worthy targets, distinct from trash spawns.
+    pub elite_foe: Option<&'static str>,
     /// A tameable wild beast roaming here, if any.
     pub tameable: Option<&'static str>,
+    /// A harvestable resource here (the gather trade worked at it), if any.
+    pub gather: Option<&'static str>,
 }
 
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
@@ -431,9 +436,36 @@ fn build_pois() -> HashMap<RoomId, Poi> {
             }
         }
     }
+    // Regional champions: the single toughest non-boss foe in each land. The
+    // endgame is wall-to-wall max-level mobs, so a per-room "elite" marker would
+    // carpet the map; one apex hunt per region stays rare and worth flagging.
+    let mut champ: HashMap<&'static str, (RoomId, &'static str, i32)> = HashMap::new();
+    for spawn in &world.spawns {
+        if spawn.boss {
+            continue;
+        }
+        let Some((region, _)) = super::world::region_atlas_entry(spawn.home) else {
+            continue;
+        };
+        let lvl = spawn.level();
+        champ
+            .entry(region)
+            .and_modify(|best| {
+                if lvl > best.2 {
+                    *best = (spawn.home, spawn.name, lvl);
+                }
+            })
+            .or_insert((spawn.home, spawn.name, lvl));
+    }
+    for (_region, (home, name, _)) in champ {
+        map.entry(home).or_default().elite_foe = Some(name);
+    }
     for beast in super::taming::wild_beasts() {
         map.entry(beast.home).or_default().tameable =
             Some(super::taming::TAMEABLE[beast.species].name);
+    }
+    for n in super::world::NODES {
+        map.entry(n.home).or_default().gather = Some(n.skill.key());
     }
     map
 }

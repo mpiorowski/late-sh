@@ -616,3 +616,33 @@ fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
         }
     }
 }
+
+// The POI index carries every marker kind the map draws, and the "notable foe"
+// marker stays rare: one regional champion per land, never a per-room carpet
+// (the endgame is wall-to-wall max-level mobs, so a level threshold would flood).
+#[test]
+fn poi_index_has_every_marker_kind_and_elite_stays_rare() {
+    let p = super::pois();
+    let has = |f: fn(&super::Poi) -> bool| p.values().filter(|x| f(x)).count();
+    assert!(has(|x| x.boss.is_some()) > 0, "bosses indexed");
+    assert!(has(|x| x.tameable.is_some()) > 0, "tameable beasts indexed");
+    assert!(has(|x| x.gather.is_some()) > 0, "gather nodes indexed");
+
+    let elite = has(|x| x.elite_foe.is_some());
+    assert!(elite > 0, "at least one regional champion");
+    // One apex per region: comfortably under any per-region-count ceiling and
+    // nowhere near the thousands a raw level threshold would mark.
+    assert!(
+        elite < 40,
+        "elite foe markers must stay rare (one per land), got {elite}"
+    );
+    // A champion room is never also a boss room (bosses take precedence).
+    for poi in p.values() {
+        if poi.elite_foe.is_some() {
+            assert!(
+                poi.boss.is_none(),
+                "a champion room must not also be a boss"
+            );
+        }
+    }
+}
