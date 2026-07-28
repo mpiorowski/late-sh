@@ -543,11 +543,34 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         }
         None
     };
-    let ground_cell = |sr: i32, sc: i32, biome: super::world::Biome| {
+    // `is_room` distinguishes the two ways a biome fills a cell. Open biomes
+    // scatter the same ground everywhere. Enclosed ones (caverns) instead carve:
+    // rooms and corridors are open floor, and the space between is solid rock, so
+    // an interior reads as passages cut through stone rather than an open plain.
+    let terrain_cell = |sr: i32, sc: i32, biome: super::world::Biome, is_room: bool| {
         let hx = 2 * center.x + (sc - cx);
         let hy = 2 * center.y + (sr - cy);
-        let (g, color) = field_ground(biome, hx, hy);
-        (g.to_string(), Style::default().fg(color))
+        if matches!(biome, super::world::Biome::Cavern) {
+            let h = (hx.wrapping_mul(73_856_093) ^ hy.wrapping_mul(19_349_663)) as u32;
+            if is_room {
+                let ch = if h.is_multiple_of(6) { ',' } else { '.' };
+                (
+                    ch.to_string(),
+                    Style::default().fg(Color::Rgb(140, 132, 152)),
+                )
+            } else {
+                // Mostly medium rock with the odd darker/heavier block for texture.
+                let ch = match h % 8 {
+                    0 => '\u{2588}',     // █
+                    1 | 2 => '\u{2593}', // ▓
+                    _ => '\u{2592}',     // ▒
+                };
+                (ch.to_string(), Style::default().fg(Color::Rgb(78, 73, 92)))
+            }
+        } else {
+            let (g, color) = field_ground(biome, hx, hy);
+            (g.to_string(), Style::default().fg(color))
+        }
     };
 
     // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
@@ -584,7 +607,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         if !super::world::nodes_at(id).is_empty() {
             return ("\u{2666}".to_string(), node_style); // ♦ a resource to gather
         }
-        ground_cell(sr, sc, super::world::biome_of(id))
+        terrain_cell(sr, sc, super::world::biome_of(id), true)
     };
 
     let mut cells: Vec<Vec<(String, Style)>> =
@@ -602,7 +625,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 Tile::LinkH => ("\u{2500}".to_string(), path_style),
                 Tile::LinkV => ("\u{2502}".to_string(), path_style),
                 Tile::Empty => match biome_at(sr, sc) {
-                    Some(biome) => ground_cell(sr, sc, biome),
+                    Some(biome) => terrain_cell(sr, sc, biome, false),
                     None => (" ".to_string(), Style::default()),
                 },
             };
