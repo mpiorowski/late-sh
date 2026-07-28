@@ -2,12 +2,12 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/games`
-- Last updated: 2026-07-08
+- Last updated: 2026-07-28 (daily briscola joined `cards.rs`'s consumers; it owns its own rank set in `lobby/daily/briscola.rs` and uses this module only to draw faces, backs, and empty slots)
 - Purpose: shared game-domain primitives and services used across game surfaces (Arcade, the house tables in `app/lobby/house`, and the Daily correspondence domain in `app/lobby/daily`).
 
 ## Source Map
 - `mod.rs` declares shared game modules only.
-- `cards.rs` defines card ranks, suits, `PlayingCard`, and ASCII card rendering themes used by Solitaire plus room card games.
+- `cards.rs` defines card ranks, suits, `PlayingCard`, and ASCII card rendering themes (`Minimal`/`Boxed` one-line faces, `Outline` five-line faces, plus backs, empty slots, and a stock counter) used by Solitaire, the house card tables, and daily briscola. It renders cards and nothing else: there is no shared deck or shuffle here, and each game owns its own rank set and point values (briscola's ten-rank order generalizes to no other game).
 - `chips/svc.rs` owns the Late Chips economy adapter: login ensure, bet debits, payout credits, floor restore, Activity-driven daily puzzle rewards, and reward-template claims for room-game daily/cooldown/lifetime payouts. SQL stays in `late-core` models.
 - `chess_core/` is the surface-agnostic chess kernel (extracted from the demolished rooms chess table; see `devdocs/FRD-DAILY.md`). Daily chess is its only consumer today:
   - `types.rs`: `ChessColor`, `ChessPieceKind`, `ChessPiece`, `ChessGameResult`, `ChessMoveSpec`, `ChessMoveRecord`, `ChessPieceRenderMode`, `piece_glyph`.

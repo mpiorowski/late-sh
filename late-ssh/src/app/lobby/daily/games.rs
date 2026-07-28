@@ -8,8 +8,8 @@ use late_core::models::{
     daily_match::DailyMatch,
     reward::{
         DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
-        DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY,
-        DAILY_REVERSI_WIN_REWARD_KEY,
+        DAILY_BRISCOLA_WIN_REWARD_KEY, DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY,
+        DAILY_CONNECT4_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY,
     },
 };
 
@@ -21,17 +21,19 @@ pub enum DailyGame {
     Reversi,
     Checkers,
     Backgammon,
+    Briscola,
 }
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Chess,
         Self::Battleship,
         Self::ConnectFour,
         Self::Reversi,
         Self::Checkers,
         Self::Backgammon,
+        Self::Briscola,
     ];
 
     /// The persisted `daily_matches.game_kind` value.
@@ -43,6 +45,7 @@ impl DailyGame {
             Self::Reversi => DailyMatch::GAME_KIND_REVERSI,
             Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
             Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
+            Self::Briscola => DailyMatch::GAME_KIND_BRISCOLA,
         }
     }
 
@@ -56,6 +59,7 @@ impl DailyGame {
             Self::Reversi => "reversi",
             Self::Checkers => "checkers",
             Self::Backgammon => "backgammon",
+            Self::Briscola => "briscola",
         }
     }
 
@@ -70,6 +74,7 @@ impl DailyGame {
             Self::Reversi => "Reversi",
             Self::Checkers => "Checkers",
             Self::Backgammon => "Backgammon",
+            Self::Briscola => "Briscola",
         }
     }
 
@@ -83,6 +88,7 @@ impl DailyGame {
             Self::Reversi => 400,
             Self::Checkers => 400,
             Self::Backgammon => 400,
+            Self::Briscola => 400,
         }
     }
 
@@ -94,6 +100,7 @@ impl DailyGame {
             Self::Reversi => DAILY_REVERSI_WIN_REWARD_KEY,
             Self::Checkers => DAILY_CHECKERS_WIN_REWARD_KEY,
             Self::Backgammon => DAILY_BACKGAMMON_WIN_REWARD_KEY,
+            Self::Briscola => DAILY_BRISCOLA_WIN_REWARD_KEY,
         }
     }
 
@@ -105,6 +112,7 @@ impl DailyGame {
             Self::Reversi => "daily_reversi_win",
             Self::Checkers => "daily_checkers_win",
             Self::Backgammon => "daily_backgammon_win",
+            Self::Briscola => "daily_briscola_win",
         }
     }
 
@@ -117,6 +125,7 @@ impl DailyGame {
             Self::Reversi => "one move per day · most discs wins",
             Self::Checkers => "one move per day · capture or block to win",
             Self::Backgammon => "one roll per day · bear off all fifteen",
+            Self::Briscola => "one card per day · most points wins",
         }
     }
 
