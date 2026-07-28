@@ -19,10 +19,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
     // don't leak to the app behind the modal.
     if let ParsedInput::Mouse(mouse) = event {
         use crate::app::input::{MouseButton, MouseEventKind};
-        if mouse.kind == MouseEventKind::Down && mouse.button == Some(MouseButton::Left) {
-            if let Some(field) = app.room_info_modal_state.field_at(mouse.x, mouse.y) {
-                app.room_info_modal_state.set_focus(field);
-            }
+        if mouse.kind == MouseEventKind::Down
+            && mouse.button == Some(MouseButton::Left)
+            && let Some(field) = app.room_info_modal_state.field_at(mouse.x, mouse.y)
+        {
+            app.room_info_modal_state.set_focus(field);
         }
         return;
     }

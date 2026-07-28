@@ -52,11 +52,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
             use crate::app::input::{MouseButton, MouseEventKind};
             match mouse.kind {
                 MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-                    if !message_mode {
-                        if let Some(index) = app.room_search_modal_state.item_at(mouse.y) {
-                            app.room_search_modal_state.set_selected(index);
-                            submit(app);
-                        }
+                    if !message_mode
+                        && let Some(index) = app.room_search_modal_state.item_at(mouse.y)
+                    {
+                        app.room_search_modal_state.set_selected(index);
+                        submit(app);
                     }
                 }
                 MouseEventKind::ScrollDown => app.room_search_modal_state.move_selection(1, len),

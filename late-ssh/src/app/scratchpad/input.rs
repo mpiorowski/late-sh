@@ -28,15 +28,15 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     // Mouse: click positions the caret; the wheel pages through the buffer.
     if let ParsedInput::Mouse(mouse) = event {
         use crate::app::input::{MouseButton, MouseEventKind};
-        match mouse.kind {
-            MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-                if state.click_to_cursor(mouse.x, mouse.y) {
-                    state.publish();
-                }
-            }
-            MouseEventKind::ScrollUp => state.scroll_lines(true),
-            MouseEventKind::ScrollDown => state.scroll_lines(false),
-            _ => {}
+        let clicked = mouse.kind == MouseEventKind::Down
+            && mouse.button == Some(MouseButton::Left)
+            && state.click_to_cursor(mouse.x, mouse.y);
+        if clicked {
+            state.publish();
+        } else if mouse.kind == MouseEventKind::ScrollUp {
+            state.scroll_lines(true);
+        } else if mouse.kind == MouseEventKind::ScrollDown {
+            state.scroll_lines(false);
         }
         return true;
     }
