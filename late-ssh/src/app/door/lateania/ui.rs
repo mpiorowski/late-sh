@@ -86,6 +86,24 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     } else {
         SIDE_NARROW
     };
+    // Wide terminals get the live field as a centre column: log on the left,
+    // the rendered world you walk through in the middle, room prose on the right.
+    // Below this width there isn't room for three columns, so the field folds
+    // away and the classic log + side view stands in (the minimap still rides in
+    // the side panel there).
+    if state.panel() == Panel::Room && area.width >= 96 {
+        let cols = Layout::horizontal([
+            Constraint::Length(24),     // log
+            Constraint::Min(24),        // live field (fills the middle)
+            Constraint::Length(side_w), // room description + foes
+        ])
+        .split(area);
+        draw_log(frame, cols[0], &view);
+        draw_field(frame, cols[1], &view);
+        draw_room_side(frame, cols[2], state, &view, usernames, false);
+        return;
+    }
+
     let cols = Layout::horizontal([Constraint::Min(26), Constraint::Length(side_w)]).split(area);
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
@@ -308,6 +326,129 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
 /// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
 /// centred on the player. `@` is the player's room; arrows / wasd pan the
 /// camera and Enter re-centres (handled in input.rs).
+/// The live play field: a scrolling, biome-coloured top-down view kept centred
+/// on the player, so ordinary movement walks you across a rendered world (the
+/// terrain and paths ahead are drawn as you go, fog lifting as you explore).
+/// Unlike the overhead map (`m`), this never pans - it just follows you - and it
+/// sits beside the room description so the prose is always right there.
+fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    use super::world::region_atlas_entry;
+    use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
+
+    if area.height < 3 || area.width < 8 {
+        return;
+    }
+    let coords = world_coords();
+    let Some(player_room) = view.room else {
+        return;
+    };
+    let Some(&center) = coords.get(&player_room) else {
+        frame.render_widget(
+            Paragraph::new("No field view for this place.")
+                .style(Style::default().fg(theme::TEXT_DIM())),
+            area,
+        );
+        return;
+    };
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // where-am-i header
+        Constraint::Min(1),    // the field itself
+    ])
+    .split(area);
+
+    // Header: the land you stand in and the depth, so the field is grounded.
+    let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
+    let depth = match center.z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    };
+    let mut header = vec![Span::styled(
+        region_name.to_string(),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !tier.is_empty() {
+        header.push(Span::styled(
+            format!("  ·  {tier}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    header.push(Span::styled(
+        format!("  ·  {depth}"),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
+
+    let body = rows[1];
+    let cols = body.width as i32;
+    let height = body.height as i32;
+    let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
+
+    // The player token turns hostile-red in a fight, so a glance at the field
+    // tells you combat is on even with your eyes off the log.
+    let player_style = if view.mobs.is_empty() {
+        Style::default()
+            .fg(Color::Rgb(250, 240, 140))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Rgb(240, 120, 90))
+            .add_modifier(Modifier::BOLD)
+    };
+    let boss_style = Style::default()
+        .fg(Color::Rgb(250, 210, 90))
+        .add_modifier(Modifier::BOLD);
+    let tame_style = Style::default()
+        .fg(Color::Rgb(230, 140, 160))
+        .add_modifier(Modifier::BOLD);
+    let link_style = Style::default().fg(theme::BORDER_DIM());
+
+    let mut cells: Vec<Vec<(String, Style)>> = canvas
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|tile| match tile {
+                    Tile::Empty => (" ".to_string(), Style::default()),
+                    Tile::LinkH => ("\u{2500}".to_string(), link_style),
+                    Tile::LinkV => ("\u{2502}".to_string(), link_style),
+                    Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
+                    Tile::Room(id) => match poi(*id) {
+                        Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
+                        Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                        _ => {
+                            let (g, color) = biome_style(super::world::biome_of(*id));
+                            (g.to_string(), Style::default().fg(color))
+                        }
+                    },
+                })
+                .collect()
+        })
+        .collect();
+
+    // Off-field bosses/tameables get a border arrow pointing the way (no spoiler).
+    for arrow in poi_arrows(coords, center, cols, height) {
+        if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+            let style = if arrow.boss { boss_style } else { tame_style };
+            *cell = (arrow.glyph.to_string(), style);
+        }
+    }
+
+    let lines: Vec<Line> = cells
+        .into_iter()
+        .map(|row| {
+            Line::from(
+                row.into_iter()
+                    .map(|(ch, style)| Span::styled(ch, style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body);
+}
+
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
@@ -722,7 +863,7 @@ fn draw_side(
     usernames: &UsernameLookup<'_>,
 ) {
     if state.panel() == Panel::Room {
-        draw_room_side(frame, area, state, view, usernames);
+        draw_room_side(frame, area, state, view, usernames, true);
         return;
     }
 
@@ -878,8 +1019,15 @@ fn draw_room_side(
     state: &State,
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
+    with_minimap: bool,
 ) {
-    let map = minimap_lines(&view.minimap);
+    let map = if with_minimap {
+        minimap_lines(&view.minimap)
+    } else {
+        // The live field column already shows the surroundings; the little
+        // minimap would just be a redundant echo beside it.
+        Vec::new()
+    };
     let panel_area = if map.is_empty() {
         area
     } else {
