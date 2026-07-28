@@ -101,7 +101,13 @@ fn a_gatherer_pays_at_the_slowed_rate() {
     game.population = 1;
 
     let one_payout = i64::from(pace::slowed(data::INCOME_DELAY));
-    advance(&mut game, View::Outside, &mut now, session_start, one_payout - 1);
+    advance(
+        &mut game,
+        View::Outside,
+        &mut now,
+        session_start,
+        one_payout - 1,
+    );
     assert_eq!(
         game.store(Resource::Wood),
         0,
@@ -216,7 +222,10 @@ fn cooldowns_keep_running_after_the_daily_allowance_is_spent() {
     let mut rng = StdRng::seed_from_u64(7);
     let settled = sim::settle(&mut game, View::Outside, now, session_start, &mut rng);
 
-    assert_eq!(settled.credited, 0, "the daily cap should have withheld all of it");
+    assert_eq!(
+        settled.credited, 0,
+        "the daily cap should have withheld all of it"
+    );
     assert!(settled.withheld > 0);
     assert_eq!(
         game.gather_cooldown, 0,

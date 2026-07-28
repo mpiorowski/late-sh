@@ -16,10 +16,17 @@ fn a_cold_room_refuses_to_build() {
     let mut game = ready_to_build();
     game.temperature = Temperature::Cold;
     assert_eq!(game.build(Building::Trap), BuildOutcome::TooCold);
-    assert_eq!(game.store(Resource::Wood), 200, "a refused build must spend nothing");
+    assert_eq!(
+        game.store(Resource::Wood),
+        200,
+        "a refused build must spend nothing"
+    );
 
     game.temperature = Temperature::Mild;
-    assert_eq!(game.build(Building::Trap), BuildOutcome::Built(Building::Trap));
+    assert_eq!(
+        game.build(Building::Trap),
+        BuildOutcome::Built(Building::Trap)
+    );
     assert_eq!(game.store(Resource::Wood), 190);
 }
 

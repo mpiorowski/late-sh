@@ -57,7 +57,10 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     frame.render_widget(Paragraph::new(action_lines(state)), columns[0]);
     frame.render_widget(Paragraph::new(stores_lines(game)), columns[1]);
 
-    frame.render_widget(Paragraph::new(log_lines(state, rows[4].height as usize)), rows[4]);
+    frame.render_widget(
+        Paragraph::new(log_lines(state, rows[4].height as usize)),
+        rows[4],
+    );
     frame.render_widget(Paragraph::new(footer(state, game)), rows[5]);
 }
 
@@ -155,12 +158,7 @@ fn stores_lines(game: &Game) -> Vec<Line<'static>> {
             continue;
         }
         let value = match income.get(&resource) {
-            Some(rate) => format!(
-                "{} {}/{}s",
-                game.store(resource),
-                fmt_income(*rate),
-                tick
-            ),
+            Some(rate) => format!("{} {}/{}s", game.store(resource), fmt_income(*rate), tick),
             None => game.store(resource).to_string(),
         };
         lines.push(landing::stat(resource.label(), &value, 12));
@@ -252,7 +250,10 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
         spans.push(Span::styled(other, Style::default().fg(theme::TEXT_DIM())));
     }
     spans.push(Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())));
-    spans.push(Span::styled(" leave", Style::default().fg(theme::TEXT_DIM())));
+    spans.push(Span::styled(
+        " leave",
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
 
     let remaining = state.credit_remaining();
     let (text, color) = if state.credit_exhausted() {
@@ -262,7 +263,11 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
         )
     } else {
         (
-            format!("   {}h{:02}m of village time left today", remaining / 3600, (remaining % 3600) / 60),
+            format!(
+                "   {}h{:02}m of village time left today",
+                remaining / 3600,
+                (remaining % 3600) / 60
+            ),
             theme::TEXT_FAINT(),
         )
     };

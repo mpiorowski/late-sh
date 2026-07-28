@@ -88,11 +88,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
             );
         }
         HubGame::Darkroom => {
-            crate::app::door::darkroom::screen::draw_landing(
-                frame,
-                layout[3],
-                view.delete_confirm,
-            );
+            crate::app::door::darkroom::screen::draw_landing(frame, layout[3], view.delete_confirm);
         }
     }
 

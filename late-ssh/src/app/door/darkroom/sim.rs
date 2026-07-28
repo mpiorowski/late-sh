@@ -184,9 +184,10 @@ fn step_builder(game: &mut Game, messages: &mut Vec<String>) {
     game.builder_timer = data::BUILDER_STATE_DELAY;
     match game.builder {
         Builder::Approaching => {
-            messages
-                .push("a ragged stranger stumbles through the door and collapses in the corner"
-                    .to_string());
+            messages.push(
+                "a ragged stranger stumbles through the door and collapses in the corner"
+                    .to_string(),
+            );
             game.builder = Builder::Collapsed;
             game.need_wood_timer = Some(data::NEED_WOOD_DELAY);
         }
@@ -198,8 +199,9 @@ fn step_builder(game: &mut Game, messages: &mut Vec<String>) {
             game.builder = Builder::Shivering;
         }
         Builder::Shivering if game.temperature >= Temperature::Warm => {
-            messages
-                .push("the stranger in the corner stops shivering. her breathing calms.".to_string());
+            messages.push(
+                "the stranger in the corner stops shivering. her breathing calms.".to_string(),
+            );
             game.builder = Builder::Sleeping;
         }
         // Still too cold to improve, or already past this stage.

@@ -41,7 +41,10 @@ fn the_floor_tops_up_a_short_visit_once_per_day() {
     let now = at(20_000, 12);
 
     // A one-minute first visit lands the whole floor...
-    assert_eq!(pace.grant(now, 60, DAILY_CREDIT_FLOOR_SECS), DAILY_CREDIT_FLOOR_SECS);
+    assert_eq!(
+        pace.grant(now, 60, DAILY_CREDIT_FLOOR_SECS),
+        DAILY_CREDIT_FLOOR_SECS
+    );
     // ...and later grants the same day are back to elapsed time.
     assert_eq!(pace.grant(now, 60, DAILY_CREDIT_FLOOR_SECS), 60);
 
@@ -60,7 +63,11 @@ fn the_floor_counts_against_the_daily_allowance() {
 
     let floored = pace.grant(now, 60, DAILY_CREDIT_FLOOR_SECS);
     let rest = pace.grant(now, DAILY_CREDIT_SECS, DAILY_CREDIT_FLOOR_SECS);
-    assert_eq!(floored + rest, DAILY_CREDIT_SECS, "the floor is not a bonus on top of the cap");
+    assert_eq!(
+        floored + rest,
+        DAILY_CREDIT_SECS,
+        "the floor is not a bonus on top of the cap"
+    );
 
     // A session already longer than the floor gains nothing from it.
     let mut long = Pace::default();

@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::data::{self, Building, Fire, Job, Resource};
-use super::model::{BuildOutcome, GatherOutcome, Game, LightFire, StokeFire, View};
+use super::model::{BuildOutcome, Game, GatherOutcome, LightFire, StokeFire, View};
 use super::pace;
 use super::sim;
 use super::svc::{DarkroomService, GameLoad};
@@ -133,13 +133,7 @@ impl State {
             return false;
         };
         let mut rng = rand::thread_rng();
-        let settled = sim::settle(
-            game,
-            self.view,
-            Utc::now(),
-            self.session_start,
-            &mut rng,
-        );
+        let settled = sim::settle(game, self.view, Utc::now(), self.session_start, &mut rng);
         self.withheld_today = self.withheld_today.saturating_add(settled.withheld);
         let had_messages = !settled.messages.is_empty();
         for message in settled.messages {
@@ -210,10 +204,7 @@ impl State {
 
     /// Switch panels. The forest is only reachable once the wood runs out.
     pub fn toggle_view(&mut self) {
-        let outside_open = self
-            .game
-            .as_ref()
-            .is_some_and(|game| game.forest_unlocked);
+        let outside_open = self.game.as_ref().is_some_and(|game| game.forest_unlocked);
         self.view = match (self.view, outside_open) {
             (View::Room, true) => View::Outside,
             (View::Room, false) => View::Room,

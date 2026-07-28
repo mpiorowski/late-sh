@@ -23,7 +23,11 @@ pub fn to_json(game: &Game) -> Value {
 /// back to a fresh game rather than failing the session: the worst case is a
 /// player who lost a save gets a dark room, which is where everyone starts.
 pub fn from_json(blob: &Value) -> Game {
-    blob.get("game")
-        .and_then(|g| serde_json::from_value::<Game>(g.clone()).ok())
-        .unwrap_or_else(Game::new)
+    match blob.get("game") {
+        Some(game) => match serde_json::from_value::<Game>(game.clone()) {
+            Ok(game) => game,
+            Err(_) => Game::new(),
+        },
+        None => Game::new(),
+    }
 }
