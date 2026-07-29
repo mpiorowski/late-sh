@@ -13,7 +13,7 @@ async fn transfer_gift_notifies_both_parties() {
     let test_db = test_db().await;
     let sender = create_test_user(&test_db.db, "gift-notify-sender").await;
     let recipient = create_test_user(&test_db.db, "gift-notify-recipient").await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     UserChips::ensure(&client, sender.id)
         .await
         .expect("sender chips");
@@ -51,11 +51,12 @@ async fn transfer_gift_notifies_both_parties() {
         }
     }
 
-    let raw: &tokio_postgres::Client = &client;
-    UserChips::transfer_gift(raw, sender.id, recipient.id, 300)
+    let tx = client.transaction().await.expect("gift transaction");
+    UserChips::transfer_gift(&tx, sender.id, recipient.id, 300)
         .await
         .expect("gift succeeds")
         .expect("sender can afford gift");
+    tx.commit().await.expect("gift commit");
 
     let mut notified: HashSet<Uuid> = HashSet::new();
     let expected: HashSet<Uuid> = [sender.id, recipient.id].into();
@@ -103,6 +104,6 @@ fn earning_exclusions_and_reason_uniqueness() {
         ChipMove::excluded_earning_reasons(),
         vec!["floor_restore", "shop_purchase"]
     );
-    let reasons: HashSet<&str> = ChipMove::ALL.into_iter().map(ChipMove::reason).collect();
+    let reasons: HashSet<&str> = ChipMove::ALL.iter().map(|mv| mv.reason()).collect();
     assert_eq!(reasons.len(), ChipMove::ALL.len());
 }

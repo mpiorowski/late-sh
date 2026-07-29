@@ -151,7 +151,7 @@ pub async fn update_marketplace_item_for_admin(
         !update.description.trim().is_empty(),
         "description cannot be empty"
     );
-    ensure!(update.price_chips >= 0, "price must be 0 or greater");
+    ensure!(update.price_chips > 0, "price must be positive");
 
     let row = client
         .query_opt(

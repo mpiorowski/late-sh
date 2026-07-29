@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, bail, ensure};
 use chrono::NaiveDate;
-use tokio_postgres::{Client, GenericClient};
+use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
@@ -26,14 +26,32 @@ pub fn difficulty_bonus(key: &str) -> i64 {
     }
 }
 
-/// Every way chips move. Adding a variant forces a decision in each match
-/// below: the persisted ledger reason, the direction and floor guard, the
-/// source kind, and whether the move counts toward the monthly chip-earner
-/// leaderboard. Call sites name their move instead of passing raw strings,
-/// and the `user_chips` triggers (migration 128) own the
-/// `chip_user_changed` notify, so no move can forget it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChipMove {
+/// Defines [`ChipMove`] and its `ALL` roster from one variant list: a
+/// variant cannot exist without an `ALL` entry, so roster-derived lists
+/// (like the earnings exclusions) can never silently skip one.
+macro_rules! chip_moves {
+    ($($(#[$doc:meta])* $variant:ident),+ $(,)?) => {
+        /// Every way chips move. Adding a variant forces a decision in each
+        /// match below: the persisted ledger reason, the direction and floor
+        /// guard, the source kind, and whether the move counts toward the
+        /// monthly chip-earner leaderboard. Call sites name their move
+        /// instead of passing raw strings, and the `user_chips` triggers
+        /// (migration 128) own the `chip_user_changed` notify, so no move
+        /// can forget it.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ChipMove {
+            $($(#[$doc])* $variant,)+
+        }
+
+        impl ChipMove {
+            /// Every variant in declaration order, generated from the same
+            /// list as the enum itself.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+        }
+    };
+}
+
+chip_moves!(
     /// Generic game credit: house-table payouts, bonsai watering bonus.
     Credit,
     /// Generic wager debit: house-table bets, may drain the balance to zero
@@ -64,7 +82,7 @@ pub enum ChipMove {
     NethackAscension,
     LateaniaArchdemonDefeat,
     LateaniaFrontierKingDefeat,
-}
+);
 
 /// Which way a move touches the balance, and under what guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,34 +97,6 @@ pub enum ChipDirection {
 }
 
 impl ChipMove {
-    pub const ALL: [Self; 25] = [
-        Self::Credit,
-        Self::Bet,
-        Self::FloorRestore,
-        Self::GiftSent,
-        Self::GiftReceived,
-        Self::DrinkPurchase,
-        Self::ShopPurchase,
-        Self::QuestReward,
-        Self::DailyQuestStreakReward,
-        Self::DailyPuzzleWin,
-        Self::AsterionEscape,
-        Self::DailyChessWin,
-        Self::DailyBattleshipWin,
-        Self::DailyConnectFourWin,
-        Self::DailyReversiWin,
-        Self::DailyCheckersWin,
-        Self::DailyBackgammonWin,
-        Self::DailyBriscolaWin,
-        Self::TronWin,
-        Self::SsnakeWin,
-        Self::GreendragonDragonSlain,
-        Self::NethackAmuletAcquired,
-        Self::NethackAscension,
-        Self::LateaniaArchdemonDefeat,
-        Self::LateaniaFrontierKingDefeat,
-    ];
-
     /// The persisted `chip_ledger.reason` value.
     pub const fn reason(self) -> &'static str {
         match self {
@@ -231,7 +221,7 @@ impl ChipMove {
     /// their exclusion list here, so they can never drift apart.
     pub fn excluded_earning_reasons() -> Vec<&'static str> {
         Self::ALL
-            .into_iter()
+            .iter()
             .filter(|mv| !mv.counts_as_earnings())
             .map(|mv| mv.reason())
             .collect()
@@ -409,11 +399,11 @@ impl UserChips {
 
     /// Move chips from sender to recipient: a [`ChipMove::GiftSent`] debit
     /// (floor-guarded) and a [`ChipMove::GiftReceived`] credit. The debit and
-    /// credit are separate statements, so the caller must run this inside a
-    /// transaction. Returns `None` when the sender cannot cover the gift and
-    /// keep the floor.
+    /// credit are separate statements, so this takes the transaction that
+    /// makes them atomic. Returns `None` when the sender cannot cover the
+    /// gift and keep the floor.
     pub async fn transfer_gift(
-        client: &impl GenericClient,
+        tx: &Transaction<'_>,
         sender_id: Uuid,
         recipient_id: Uuid,
         amount: i64,
@@ -424,21 +414,20 @@ impl UserChips {
         // Ensure both chip rows exist first, so gifting to a user without a
         // pre-existing row credits on top of the initial balance instead of
         // spuriously failing.
-        client
-            .execute(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $3), ($2, $3)
-                 ON CONFLICT (user_id) DO NOTHING",
-                &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
-            )
-            .await?;
+        tx.execute(
+            "INSERT INTO user_chips (user_id, balance)
+             VALUES ($1, $3), ($2, $3)
+             ON CONFLICT (user_id) DO NOTHING",
+            &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
+        )
+        .await?;
 
-        let Some(sender) = Self::apply(client, sender_id, ChipMove::GiftSent, amount, None).await?
+        let Some(sender) = Self::apply(tx, sender_id, ChipMove::GiftSent, amount, None).await?
         else {
             return Ok(None);
         };
         let Some(recipient) =
-            Self::apply(client, recipient_id, ChipMove::GiftReceived, amount, None).await?
+            Self::apply(tx, recipient_id, ChipMove::GiftReceived, amount, None).await?
         else {
             bail!("gift credit returned no row");
         };

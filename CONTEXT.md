@@ -3,8 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-07-29 (Chip economy hardening: `ChipMove` closed enum + `UserChips::apply` choke point in `late-core/src/models/chips.rs`; `chip_user_changed` is now guaranteed by `user_chips` triggers in migration 128, fixing /gift never notifying; earnings exclusion lists derive from `ChipMove::excluded_earning_reasons()`; daily briscola's win payout now flows through `ChipMove::DailyBriscolaWin`)
-- Last updated: 2026-07-28 (daily briscola: the Lobby correspondence roster gains a seventh game, the first with a hidden hand. `DailyMatch::GAME_KIND_BRISCOLA` + `RESULT_MOST_POINTS`, reward key `daily_briscola_win_payout` seeded by migration 128, rules and renderer in `late-ssh/src/app/lobby/daily/briscola{,_ui}.rs`; the state holds both hands and only the server-side renderer keeps them apart)
+- Last updated: 2026-07-29 (Chip economy hardening: `ChipMove` closed enum + `UserChips::apply` choke point in `late-core/src/models/chips.rs`, both generated from one roster list; `chip_user_changed` is now guaranteed by `user_chips` triggers in migration 128, fixing /gift never notifying; `transfer_gift` takes a `Transaction`; earnings exclusion lists derive from `ChipMove::excluded_earning_reasons()`; shop prices must be positive (migration 129); daily briscola's win payout flows through `ChipMove::DailyBriscolaWin`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

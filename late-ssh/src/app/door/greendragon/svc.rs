@@ -105,8 +105,6 @@ const NEWS_PAGE_LIMIT: i64 = 200;
 /// flag exactly as upstream pairs `laston` with `loggedin`.
 pub const ONLINE_WINDOW_SECS: i64 = 900;
 
-/// Chip-ledger reason for the once-per-account dragon-kill payout.
-
 /// One character as the warrior roster / Hall of Fame reads it: the ranked
 /// stats decoded out of the saved blob, plus the presence signals. The
 /// session's own character appears too, as its last-saved snapshot.

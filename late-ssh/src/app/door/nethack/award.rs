@@ -60,7 +60,7 @@ impl NethackAwards {
     }
 
     fn spawn_grant(&self, user_id: Uuid, milestone: Milestone) {
-        let (reward_key, ledger_reason, category, detail) = match milestone {
+        let (reward_key, chip_move, category, detail) = match milestone {
             Milestone::Amulet => (
                 NETHACK_AMULET_REWARD_KEY,
                 ChipMove::NethackAmuletAcquired,
@@ -79,7 +79,7 @@ impl NethackAwards {
         let activity = self.activity.clone();
         tokio::spawn(async move {
             let grant = match chip_svc
-                .credit_lifetime_reward_template(user_id, reward_key, ledger_reason)
+                .credit_lifetime_reward_template(user_id, reward_key, chip_move)
                 .await
             {
                 Ok(grant) => grant,
