@@ -4,7 +4,7 @@ use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::chips::{ChipLeader, UserChips};
+use super::chips::{ChipLeader, ChipMove, UserChips};
 
 #[derive(Clone)]
 pub struct LeaderboardEntry {
@@ -132,12 +132,13 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
 }
 
 async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let excluded_reasons = ChipMove::excluded_earning_reasons();
     let rows = client
         .query(
             "WITH totals AS (
                 SELECT user_id, SUM(delta)::bigint AS earned
                 FROM chip_ledger
-                WHERE reason NOT IN ('floor_restore', 'shop_purchase')
+                WHERE reason <> ALL($2)
                   AND created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
                 GROUP BY user_id
                 HAVING SUM(delta) > 0
@@ -154,7 +155,7 @@ async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<R
             FROM ranked
             ORDER BY rank ASC, username ASC
             LIMIT $1",
-            &[&limit],
+            &[&limit, &excluded_reasons],
         )
         .await?;
 

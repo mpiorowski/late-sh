@@ -8,6 +8,7 @@
 //! award insert — so re-running across sessions or ticks is harmless.
 
 use late_core::db::Db;
+use late_core::models::chips::ChipMove;
 use late_core::models::profile_award::{
     NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY, award_badge,
     grant_unique_milestone_award,
@@ -19,9 +20,6 @@ use super::milestone::Milestone;
 use crate::app::activity::event::ActivityGame;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::chips::svc::ChipService;
-
-const AMULET_LEDGER_REASON: &str = "nethack_amulet_acquired";
-const ASCENSION_LEDGER_REASON: &str = "nethack_ascension";
 
 /// Services needed to mint a NetHack milestone reward. Cheap to clone (each
 /// field is itself a handle/clone), held on the per-session door `State`.
@@ -65,13 +63,13 @@ impl NethackAwards {
         let (reward_key, ledger_reason, category, detail) = match milestone {
             Milestone::Amulet => (
                 NETHACK_AMULET_REWARD_KEY,
-                AMULET_LEDGER_REASON,
+                ChipMove::NethackAmuletAcquired,
                 NETHACK_AMULET_AWARD_CATEGORY,
                 "acquired the Amulet of Yendor",
             ),
             Milestone::Ascension => (
                 NETHACK_ASCENSION_REWARD_KEY,
-                ASCENSION_LEDGER_REASON,
+                ChipMove::NethackAscension,
                 NETHACK_ASCENSION_AWARD_CATEGORY,
                 "ascended to Demigod",
             ),
