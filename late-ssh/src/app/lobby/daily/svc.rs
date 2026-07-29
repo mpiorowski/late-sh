@@ -337,9 +337,9 @@ impl DailyService {
         });
     }
 
-    /// Directed challenge addressed by username (the `/challenge @user` and
-    /// modal prompt path). Resolves against the DB so the target does not
-    /// need to be online.
+    /// Directed challenge addressed by username (the modal's directed-draft
+    /// prompt path). Resolves against the DB so the target does not need to
+    /// be online.
     pub fn post_challenge_to_username_task(
         &self,
         user_id: Uuid,

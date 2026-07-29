@@ -356,7 +356,11 @@ fn middle_label(
     match (table.led, table.history.last()) {
         (Some((seat, _)), _) => format!("{} led", subject(seat)),
         (None, Some(trick)) => {
-            format!("last trick · {} took {}", subject(trick.winner), trick.points)
+            format!(
+                "last trick · {} took {}",
+                subject(trick.winner),
+                trick.points
+            )
         }
         (None, None) => format!("{} lead", possessive(table.turn)),
     }

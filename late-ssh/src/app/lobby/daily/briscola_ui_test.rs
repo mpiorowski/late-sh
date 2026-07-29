@@ -53,9 +53,9 @@ fn rendered(state: &DailyBriscolaState, my_seat: usize, spectating: bool) -> Str
         String::new(),
     )
     .iter()
-        .flat_map(|line| line.spans.iter())
-        .map(|span| span.content.to_string())
-        .collect()
+    .flat_map(|line| line.spans.iter())
+    .map(|span| span.content.to_string())
+    .collect()
 }
 
 #[test]

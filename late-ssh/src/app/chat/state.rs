@@ -554,7 +554,6 @@ pub struct ChatState {
     requested_settings_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
-    requested_daily_challenge: Option<DailyChallengeRequest>,
     requested_pair: Option<PairRequest>,
     requested_icon_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
@@ -741,7 +740,6 @@ impl ChatState {
             requested_settings_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
-            requested_daily_challenge: None,
             requested_pair: None,
             requested_icon_picker: false,
             requested_message_search: None,
@@ -1017,10 +1015,6 @@ impl ChatState {
 
     pub fn take_requested_ultimate_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_ultimate_modal)
-    }
-
-    pub(crate) fn take_requested_daily_challenge(&mut self) -> Option<DailyChallengeRequest> {
-        self.requested_daily_challenge.take()
     }
 
     pub(crate) fn take_requested_pair(&mut self) -> Option<PairRequest> {
@@ -2134,22 +2128,6 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_message_search = Some(query);
             return None;
-        }
-
-        if let Some(parsed) = parse_challenge_command(&body) {
-            self.clear_composer_after_submit();
-            match parsed {
-                Some(request) => {
-                    self.requested_daily_challenge = Some(request);
-                    return None;
-                }
-                None => {
-                    return Some(Banner::error(&format!(
-                        "Usage: /challenge [@user] [{}]",
-                        crate::app::lobby::daily::games::DailyGame::usage_labels()
-                    )));
-                }
-            }
         }
 
         if let Some(parsed) = parse_pair_command(&body) {
@@ -5198,7 +5176,7 @@ pub(crate) fn parse_gift_command(input: &str) -> Option<GiftParse> {
 /// A `/pair` request drained by `handle_post_submit_requests` (the composer
 /// has no handle on `active_users`/the scratchpad registry of its own).
 /// Only the directed form exists: `/pair` has no open/anyone-can-claim
-/// lobby, unlike `/challenge`.
+/// lobby, unlike the daily challenge flow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PairRequest {
     Directed(String),
@@ -5224,55 +5202,6 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
         return Some(None);
     }
     Some(Some(PairRequest::Directed(username.to_string())))
-}
-
-/// A `/challenge` request drained by `handle_post_submit_requests` (the
-/// composer has no `DailyService` handle of its own).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DailyChallengeRequest {
-    /// Bare `/challenge`: open the Daily Games modal.
-    Modal,
-    /// `/challenge <game>`: post an open-lobby challenge.
-    Open(crate::app::lobby::daily::games::DailyGame),
-    /// `/challenge @user [game]`: post a directed challenge.
-    Directed(String, crate::app::lobby::daily::games::DailyGame),
-}
-
-/// `Some(Some(request))` on a valid `/challenge` line, `Some(None)` on a
-/// malformed one (usage banner), `None` when it isn't `/challenge` at all.
-/// Game names come from the daily roster (`chess`, `battleship`, ...);
-/// omitting one on a directed challenge defaults to the roster's first game.
-fn parse_challenge_command(input: &str) -> Option<Option<DailyChallengeRequest>> {
-    use crate::app::lobby::daily::games::DailyGame;
-
-    let trimmed = input.trim();
-    if trimmed == "/challenge" {
-        return Some(Some(DailyChallengeRequest::Modal));
-    }
-    let rest = trimmed.strip_prefix("/challenge ")?;
-    let mut tokens = rest.split_whitespace();
-    let first = tokens.next()?;
-    if let Some(game) = DailyGame::from_label(first) {
-        return Some(match tokens.next() {
-            None => Some(DailyChallengeRequest::Open(game)),
-            Some(_) => None,
-        });
-    }
-    let Some(username) = first.strip_prefix('@').filter(|name| !name.is_empty()) else {
-        return Some(None);
-    };
-    Some(match tokens.next() {
-        None => Some(DailyChallengeRequest::Directed(
-            username.to_string(),
-            DailyGame::ALL[0],
-        )),
-        Some(game_token) => match DailyGame::from_label(game_token) {
-            Some(game) if tokens.next().is_none() => {
-                Some(DailyChallengeRequest::Directed(username.to_string(), game))
-            }
-            _ => None,
-        },
-    })
 }
 
 fn parse_me_command(input: &str) -> Option<Option<String>> {

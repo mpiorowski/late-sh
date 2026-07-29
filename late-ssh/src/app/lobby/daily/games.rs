@@ -49,8 +49,7 @@ impl DailyGame {
         }
     }
 
-    /// Lowercase display name; also what `/challenge` accepts.
-    /// The lowercase token used in `/challenge <game>` and usage banners.
+    /// Lowercase display name; also the token used in usage banners.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chess => "chess",
@@ -133,7 +132,7 @@ impl DailyGame {
         Self::ALL.into_iter().find(|game| game.kind() == kind)
     }
 
-    /// Parse a user-typed game name (`/challenge battleship`).
+    /// Parse a user-typed game name (e.g. `battleship`).
     pub fn from_label(label: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
