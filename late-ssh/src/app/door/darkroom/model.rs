@@ -639,13 +639,7 @@ impl Game {
         }
         if self.building_count(Building::TradingPost) > 0 {
             for good in &data::TRADE_GOODS {
-                // Upstream offers the compass sight unseen, and it is the one
-                // good whose whole point is opening the path. It stays off the
-                // shelf until there is a path for it to open.
-                if good.good == Resource::Compass {
-                    continue;
-                }
-                if self.has_seen(good.good) {
+                if good.good == Resource::Compass || self.has_seen(good.good) {
                     self.seen_trades.insert(good.good);
                 }
             }

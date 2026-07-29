@@ -168,8 +168,8 @@ fn the_trading_post_only_sells_what_has_been_seen() {
         "iron has never been seen, so upstream does not offer it yet"
     );
     assert!(
-        !game.buy_available(trade_good(Resource::Compass)),
-        "upstream offers the compass sight unseen, but it buys a path that does not exist yet"
+        game.buy_available(trade_good(Resource::Compass)),
+        "the compass is the one thing offered sight unseen, and it opens the path"
     );
 }
 
