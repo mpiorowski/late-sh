@@ -7797,7 +7797,11 @@ fn shop_menu(c: &Character, weapon: bool) -> Vec<(String, bool)> {
             let label = if net >= 0 {
                 format!("{} (power {tier}) - {net} gold", name(tier))
             } else {
-                format!("{} (power {tier}) - trade down, {} gold back", name(tier), -net)
+                format!(
+                    "{} (power {tier}) - trade down, {} gold back",
+                    name(tier),
+                    -net
+                )
             };
             (label, c.gold as i64 >= net)
         })

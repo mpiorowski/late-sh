@@ -22,30 +22,58 @@
 //! knows about it.
 //!
 //! Module map (flat, like the other door domains):
-//! - `data`    — upstream balance tables, prose, and timing constants
-//! - `pace`    — our pacing layer: credit accrual, the daily cap, the slowdown
-//! - `model`   — the persistent `Game` and the rules acting on it
-//! - `sim`     — the settle-forward clock (no timers, no game loop)
-//! - `persist` — JSON save/load envelope with a schema version
-//! - `svc`     — DB-backed load/save service (cheap to clone)
-//! - `state`   — per-session state: the loaded game, panel, cursor, log
-//! - `ui`      — the live page and the Games-hub landing card
-//! - `screen`  — the `DoorGame` impl, launcher/active input, and `leave`
+//! - `data`       — upstream balance tables, prose, and timing constants
+//! - `pace`       — our pacing layer: credit accrual, daily cap, slowdown
+//! - `model`      — the persistent `Game` and the rules acting on it
+//! - `sim`        — the settle-forward village clock (no timers, no game loop)
+//! - `event`      — the scene machine and the fight
+//! - `scenes_*`   — the event pools: village, encounters, setpieces
+//! - `world_data` — the wasteland's tables: tiles, landmarks, weapons, weights
+//! - `world`      — map generation, walking, supplies, going home or not
+//! - `space`      — the ascent, and the way off this rock
+//! - `persist`    — JSON save/load envelope with a schema version
+//! - `svc`        — DB-backed load/save service (cheap to clone)
+//! - `state`      — per-session state: game, panel, cursor, log, what's live
+//! - `ui`         — the live page and the Games-hub landing card
+//! - `ui_event`   — the event modal and the fight panel
+//! - `ui_world`   — the masked map and the ascent
+//! - `screen`     — the `DoorGame` impl, launcher/active input, and `leave`
 pub mod data;
+pub mod event;
 pub mod model;
 pub mod pace;
 pub mod persist;
+pub mod scenes_encounters;
+pub mod scenes_setpieces;
+pub mod scenes_village;
 pub mod screen;
 pub mod sim;
+pub mod space;
 pub mod state;
 pub mod svc;
 pub mod ui;
+pub mod ui_event;
+pub mod ui_world;
+pub mod world;
+pub mod world_data;
+
+#[cfg(test)]
+mod event_test;
 
 #[cfg(test)]
 mod model_test;
 
 #[cfg(test)]
+mod space_test;
+
+#[cfg(test)]
+mod world_test;
+
+#[cfg(test)]
 mod pace_test;
+
+#[cfg(test)]
+mod persist_test;
 
 #[cfg(test)]
 mod sim_test;

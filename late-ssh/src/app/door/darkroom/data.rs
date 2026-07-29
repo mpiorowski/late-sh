@@ -40,11 +40,38 @@ pub enum Resource {
     Bait,
     Leather,
     CuredMeat,
+    Iron,
+    Coal,
+    Sulphur,
+    Steel,
+    Medicine,
+    Bullets,
+    EnergyCell,
+    AlienAlloy,
+    Torch,
+    BoneSpear,
+    IronSword,
+    SteelSword,
+    Rifle,
+    LaserRifle,
+    Bolas,
+    Grenade,
+    Bayonet,
+    Waterskin,
+    Cask,
+    WaterTank,
+    Rucksack,
+    Wagon,
+    Convoy,
+    LeatherArmour,
+    IronArmour,
+    SteelArmour,
+    Compass,
 }
 
 impl Resource {
     /// Every resource, in the order the stores panel lists them.
-    pub const ALL: [Resource; 10] = [
+    pub const ALL: [Resource; 37] = [
         Resource::Wood,
         Resource::Fur,
         Resource::Meat,
@@ -55,6 +82,33 @@ impl Resource {
         Resource::Bait,
         Resource::Leather,
         Resource::CuredMeat,
+        Resource::Iron,
+        Resource::Coal,
+        Resource::Sulphur,
+        Resource::Steel,
+        Resource::Medicine,
+        Resource::Bullets,
+        Resource::EnergyCell,
+        Resource::AlienAlloy,
+        Resource::Torch,
+        Resource::BoneSpear,
+        Resource::IronSword,
+        Resource::SteelSword,
+        Resource::Rifle,
+        Resource::LaserRifle,
+        Resource::Bolas,
+        Resource::Grenade,
+        Resource::Bayonet,
+        Resource::Waterskin,
+        Resource::Cask,
+        Resource::WaterTank,
+        Resource::Rucksack,
+        Resource::Wagon,
+        Resource::Convoy,
+        Resource::LeatherArmour,
+        Resource::IronArmour,
+        Resource::SteelArmour,
+        Resource::Compass,
     ];
 
     /// Lowercase label, exactly as upstream prints it.
@@ -70,13 +124,107 @@ impl Resource {
             Resource::Bait => "bait",
             Resource::Leather => "leather",
             Resource::CuredMeat => "cured meat",
+            Resource::Iron => "iron",
+            Resource::Coal => "coal",
+            Resource::Sulphur => "sulphur",
+            Resource::Steel => "steel",
+            Resource::Medicine => "medicine",
+            Resource::Bullets => "bullets",
+            Resource::EnergyCell => "energy cell",
+            Resource::AlienAlloy => "alien alloy",
+            Resource::Torch => "torch",
+            Resource::BoneSpear => "bone spear",
+            Resource::IronSword => "iron sword",
+            Resource::SteelSword => "steel sword",
+            Resource::Rifle => "rifle",
+            Resource::LaserRifle => "laser rifle",
+            Resource::Bolas => "bolas",
+            Resource::Grenade => "grenade",
+            Resource::Bayonet => "bayonet",
+            Resource::Waterskin => "waterskin",
+            Resource::Cask => "cask",
+            Resource::WaterTank => "water tank",
+            Resource::Rucksack => "rucksack",
+            Resource::Wagon => "wagon",
+            Resource::Convoy => "convoy",
+            Resource::LeatherArmour => "l armour",
+            Resource::IronArmour => "i armour",
+            Resource::SteelArmour => "s armour",
+            Resource::Compass => "compass",
+        }
+    }
+
+    /// Which bucket this belongs to, from the `type` field upstream hangs off
+    /// its `Craftables`/`TradeGoods`/`MiscItems` entries.
+    pub fn kind(self) -> ResourceKind {
+        match self {
+            Resource::Wood
+            | Resource::Meat
+            | Resource::Cloth
+            | Resource::Charm
+            | Resource::Bait
+            | Resource::Leather
+            | Resource::CuredMeat
+            | Resource::Fur
+            | Resource::Sulphur => ResourceKind::Basic,
+            Resource::Scales
+            | Resource::Teeth
+            | Resource::Iron
+            | Resource::Coal
+            | Resource::Steel
+            | Resource::Medicine
+            | Resource::Bullets
+            | Resource::EnergyCell
+            | Resource::AlienAlloy => ResourceKind::Good,
+            Resource::Torch => ResourceKind::Tool,
+            Resource::BoneSpear
+            | Resource::IronSword
+            | Resource::SteelSword
+            | Resource::Rifle
+            | Resource::LaserRifle
+            | Resource::Bolas
+            | Resource::Grenade
+            | Resource::Bayonet => ResourceKind::Weapon,
+            Resource::Waterskin
+            | Resource::Cask
+            | Resource::WaterTank
+            | Resource::Rucksack
+            | Resource::Wagon
+            | Resource::Convoy
+            | Resource::LeatherArmour
+            | Resource::IronArmour
+            | Resource::SteelArmour => ResourceKind::Upgrade,
+            Resource::Compass => ResourceKind::Special,
         }
     }
 }
 
-/// What the builder can put up. Upstream's `Craftables` of `type: 'building'`,
-/// cut to the village act: the workshop tier and beyond needs the wasteland to
-/// supply its materials, so it is not in this port yet.
+/// Upstream's `type` field, which decides where a store is listed and whether
+/// the workshop is needed to make it. The keys upstream leaves untyped (wood,
+/// fur, the trap drops) fall into its default bucket, which is `Basic` here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum ResourceKind {
+    Basic,
+    Good,
+    Tool,
+    Weapon,
+    Upgrade,
+    Special,
+}
+
+impl ResourceKind {
+    /// Upstream `Room.needsWorkshop`: the finer things need the tools.
+    pub fn needs_workshop(self) -> bool {
+        match self {
+            ResourceKind::Tool | ResourceKind::Weapon | ResourceKind::Upgrade => true,
+            ResourceKind::Basic | ResourceKind::Good | ResourceKind::Special => false,
+        }
+    }
+}
+
+/// Everything that can stand in the village. Upstream's `Craftables` of
+/// `type: 'building'`, plus the three mines, which are never offered by the
+/// builder: the world hands those over when their setpiece is cleared.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Building {
@@ -87,10 +235,16 @@ pub enum Building {
     TradingPost,
     Tannery,
     Smokehouse,
+    Workshop,
+    Steelworks,
+    Armoury,
+    IronMine,
+    CoalMine,
+    SulphurMine,
 }
 
 impl Building {
-    pub const ALL: [Building; 7] = [
+    pub const ALL: [Building; 13] = [
         Building::Trap,
         Building::Cart,
         Building::Hut,
@@ -98,6 +252,12 @@ impl Building {
         Building::TradingPost,
         Building::Tannery,
         Building::Smokehouse,
+        Building::Workshop,
+        Building::Steelworks,
+        Building::Armoury,
+        Building::IronMine,
+        Building::CoalMine,
+        Building::SulphurMine,
     ];
 
     pub fn label(self) -> &'static str {
@@ -109,6 +269,31 @@ impl Building {
             Building::TradingPost => "trading post",
             Building::Tannery => "tannery",
             Building::Smokehouse => "smokehouse",
+            Building::Workshop => "workshop",
+            Building::Steelworks => "steelworks",
+            Building::Armoury => "armoury",
+            Building::IronMine => "iron mine",
+            Building::CoalMine => "coal mine",
+            Building::SulphurMine => "sulphur mine",
+        }
+    }
+
+    /// Whether the builder offers this at all. The mines are the exception:
+    /// they only ever arrive from the wasteland, so they carry no cost and no
+    /// build line, and never appear as a build row.
+    pub fn builder_built(self) -> bool {
+        match self {
+            Building::Trap
+            | Building::Cart
+            | Building::Hut
+            | Building::Lodge
+            | Building::TradingPost
+            | Building::Tannery
+            | Building::Smokehouse
+            | Building::Workshop
+            | Building::Steelworks
+            | Building::Armoury => true,
+            Building::IronMine | Building::CoalMine | Building::SulphurMine => false,
         }
     }
 
@@ -121,11 +306,18 @@ impl Building {
             | Building::Lodge
             | Building::TradingPost
             | Building::Tannery
-            | Building::Smokehouse => Some(1),
+            | Building::Smokehouse
+            | Building::Workshop
+            | Building::Steelworks
+            | Building::Armoury
+            | Building::IronMine
+            | Building::CoalMine
+            | Building::SulphurMine => Some(1),
         }
     }
 
     /// Build cost given how many already stand (traps and huts get pricier).
+    /// The mines have none: they are not built, they are found.
     pub fn cost(self, built: u32) -> Vec<(Resource, i64)> {
         let n = i64::from(built);
         match self {
@@ -140,40 +332,74 @@ impl Building {
             Building::TradingPost => vec![(Resource::Wood, 400), (Resource::Fur, 100)],
             Building::Tannery => vec![(Resource::Wood, 500), (Resource::Fur, 50)],
             Building::Smokehouse => vec![(Resource::Wood, 600), (Resource::Meat, 50)],
+            Building::Workshop => vec![
+                (Resource::Wood, 800),
+                (Resource::Leather, 100),
+                (Resource::Scales, 10),
+            ],
+            Building::Steelworks => vec![
+                (Resource::Wood, 1500),
+                (Resource::Iron, 100),
+                (Resource::Coal, 100),
+            ],
+            Building::Armoury => vec![
+                (Resource::Wood, 3000),
+                (Resource::Steel, 100),
+                (Resource::Sulphur, 50),
+            ],
+            Building::IronMine | Building::CoalMine | Building::SulphurMine => Vec::new(),
         }
     }
 
     /// The line the builder says when this first becomes available.
-    pub fn available_msg(self) -> &'static str {
+    pub fn available_msg(self) -> Option<&'static str> {
         match self {
-            Building::Trap => {
-                "builder says she can make traps to catch any creatures might still be alive out there"
-            }
-            Building::Cart => "builder says she can make a cart for carrying wood",
-            Building::Hut => "builder says there are more wanderers. says they'll work, too.",
-            Building::Lodge => "villagers could help hunt, given the means",
-            Building::TradingPost => "a trading post would make commerce easier",
+            Building::Trap => Some(
+                "builder says she can make traps to catch any creatures might still be alive out there",
+            ),
+            Building::Cart => Some("builder says she can make a cart for carrying wood"),
+            Building::Hut => Some("builder says there are more wanderers. says they'll work, too."),
+            Building::Lodge => Some("villagers could help hunt, given the means"),
+            Building::TradingPost => Some("a trading post would make commerce easier"),
             Building::Tannery => {
-                "builder says leather could be useful. says the villagers could make it."
+                Some("builder says leather could be useful. says the villagers could make it.")
             }
             Building::Smokehouse => {
-                "should cure the meat, or it'll spoil. builder says she can fix something up."
+                Some("should cure the meat, or it'll spoil. builder says she can fix something up.")
             }
+            Building::Workshop => {
+                Some("builder says she could make finer things, if she had the tools")
+            }
+            Building::Steelworks => {
+                Some("builder says the villagers could make steel, given the tools")
+            }
+            Building::Armoury => {
+                Some("builder says it'd be useful to have a steady source of bullets")
+            }
+            Building::IronMine | Building::CoalMine | Building::SulphurMine => None,
         }
     }
 
     /// The line when one goes up.
-    pub fn build_msg(self) -> &'static str {
+    pub fn build_msg(self) -> Option<&'static str> {
         match self {
-            Building::Trap => "more traps to catch more creatures",
-            Building::Cart => "the rickety cart will carry more wood from the forest",
-            Building::Hut => "builder puts up a hut, out in the forest. says word will get around.",
-            Building::Lodge => "the hunting lodge stands in the forest, a ways out of town",
-            Building::TradingPost => {
-                "now the nomads have a place to set up shop, they might stick around a while"
+            Building::Trap => Some("more traps to catch more creatures"),
+            Building::Cart => Some("the rickety cart will carry more wood from the forest"),
+            Building::Hut => {
+                Some("builder puts up a hut, out in the forest. says word will get around.")
             }
-            Building::Tannery => "tannery goes up quick, on the edge of the village",
-            Building::Smokehouse => "builder finishes the smokehouse. she looks hungry.",
+            Building::Lodge => Some("the hunting lodge stands in the forest, a ways out of town"),
+            Building::TradingPost => {
+                Some("now the nomads have a place to set up shop, they might stick around a while")
+            }
+            Building::Tannery => Some("tannery goes up quick, on the edge of the village"),
+            Building::Smokehouse => Some("builder finishes the smokehouse. she looks hungry."),
+            Building::Workshop => Some("workshop's finally ready. builder's excited to get to it"),
+            Building::Steelworks => {
+                Some("a haze falls over the village as the steelworks fires up")
+            }
+            Building::Armoury => Some("armoury's done, welcoming back the weapons of the past."),
+            Building::IronMine | Building::CoalMine | Building::SulphurMine => None,
         }
     }
 
@@ -186,7 +412,13 @@ impl Building {
             | Building::Lodge
             | Building::TradingPost
             | Building::Tannery
-            | Building::Smokehouse => None,
+            | Building::Smokehouse
+            | Building::Workshop
+            | Building::Steelworks
+            | Building::Armoury
+            | Building::IronMine
+            | Building::CoalMine
+            | Building::SulphurMine => None,
         }
     }
 
@@ -196,7 +428,16 @@ impl Building {
             Building::Lodge => &[Job::Hunter, Job::Trapper],
             Building::Tannery => &[Job::Tanner],
             Building::Smokehouse => &[Job::Charcutier],
-            Building::Trap | Building::Cart | Building::Hut | Building::TradingPost => &[],
+            Building::IronMine => &[Job::IronMiner],
+            Building::CoalMine => &[Job::CoalMiner],
+            Building::SulphurMine => &[Job::SulphurMiner],
+            Building::Steelworks => &[Job::Steelworker],
+            Building::Armoury => &[Job::Armourer],
+            Building::Trap
+            | Building::Cart
+            | Building::Hut
+            | Building::TradingPost
+            | Building::Workshop => &[],
         }
     }
 }
@@ -211,10 +452,26 @@ pub enum Job {
     Trapper,
     Tanner,
     Charcutier,
+    IronMiner,
+    CoalMiner,
+    SulphurMiner,
+    Steelworker,
+    Armourer,
 }
 
 impl Job {
-    pub const ALL: [Job; 4] = [Job::Hunter, Job::Trapper, Job::Tanner, Job::Charcutier];
+    /// In upstream `_INCOME` order, which is the order the workers list uses.
+    pub const ALL: [Job; 9] = [
+        Job::Hunter,
+        Job::Trapper,
+        Job::Tanner,
+        Job::Charcutier,
+        Job::IronMiner,
+        Job::CoalMiner,
+        Job::SulphurMiner,
+        Job::Steelworker,
+        Job::Armourer,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -222,6 +479,11 @@ impl Job {
             Job::Trapper => "trapper",
             Job::Tanner => "tanner",
             Job::Charcutier => "charcutier",
+            Job::IronMiner => "iron miner",
+            Job::CoalMiner => "coal miner",
+            Job::SulphurMiner => "sulphur miner",
+            Job::Steelworker => "steelworker",
+            Job::Armourer => "armourer",
         }
     }
 
@@ -238,6 +500,314 @@ impl Job {
                 (Resource::Wood, -5.0),
                 (Resource::CuredMeat, 1.0),
             ],
+            Job::IronMiner => &[(Resource::CuredMeat, -1.0), (Resource::Iron, 1.0)],
+            Job::CoalMiner => &[(Resource::CuredMeat, -1.0), (Resource::Coal, 1.0)],
+            Job::SulphurMiner => &[(Resource::CuredMeat, -1.0), (Resource::Sulphur, 1.0)],
+            Job::Steelworker => &[
+                (Resource::Iron, -1.0),
+                (Resource::Coal, -1.0),
+                (Resource::Steel, 1.0),
+            ],
+            Job::Armourer => &[
+                (Resource::Steel, -1.0),
+                (Resource::Sulphur, -1.0),
+                (Resource::Bullets, 1.0),
+            ],
+        }
+    }
+}
+
+/// One thing the workshop can make. Upstream keeps these in the same
+/// `Craftables` table as the buildings, keyed by `type`; the buildings live on
+/// [`Building`] here, because only they carry an escalating cost.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Craftable {
+    pub item: Resource,
+    /// `None` where upstream leaves `maximum` undefined: torches and weapons
+    /// stack, upgrades are one apiece.
+    pub maximum: Option<u32>,
+    pub cost: &'static [(Resource, i64)],
+    /// The line when one is made. Upstream gives craftables no `availableMsg`,
+    /// so a new craft row simply appears without comment.
+    pub build_msg: &'static str,
+}
+
+/// Everything the workshop makes, in upstream's `Craftables` order. A `static`
+/// rather than a `const` so a row can hold a `&'static Craftable` and no code
+/// path has to look one up by name.
+pub static CRAFTABLES: [Craftable; 14] = [
+    Craftable {
+        item: Resource::Torch,
+        maximum: None,
+        cost: &[(Resource::Wood, 1), (Resource::Cloth, 1)],
+        build_msg: "a torch to keep the dark away",
+    },
+    Craftable {
+        item: Resource::Waterskin,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 50)],
+        build_msg: "this waterskin'll hold a bit of water, at least",
+    },
+    Craftable {
+        item: Resource::Cask,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 100), (Resource::Iron, 20)],
+        build_msg: "the cask holds enough water for longer expeditions",
+    },
+    Craftable {
+        item: Resource::WaterTank,
+        maximum: Some(1),
+        cost: &[(Resource::Iron, 100), (Resource::Steel, 50)],
+        build_msg: "never go thirsty again",
+    },
+    Craftable {
+        item: Resource::BoneSpear,
+        maximum: None,
+        cost: &[(Resource::Wood, 100), (Resource::Teeth, 5)],
+        build_msg: "this spear's not elegant, but it's pretty good at stabbing",
+    },
+    Craftable {
+        item: Resource::Rucksack,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 200)],
+        build_msg: "carrying more means longer expeditions to the wilds",
+    },
+    Craftable {
+        item: Resource::Wagon,
+        maximum: Some(1),
+        cost: &[(Resource::Wood, 500), (Resource::Iron, 100)],
+        build_msg: "the wagon can carry a lot of supplies",
+    },
+    Craftable {
+        item: Resource::Convoy,
+        maximum: Some(1),
+        cost: &[
+            (Resource::Wood, 1000),
+            (Resource::Iron, 200),
+            (Resource::Steel, 100),
+        ],
+        build_msg: "the convoy can haul mostly everything",
+    },
+    Craftable {
+        item: Resource::LeatherArmour,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 200), (Resource::Scales, 20)],
+        build_msg: "leather's not strong. better than rags, though.",
+    },
+    Craftable {
+        item: Resource::IronArmour,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 200), (Resource::Iron, 100)],
+        build_msg: "iron's stronger than leather",
+    },
+    Craftable {
+        item: Resource::SteelArmour,
+        maximum: Some(1),
+        cost: &[(Resource::Leather, 200), (Resource::Steel, 100)],
+        build_msg: "steel's stronger than iron",
+    },
+    Craftable {
+        item: Resource::IronSword,
+        maximum: None,
+        cost: &[
+            (Resource::Wood, 200),
+            (Resource::Leather, 50),
+            (Resource::Iron, 20),
+        ],
+        build_msg: "sword is sharp. good protection out in the wilds.",
+    },
+    Craftable {
+        item: Resource::SteelSword,
+        maximum: None,
+        cost: &[
+            (Resource::Wood, 500),
+            (Resource::Leather, 100),
+            (Resource::Steel, 20),
+        ],
+        build_msg: "the steel is strong, and the blade true.",
+    },
+    Craftable {
+        item: Resource::Rifle,
+        maximum: None,
+        cost: &[
+            (Resource::Wood, 200),
+            (Resource::Steel, 50),
+            (Resource::Sulphur, 50),
+        ],
+        build_msg: "black powder and bullets, like the old days.",
+    },
+];
+
+/// One thing the trading post sells. Upstream's `TradeGoods` entries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TradeGood {
+    pub good: Resource,
+    /// Only the compass is limited (`maximum: 1`); the rest stack.
+    pub maximum: Option<u32>,
+    pub cost: &'static [(Resource, i64)],
+}
+
+/// Everything the nomads sell, in upstream's `TradeGoods` order.
+pub static TRADE_GOODS: [TradeGood; 13] = [
+    TradeGood {
+        good: Resource::Scales,
+        maximum: None,
+        cost: &[(Resource::Fur, 150)],
+    },
+    TradeGood {
+        good: Resource::Teeth,
+        maximum: None,
+        cost: &[(Resource::Fur, 300)],
+    },
+    TradeGood {
+        good: Resource::Iron,
+        maximum: None,
+        cost: &[(Resource::Fur, 150), (Resource::Scales, 50)],
+    },
+    TradeGood {
+        good: Resource::Coal,
+        maximum: None,
+        cost: &[(Resource::Fur, 200), (Resource::Teeth, 50)],
+    },
+    TradeGood {
+        good: Resource::Steel,
+        maximum: None,
+        cost: &[
+            (Resource::Fur, 300),
+            (Resource::Scales, 50),
+            (Resource::Teeth, 50),
+        ],
+    },
+    TradeGood {
+        good: Resource::Medicine,
+        maximum: None,
+        cost: &[(Resource::Scales, 50), (Resource::Teeth, 30)],
+    },
+    TradeGood {
+        good: Resource::Bullets,
+        maximum: None,
+        cost: &[(Resource::Scales, 10)],
+    },
+    TradeGood {
+        good: Resource::EnergyCell,
+        maximum: None,
+        cost: &[(Resource::Scales, 10), (Resource::Teeth, 10)],
+    },
+    TradeGood {
+        good: Resource::Bolas,
+        maximum: None,
+        cost: &[(Resource::Teeth, 10)],
+    },
+    TradeGood {
+        good: Resource::Grenade,
+        maximum: None,
+        cost: &[(Resource::Scales, 100), (Resource::Teeth, 50)],
+    },
+    TradeGood {
+        good: Resource::Bayonet,
+        maximum: None,
+        cost: &[(Resource::Scales, 500), (Resource::Teeth, 250)],
+    },
+    TradeGood {
+        good: Resource::AlienAlloy,
+        maximum: None,
+        cost: &[
+            (Resource::Fur, 1500),
+            (Resource::Scales, 750),
+            (Resource::Teeth, 300),
+        ],
+    },
+    TradeGood {
+        good: Resource::Compass,
+        maximum: Some(1),
+        cost: &[
+            (Resource::Fur, 400),
+            (Resource::Scales, 20),
+            (Resource::Teeth, 10),
+        ],
+    },
+];
+
+/// What the wanderer has learned, from `engine.js` `Engine.Perks`. Perks are
+/// permanent, and every one of them changes a number in the wasteland rather
+/// than unlocking anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Perk {
+    Boxer,
+    MartialArtist,
+    UnarmedMaster,
+    Barbarian,
+    SlowMetabolism,
+    DesertRat,
+    Evasive,
+    Precise,
+    Scout,
+    Stealthy,
+    Gastronome,
+}
+
+impl Perk {
+    pub const ALL: [Perk; 11] = [
+        Perk::Boxer,
+        Perk::MartialArtist,
+        Perk::UnarmedMaster,
+        Perk::Barbarian,
+        Perk::SlowMetabolism,
+        Perk::DesertRat,
+        Perk::Evasive,
+        Perk::Precise,
+        Perk::Scout,
+        Perk::Stealthy,
+        Perk::Gastronome,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Perk::Boxer => "boxer",
+            Perk::MartialArtist => "martial artist",
+            Perk::UnarmedMaster => "unarmed master",
+            Perk::Barbarian => "barbarian",
+            Perk::SlowMetabolism => "slow metabolism",
+            Perk::DesertRat => "desert rat",
+            Perk::Evasive => "evasive",
+            Perk::Precise => "precise",
+            Perk::Scout => "scout",
+            Perk::Stealthy => "stealthy",
+            Perk::Gastronome => "gastronome",
+        }
+    }
+
+    pub fn desc(self) -> &'static str {
+        match self {
+            Perk::Boxer => "punches do more damage",
+            Perk::MartialArtist => "punches do even more damage.",
+            Perk::UnarmedMaster => "punch twice as fast, and with even more force",
+            Perk::Barbarian => "melee weapons deal more damage",
+            Perk::SlowMetabolism => "go twice as far without eating",
+            Perk::DesertRat => "go twice as far without drinking",
+            Perk::Evasive => "dodge attacks more effectively",
+            Perk::Precise => "land blows more often",
+            Perk::Scout => "see farther",
+            Perk::Stealthy => "better avoid conflict in the wild",
+            Perk::Gastronome => "restore more health when eating",
+        }
+    }
+
+    /// The line printed the moment it is learned.
+    pub fn notify(self) -> &'static str {
+        match self {
+            Perk::Boxer => "learned to throw punches with purpose",
+            Perk::MartialArtist => "learned to fight quite effectively without weapons",
+            Perk::UnarmedMaster => "learned to strike faster without weapons",
+            Perk::Barbarian => "learned to swing weapons with force",
+            Perk::SlowMetabolism => "learned how to ignore the hunger",
+            Perk::DesertRat => "learned to love the dry air",
+            Perk::Evasive => "learned to be where they're not",
+            Perk::Precise => "learned to predict their movement",
+            Perk::Scout => "learned to look ahead",
+            Perk::Stealthy => "learned how not to be seen",
+            Perk::Gastronome => "learned to make the most of food",
         }
     }
 }
@@ -247,6 +817,14 @@ pub const GATHERER_YIELD: (Resource, f64) = (Resource::Wood, 1.0);
 
 /// What the builder brings in once she is helping.
 pub const BUILDER_YIELD: (Resource, f64) = (Resource::Wood, 2.0);
+
+/// What the thieves take per income tick while they are at it
+/// (`state_manager.js` `startThieves`).
+pub const THIEF_SKIM: &[(Resource, i64)] = &[
+    (Resource::Wood, -10),
+    (Resource::Fur, -5),
+    (Resource::Meat, -5),
+];
 
 /// How hot the fire is burning.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -429,3 +1007,8 @@ pub const MSG_GATHER_WOOD: &str = "dry brush and dead branches litter the forest
 
 /// `Outside.onArrival`, printed once on the first visit outside.
 pub const MSG_SEEN_FOREST: &str = "the sky is grey and the wind blows relentlessly";
+
+/// The legends over the three groups of room buttons (`updateBuildButtons`).
+pub const SECTION_BUILD: &str = "build:";
+pub const SECTION_CRAFT: &str = "craft:";
+pub const SECTION_BUY: &str = "buy:";
