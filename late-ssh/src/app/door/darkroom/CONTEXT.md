@@ -173,9 +173,12 @@ because a trip is paid for in supplies per move, not in time.
 
 **Expeditions park.** The in-flight trip lives in `Game::expedition` and is
 saved on every move, so a dropped SSH connection or an Esc leaves the wanderer
-standing where they were rather than losing the trip. Upstream loses everything
-when the tab closes; that is a deliberate softening, and it costs nothing
-because supplies burn per move. Death still discards the trip and the pack.
+standing where they were rather than losing the trip. A fight in progress
+parks with it (`Expedition::combat`) and resumes on return, whichever way the
+session ended: leaving the door must never be a way to flee one. Upstream
+loses everything when the tab closes; that is a deliberate softening, and it
+costs nothing because supplies burn per move. Death still discards the trip
+and the pack.
 
 **In the village, almost nothing decays.** Stores, buildings, population and
 unlocked trades mostly only go up. The exceptions all arrive with the
@@ -185,10 +188,9 @@ Absence costs progress, never possessions. That bites early (the builder arc
 stalls whenever the room is below Warm, so a dead fire freezes her; and she
 refuses to build at all while the room is Cold or worse), and mostly stops
 biting once she is Helping, because she stokes the fire herself and out-earns
-what she burns. Past that point the daily cap is the only brake, and the cold
-gate on building is the one residual reason a cold room still costs anything.
-If v1 turns out to need a reason to check in, the fire is the only lever that
-exists; play a week before adding one.
+what she burns. Past that point the brakes are the daily cap and the supply
+lines an expedition needs; the village events only ever fire while somebody is
+in the door, so an absent player is never robbed of anything but time.
 
 **Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /
 `audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets), roughly
@@ -220,3 +222,16 @@ exists; play a week before adding one.
   dispatched by `flush_pending_escape` in `app/input.rs`, which has one explicit
   arm per screen. Wiring `handle_key` alone leaves Esc dead: the door needs its
   own arm there (next to Green Dragon's) to be leavable at all.
+- **`Game::outfit` is a plan, not a claim.** The store room can shrink after
+  packing (the charcutier eats meat, the thieves skim fur), so `world::embark`
+  clamps every line to what the shelf still holds, and `can_embark` gates on
+  the packed-and-still-held cured meat, exactly like upstream's live
+  outfitting screen. Skip the clamp and a stale loadout conjures supplies.
+- **Never clear `Expedition::combat` on the way out of the door.** `park()`
+  snapshots the fight before dropping the modal; clearing it instead would
+  turn Esc into a free flee button, while a dropped connection still resumed
+  the fight. The two exits must stay equivalent.
+- **The thief skim is not a starved trade.** Every other income source skips
+  its whole payout when an input runs short; the skim drains to zero and books
+  only what was actually there into `Game::stolen` (upstream `addStolen`),
+  because that is the pile "hang him" gives back.
