@@ -56,6 +56,7 @@ pub enum ChipMove {
     DailyReversiWin,
     DailyCheckersWin,
     DailyBackgammonWin,
+    DailyBriscolaWin,
     TronWin,
     SsnakeWin,
     GreendragonDragonSlain,
@@ -78,7 +79,7 @@ pub enum ChipDirection {
 }
 
 impl ChipMove {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Credit,
         Self::Bet,
         Self::FloorRestore,
@@ -96,6 +97,7 @@ impl ChipMove {
         Self::DailyReversiWin,
         Self::DailyCheckersWin,
         Self::DailyBackgammonWin,
+        Self::DailyBriscolaWin,
         Self::TronWin,
         Self::SsnakeWin,
         Self::GreendragonDragonSlain,
@@ -125,6 +127,7 @@ impl ChipMove {
             Self::DailyReversiWin => "daily_reversi_win",
             Self::DailyCheckersWin => "daily_checkers_win",
             Self::DailyBackgammonWin => "daily_backgammon_win",
+            Self::DailyBriscolaWin => "daily_briscola_win",
             Self::TronWin => "tron_win",
             Self::SsnakeWin => "ssnake_win",
             Self::GreendragonDragonSlain => "greendragon_dragon_slain",
@@ -153,6 +156,7 @@ impl ChipMove {
             | Self::DailyReversiWin
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::SsnakeWin
             | Self::GreendragonDragonSlain
@@ -177,6 +181,7 @@ impl ChipMove {
             | Self::DailyReversiWin
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::SsnakeWin
             | Self::GreendragonDragonSlain
@@ -210,6 +215,7 @@ impl ChipMove {
             | Self::DailyReversiWin
             | Self::DailyCheckersWin
             | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::SsnakeWin
             | Self::GreendragonDragonSlain

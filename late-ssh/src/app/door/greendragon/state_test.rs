@@ -228,7 +228,10 @@ fn fight_menu_offers_targets_in_multi_fights() {
     assert_eq!(strikes.len(), 1);
     assert!(strikes[0].0.contains("3 HP"));
     // Multi-foe fights phrase the finish row per upstream's auto=full split.
-    assert!(rows.iter().any(|(l, _)| l == "Auto: until your target falls"));
+    assert!(
+        rows.iter()
+            .any(|(l, _)| l == "Auto: until your target falls")
+    );
     // Re-aiming: the plan's Target row carries the foe index.
     let plan = fight_rows(&c, Some(&enc));
     assert!(plan.iter().any(|(r, _, _)| *r == FightRow::Target(1)));
