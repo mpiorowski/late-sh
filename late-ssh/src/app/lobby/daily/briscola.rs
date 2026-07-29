@@ -185,7 +185,7 @@ impl Card {
         self.rank.points()
     }
 
-    /// `A♥` — the move-feed and history spelling.
+    /// `A♥`: the move-feed and history spelling.
     pub fn label(self) -> String {
         format!("{}{}", self.rank.label(), self.suit.symbol())
     }
@@ -279,16 +279,19 @@ pub struct PlayOutcome {
 }
 
 impl PlayOutcome {
-    /// `A♥` / `A♥, takes 21` / `A♥, takes 21, 64-56` — the move-feed label.
+    /// `A♥` / `A♥, takes 21` / `A♥, loses 21, 64-56`: the move-feed label,
+    /// spoken from the mover's side, so a card that closes a trick says
+    /// whether the mover took it or gave it away.
     pub fn label(&self) -> String {
         let card = self.card.label();
         let Some(trick) = self.trick else {
             return card;
         };
-        let taken = if trick.points == 0 {
-            format!("{card}, takes the trick")
-        } else {
-            format!("{card}, takes {}", trick.points)
+        let taken = match (trick.winner == self.seat, trick.points) {
+            (true, 0) => format!("{card}, takes the trick"),
+            (true, points) => format!("{card}, takes {points}"),
+            (false, 0) => format!("{card}, loses the trick"),
+            (false, points) => format!("{card}, loses {points}"),
         };
         match self.finish {
             None => taken,

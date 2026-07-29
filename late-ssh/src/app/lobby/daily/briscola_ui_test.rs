@@ -41,8 +41,18 @@ fn table_deal() -> DailyBriscolaState {
 
 fn rendered(state: &DailyBriscolaState, my_seat: usize, spectating: bool) -> String {
     let table = state.table();
-    table_lines(state, &table, my_seat, None, spectating, Tier::Full)
-        .iter()
+    // The middle label needs a board to name players, so tests pass it blank;
+    // the assertions here are about which cards are drawn.
+    table_lines(
+        state,
+        &table,
+        my_seat,
+        None,
+        spectating,
+        Tier::Full,
+        String::new(),
+    )
+    .iter()
         .flat_map(|line| line.spans.iter())
         .map(|span| span.content.to_string())
         .collect()
@@ -97,7 +107,7 @@ fn the_table_shows_the_open_trick_then_the_one_just_taken() {
     state
         .apply_play(card(Rank::Three, CardSuit::Hearts))
         .expect("seat 1 answers");
-    // The trick is over, so both its cards stay up until the next lead — a
+    // The trick is over, so both its cards stay up until the next lead: a
     // player coming back a day later needs to see what happened.
     let after = rendered(&state, 1, false);
     assert!(after.contains("A♥"), "the lead stays on the table");

@@ -56,7 +56,7 @@ fn the_follower_takes_the_trick_by_rank_or_by_trump() {
     let lead = card(Rank::King, CardSuit::Hearts);
 
     // Following suit: rank decides, and the briscola order is not the face
-    // order — a three beats a king.
+    // order: a three beats a king.
     assert!(takes_trick(
         card(Rank::Three, CardSuit::Hearts),
         lead,
@@ -130,6 +130,17 @@ fn the_trick_winner_draws_first_and_leads_the_next_trick() {
         Some(&card(Rank::Six, CardSuit::Hearts))
     );
     assert_eq!(state.stock_remaining(), DRAWS - 2);
+
+    // The next trick goes the other way, and the label follows the mover:
+    // seat 1's answer takes this one.
+    state
+        .apply_play(card(Rank::Two, CardSuit::Diamonds))
+        .expect("the winner leads the second trick");
+    let outcome = state
+        .apply_play(card(Rank::Four, CardSuit::Diamonds))
+        .expect("seat 1 answers");
+    assert_eq!(outcome.label(), "4♦, takes the trick");
+    assert_eq!(state.table().turn, 1, "the new winner leads");
 }
 
 #[test]
@@ -188,7 +199,8 @@ fn taking_sixty_one_points_finishes_the_match() {
 
     assert_eq!(outcome.finish, Some(MatchEnd::Winner(0)));
     assert_eq!(outcome.totals, [63, 0]);
-    assert_eq!(outcome.label(), "3♣, takes 21, 63-0");
+    // The label speaks from the mover's side: seat 1's answer lost the trick.
+    assert_eq!(outcome.label(), "3♣, loses 21, 63-0");
 }
 
 #[test]

@@ -1281,8 +1281,11 @@ impl DailyState {
         if table.turn != seat {
             return;
         }
-        // The cursor can sit past the end of a hand that just shrank.
+        // The cursor can sit past the end of a shrunken hand, e.g. after a
+        // click on one of the fixed slots a card no longer fills; reel it
+        // back onto the hand instead of leaving the marker on nothing.
         let Some(&card) = table.hands[seat].get(board.cursor) else {
+            board.cursor = table.hands[seat].len().saturating_sub(1);
             return;
         };
         if briscola.state.apply_play(card).is_err() {

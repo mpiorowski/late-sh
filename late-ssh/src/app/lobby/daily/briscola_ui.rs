@@ -1,7 +1,7 @@
 //! Full-screen daily briscola board: your hand across the bottom, the trump
 //! and the table in the middle, the opponent's hand as backs along the top.
-//! Shares the daily board chrome — status line, player bars, pinned key
-//! hints — with the chess and connect four renderers.
+//! Shares the daily board chrome (status line, player bars, pinned key
+//! hints) with the chess and connect four renderers.
 //!
 //! This is the file that keeps briscola's hidden information hidden. The
 //! match state holds both hands and the whole stock (see `briscola.rs`), so
@@ -88,7 +88,7 @@ impl Tier {
 }
 
 /// What a card slot shows. `Back` and `Empty` are how the opponent's hand and
-/// the untaken half of a trick are drawn — no card ever reaches them.
+/// the untaken half of a trick are drawn; no card ever reaches them.
 enum Slot {
     Face(Card),
     Back,
@@ -191,6 +191,7 @@ pub(crate) fn draw(
             my_turn.then_some(board.cursor),
             board.spectating,
             tier,
+            middle_label(board, state, &table, my_seat),
         )),
         table_rect,
     );
@@ -227,7 +228,8 @@ fn suit_color(card: Card) -> Color {
 }
 
 /// The whole table: the opponent's backs, the trump and the trick, then your
-/// hand with the cursor marker under it.
+/// hand with the cursor marker under it. The middle label arrives pre-built
+/// because naming the players needs the board, which this stays free of.
 fn table_lines(
     state: &DailyBriscolaState,
     table: &Table,
@@ -235,6 +237,7 @@ fn table_lines(
     cursor: Option<usize>,
     spectating: bool,
     tier: Tier,
+    middle: String,
 ) -> Vec<Line<'static>> {
     let width = tier.table_width() as usize;
     let mut lines = Vec::new();
@@ -254,10 +257,10 @@ fn table_lines(
     lines.push(Line::raw(""));
 
     lines.extend(centered(middle_row(state, table, tier), width));
-    lines.push(centered_label(middle_label(table, my_seat), width));
+    lines.push(centered_label(middle, width));
     lines.push(Line::raw(""));
 
-    // Your hand, face up — unless you are only watching.
+    // Your hand, face up, unless you are only watching.
     let my_hand: Vec<(Slot, Style)> = (0..briscola::HAND)
         .map(|index| match table.hands[my_seat].get(index) {
             Some(_) if spectating => (Slot::Back, Style::default().fg(theme::BORDER_DIM())),
@@ -322,12 +325,40 @@ fn trick_slots(table: &Table) -> ((Slot, Style), (Slot, Style)) {
     }
 }
 
-fn middle_label(table: &Table, my_seat: usize) -> String {
-    let who = |seat: usize| if seat == my_seat { "you" } else { "they" };
+/// The label under the trick. A player reads "you"/"they"; a spectator holds
+/// no seat, so they read the players' names instead of being addressed as
+/// seat 0. The fresh-match case names whoever actually leads, which is not
+/// always the viewer.
+fn middle_label(
+    board: &DailyBoardState,
+    state: &DailyBriscolaState,
+    table: &Table,
+    my_seat: usize,
+) -> String {
+    let subject = |seat: usize| {
+        if board.spectating {
+            name_for(board, state.user_of(seat))
+        } else if seat == my_seat {
+            "you".to_string()
+        } else {
+            "they".to_string()
+        }
+    };
+    let possessive = |seat: usize| {
+        if board.spectating {
+            format!("{}'s", name_for(board, state.user_of(seat)))
+        } else if seat == my_seat {
+            "your".to_string()
+        } else {
+            "their".to_string()
+        }
+    };
     match (table.led, table.history.last()) {
-        (Some((seat, _)), _) => format!("{} led", who(seat)),
-        (None, Some(trick)) => format!("last trick · {} took {}", who(trick.winner), trick.points),
-        (None, None) => "your lead".to_string(),
+        (Some((seat, _)), _) => format!("{} led", subject(seat)),
+        (None, Some(trick)) => {
+            format!("last trick · {} took {}", subject(trick.winner), trick.points)
+        }
+        (None, None) => format!("{} lead", possessive(table.turn)),
     }
 }
 
