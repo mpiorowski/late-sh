@@ -71,7 +71,7 @@ Host (`late-codekeep`):
 - Compose uses `dev-codekeep` plus the `codekeep-data` named volume.
 - `infra/codekeep.tf` owns the 1Gi RWO `codekeep-save` PVC.
 - `infra/service-codekeep.tf` owns the one-replica, kill-before-create Deployment and internal Service on 2328. The init container chowns the mounted root to `late`.
-- The standard deploy builds `runtime-codekeep` alongside `runtime-ssh`. Other deploy workflows preserve the live CodeKeep image tag through the required Terraform input.
+- The standard deploy builds `runtime-codekeep` alongside `runtime-ssh`; `.github/workflows/deploy_codekeep.yml` builds and rolls out only CodeKeep for `-codekeep` releases. Other deploy workflows preserve the live CodeKeep image tag through the required Terraform input.
 
 ## Critical invariants
 
