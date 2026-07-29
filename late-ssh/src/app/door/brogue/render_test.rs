@@ -2,7 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
-use super::{clear_canvas_black, clear_letterbox, grid_rect};
+use super::{clear_canvas_black, grid_rect, reset_door_area};
 
 fn buf_with_bg(area: Rect, bg: Color) -> Buffer {
     let mut buf = Buffer::empty(area);
@@ -64,27 +64,30 @@ fn only_touches_cells_inside_the_area() {
 }
 
 #[test]
-fn letterbox_resets_the_page_background() {
-    // The root paints the page over BG_CANVAS; after the clear, every cell in
-    // the door area must be back to the terminal-default canvas.
+fn door_area_resets_to_the_shared_canvas() {
+    // Whatever the frame left in the door area, the clear puts every cell back
+    // to `Reset`, which the app's OSC 11 push resolves to the theme background.
     let area = Rect::new(0, 0, 6, 3);
     let mut buf = buf_with_bg(area, Color::Rgb(70, 75, 95));
-    clear_letterbox(&mut buf, area);
+    reset_door_area(&mut buf, area);
     assert_eq!(buf[(0, 0)].style().bg, Some(Color::Reset));
     assert_eq!(buf[(5, 2)].style().bg, Some(Color::Reset));
     assert_eq!(buf[(3, 1)].symbol(), " ");
 }
 
+/// Brogue's grid is a fixed 100x34, so a roomy viewport leaves slack. It goes
+/// to the right and bottom edges: the game starts in the viewport's top-left
+/// corner like every other door.
 #[test]
-fn grid_centers_inside_a_larger_viewport() {
+fn grid_pins_top_left_inside_a_larger_viewport() {
     let parser = vt100::Parser::new(4, 10, 0);
     let area = Rect::new(2, 1, 20, 10);
     let grid = grid_rect(area, parser.screen());
-    assert_eq!(grid, Rect::new(2 + 5, 1 + 3, 10, 4));
+    assert_eq!(grid, Rect::new(2, 1, 10, 4));
 }
 
 #[test]
-fn grid_pins_top_left_when_viewport_is_smaller() {
+fn grid_clamps_to_a_smaller_viewport() {
     let parser = vt100::Parser::new(4, 10, 0);
     let area = Rect::new(0, 0, 6, 2);
     let grid = grid_rect(area, parser.screen());

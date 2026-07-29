@@ -121,6 +121,13 @@ fn pvp_death_costs_the_purse_and_fifteen_percent() {
     assert_eq!(c.gold, 0);
     assert_eq!(c.experience, 850); // 15% lost (pvpattlose)
     assert!(!c.alive);
+    // Companions survive every death — upstream wipes them only on a
+    // dragon kill (`dragon.php:227`).
+    assert_eq!(c.companions.len(), 1);
+    c.alive = true;
+    c.die();
+    assert_eq!(c.companions.len(), 1);
+    c.slay_dragon(false);
     assert!(c.companions.is_empty());
 }
 
@@ -366,14 +373,33 @@ fn advancing_levels_adds_hp_and_full_heals() {
 fn weapon_trade_in_is_credited() {
     let mut c = Character::new("hero", 0);
     // First weapon, no trade-in: tier 1 costs 48.
-    assert_eq!(c.weapon_upgrade_cost(1), Some(48));
-    assert!(c.buy_weapon(1));
+    assert_eq!(c.weapon_swap_cost(1), Some(48));
+    assert_eq!(c.buy_weapon(1), Some(48));
     assert_eq!(c.weapon_tier, 1);
     assert_eq!(c.gold, 2); // 50 - 48
-    // Can't "upgrade" to a lower/equal tier.
-    assert_eq!(c.weapon_upgrade_cost(1), None);
+    // Re-buying the equipped row is refused.
+    assert_eq!(c.weapon_swap_cost(1), None);
     // Tier 2 costs 225 minus 75% of tier-1's 48 = 225 - 36 = 189.
-    assert_eq!(c.weapon_upgrade_cost(2), Some(189));
+    assert_eq!(c.weapon_swap_cost(2), Some(189));
+}
+
+#[test]
+fn shop_sells_the_whole_ladder_on_gold_alone() {
+    // Upstream gates nothing on player level (`weapons.php`): a level-1
+    // warrior with the gold walks out with the damage-15 weapon.
+    let mut c = Character::new("hero", 0);
+    c.gold = 20_000;
+    assert_eq!(c.level, 1);
+    assert_eq!(c.weapon_swap_cost(15), Some(10_350));
+    assert_eq!(c.buy_weapon(15), Some(10_350));
+    assert_eq!(c.weapon_tier, 15);
+    // Trading down pays out: tier 15's trade-in (7 763) exceeds tier 1's 48.
+    let refund = c.weapon_swap_cost(1).unwrap();
+    assert_eq!(refund, 48 - 7_763);
+    let gold_before = c.gold;
+    assert_eq!(c.buy_weapon(1), Some(refund));
+    assert_eq!(c.gold, (gold_before as i64 - refund) as u64);
+    assert_eq!(c.weapon_tier, 1);
 }
 
 #[test]

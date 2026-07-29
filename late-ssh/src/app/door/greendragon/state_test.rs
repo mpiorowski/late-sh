@@ -14,8 +14,11 @@ fn village_menu_gates_on_state() {
     let rows = village_menu(&c, false, false);
     // Forest row disabled with no turns.
     assert!(!rows[0].1);
-    // Healer disabled at full health.
-    let healer = rows
+    // The healer is a forest amenity (`lib/forest.php:12`), not a village
+    // building; its row is disabled at full health.
+    assert!(!rows.iter().any(|(l, _)| l.starts_with("The Mendery")));
+    let forest_rows = forest_menu(&c);
+    let healer = forest_rows
         .iter()
         .find(|(l, _)| l.starts_with("The Mendery"))
         .unwrap();
@@ -41,34 +44,37 @@ fn dragon_offered_at_max_level() {
     assert!(rows.iter().any(|(l, _)| l.starts_with("Seek Out")));
     // The dragon fight offers no Flee row; skills stay
     // (`dragon.php` `fightnav(true, false)`).
-    let rows = fight_menu(&c, FoeKind::Dragon);
+    let rows = fight_menu(&c, Some(&test_enc(FoeKind::Dragon)));
     assert!(!rows.iter().any(|(l, _)| l == "Flee"));
     assert!(rows.len() > 1 || c.specialty == Specialty::None);
 }
 
 #[test]
-fn shop_lists_affordable_upgrades() {
-    let mut c = lvl(2); // level 2 stocks tiers 1 and 2
-    c.gold = 100; // affords tier 1 (48) but not tier 2 (189 after trade-in)
-    let tiers = available_tiers(&c, true);
-    assert_eq!(tiers[0], (1, 48));
+fn shop_lists_affordable_rows() {
+    let mut c = lvl(2);
+    c.gold = 100; // affords tier 1 (48) but not tier 2 (225)
     let menu = shop_menu(&c, true);
     assert!(menu[0].1); // tier 1 affordable
     assert!(!menu[1].1); // tier 2 not
 }
 
 #[test]
-fn shop_is_level_gated() {
-    // Even with limitless gold, a shop only stocks gear up to your level.
+fn shop_sells_whole_ladder_regardless_of_level() {
+    // Upstream lists the full 15-row rack and gates only on gold
+    // (`weapons.php`); no player-level gate.
     let mut c = lvl(3);
     c.gold = 1_000_000;
-    let tiers = available_tiers(&c, true);
-    assert!(tiers.iter().all(|(t, _)| *t <= 3));
-    assert_eq!(tiers.last().unwrap().0, 3);
-    // Out of upgrades for your rank shows the level-gated nudge, not "finest".
+    let menu = shop_menu(&c, true);
+    assert_eq!(menu.len(), data::COST_LADDER.len());
+    assert!(menu.iter().all(|(_, enabled)| *enabled));
+    // The equipped row is the one disabled row, marked as such.
     c.weapon_tier = 3;
     let menu = shop_menu(&c, true);
-    assert!(menu[0].0.contains("Advance a level"));
+    assert!(menu[2].0.contains("equipped"));
+    assert!(!menu[2].1);
+    // A weaker row trades down for a payout and stays selectable.
+    assert!(menu[0].0.contains("gold back"));
+    assert!(menu[0].1);
 }
 
 #[test]
@@ -153,22 +159,85 @@ fn graveyard_menu_gates_on_favor_and_fights() {
     assert!(!graveyard_menu(&c)[1].1);
 }
 
+fn test_foe(hp: u32) -> Foe {
+    Foe {
+        name: "Shade".into(),
+        weapon: "claw".into(),
+        combatant: Combatant {
+            attack: 1,
+            defense: 1,
+        },
+        hp,
+        max_hp: hp.max(1),
+        reward_gold: 0,
+        reward_exp: 0,
+        level: 1,
+        bandit: false,
+    }
+}
+
+fn test_enc(kind: FoeKind) -> Encounter {
+    Encounter::single(test_foe(5), kind)
+}
+
 #[test]
 fn fight_menu_hides_skills_from_the_dead() {
     let mut c = lvl(5);
     c.choose_specialty(Specialty::Thief);
-    // Alive: Attack + 4 skills + Flee.
-    assert_eq!(fight_menu(&c, FoeKind::Creature).len(), 6);
-    // PvP strips skills AND the way out ("honor" and "pride").
-    let rows = fight_menu(&c, FoeKind::Pvp);
-    assert_eq!(rows.len(), 1);
+    // Alive: Attack + 4 skills + 3 auto rows + Flee.
+    assert_eq!(fight_menu(&c, Some(&test_enc(FoeKind::Creature))).len(), 9);
+    // PvP strips skills AND the way out ("honor" and "pride"); the auto
+    // rows stay (upstream's block sits outside the allowspecial gate).
+    let rows = fight_menu(&c, Some(&test_enc(FoeKind::Pvp)));
+    assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].0, "Attack");
+    assert!(rows.iter().all(|(l, _)| !l.starts_with("Flee")));
     // Dead (a torment fight): bare essence only.
     c.die();
-    let rows = fight_menu(&c, FoeKind::Torment);
-    assert_eq!(rows.len(), 2);
+    let rows = fight_menu(&c, Some(&test_enc(FoeKind::Torment)));
+    assert_eq!(rows.len(), 5);
     assert_eq!(rows[0].0, "Attack");
-    assert_eq!(rows[1].0, "Flee");
+    assert_eq!(rows.last().unwrap().0, "Flee");
+}
+
+#[test]
+fn forest_cursor_defaults_to_the_plain_hunt() {
+    // A stray Enter after a fight must search again, not slum (user
+    // feedback); the healer and slumming rows sit above the hunt.
+    let c = lvl(5);
+    let idx = forest_menu(&c)
+        .iter()
+        .position(|(l, _)| l.starts_with("Look for Something"))
+        .unwrap();
+    assert!(idx > 0); // the healer row precedes it, so the default matters
+}
+
+#[test]
+fn fight_menu_offers_targets_in_multi_fights() {
+    // `fightnav`'s ungated Targets rows: every living foe except the one
+    // already aimed at, each picking the mark and fighting the round.
+    let c = lvl(5);
+    let mut enc = test_enc(FoeKind::Creature);
+    enc.foes.push(test_foe(3));
+    enc.foes.push(test_foe(0)); // already down: no row
+    let rows = fight_menu(&c, Some(&enc));
+    let strikes: Vec<_> = rows
+        .iter()
+        .filter(|(l, _)| l.starts_with("Strike "))
+        .collect();
+    assert_eq!(strikes.len(), 1);
+    assert!(strikes[0].0.contains("3 HP"));
+    // Multi-foe fights phrase the finish row per upstream's auto=full split.
+    assert!(rows.iter().any(|(l, _)| l == "Auto: until your target falls"));
+    // Re-aiming: the plan's Target row carries the foe index.
+    let plan = fight_rows(&c, Some(&enc));
+    assert!(plan.iter().any(|(r, _, _)| *r == FightRow::Target(1)));
+    // Once re-aimed at foe 1, the target() follows it and foe 0 gets the row.
+    enc.target_idx = 1;
+    assert_eq!(enc.target(), Some(1));
+    let plan = fight_rows(&c, Some(&enc));
+    assert!(plan.iter().any(|(r, _, _)| *r == FightRow::Target(0)));
+    assert!(plan.iter().all(|(r, _, _)| *r != FightRow::Target(1)));
 }
 
 #[test]

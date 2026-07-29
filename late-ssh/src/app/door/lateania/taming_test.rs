@@ -78,12 +78,19 @@ fn tame_chance_rises_with_surplus_and_refuses_under_level() {
 
 #[test]
 fn pet_skills_unlock_on_the_ladder() {
-    assert_eq!(pet_skills_at(1).count(), 0, "no skills before level 3");
-    assert_eq!(pet_skills_at(3).count(), 1, "savage bite at 3");
-    assert_eq!(pet_skills_at(8).count(), 2, "rend at 8");
-    assert_eq!(pet_skills_at(15).count(), 3, "roar at 15");
-    assert_eq!(pet_skills_at(22).count(), 4, "guard at 22");
-    assert_eq!(pet_skills_at(30).count(), PET_SKILLS.len(), "pounce at 30");
+    assert_eq!(pet_skills_at(1).count(), 0, "no skills before level 2");
+    assert_eq!(pet_skills_at(2).count(), 1, "savage bite at 2");
+    assert_eq!(pet_skills_at(4).count(), 2, "rend at 4");
+    assert_eq!(pet_skills_at(6).count(), 3, "roar at 6");
+    assert_eq!(pet_skills_at(8).count(), 4, "guard at 8");
+    assert_eq!(pet_skills_at(10).count(), PET_SKILLS.len(), "pounce at 10");
+    // Every rung is reachable within the pet level cap.
+    assert!(
+        PET_SKILLS
+            .iter()
+            .all(|s| s.level <= super::super::pets::PET_MAX_LEVEL),
+        "all pet skills unlock at or below PET_MAX_LEVEL"
+    );
     // Unlock levels are strictly increasing.
     for w in PET_SKILLS.windows(2) {
         assert!(w[1].level > w[0].level, "pet skill unlocks climb");

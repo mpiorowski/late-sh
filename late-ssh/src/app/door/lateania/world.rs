@@ -4980,12 +4980,14 @@ fn tune_spawn_balance(spawns: &mut [MobSpawn]) {
         // Kaelmyr (mob ids 960000+) rides the same endgame multipliers; its
         // authored base stats simply sit a full continent higher on the curve.
         let reaches = (REACHES_SPAWN_ID_START..KAELMYR_SPAWN_ID_START).contains(&spawn.id);
-        // Kaelmyr owns 960000+, but later peaceful/mid continents (the lakes at
-        // 980000+, Broceliande at 990000+) sit above it. The lakes and archipelago
-        // ride the endgame band with deliberately tiny base stats; Broceliande is
-        // its own moderate green continent, so it is excluded here and keeps the
-        // gentle overworld multipliers instead of the endgame ones.
-        let kaelmyr = (KAELMYR_SPAWN_ID_START..BROCELIANDE_SPAWN_ID_START).contains(&spawn.id);
+        // Kaelmyr owns 960000+ and the deadly archipelago (970000+) rides the same
+        // endgame band. The later continents sit above them but are NOT endgame:
+        // the Sunderlakes (980000+) are a peaceful fishing country and Broceliande
+        // (990000+) a moderate green continent, so both are excluded here and keep
+        // the gentle overworld multipliers instead of the endgame ones. (The lakes
+        // used to ride the endgame band, which made a "peaceful" region hit like
+        // Kaelmyr - the bug this range fixes.)
+        let kaelmyr = (KAELMYR_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&spawn.id);
         let endgame = frontier || reaches || kaelmyr;
         let living_dark = is_living_dark_spawn(spawn.id);
         let (hp_num, hp_den, dmg_num, dmg_den, xp_num, xp_den) =

@@ -226,36 +226,34 @@ fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
     let buf = frame.buffer_mut();
     proxy.with_screen(|screen| {
         let grid = grid_rect(area, screen);
-        clear_letterbox(buf, area);
+        reset_door_area(buf, area);
         blit_screen(buf, grid, screen);
         clear_canvas_black(buf, grid);
     });
 }
 
-/// Center brogue's fixed grid inside the viewport. The parser tracks the
-/// game's own geometry (brogue emits `ESC[8;34;100t` at startup, honored by
-/// the proxy's `HonorResize` callback; vt100 ignores it by default), so the
-/// screen is usually exactly 100x34 while the viewport is larger. A viewport
-/// smaller than the grid pins to the top-left so the sidebar and message line
-/// stay visible.
+/// Pin brogue's fixed grid to the viewport's top-left corner, the way every
+/// other door blits. The parser tracks the game's own geometry (brogue emits
+/// `ESC[8;34;100t` at startup, honored by the proxy's `HonorResize` callback;
+/// vt100 ignores it by default), so the screen is usually exactly 100x34 while
+/// the viewport is larger; brogue is the only door whose grid does not fill its
+/// area, so it is the only one where the anchor is visible. The slack goes to
+/// the right and bottom edges. A viewport smaller than the grid clamps, and
+/// ncurses crops the far edge (see the landing's "roomiest at 100x34" copy).
 fn grid_rect(area: Rect, screen: &vt100::Screen) -> Rect {
     let (rows, cols) = screen.size();
-    let w = cols.min(area.width);
-    let h = rows.min(area.height);
-    Rect::new(
-        area.x + (area.width - w) / 2,
-        area.y + (area.height - h) / 2,
-        w,
-        h,
-    )
+    Rect::new(area.x, area.y, cols.min(area.width), rows.min(area.height))
 }
 
-/// The app root paints every page over `BG_CANVAS`, and `blit_screen` never
-/// touches cells outside the game grid, so without this the fixed 100x34 game
-/// floats in a page-colored frame. Reset the whole door area first: the
-/// letterbox then shares one canvas (`Reset`, the terminal default) with the
-/// keyed-out game interior below, matching how nethack and dcss render.
-fn clear_letterbox(buf: &mut ratatui::buffer::Buffer, area: Rect) {
+/// `blit_screen` never touches cells outside the game grid, and brogue's grid
+/// does not fill the viewport, so the slack to its right and below is whatever
+/// the frame left there. Reset the whole door area first: the slack then shares
+/// one canvas (`Reset`) with the keyed-out game interior below, matching how
+/// nethack and dcss render. `Reset` is the app background, not a bare terminal
+/// default: `app/render.rs` pushes `OSC 11` to set the terminal's own default
+/// background to `theme::BG_CANVAS()` whenever the user has the background
+/// color enabled, so the theme follows the door in without being painted here.
+fn reset_door_area(buf: &mut ratatui::buffer::Buffer, area: Rect) {
     for y in area.y..area.y.saturating_add(area.height) {
         for x in area.x..area.x.saturating_add(area.width) {
             if let Some(cell) = buf.cell_mut((x, y)) {

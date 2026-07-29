@@ -40,5 +40,23 @@ chat_dumps/
 # Re-fetch: git clone --depth 1 https://github.com/jimlunsford/lotgd upstream-lotgd
 upstream-lotgd/
 
+# Local clone of the A Dark Room port reference (doublespeakgames/adarkroom,
+# MPL-2.0). We transcribe from it into MPL-headered files; the clone itself
+# stays out of the repo.
+# Re-fetch: git clone --depth 1 https://github.com/doublespeakgames/adarkroom upstream-adarkroom
+upstream-adarkroom/
+
+# Local copy of the Brogue CE source we actually ship (tmewett/BrogueCE,
+# AGPL-3.0), pinned to the same tag + SHA-256 as the door-brogue image build in
+# docker/doors/brogue.Dockerfile. Read-only reference: the door links nothing
+# from it, and the one change we make to upstream lives in
+# scripts/brogue_hangup_save.patch. Keep the pin in step with the Dockerfile on
+# a CE bump, or the reference stops describing the running binary.
+# Re-fetch:
+#   curl -fsSL -o /tmp/brogue.tar.gz https://github.com/tmewett/BrogueCE/archive/refs/tags/v1.15.1.tar.gz
+#   echo "2abc186c5327342cb9ad7e45d41096ab10797d5ba76dcac843824ac2a0bfb3ac  /tmp/brogue.tar.gz" | sha256sum -c -
+#   mkdir -p upstream-brogue && tar -xzf /tmp/brogue.tar.gz --strip-components=1 -C upstream-brogue
+upstream-brogue/
+
 # Symlink to personal AI guidelines (canonical copy in dotfiles).
 GUIDE.md

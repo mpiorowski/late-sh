@@ -345,12 +345,17 @@ pub struct Foe {
     pub bandit: bool,
 }
 
-/// A live combat encounter: the player strikes the first living foe each
-/// round; every living foe strikes back.
+/// A live combat encounter: the player strikes their chosen target each
+/// round (the first living foe until re-aimed); every living foe strikes
+/// back.
 #[derive(Clone, Debug)]
 pub struct Encounter {
     pub foes: Vec<Foe>,
     pub kind: FoeKind,
+    /// The foe the player is aiming at (`fightnav`'s Targets rows set
+    /// upstream's `istarget`). Falls back to the first living foe once this
+    /// one is down.
+    pub target_idx: usize,
     /// Active specialty buffs, ticked each round by [`resolve_round_buffed`].
     pub buffs: Vec<Buff>,
     /// Whether the player has taken any damage this fight (drives flawless
@@ -370,6 +375,7 @@ impl Encounter {
         Encounter {
             foes: vec![foe],
             kind,
+            target_idx: 0,
             buffs: Vec::new(),
             took_damage: false,
             slain: Vec::new(),
@@ -377,8 +383,12 @@ impl Encounter {
         }
     }
 
-    /// Index of the player's current target: the first living foe.
+    /// Index of the player's current target: the aimed-at foe while it
+    /// stands, else the first living foe.
     pub fn target(&self) -> Option<usize> {
+        if self.foes.get(self.target_idx).is_some_and(|f| f.hp > 0) {
+            return Some(self.target_idx);
+        }
         self.foes.iter().position(|f| f.hp > 0)
     }
 
@@ -788,13 +798,7 @@ impl State {
             Mode::BankTransferTarget => self.transfer_target_menu(),
             Mode::BankTransferAmount => self.transfer_amount_menu(),
             Mode::Training => training_menu(c),
-            Mode::Fight => fight_menu(
-                c,
-                self.encounter
-                    .as_ref()
-                    .map(|e| e.kind)
-                    .unwrap_or(FoeKind::Creature),
-            ),
+            Mode::Fight => fight_menu(c, self.encounter.as_ref()),
             Mode::Event => event_menu(c, self.pending_event),
             Mode::ChooseStyle => style_menu(),
             Mode::ChooseRace => race_menu(),
@@ -1009,6 +1013,12 @@ impl State {
             // The forest amenities back out to the forest. Slipping out of
             // the stall unwashed is a real (and newsworthy) choice, so Esc
             // takes the explicit no-wash exit.
+            // The healer is a forest amenity (`lib/forest.php:12`); Esc walks
+            // back out among the trees.
+            Mode::Healer => {
+                self.goto(Mode::Forest);
+                Selection::Stay
+            }
             Mode::Outhouse => {
                 self.goto(Mode::Forest);
                 Selection::Stay
@@ -1131,6 +1141,18 @@ impl State {
     fn goto(&mut self, mode: Mode) {
         self.mode = mode;
         self.cursor = 0;
+        if mode == Mode::Forest {
+            // Land the cursor on the plain hunt, not the healer or the
+            // slumming row above it: a stray Enter right after a fight
+            // should search again, never downgrade the prey (user feedback).
+            if let Some(c) = self.character.as_ref()
+                && let Some(idx) = forest_menu(c)
+                    .iter()
+                    .position(|(l, _)| l.starts_with("Look for Something"))
+            {
+                self.cursor = idx;
+            }
+        }
         if mode == Mode::Village {
             // Mad Juna sets up in the square 20% of visits
             // (`crazyaudrey`'s village-desc hook, `e_rand(1,100) <= 20`
@@ -1251,17 +1273,6 @@ impl State {
             s if s.starts_with("The Proving Yard") => self.goto(Mode::Training),
             s if s.starts_with("Ironroost") => self.goto(Mode::WeaponShop),
             s if s.starts_with("Duskmail") => self.goto(Mode::ArmorShop),
-            s if s.starts_with("The Mendery") => {
-                // Over-healed visitors are clipped back to max, free of charge
-                // (healer.php's forced over-max branch).
-                if self.character.as_mut().unwrap().normalize_overheal() {
-                    self.push_log(
-                        "The healer eyes your unnatural vigor and drains it off, no charge.".into(),
-                    );
-                    self.save();
-                }
-                self.goto(Mode::Healer)
-            }
             s if s.starts_with("The Coinvault") => self.goto(Mode::Bank),
             s if s.starts_with("The Stables") => self.goto(Mode::Stables),
             s if s.starts_with("The Mercenary Camp") => self.goto(Mode::MercCamp),
@@ -1323,6 +1334,17 @@ impl State {
     fn select_forest(&mut self) -> Selection {
         let rows = forest_menu(self.character.as_ref().unwrap());
         match rows[self.cursor].0.as_str() {
+            s if s.starts_with("The Mendery") => {
+                // Over-healed visitors are clipped back to max, free of charge
+                // (healer.php's forced over-max branch).
+                if self.character.as_mut().unwrap().normalize_overheal() {
+                    self.push_log(
+                        "The healer eyes your unnatural vigor and drains it off, no charge.".into(),
+                    );
+                    self.save();
+                }
+                self.goto(Mode::Healer)
+            }
             s if s.starts_with("Go Slumming") => self.start_forest_fight(ForestHunt::Slumming),
             s if s.starts_with("Look for Something") => self.start_forest_fight(ForestHunt::Hunt),
             s if s.starts_with("Go Thrillseeking") => {
@@ -1467,6 +1489,7 @@ impl State {
         self.encounter = Some(Encounter {
             foes,
             kind: FoeKind::Creature,
+            target_idx: 0,
             buffs: Vec::new(),
             took_damage: false,
             slain: Vec::new(),
@@ -3319,34 +3342,64 @@ impl State {
     }
 
     fn select_fight(&mut self) -> Selection {
-        // Against a sleeping warrior the menu is one row: Attack (no skills,
-        // no flee — `pvp.php` strips both).
-        if self
-            .encounter
-            .as_ref()
-            .is_some_and(|e| e.kind == FoeKind::Pvp)
-        {
-            self.attack_round();
+        let rows = fight_rows(self.character.as_ref().unwrap(), self.encounter.as_ref());
+        let Some((row, _, _)) = rows.into_iter().nth(self.fight_menu_action()) else {
             return Selection::Stay;
-        }
-        let c = self.character.as_ref().unwrap();
-        // The dead fight with bare essence: no specialty skills in the menu
-        // (upstream's graveyard passes `fightnav(false, ...)`).
-        let skill_count = if c.alive {
-            specialty::skills(c.specialty).len()
-        } else {
-            0
         };
-        let cursor = self.fight_menu_action();
-        // Layout: [0] Attack, [1..=skill_count] skills, [last] Flee.
-        if cursor == 0 {
+        match row {
+            FightRow::Attack => {
+                self.attack_round();
+                Selection::Stay
+            }
+            FightRow::Skill(i) => self.cast_specialty_skill(i),
+            FightRow::Auto(n) => {
+                self.auto_rounds(n, false);
+                Selection::Stay
+            }
+            FightRow::AutoFinish => {
+                // "Until the end" runs while the *current* target stands
+                // (upstream's multi-foe `auto=full` stops when the aimed-at
+                // enemy dies); with one foe that IS the whole fight. The cap
+                // is a runaway guard only — reroll-until-progress means
+                // rounds always move HP.
+                self.auto_rounds(200, true);
+                Selection::Stay
+            }
+            FightRow::Target(i) => {
+                if let Some(enc) = self.encounter.as_mut() {
+                    enc.target_idx = i;
+                    let name = enc.foes[i].name.clone();
+                    self.push_log(format!("You turn on {name}!"));
+                }
+                // Picking a target fights the round (upstream's Targets nav
+                // rides `op=fight&newtarget`).
+                self.attack_round();
+                Selection::Stay
+            }
+            FightRow::Flee => {
+                self.attempt_flee();
+                Selection::Stay
+            }
+        }
+    }
+
+    /// Run up to `n` attack rounds without stopping for input (upstream's
+    /// "Automatic Fighting"): the loop ends early when the fight does —
+    /// victory or defeat — and, with `stop_on_target_fall` (the finish
+    /// row's multi-foe rule), when the aimed-at target changes.
+    fn auto_rounds(&mut self, n: u32, stop_on_target_fall: bool) {
+        let target = self.encounter.as_ref().and_then(|e| e.target());
+        for _ in 0..n {
+            if self.mode != Mode::Fight {
+                return;
+            }
+            let Some(enc) = self.encounter.as_ref() else {
+                return;
+            };
+            if stop_on_target_fall && enc.target() != target {
+                return;
+            }
             self.attack_round();
-            Selection::Stay
-        } else if cursor <= skill_count {
-            self.cast_specialty_skill(cursor - 1)
-        } else {
-            self.attempt_flee(); // Flee
-            Selection::Stay
         }
     }
 
@@ -3991,28 +4044,36 @@ impl State {
     // --- shops --------------------------------------------------------------
 
     fn buy_gear(&mut self, weapon: bool) -> Selection {
-        let c = self.character.as_ref().unwrap();
-        let tiers = available_tiers(c, weapon);
-        if self.cursor >= tiers.len() {
+        // The menu is the full ladder, one row per tier, so the cursor IS the
+        // tier minus one.
+        let tier = (self.cursor + 1) as u8;
+        if tier as usize > data::COST_LADDER.len() {
             return Selection::Stay;
         }
-        let (tier, _cost) = tiers[self.cursor];
         let c = self.character.as_mut().unwrap();
-        let ok = if weapon {
+        let res = if weapon {
             c.buy_weapon(tier)
         } else {
             c.buy_armor(tier)
         };
-        if ok {
-            let name = if weapon {
-                data::weapon_name(tier)
-            } else {
-                data::armor_name(tier)
-            };
-            self.push_log(format!("You equip the {name}."));
-            self.save();
-        } else {
-            self.push_log("You can't afford that.".into());
+        match res {
+            Some(net) => {
+                let name = if weapon {
+                    data::weapon_name(tier)
+                } else {
+                    data::armor_name(tier)
+                };
+                if net >= 0 {
+                    self.push_log(format!("You equip the {name} for {net} gold."));
+                } else {
+                    self.push_log(format!(
+                        "You equip the {name}; the trade-in nets you {} gold back.",
+                        -net
+                    ));
+                }
+                self.save();
+            }
+            None => self.push_log("You can't afford that.".into()),
         }
         Selection::Stay
     }
@@ -6353,11 +6414,6 @@ fn village_menu(c: &Character, audrey_here: bool, baskets_open: bool) -> Vec<(St
     }
     rows.push(("Ironroost Weapons".into(), true));
     rows.push(("Duskmail Armoury".into(), true));
-    rows.push((
-        "The Mendery (healer)".into(),
-        // Open for your own wounds or a companion's (`healer.php` mends both).
-        c.hitpoints != c.max_hitpoints() || !wounded_companions(c).is_empty(),
-    ));
     rows.push(("The Coinvault (bank)".into(), true));
     rows.push(("The Stables (mounts)".into(), true));
     rows.push(("The Mercenary Camp (allies)".into(), true));
@@ -6996,6 +7052,13 @@ fn news_menu(days_back: i64) -> Vec<(String, bool)> {
 fn forest_menu(c: &Character) -> Vec<(String, bool)> {
     let has_turns = c.turns > 0;
     let mut rows = Vec::new();
+    // The Healer's Hut is a forest nav upstream (`lib/forest.php:11-12`,
+    // the "Heal" section before "Fight") — the village has no heal row.
+    rows.push((
+        "The Mendery (healer)".into(),
+        // Open for your own wounds or a companion's (`healer.php` mends both).
+        c.hitpoints != c.max_hitpoints() || !wounded_companions(c).is_empty(),
+    ));
     // Slumming's nav only shows past level 1 (`lib/forest.php:15`).
     if c.level > 1 {
         rows.push(("Go Slumming (weaker prey)".into(), has_turns));
@@ -7027,26 +7090,45 @@ fn dragon_approach_menu() -> Vec<(String, bool)> {
 /// The fight menu: Attack, then any unlocked specialty skills (shown with their
 /// use-cost and disabled when the pool can't pay), then Flee. The skill rows sit
 /// between Attack and Flee so those two keep stable positions.
-fn fight_menu(c: &Character, kind: FoeKind) -> Vec<(String, bool)> {
+/// One selectable row of the fight menu; the plan ([`fight_rows`]) is built
+/// identically at render and at select time so the cursor can never drift
+/// against the labels.
+#[derive(Clone, Debug, PartialEq)]
+enum FightRow {
+    Attack,
+    Skill(usize),
+    /// Autofight for up to N rounds — upstream's `fightnav` "Automatic
+    /// Fighting" block (stock code behind `autofight`, default off; adopted
+    /// as a QoL deviation for the TUI).
+    Auto(u32),
+    /// Autofight until the fight ends (single foe) or the current target
+    /// falls (upstream's `auto=full` split).
+    AutoFinish,
+    /// Re-aim at foe `idx` and fight the round (upstream's Targets nav rides
+    /// `op=fight&newtarget=idx`).
+    Target(usize),
+    Flee,
+}
+
+/// How many rounds the two fixed autofight rows run (upstream's five/ten).
+const AUTO_ROUNDS: [u32; 2] = [5, 10];
+
+fn fight_rows(c: &Character, enc: Option<&Encounter>) -> Vec<(FightRow, String, bool)> {
+    let kind = enc.map(|e| e.kind).unwrap_or(FoeKind::Creature);
+    let mut rows = vec![(FightRow::Attack, "Attack".into(), true)];
     // A fight you picked with a sleeping warrior offers no skills ("your
     // honor prevents it") and no way out ("your pride prevents it") —
-    // `pvp.php` strips both.
-    if kind == FoeKind::Pvp {
-        return vec![("Attack".into(), true)];
-    }
-    // The master's yard bans everything too (`train.php`: `fightnav(false,
-    // false)` — no skills, no run — with every stock buff and companion
-    // suspended; only the elf/troll racial buff sets `allowintrain`, and
-    // ours rides the stat derivation instead).
-    if kind == FoeKind::Master {
-        return vec![("Attack".into(), true)];
-    }
-    let mut rows = vec![("Attack".into(), true)];
-    // The dead fight with bare essence: no specialty skills beyond the grave
-    // (upstream's graveyard calls `fightnav(false, ...)`).
-    if c.alive {
-        for skill in specialty::skills(c.specialty) {
+    // `pvp.php` strips both. The master's yard bans everything too
+    // (`train.php`: `fightnav(false, false)` — no skills, no run — with
+    // every stock buff and companion suspended; only the elf/troll racial
+    // buff sets `allowintrain`, and ours rides the stat derivation instead).
+    // The dead fight with bare essence: no specialty skills beyond the
+    // grave (upstream's graveyard calls `fightnav(false, ...)`).
+    let skills_allowed = !matches!(kind, FoeKind::Pvp | FoeKind::Master) && c.alive;
+    if skills_allowed {
+        for (i, skill) in specialty::skills(c.specialty).iter().enumerate() {
             rows.push((
+                FightRow::Skill(i),
                 format!(
                     "{} ({} use{})",
                     skill.name,
@@ -7057,13 +7139,49 @@ fn fight_menu(c: &Character, kind: FoeKind) -> Vec<(String, bool)> {
             ));
         }
     }
+    // Automatic fighting (upstream's block sits outside the allowspecial
+    // gate, so every fight kind gets it).
+    for n in AUTO_ROUNDS {
+        rows.push((FightRow::Auto(n), format!("Auto: {n} rounds"), true));
+    }
+    let living = enc.map(|e| e.living()).unwrap_or(1);
+    let finish_label = if living > 1 {
+        "Auto: until your target falls"
+    } else {
+        "Auto: to the finish"
+    };
+    rows.push((FightRow::AutoFinish, finish_label.into(), true));
+    // The Targets rows (`fightnav`: whenever more than one foe stands):
+    // every living foe except the one already aimed at.
+    if let Some(enc) = enc
+        && living > 1
+    {
+        let aimed = enc.target();
+        for (i, foe) in enc.foes.iter().enumerate() {
+            if foe.hp > 0 && Some(i) != aimed {
+                rows.push((
+                    FightRow::Target(i),
+                    format!("Strike {} ({} HP)", foe.name, foe.hp),
+                    true,
+                ));
+            }
+        }
+    }
     // There is no running from the dragon: its lair has one exit and the
     // tail blocks it (`dragon.php` hides the run nav, `fightnav(true,false)`,
-    // and converts a forced `op=run` into a fought round).
-    if kind != FoeKind::Dragon {
-        rows.push(("Flee".into(), true));
+    // and converts a forced `op=run` into a fought round). PvP and the yard
+    // strip the row too (pride, see above).
+    if !matches!(kind, FoeKind::Dragon | FoeKind::Pvp | FoeKind::Master) {
+        rows.push((FightRow::Flee, "Flee".into(), true));
     }
     rows
+}
+
+fn fight_menu(c: &Character, enc: Option<&Encounter>) -> Vec<(String, bool)> {
+    fight_rows(c, enc)
+        .into_iter()
+        .map(|(_, label, enabled)| (label, enabled))
+        .collect()
 }
 
 /// The dead realm's hub (`graveyard.php` + the mausoleum): torment souls for
@@ -7653,45 +7771,35 @@ fn training_menu(c: &Character) -> Vec<(String, bool)> {
 /// Level-gated, mirroring LoGD: a shop only stocks gear up to the character's
 /// own level, so you can't grind gold to out-gear your rank and trivialize the
 /// master fights. The cost ladder still gates affordability on top of this.
-fn available_tiers(c: &Character, weapon: bool) -> Vec<(u8, u64)> {
-    let current = if weapon { c.weapon_tier } else { c.armor_tier };
-    let ceiling = c.level.min(data::COST_LADDER.len() as u8);
-    (current + 1..=ceiling)
-        .take(5)
-        .filter_map(|tier| {
-            let cost = if weapon {
-                c.weapon_upgrade_cost(tier)
-            } else {
-                c.armor_upgrade_cost(tier)
-            }?;
-            Some((tier, cost))
-        })
-        .collect()
-}
-
+/// The shop's full ladder, one row per tier — upstream lists the whole
+/// 15-row rack and gates nothing on player level (`weapons.php`: the buy
+/// link renders whenever `value <= gold + tradein`). The equipped row is
+/// disabled; every other row is enabled when the net swap cost (price less
+/// the 75% trade-in) fits the purse, downgrade refunds included.
 fn shop_menu(c: &Character, weapon: bool) -> Vec<(String, bool)> {
-    let tiers = available_tiers(c, weapon);
-    if tiers.is_empty() {
-        let current = if weapon { c.weapon_tier } else { c.armor_tier };
-        let msg = if current >= data::MAX_LEVEL {
-            "You already wield the finest in the land. (nothing to buy)"
-        } else {
-            "Nothing here befits your rank yet. Advance a level for finer gear. (nothing to buy)"
-        };
-        return vec![(msg.into(), false)];
-    }
+    let current = if weapon { c.weapon_tier } else { c.armor_tier };
     let name = if weapon {
         data::weapon_name
     } else {
         data::armor_name
     };
-    tiers
-        .into_iter()
-        .map(|(tier, cost)| {
-            (
-                format!("{} (power {tier}) - {cost} gold", name(tier)),
-                c.gold >= cost,
-            )
+    (1..=data::COST_LADDER.len() as u8)
+        .map(|tier| {
+            if tier == current {
+                return (format!("{} (power {tier}) - equipped", name(tier)), false);
+            }
+            let net = if weapon {
+                c.weapon_swap_cost(tier)
+            } else {
+                c.armor_swap_cost(tier)
+            }
+            .unwrap();
+            let label = if net >= 0 {
+                format!("{} (power {tier}) - {net} gold", name(tier))
+            } else {
+                format!("{} (power {tier}) - trade down, {} gold back", name(tier), -net)
+            };
+            (label, c.gold as i64 >= net)
         })
         .collect()
 }

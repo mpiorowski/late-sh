@@ -1241,9 +1241,6 @@ impl DailyService {
         Ok(())
     }
 
-    /// Game-agnostic: the winner is simply the other player on the row, and
-    /// the revision bump happens on the raw state JSON, so resign never needs
-    /// to know which game it is quitting.
     /// One card onto the table. The turn passes to the follower mid-trick and
     /// to the trick winner once the trick closes, so the mover can come
     /// straight back up. Passing 60 of the 120 points finishes the match; an
@@ -1331,6 +1328,9 @@ impl DailyService {
         Ok(())
     }
 
+    /// Game-agnostic: the winner is simply the other player on the row, and
+    /// the revision bump happens on the raw state JSON, so resign never needs
+    /// to know which game it is quitting.
     pub async fn resign(&self, user_id: Uuid, match_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         // `finish` is revision-guarded, so a resign that raced the opponent's

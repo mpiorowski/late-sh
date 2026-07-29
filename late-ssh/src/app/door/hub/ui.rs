@@ -87,6 +87,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
                 view.dopewars_enabled,
             );
         }
+        HubGame::Darkroom => {
+            crate::app::door::darkroom::screen::draw_landing(frame, layout[3], view.delete_confirm);
+        }
     }
 
     draw_footer(frame, layout[4]);

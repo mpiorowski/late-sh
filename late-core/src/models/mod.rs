@@ -38,6 +38,7 @@ pub mod chips;
 #[cfg(test)]
 mod chips_test;
 pub mod daily_match;
+pub mod darkroom_save;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;

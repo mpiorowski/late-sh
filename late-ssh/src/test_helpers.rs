@@ -284,6 +284,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
@@ -456,6 +457,7 @@ fn make_app_with_chat_service_and_permissions(
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -641,6 +643,7 @@ pub fn make_app_with_paired_client(
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),

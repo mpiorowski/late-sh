@@ -35,6 +35,15 @@ permissions:
 #   sets CARGO_INCREMENTAL=0.
 # - Caches are saved only on main pushes (save-if below; main.yml keeps them
 #   warm). PR runs restore, never save.
+# - check_cli is the non-Linux guard, one matrix job over the three OSes we ship
+#   late-cli to that Linux CI cannot compile: Windows, macOS, and the Android
+#   build Termux installs pull. Those halves of the per-platform cfgs used to be
+#   compiled for the first time at release, so a platform-only break could not
+#   fail a PR. It is a `cargo check` on purpose: it type-checks every cfg branch
+#   without codegen or linking, which is the cheap 80% of the value. Link-time
+#   failures (missing symbols, a bad .lib) are the part it does not cover and
+#   still surface first in the release build. Scoped to late-cli, the only crate
+#   we ship to those platforms.
 # - The job is named "clippy + test" so the branch ruleset's required check
 #   "ci / clippy + test" is satisfied directly (context is "<caller job> /
 #   <this job>" = "ci / clippy + test"); fmt provides "ci / rustfmt".
@@ -137,3 +146,82 @@ jobs:
       - name: dump_postgres_logs
         if: failure()
         run: docker logs ci-postgres
+
+  check_cli:
+    name: check_cli (${{ matrix.target }})
+    needs: [fmt]
+    # late-cli is the only crate shipped to these platforms, so this job is
+    # pointless for the other per-package release callers.
+    if: ${{ inputs.package == '' || inputs.package == 'late-cli' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One arch per OS is enough: the platform cfgs key off target_os, so
+          # the second arch of each pair compiles the exact same branches.
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          # Termux installs get this build, so it is not optional coverage.
+          - runner: ubuntu-latest
+            target: aarch64-linux-android
+            android: true
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - name: restore_rust_cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ env.CACHE_PREFIX }}
+          shared-key: ci-check-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: install_rust_target
+        shell: bash
+        run: rustup target add ${{ matrix.target }}
+      # /MT so the C dependencies' build scripts match the release build. The
+      # release build also passes -C target-feature=+crt-static; that one is
+      # purely a link-time flag and `cargo check` never links, so it is omitted
+      # here rather than fighting cargo's mutually exclusive rustflags sources.
+      - name: configure_windows_msvc_runtime
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          {
+            echo "CFLAGS_x86_64_pc_windows_msvc=/MT"
+            echo "CXXFLAGS_x86_64_pc_windows_msvc=/MT"
+          } >> "$GITHUB_ENV"
+      - name: set_up_android_sdk
+        if: matrix.android == true
+        uses: android-actions/setup-android@v4.0.1
+      - name: install_android_ndk
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+      # The NDK is needed even for a check: nothing links, but build scripts
+      # still compile the C dependencies for the target.
+      - name: configure_android_toolchain
+        if: matrix.android == true
+        env:
+          ANDROID_NDK_VERSION: 27.2.12479018
+        run: |
+          NDK_HOME="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          linker="$TOOLCHAIN/bin/aarch64-linux-android26-clang"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$linker" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB_aarch64_linux_android=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "$TOOLCHAIN/bin/aarch64-linux-android-ranlib"
+          ln -sf "$TOOLCHAIN/bin/llvm-ar" "$TOOLCHAIN/bin/aarch64-linux-android-ar"
+          echo "$TOOLCHAIN/bin" >> "$GITHUB_PATH"
+      - name: cargo_check_late_cli
+        shell: bash
+        run: cargo check -p late-cli --all-targets --target ${{ matrix.target }}

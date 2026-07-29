@@ -222,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         db.clone(),
     );
+    let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(db.clone());
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
@@ -343,6 +344,7 @@ async fn main() -> anyhow::Result<()> {
         minesweeper_service,
         lateania_service,
         greendragon_service,
+        darkroom_service,
         arcade_handle_service,
         daily_service,
         bonsai_service,
