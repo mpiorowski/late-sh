@@ -98,12 +98,6 @@ impl State {
         }
     }
 
-    /// CodeKeep has no post-exit prompts or trailing key sequence to absorb, so
-    /// it returns directly to Games instead of holding on its launcher.
-    pub fn in_exit_grace(&self) -> bool {
-        false
-    }
-
     pub fn proxy(&self) -> Option<&CodekeepProcess> {
         self.proxy.as_ref()
     }

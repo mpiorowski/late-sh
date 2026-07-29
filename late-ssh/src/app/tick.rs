@@ -503,10 +503,7 @@ impl App {
             self.set_screen(Screen::Games);
         }
         if self.screen == Screen::Codekeep
-            && self
-                .codekeep_state
-                .as_ref()
-                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+            && self.codekeep_state.as_ref().is_none_or(|s| !s.is_running())
         {
             self.set_screen(Screen::Games);
         }

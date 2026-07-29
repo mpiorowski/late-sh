@@ -34,10 +34,9 @@ fn strip_input_noise_keeps_keys_and_arrows() {
 }
 
 #[test]
-fn closed_proxy_returns_to_launcher_without_exit_grace() {
+fn closed_proxy_returns_to_launcher() {
     let mut state = disabled_state();
     state.mode = Mode::Running;
     state.tick();
     assert_eq!(state.mode(), Mode::Launcher);
-    assert!(!state.in_exit_grace());
 }

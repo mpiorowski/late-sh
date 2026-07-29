@@ -2193,12 +2193,6 @@ impl App {
             state.forward_input(data);
             return;
         }
-        if self.screen == crate::app::common::primitives::Screen::Codekeep
-            && let Some(state) = self.codekeep_state.as_ref()
-            && state.in_exit_grace()
-        {
-            return;
-        }
         crate::app::input::handle(self, data)
     }
 
