@@ -46,7 +46,9 @@ names original to late.sh** (upstream text is CC BY-NC-SA and off-limits).
   only to suppress — so `defend` is inert here.
 - Buff engine; forest death (gold→0, exp×0.9); master fights
   (non-lethal loss, +5 soulpoints on win); shop ladder + 75% trade-in +
-  level gating; healer full-heal cost `round(ln(level)·(missing+10))`;
+  ~~level gating~~ (**refuted** by the 2026-07 user-feedback sweep: upstream
+  gates the shop tier by dragonkills and sells on gold alone — see that
+  section); healer full-heal cost `round(ln(level)·(missing+10))`;
   8 stock forest events at 15% (`forestchance`); exp curve + DK scaling;
   new-day spirits `e_rand(-1,1)+e_rand(-1,1)` (the −6 turn dock belongs to
   the *paid* resurrection only — see phase 1);
@@ -323,7 +325,9 @@ romance NPCs is "your partner", and bard outcome 15. Field
   `round(ln(level+1) · (missing + 10) · 1.33)` gold → full HP.
 - Companion struct gains `ability` (Fight/Defend/Heal(n)/Magic(n)) and
   `ignore_limit: bool`; hired ones persist across days; all wiped on dragon
-  kill (already true) and on death (already true).
+  kill (already true) and ~~on death (already true)~~ (**refuted** by the
+  2026-07 user-feedback sweep: upstream companions survive player death —
+  see that section).
 - Upstream extras we defer: `defend` (one companion soaks/round) and
   `magic` (self-HP-cost nuke) have no stock sellers — implement the enum
   arms when content needs them.
@@ -1749,6 +1753,114 @@ stables, inn (room/bard/drinks/flirt/potions/drunkenness), races, roster +
 HoF, forest spawn/jitter/payouts, bank formulas + transfers, clans core
 (ranks/gates/succession/validation), specialties use-economy + the other
 11 skills, healer pricing, combat rolldamage core + tables.
+
+## User-feedback sweep (2026-07, tester: mhrstv)
+
+A veteran player's DM feedback (gathered 2026-07-29 via `scripts/dump_dms.sh`;
+he played a modded Bulgarian DragonPrime server, lotgd.digsys.bg, mid-2000s,
+so every claim was double-checked against the local `upstream-lotgd/` clone
+rather than taken at face value). **Investigation only, no code changed yet** —
+each finding below is a queued fix/decision.
+
+### Parity findings (real deviations his feedback caught)
+
+- [ ] **Game-day length: stock is 4 game days per real day.**
+  `lib/datetime.php:127,138` — `getsetting("daysperday", 4)`; the game clock
+  runs 4× real time, so a new day rolls every 6 real hours. Ours rolls one
+  per UTC calendar day. This is the shipped default the defaults rule says
+  we port, and it was missed; it is the root of his "too few turns", "one
+  game day per calendar day", and most of the gems-too-rare / progress-slow
+  feel (his server ran 3/day, close to stock). **Decision needed**: adopt
+  the 4×-clock (or some multiple), or document 1/day as a deliberate
+  late.sh pacing deviation (the A Dark Room precedent).
+- [ ] **Shop gating: gear is NOT level-gated upstream.** `weapons.php:66` /
+  `armor.php:59` pick the shop *tier* by `dragonkills`
+  (`max(level) WHERE level <= dragonkills`), then list that tier's full 15
+  rows (damage/defense 1..15); the only purchase gate is affordability
+  (`value <= gold + tradeinvalue` renders the buy link). The seed's `level`
+  column is a **DK tier**, not a player-level gate: 13 tiers × 15 rows,
+  identical cost ladder (48..10350) in every tier, names-only reskin per
+  tier. A level-1 warrior with the gold buys the damage-15 weapon. Our
+  `available_tiers` caps at `c.level` (and shows only the next 5 rows).
+  The "Already 1=1" / CONTEXT.md claim "matches LoGD selling gear by
+  level" misread the column and is refuted. Downstream effect: master
+  fights are harder here than upstream (his "lost to my teacher second day
+  in a row with all appropriate gear" — upstream players out-gear their
+  level with gold; the masters themselves audited clean).
+- [ ] **Companions are NOT wiped by player death upstream.** Only
+  `dragon.php:227-228` clears companions. Forest/PvE death never touches
+  them; the graveyard only `suspend_companions("allowinshades")`
+  (`lib/graveyard/case_battle_search.php:8`), which every stock companion
+  passes (seed `allowinshades=1` — they even fight the torments, as the
+  masters audit noted), and `newday.php:289` unsuspends. Ours clears
+  companions in `die()` (and `pvp_slain`/`pvp_die`; the PvP-victim wipe is
+  a documented adaptation, but the PvE `die()` wipe was believed
+  upstream-true and isn't). A companion struck to 0 HP in battle does die
+  (`lib/extended-battle.php:370-383`, no stock `cannotdie`) — that half
+  matches. (His "resurrect the companion with gold after you revive" is
+  his mod; stock companions simply survive, and wounded ones heal for gold
+  at the camp/healer.)
+- [ ] **The Healer's Hut is a forest nav, not a village building.**
+  `lib/forest.php:11-12` ("Heal" section, `healer.php`); `village.php` has
+  no heal row at all. Ours is village-only ("The Mendery") with no forest
+  row — exactly his "when you need healing, you're almost always in the
+  forest".
+- [ ] **Multi-fight target picking is missing** (incidental find while
+  checking his autofight memory): `lib/fightnav.php` adds an *ungated*
+  "Targets" section whenever `count($newenemies) > 1` — the player chooses
+  which living foe to strike (`istarget`). Ours always strikes the first
+  living foe. Affects multi-fights (≥10 DKs) only.
+
+### Verified stock (his feel, not deviations)
+
+- **Base 10 turns/day** (`newday.php:17`, `getsetting("turns", 10)`).
+- **The mine cave-in's lucky escape zeroing the day's turns** (phase-2
+  corrections 1-2; strict `<` death roll). Stock 1=1 — but the pain is
+  amplified 4× by our day-length deviation above.
+- **A 9-turn start** (spirits `e_rand(-1,1)+e_rand(-1,1)` can land −1) and
+  his "9 turns, won one, lost one, now 8": the flawless win refunded its
+  turn, the loss spent one. Arithmetic checks out; not a bug.
+- **Gem odds** (forest 1-in-25 under level 15, goldmine/fairy/stream/
+  outhouse/bard sources): stock-faithful as audited; the scarcity feel is
+  mostly the day-length deviation plus his mod's extra gem sources.
+- **Autofight** (5/10 rounds, until-end) *is* stock code
+  (`lib/fightnav.php`) but behind `getsetting("autofight", 0)` — default
+  **off**, so correctly absent under the defaults rule; his server enabled
+  it. Optional adoption candidate for the TUI (it would save a lot of
+  Enter-pressing in a terminal). (Surfaced via his #suggestions post.)
+
+### Mod content, not stock (idea pool only)
+
+His server ran DragonPrime add-ons; these have no stock counterpart and are
+original-content decisions, not parity items (mechanics may be borrowed,
+prose/names must stay ours, add-on module code/text is off-limits):
+
+- Music lessons: a skill learned over days that survives dragon kills, with
+  a small daily bonus (buff / forest fight / gem).
+- Player-to-player marriages with daily bonuses (stock marriage is the NPC
+  romance ladder we ported).
+- Alignment points from event choices unlocking black/white/gray knight
+  specializations.
+- A permanent profile tattoo per dragon kill.
+- Buffed drinks at the *forest* tavern (stock drinks belong to the inn,
+  where ours are; the Crooked Wheel is games/board/intel upstream too).
+- Companion resurrection for gold (stock companions survive death — see
+  the finding above).
+
+### UX notes (TUI-side, ours to design; no upstream counterpart)
+
+- Bard outcome 4 and drink results don't announce the HP change amount.
+- XP/HP bars alongside the numbers; HP color when overhealed, XP color when
+  the master challenge is within reach.
+- Align your HP directly under the foe's in the fight panel.
+- Stat-rail lines for active bonuses (mount/companion/drink buffs) with
+  remaining duration. (Upstream has no persistent buff list either — buffs
+  only announce per round and on wear-off — so this is pure UX.)
+- More creature name variety: ours is 64 names over 16 levels vs upstream's
+  291 seed rows; `data::CREATURE_NAMES` appends per level without touching
+  the stat tables.
+- Forest menu default highlight on "Look for Something to Kill" (accidental
+  slumming picks after a fight ends). (From his #suggestions post.)
 
 ## Out of scope (not stock / not portable)
 

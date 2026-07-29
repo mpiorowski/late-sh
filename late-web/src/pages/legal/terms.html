@@ -1,0 +1,260 @@
+{% extends "pages/layout.html" %}
+
+{% block title %}terms &amp; acceptable use / late.sh{% endblock %}
+
+{% block page %}
+<div class="max-w-2xl mx-auto pt-8 sm:pt-16 pb-24">
+
+    <div class="mb-12">
+        <a href="/" class="text-xs text-gray-400 hover:text-green-400 underline underline-offset-2 transition-colors">&larr;
+            late.sh</a>
+        <h1 class="text-2xl sm:text-3xl text-green-500 tracking-tight mt-4">terms &amp; acceptable use</h1>
+        <p class="text-xs text-gray-400 mt-2">effective {{ effective_date }}</p>
+        <p class="text-sm text-gray-300 mt-4 leading-relaxed">
+            late.sh is a free hobby project run by one person. These are the rules for using it.
+            Short version: the whole service is 18+ and adult content can turn up anywhere, don't
+            post anything illegal, don't post anyone who hasn't agreed to be posted, and the
+            operator can remove anything and ban anyone.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 1. who runs this</div>
+        <p class="text-gray-300">
+            late.sh ("the service") is operated by {{ operator_name }}, a private individual resident
+            in Poland, reachable at
+            <a href="mailto:{{ contact_email }}"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">{{ contact_email }}</a>.
+            That address is also the contact point for abuse reports, content removal requests, and
+            data protection questions.
+        </p>
+        <p class="text-gray-400 mt-3">
+            There is no company behind this. It is a personal project, provided free of charge, with
+            no commercial purpose.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 2. the deal</div>
+        <p class="text-gray-300">
+            The service is provided free, as is, and with no guarantee that it works, stays online,
+            or keeps your data. There is no SLA, no support obligation, and no promise of backups.
+            It may change or shut down at any time, without notice.
+        </p>
+        <p class="text-gray-400 mt-3">
+            There are no accounts and no passwords. Your SSH public key fingerprint is your identity.
+            Anyone holding your private key is you, as far as the service can tell. Keep it safe.
+        </p>
+        <p class="text-gray-400 mt-3">
+            By connecting to the service you accept these terms. If you do not accept them,
+            disconnect and do not use it.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 3. age</div>
+        <p class="text-gray-300">
+            <span class="text-green-400">You must be 18 or older to use late.sh.</span>
+            There is no younger tier and no general-audience area. The service permits consensual
+            adult content, so the whole service is adults only.
+        </p>
+        <p class="text-gray-400 mt-3">
+            <span class="text-gray-300">Adult content may appear in any room, without warning.</span>
+            Images posted in chat are rendered inline and automatically, so you can encounter one
+            without choosing to open it. If that is not acceptable to you, wherever you are or
+            whoever is behind you, do not use the service.
+        </p>
+        <p class="text-gray-400 mt-3">
+            The operator does not run formal age verification. Connecting to the service is your
+            representation that you are 18 or older. If the operator has reason to believe a user is
+            a minor, that user will be banned.
+        </p>
+    </div>
+
+    <div id="acceptable-use" class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 4. acceptable use</div>
+
+        <p class="text-gray-300 mb-4">This section is the acceptable use policy. It applies to chat,
+            direct messages, rooms, the artboard, profiles, uploaded images, game content, usernames,
+            and anything else you can put into the service.</p>
+
+        <div class="border border-red-900/60 bg-red-950/20 px-4 py-3 mb-5">
+            <div class="text-red-400 text-xs mb-2">never, under any circumstances</div>
+            <ul class="text-gray-300 space-y-1.5 text-xs leading-relaxed">
+                <li>&#9500;&#9472; Sexual content involving anyone under 18, real or drawn or generated.
+                    This is reported to law enforcement and banned permanently, with no warning and
+                    no appeal.</li>
+                <li>&#9500;&#9472; Intimate images of a person who has not consented to their publication,
+                    including images shared to harass, coerce, or take revenge on someone.</li>
+                <li>&#9500;&#9472; Sexual content depicting non-consent, coercion, or animals.</li>
+                <li>&#9500;&#9472; Content that is illegal under Polish or EU law, or that incites violence
+                    or hatred against a person or group.</li>
+                <li>&#9500;&#9472; Doxxing: posting someone's private information without their consent.</li>
+                <li>&#9492;&#9472; Malware, credential theft, or using the service to attack other systems.</li>
+            </ul>
+        </div>
+
+        <div class="text-gray-300 mb-2">adult content</div>
+        <p class="text-gray-400 mb-3">
+            Consensual adult content is allowed. There are no designated rooms for it and no
+            content gate: the service is adults-only throughout, and moderators remove whatever
+            they judge does not belong in a given room. Sending it to someone in a direct message
+            who did not ask for it is harassment, and is covered by the conduct rules below.
+        </p>
+        <p class="text-gray-400 mb-3">If you post adult content, you confirm all of the following, and
+            you must be able to confirm it again if the operator asks:</p>
+        <ul class="text-gray-400 space-y-1.5 text-xs leading-relaxed mb-3 pl-4">
+            <li>&#9500;&#9472; Every identifiable person depicted is 18 or older.</li>
+            <li>&#9500;&#9472; Every identifiable person depicted has agreed to the content being published
+                here, specifically. Consent to be photographed is not consent to be posted.</li>
+            <li>&#9492;&#9472; You have the right to publish it.</li>
+        </ul>
+        <p class="text-gray-400 mb-3">
+            <span class="text-gray-300">Consent can be withdrawn.</span> If any person depicted asks
+            for the content to come down, it comes down, and the operator does not need the poster's
+            agreement to remove it. This applies whatever the relationship between the people
+            involved was at the time of posting.
+        </p>
+        <p class="text-gray-400 mb-5">
+            The operator may remove any of it from any room at any time, and may withdraw
+            permission for adult content entirely, for any reason, including "this became more
+            trouble than it is worth".
+        </p>
+
+        <div class="text-gray-300 mb-2">general conduct</div>
+        <ul class="text-gray-400 space-y-1.5 text-xs leading-relaxed pl-4">
+            <li>&#9500;&#9472; No harassment, stalking, or targeted abuse of other users.</li>
+            <li>&#9500;&#9472; No spam, advertising, or mass unsolicited messaging.</li>
+            <li>&#9500;&#9472; No impersonating other users, the operator, or the system account.</li>
+            <li>&#9500;&#9472; No posting other people's copyrighted work without permission.</li>
+            <li>&#9500;&#9472; No attempts to break, overload, or circumvent the service's limits, bans,
+                or moderation.</li>
+            <li>&#9492;&#9472; No using the service to store or distribute files unrelated to it.</li>
+        </ul>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 5. your content</div>
+        <p class="text-gray-300">
+            You keep ownership of what you post. You are responsible for it, including for having the
+            rights and the consent needed to post it.
+        </p>
+        <p class="text-gray-400 mt-3">
+            You grant the operator the permission needed to run the service: to store your content,
+            show it to other users, include it in room history and archives, and keep artboard
+            snapshots. This permission is non-exclusive, unpaid, and limited to operating late.sh.
+        </p>
+        <p class="text-gray-400 mt-3">
+            Uploaded images are stored in third-party object storage and served from public URLs.
+            <span class="text-gray-300">Anyone who has the URL can open it, whether or not they use
+                late.sh, and whether or not the message is still visible in chat.</span>
+            Treat anything you upload as public.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 6. reporting content</div>
+        <p class="text-gray-300">
+            To report content or a user, email
+            <a href="mailto:{{ contact_email }}"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">{{ contact_email }}</a>,
+            or tell a moderator in the service. Include enough detail to find it: the room, the
+            username, roughly when, and why you are reporting it.
+        </p>
+        <p class="text-gray-400 mt-3">
+            This is the notice mechanism under Article 16 of the EU Digital Services Act. Reports are
+            reviewed by a human, not automatically. Reports about sexual content involving minors and
+            about intimate images posted without consent are handled first, ahead of everything else.
+        </p>
+        <p class="text-gray-400 mt-3">
+            If you are depicted in content posted here and want it removed, say so and it will be
+            removed. You do not have to explain why, and you do not have to prove a relationship to
+            whoever posted it.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 7. enforcement</div>
+        <p class="text-gray-300">
+            The operator and moderators may remove any content and restrict any user, at their
+            discretion. Available measures include deleting messages, slow mode, removal from a room,
+            room bans, artboard and audio bans, and temporary or permanent bans from the whole
+            service.
+        </p>
+        <p class="text-gray-400 mt-3">
+            Where practical you will be told what happened and why. For the prohibitions in section 4
+            marked "never", enforcement is immediate and permanent, with no notice.
+        </p>
+        <p class="text-gray-400 mt-3">
+            Moderation actions are logged. There is no formal appeals process; if you think a
+            decision was wrong, email the address above and a human will read it.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 8. liability</div>
+        <p class="text-gray-300">
+            The service is free and provided as is, with no warranty of any kind. To the extent
+            Polish law allows, the operator is not liable for lost data, downtime, or damage arising
+            from your use of the service, or for what other users post.
+        </p>
+        <p class="text-gray-400 mt-3">
+            Nothing here limits liability for intentional harm or gross negligence, or any liability
+            that cannot be excluded under mandatory law.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 9. privacy</div>
+        <p class="text-gray-300">
+            The operator is the data controller for personal data processed by the service. Stored
+            data: your SSH key fingerprint, your chosen username, your settings, when you were last
+            seen, and what you post: chat messages, scores, profiles, and uploaded images. The full
+            public key is not stored, only its fingerprint.
+        </p>
+        <p class="text-gray-400 mt-3">
+            It is processed for one purpose, running late.sh, on the basis of providing you the
+            service under these terms and the operator's legitimate interest in keeping it safe.
+            <span class="text-gray-300">No advertising, no tracking, no sale or sharing of data for
+                marketing.</span> Data reaches third parties only as infrastructure: the servers the
+            service runs on and the object storage that holds uploaded images, processing it on the
+            operator's behalf.
+        </p>
+        <p class="text-gray-400 mt-3">
+            Data is kept while the service runs, or until you ask for deletion. One exception:
+            <span class="text-gray-300">when moderators remove a message, its content is
+                kept in the moderation log</span>, so that rule-breaking content cannot be hidden
+            by deleting the evidence, and so takedown requests can still be traced to the removed
+            content.
+        </p>
+        <p class="text-gray-400 mt-3">
+            You have the rights the GDPR gives you, including access, correction, deletion,
+            objection, and complaint to the Polish supervisory authority (UODO). To exercise them,
+            email the address above.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 10. changes</div>
+        <p class="text-gray-300">
+            These terms can change. The effective date at the top says when this version started
+            applying. Continuing to use the service after a change means you accept the new version.
+        </p>
+    </div>
+
+    <div class="mb-10 text-sm leading-relaxed">
+        <div class="text-gray-400 mb-3"><span class="text-gray-500">#</span> 11. law</div>
+        <p class="text-gray-300">
+            Polish law applies. If you are a consumer resident in the EU, you keep the protections of
+            the mandatory consumer law of your own country, and you may bring proceedings in your own
+            country's courts.
+        </p>
+    </div>
+
+    <div class="text-xs text-gray-500 border-t border-gray-700 pt-6">
+        questions: <a href="mailto:{{ contact_email }}"
+            class="text-green-400 hover:text-green-300 underline underline-offset-2">{{ contact_email }}</a>
+    </div>
+
+</div>
+{% endblock %}

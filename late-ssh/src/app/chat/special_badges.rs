@@ -14,6 +14,7 @@ const SPECIAL_BADGES: &[(&str, &[&str])] = &[
     ("ricott1", &[DEVELOPER]),
     ("odd", &[MODERATOR, DEVELOPER]),
     ("tasmania", &[MODERATOR, DEVELOPER]),
+    ("cws", &[MODERATOR]),
 ];
 
 pub(crate) fn special_badges(username: &str) -> &'static [&'static str] {
