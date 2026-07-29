@@ -11,7 +11,7 @@ use crate::test_helpers::new_test_db;
 use late_core::models::{
     artboard_ban::ArtboardBan,
     chat_room::ChatRoom,
-    chips::{INITIAL_CHIP_BALANCE, UserChips},
+    chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
     moderation_audit_log::ModerationAuditLog,
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
@@ -73,9 +73,10 @@ async fn find_profile_publishes_stored_chip_balance() {
     UserChips::ensure(&client, user.id)
         .await
         .expect("ensure chips");
-    let chips = UserChips::add_bonus(&client, user.id, 250)
+    let chips = UserChips::apply(&**client, user.id, ChipMove::Credit, 250, None)
         .await
-        .expect("add chips");
+        .expect("add chips")
+        .expect("credited");
 
     let service = ProfileService::new(test_db.db.clone(), default_active_users());
     let mut snapshot_rx = service.subscribe_snapshot(user.id);
