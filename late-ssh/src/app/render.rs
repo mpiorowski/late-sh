@@ -159,6 +159,7 @@ struct DrawContext<'a> {
     brogue_enabled: bool,
     usurper_enabled: bool,
     dopewars_enabled: bool,
+    codekeep_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
@@ -170,6 +171,7 @@ struct DrawContext<'a> {
     brogue_state: Option<&'a mut crate::app::door::brogue::state::State>,
     usurper_state: Option<&'a mut crate::app::door::usurper::state::State>,
     dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
+    codekeep_state: Option<&'a mut crate::app::door::codekeep::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
     /// pixel polish on top of the existing text rendering.
@@ -926,6 +928,7 @@ impl App {
         let mut brogue_state_taken = self.brogue_state.take();
         let mut usurper_state_taken = self.usurper_state.take();
         let mut dopewars_state_taken = self.dopewars_state.take();
+        let mut codekeep_state_taken = self.codekeep_state.take();
 
         let pinstar_browser = if screen == Screen::Pinstar {
             Some(&self.pinstar_browser)
@@ -955,6 +958,7 @@ impl App {
                         brogue_enabled: self.brogue_enabled,
                         usurper_enabled: self.usurper_enabled,
                         dopewars_enabled: self.dopewars_enabled,
+                        codekeep_enabled: self.codekeep_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
                         greendragon_state: self.greendragon_state.as_ref(),
@@ -965,6 +969,7 @@ impl App {
                         brogue_state: brogue_state_taken.as_mut(),
                         usurper_state: usurper_state_taken.as_mut(),
                         dopewars_state: dopewars_state_taken.as_mut(),
+                        codekeep_state: codekeep_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
                         tetris_state: &self.tetris_state,
@@ -1088,6 +1093,7 @@ impl App {
         self.brogue_state = brogue_state_taken;
         self.usurper_state = usurper_state_taken;
         self.dopewars_state = dopewars_state_taken;
+        self.codekeep_state = codekeep_state_taken;
         draw_result?;
 
         // Feed the modal's image capacity (recorded during draw) back into
@@ -1309,6 +1315,7 @@ impl App {
                         brogue_enabled: ctx.brogue_enabled,
                         usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
+                        codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
                     },
                 );
@@ -1389,6 +1396,12 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dopewars::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Codekeep => {
+                if let Some(state) = ctx.codekeep_state {
+                    state.set_viewport(content_area);
+                    crate::app::door::codekeep::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Pinstar => {
@@ -1755,6 +1768,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Brogue
                         | Screen::Usurper
                         | Screen::Dopewars
+                        | Screen::Codekeep
                         | Screen::GreenDragon
                 ))
             || (*tab_screen == Screen::Dashboard
@@ -1780,6 +1794,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
+        Screen::Codekeep => "CodeKeep",
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
@@ -1908,6 +1923,23 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.push(Span::styled(
                 "· Ctrl-C quit ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Codekeep {
+        spans.push(Span::styled(
+            "by github.com/tooyipjee/codekeep ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        let in_game = ctx
+            .codekeep_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "· Ctrl-C save & quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

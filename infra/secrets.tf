@@ -152,6 +152,27 @@ resource "kubernetes_secret_v1" "dopewars_identity_secret" {
 }
 
 # =============================================================================
+# CodeKeep Door Identity Seed
+# =============================================================================
+
+resource "random_password" "codekeep_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "codekeep_identity_secret" {
+  metadata {
+    name = "codekeep-identity-secret"
+  }
+
+  data = {
+    secret = random_password.codekeep_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # DCSS Door Identity Seed
 # =============================================================================
 # Shared secret authorizing late-ssh -> late-dcss. The same value is injected

@@ -10,6 +10,7 @@ locals {
   # (service-ssh's LATE_DOPEWARS_ENABLED); the late-dopewars host pod is always
   # deployed. Host/port/PVC locals live in dopewars.tf.
   dopewars_enabled = trimspace(var.DOPEWARS_ENABLED) != "" ? trimspace(var.DOPEWARS_ENABLED) : "1"
+  codekeep_enabled = trimspace(var.CODEKEEP_ENABLED) != "" ? trimspace(var.CODEKEEP_ENABLED) : "1"
 
   voice_enabled = trimspace(var.VOICE_ENABLED) != "" ? trimspace(var.VOICE_ENABLED) : "1"
   voice_room    = trimspace(var.VOICE_ROOM) != "" ? trimspace(var.VOICE_ROOM) : "late-voice"

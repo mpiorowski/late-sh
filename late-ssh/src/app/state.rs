@@ -259,6 +259,11 @@ pub struct SessionConfig {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// CodeKeep door game: reached through the dedicated `late-codekeep` host.
+    pub codekeep_enabled: bool,
+    pub codekeep_host: String,
+    pub codekeep_port: u16,
+    pub codekeep_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -595,6 +600,12 @@ pub struct App {
     pub(crate) dopewars_host: String,
     pub(crate) dopewars_port: u16,
     pub(crate) dopewars_secret: String,
+    pub(crate) codekeep_state: Option<crate::app::door::codekeep::state::State>,
+    pub(crate) codekeep_term: String,
+    pub(crate) codekeep_enabled: bool,
+    pub(crate) codekeep_host: String,
+    pub(crate) codekeep_port: u16,
+    pub(crate) codekeep_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1327,6 +1338,12 @@ impl App {
             dopewars_host: config.dopewars_host,
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
+            codekeep_state: None,
+            codekeep_term: config.term.clone(),
+            codekeep_enabled: config.codekeep_enabled,
+            codekeep_host: config.codekeep_host,
+            codekeep_port: config.codekeep_port,
+            codekeep_secret: config.codekeep_secret,
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
@@ -1616,6 +1633,27 @@ impl App {
         self.dopewars_state = None;
     }
 
+    pub(crate) fn enter_codekeep(&mut self) {
+        if self.codekeep_state.is_some() {
+            return;
+        }
+        self.codekeep_state = Some(crate::app::door::codekeep::state::State::new(
+            self.user_id,
+            self.codekeep_host.clone(),
+            self.codekeep_port,
+            self.codekeep_secret.clone(),
+            self.codekeep_term.clone(),
+            self.codekeep_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_codekeep(&mut self) {
+        // Dropping the proxy closes the host session; the host SIGHUP-saves the
+        // upstream game before releasing this account's single-session lease.
+        self.codekeep_state = None;
+    }
+
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
         self.expire_artboard_ban_if_needed();
         if self.artboard_banned {
@@ -1824,6 +1862,9 @@ impl App {
             if screen == Screen::Dopewars {
                 self.enter_dopewars();
             }
+            if screen == Screen::Codekeep {
+                self.enter_codekeep();
+            }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
             }
@@ -1870,6 +1911,11 @@ impl App {
 
         if self.screen == Screen::Dopewars {
             self.leave_dopewars();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Codekeep {
+            self.leave_codekeep();
             self.force_full_repaint();
         }
 
@@ -1925,6 +1971,9 @@ impl App {
         }
         if self.screen == Screen::Dopewars {
             self.enter_dopewars();
+        }
+        if self.screen == Screen::Codekeep {
+            self.enter_codekeep();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
@@ -2131,6 +2180,21 @@ impl App {
         }
         if self.screen == crate::app::common::primitives::Screen::Dopewars
             && let Some(state) = self.dopewars_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // CodeKeep is another network PTY door. Ink owns every key while the
+        // game is live; Ctrl-C triggers upstream's graceful save-and-exit.
+        if self.screen == crate::app::common::primitives::Screen::Codekeep
+            && let Some(state) = self.codekeep_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Codekeep
+            && let Some(state) = self.codekeep_state.as_ref()
             && state.in_exit_grace()
         {
             return;

@@ -173,6 +173,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
     }
 }
 
@@ -513,6 +517,10 @@ fn make_app_with_chat_service_and_permissions(
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -699,6 +707,10 @@ pub fn make_app_with_paired_client(
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

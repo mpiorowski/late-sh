@@ -1382,7 +1382,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Dcss
                     | HubGame::Brogue
                     | HubGame::Usurper
-                    | HubGame::Dopewars => {
+                    | HubGame::Dopewars
+                    | HubGame::Codekeep => {
                         app.leave_lateania();
                         app.lateania_service.delete_character_task(app.user_id);
                         app.banner = Some(crate::app::common::primitives::Banner::success(
@@ -1527,6 +1528,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.set_screen(Screen::Darkroom);
             app.enter_darkroom();
         }
+        HubGame::Codekeep => {
+            if !app.codekeep_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "CodeKeep is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Codekeep);
+            if let Some(state) = app.codekeep_state.as_mut() {
+                state.connect();
+            }
+        }
     }
 }
 
@@ -1666,6 +1679,19 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         if let ParsedInput::Byte(b'\r' | b'\n') = event {
             app.enter_dopewars();
             if let Some(state) = app.dopewars_state.as_mut() {
+                state.connect();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Codekeep {
+        // Running bytes are intercepted before parsed input. This fallback only
+        // covers a launcher state reached after a failed/closed connection.
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_codekeep();
+            if let Some(state) = app.codekeep_state.as_mut() {
                 state.connect();
             }
             return true;
@@ -3375,6 +3401,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
+        Screen::Codekeep => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
         Screen::Pinstar => {
@@ -4110,6 +4137,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
+        }
+        Screen::Codekeep => {
+            // Launcher Enter is handled in handle_dedicated_screen_input;
+            // Running-mode bytes are forwarded raw in App::handle_input.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

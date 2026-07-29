@@ -430,6 +430,9 @@ impl App {
         if let Some(state) = self.dopewars_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.codekeep_state.as_mut() {
+            state.tick();
+        }
         if let Some(state) = self.greendragon_state.as_mut() {
             // Same off-screen drain rule as Lateania above.
             let greendragon_changed = state.tick();
@@ -494,6 +497,14 @@ impl App {
         if self.screen == Screen::Dopewars
             && self
                 .dopewars_state
+                .as_ref()
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Codekeep
+            && self
+                .codekeep_state
                 .as_ref()
                 .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
         {
