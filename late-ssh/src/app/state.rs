@@ -324,6 +324,35 @@ pub struct SessionConfig {
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// A running `/pomodoro` countdown. Deliberately not a Work/Break state
+/// machine: `label` is whatever the user typed, and nothing auto-advances to
+/// a next phase. Single-user and entirely in-memory -- no DB, no migration,
+/// no registry, unlike `/pair` which needed one only because two people had
+/// to agree on anything.
+#[derive(Clone, Debug)]
+pub(crate) struct PomodoroTimer {
+    pub(crate) label: String,
+    pub(crate) ends_at: DateTime<Utc>,
+}
+
+impl PomodoroTimer {
+    /// Whole seconds left, rounded up so a freshly started 25 minute timer
+    /// reads `25:00` instead of `24:59`, and floored at zero for the frame
+    /// between expiry and the 1Hz edge in `tick.rs` that clears the timer.
+    pub(crate) fn remaining_secs(&self, now: DateTime<Utc>) -> u64 {
+        let millis = (self.ends_at - now).num_milliseconds().max(0) as u64;
+        millis.div_ceil(1_000)
+    }
+
+    /// The status HUD badge: `MM:SS label`. Minutes are not wrapped into
+    /// hours because the command caps a timer well under the point where
+    /// three-digit minutes would be confusing.
+    pub(crate) fn badge(&self, now: DateTime<Utc>) -> String {
+        let remaining = self.remaining_secs(now);
+        format!("{:02}:{:02} {}", remaining / 60, remaining % 60, self.label)
+    }
+}
+
 /// Main application state
 pub struct App {
     /// Lifecycle
@@ -679,10 +708,13 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// Desktop-notification domain: producers (chat, daily) push through
-    /// cloned `notifier` handles; render drains `notify_outbox` into OSC
-    /// bytes.
+    /// Desktop-notification domain: producers (chat, daily, this session's
+    /// own tick-driven events like Pomodoro completion) push through cloned
+    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
+    pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
+    /// The running `/pomodoro` countdown, if any. `None` when idle.
+    pub(crate) pomodoro: Option<PomodoroTimer>,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -1367,7 +1399,9 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
+            notifier,
             notify_outbox,
+            pomodoro: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),

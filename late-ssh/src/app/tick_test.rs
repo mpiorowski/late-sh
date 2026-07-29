@@ -272,3 +272,53 @@ async fn sidebar_holds_half_rate_and_paints_on_edges() {
         "sidebar must skip between edges ({changed}/{total})"
     );
 }
+
+/// The `/pomodoro` countdown lives entirely on the tick's 1Hz edge: a running
+/// timer keeps paying frames (the HUD badge counts down in seconds), and the
+/// edge that finds it expired clears it, banners, and queues the desktop
+/// notification. Forcing `last_one_hz_index` to `None` fires the edge on the
+/// next tick so the test does not sleep out a real wall-clock second.
+#[tokio::test]
+async fn pomodoro_paints_while_running_then_fires_once_on_expiry() {
+    let (_test_db, mut app) = chat_compose_app("tick-gate-pomodoro").await;
+    hide_sidebar(&mut app);
+
+    settle_clean(&mut app).await;
+
+    app.pomodoro = Some(crate::app::state::PomodoroTimer {
+        label: "deep work".to_string(),
+        ends_at: chrono::Utc::now() + chrono::Duration::minutes(25),
+    });
+    app.last_one_hz_index = None;
+    assert!(app.tick(), "a running countdown repaints on the 1Hz edge");
+    assert!(
+        app.pomodoro.is_some(),
+        "an unexpired countdown must survive the edge"
+    );
+    app.banner = None;
+    drain_frame(&mut app);
+
+    app.pomodoro = Some(crate::app::state::PomodoroTimer {
+        label: "deep work".to_string(),
+        ends_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+    });
+    app.last_one_hz_index = None;
+    assert!(app.tick(), "expiry dirties the tick");
+    assert!(app.pomodoro.is_none(), "expiry clears the timer");
+    let banner = app.banner.take().expect("expiry banners the label");
+    assert!(
+        banner.message.contains("deep work"),
+        "banner should name the finished timer: {}",
+        banner.message
+    );
+    assert!(
+        app.notify_outbox.has_pending(),
+        "expiry queues a desktop notification"
+    );
+
+    // Nothing left to fire: the next edge is quiet again.
+    drain_frame(&mut app);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert!(app.banner.is_none(), "expiry must not re-fire");
+}

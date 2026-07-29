@@ -94,6 +94,17 @@ impl Notification {
             body: question.to_string(),
         }
     }
+
+    /// Reuses `GameEvents` rather than adding a dedicated `Kind`/settings row:
+    /// this is the same "something you started needs your attention" bucket
+    /// as the daily/house your-turn alerts.
+    pub(crate) fn pomodoro_done(label: &str) -> Self {
+        Self {
+            kind: Kind::GameEvents,
+            title: format!("{label} done"),
+            body: "your /pomodoro timer finished".to_string(),
+        }
+    }
 }
 
 /// Create the session's notification channel. Clone the [`Notifier`] into any

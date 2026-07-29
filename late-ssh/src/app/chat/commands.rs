@@ -121,6 +121,7 @@ const COMMANDS: &[Command] = &[
     global("pet", "toggle the pet strip"),
     global("petname", "name your pet"),
     global("poll", "start room poll"),
+    global("pomodoro", "start a focus countdown (stop to cancel)"),
     global("private", "new private room"),
     global("profile", "view user profile"),
     global("public", "open public room for everyone"),

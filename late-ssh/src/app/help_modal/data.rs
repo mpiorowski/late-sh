@@ -472,6 +472,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /poll              start a Home room poll with 2-3 options",
         "  /challenge [@user] daily challenge (chess, battleship, connect4, reversi, checkers, backgammon): lobby or directed",
         "  /pair @user        shared live coding scratchpad (both of you must run it)",
+        "  /pomodoro [m] [..] focus countdown in the top bar (default 25 min); /pomodoro stop",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
         "  /sheet [@user]     your character sheet, or another user's (#dnd)",
         "  /paste-image       upload image from paired CLI clipboard (see Images)",

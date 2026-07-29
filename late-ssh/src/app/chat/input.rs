@@ -269,6 +269,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             }
         }
     }
+    if let Some(request) = app.chat.take_requested_pomodoro() {
+        app.banner = Some(apply_pomodoro_request(app, request));
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
@@ -291,6 +294,37 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             app.banner = Some(Banner::error(
                 "No paired CLI with clipboard image support. Update and run `late`.",
             ));
+        }
+    }
+}
+
+/// Apply a parsed `/pomodoro` command to the session's timer and produce the
+/// banner to show. The timer is session-local state on `App`, so nothing here
+/// touches a service.
+fn apply_pomodoro_request(
+    app: &mut App,
+    request: crate::app::chat::state::PomodoroRequest,
+) -> Banner {
+    use crate::app::chat::state::PomodoroRequest;
+    match request {
+        PomodoroRequest::Stop => match app.pomodoro.take() {
+            Some(timer) => Banner::success(&format!("stopped {}", timer.label)),
+            None => Banner::error("no pomodoro running — start one with /pomodoro [minutes]"),
+        },
+        PomodoroRequest::Start { minutes, label } => {
+            // A second /pomodoro replaces the running one instead of being
+            // refused: restarting a focus block is the common case, and the
+            // banner says which it was.
+            let verb = if app.pomodoro.is_some() {
+                "restarted"
+            } else {
+                "started"
+            };
+            app.pomodoro = Some(crate::app::state::PomodoroTimer {
+                label: label.clone(),
+                ends_at: chrono::Utc::now() + chrono::Duration::minutes(i64::from(minutes)),
+            });
+            Banner::success(&format!("{verb} {label} — {minutes} min"))
         }
     }
 }

@@ -105,3 +105,41 @@ fn voice_toggle_intent_switches_to_active_voice_room() {
         VoiceToggleIntent::JoinOrSwitch
     );
 }
+
+#[test]
+fn pomodoro_badge_counts_down_in_whole_seconds() {
+    let now = Utc::now();
+    let timer = PomodoroTimer {
+        label: "deep work".to_string(),
+        ends_at: now + chrono::Duration::minutes(25),
+    };
+    // Rounded up, so the first frame after `/pomodoro 25` reads the duration
+    // the user asked for rather than one second less.
+    assert_eq!(timer.remaining_secs(now), 25 * 60);
+    assert_eq!(timer.badge(now), "25:00 deep work");
+    assert_eq!(
+        timer.badge(now + chrono::Duration::milliseconds(500)),
+        "25:00 deep work"
+    );
+    assert_eq!(
+        timer.badge(now + chrono::Duration::seconds(1)),
+        "24:59 deep work"
+    );
+    assert_eq!(
+        timer.badge(now + chrono::Duration::minutes(24)),
+        "01:00 deep work"
+    );
+}
+
+/// Expiry is cleared on a 1Hz edge in `tick.rs`, so the badge has to hold at
+/// zero for the frames in between instead of going negative.
+#[test]
+fn pomodoro_badge_floors_at_zero_after_expiry() {
+    let now = Utc::now();
+    let timer = PomodoroTimer {
+        label: "Pomodoro".to_string(),
+        ends_at: now - chrono::Duration::seconds(30),
+    };
+    assert_eq!(timer.remaining_secs(now), 0);
+    assert_eq!(timer.badge(now), "00:00 Pomodoro");
+}

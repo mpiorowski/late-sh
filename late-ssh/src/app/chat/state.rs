@@ -556,6 +556,7 @@ pub struct ChatState {
     requested_ultimate_modal: bool,
     requested_daily_challenge: Option<DailyChallengeRequest>,
     requested_pair: Option<PairRequest>,
+    requested_pomodoro: Option<PomodoroRequest>,
     requested_icon_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
@@ -743,6 +744,7 @@ impl ChatState {
             requested_ultimate_modal: false,
             requested_daily_challenge: None,
             requested_pair: None,
+            requested_pomodoro: None,
             requested_icon_picker: false,
             requested_message_search: None,
             requested_petname: None,
@@ -1025,6 +1027,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_pair(&mut self) -> Option<PairRequest> {
         self.requested_pair.take()
+    }
+
+    pub(crate) fn take_requested_pomodoro(&mut self) -> Option<PomodoroRequest> {
+        self.requested_pomodoro.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -2161,6 +2167,21 @@ impl ChatState {
                 }
                 None => {
                     return Some(Banner::error("Usage: /pair @user"));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_pomodoro_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                Some(request) => {
+                    self.requested_pomodoro = Some(request);
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error(
+                        "Usage: /pomodoro [minutes] [label...] or /pomodoro stop",
+                    ));
                 }
             }
         }
@@ -5224,6 +5245,83 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
         return Some(None);
     }
     Some(Some(PairRequest::Directed(username.to_string())))
+}
+
+/// One classic tomato when `/pomodoro` is given no duration.
+const POMODORO_DEFAULT_MINUTES: u32 = 25;
+/// Well past any real focus block, and short enough that the HUD badge stays
+/// two-digit minutes.
+const POMODORO_MAX_MINUTES: u32 = 180;
+/// The badge shares the top border with mentions, voice, and chips, so the
+/// label has to stay short. Display cells, not chars: a CJK or emoji label
+/// costs two cells per char and would otherwise crowd the border out.
+const POMODORO_LABEL_MAX_COLS: usize = 24;
+const POMODORO_DEFAULT_LABEL: &str = "Pomodoro";
+
+/// A `/pomodoro` request drained by `handle_post_submit_requests`. The timer
+/// itself lives on `App` (not here): `tick.rs` fires it and the status HUD
+/// draws it from every screen, not just chat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PomodoroRequest {
+    Start { minutes: u32, label: String },
+    Stop,
+}
+
+/// `Some(Some(request))` on a usable `/pomodoro` line, `Some(None)` on a
+/// malformed one (usage banner), `None` when it isn't `/pomodoro` at all.
+///
+/// A leading integer is the duration and everything after it is the label, so
+/// `/pomodoro 50 deep work` and the label-only `/pomodoro deep work` (default
+/// duration) both work. Only an out-of-range duration is an error.
+fn parse_pomodoro_command(input: &str) -> Option<Option<PomodoroRequest>> {
+    let rest = input.trim().strip_prefix("/pomodoro")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut words = rest.split_whitespace().peekable();
+    // `stop` is checked before the label path so it can never be read as one.
+    if words
+        .peek()
+        .is_some_and(|word| word.eq_ignore_ascii_case("stop"))
+    {
+        words.next();
+        return Some((words.next().is_none()).then_some(PomodoroRequest::Stop));
+    }
+    let mut minutes = POMODORO_DEFAULT_MINUTES;
+    if words
+        .peek()
+        .is_some_and(|word| word.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        let digits = words.next().unwrap_or_default();
+        // Out of range (including a digit run too long for u32) is a usage
+        // banner rather than a silent clamp.
+        match digits.parse::<u32>() {
+            Ok(parsed) if (1..=POMODORO_MAX_MINUTES).contains(&parsed) => minutes = parsed,
+            _ => return Some(None),
+        }
+    }
+    // Rejoining with single spaces drops any tabs/newlines; then strip control
+    // chars (the label reaches a desktop notification and the top border) and
+    // cap the width, same shape as the `/gift` note.
+    use unicode_width::UnicodeWidthChar;
+    let mut cols = 0usize;
+    let label: String = words
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take_while(|ch| {
+            cols += ch.width().unwrap_or(0);
+            cols <= POMODORO_LABEL_MAX_COLS
+        })
+        .collect();
+    let label = label.trim();
+    let label = if label.is_empty() {
+        POMODORO_DEFAULT_LABEL.to_string()
+    } else {
+        label.to_string()
+    };
+    Some(Some(PomodoroRequest::Start { minutes, label }))
 }
 
 /// A `/challenge` request drained by `handle_post_submit_requests` (the
