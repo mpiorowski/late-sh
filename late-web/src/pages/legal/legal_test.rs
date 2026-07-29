@@ -46,6 +46,20 @@ fn terms_state_the_age_limit_and_the_consent_rules() {
 }
 
 #[test]
+fn terms_disclose_retention_and_the_moderation_log() {
+    let page = rendered();
+
+    assert!(
+        page.contains("until you ask for deletion"),
+        "gdpr requires stating how long data is kept"
+    );
+    assert!(
+        page.contains("kept in the moderation log"),
+        "deleted messages are retained in the audit log and that must be disclosed"
+    );
+}
+
+#[test]
 fn terms_prohibit_minors_and_non_consensual_intimate_images() {
     let page = rendered();
 
