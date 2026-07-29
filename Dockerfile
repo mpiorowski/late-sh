@@ -13,28 +13,17 @@ ARG DEBIAN_VERSION=bookworm
 # ==============================================================================
 # Stage 0: Door game binaries - prebuilt images from docker/doors/
 # ==============================================================================
-# Each door game (the real upstream binary, compiled from verified source) has
-# its own Dockerfile under docker/doors/ and its own workflow that builds and
-# pushes the image (.github/workflows/<door>.yml). Pinning them here by tag
-# means a door recipe rebuilds only when its own Dockerfile changes, never on
-# ordinary image builds. Bump a tag when that door's recipe or upstream
-# version changes.
+# Each door game's upstream runtime artifact is prepared by its own Dockerfile
+# under docker/doors/ and its own workflow that builds and pushes the image
+# (.github/workflows/<door>.yml). Pinning them here by tag means a door recipe
+# rebuilds only when its own Dockerfile changes, never on ordinary image
+# builds. Bump a tag when that door's recipe or upstream version changes.
 FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r1 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r1 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
 FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2 AS brogue-build
-
-# CodeKeep is an npm-published Ink TUI. Resolve the exact package and every
-# transitive dependency from the checked-in Bun lock; runtime never uses bunx
-# or reaches the registry.
-FROM oven/bun:1.3.10-debian AS codekeep-build
-WORKDIR /opt/codekeep
-COPY docker/codekeep/package.json docker/codekeep/bun.lock ./
-RUN bun install --production --frozen-lockfile \
-    && bun node_modules/codekeep/dist/index.js --version | grep -qx '1.0.9'
-COPY docker/codekeep/codekeep /usr/local/bin/codekeep
-RUN chmod 0755 /usr/local/bin/codekeep
+FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
 
 # ==============================================================================
 # Stage 0: Base - Common system dependencies
