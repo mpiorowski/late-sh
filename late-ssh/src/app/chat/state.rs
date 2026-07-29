@@ -4210,10 +4210,8 @@ impl ChatState {
                     user_id,
                     request_id,
                     message,
-                } if self.user_id == user_id => {
-                    if self.message_search.is_current(request_id) {
-                        self.message_search.fail(sentence_case(&message));
-                    }
+                } if self.user_id == user_id && self.message_search.is_current(request_id) => {
+                    self.message_search.fail(sentence_case(&message));
                 }
                 ChatEvent::MessageContextLoaded {
                     user_id,
@@ -4236,15 +4234,15 @@ impl ChatState {
                     user_id,
                     request_id,
                     message_id,
-                } if self.user_id == user_id => {
-                    if self.message_search.context_in_flight == Some((request_id, message_id)) {
-                        self.message_search.context_in_flight = None;
-                        // Cache an empty window so a persistent failure does
-                        // not refire every tick; the hit still renders alone.
-                        self.message_search
-                            .context
-                            .insert(message_id, MessageContext::default());
-                    }
+                } if self.user_id == user_id
+                    && self.message_search.context_in_flight == Some((request_id, message_id)) =>
+                {
+                    self.message_search.context_in_flight = None;
+                    // Cache an empty window so a persistent failure does not
+                    // refire every tick; the hit still renders alone.
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext::default());
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id,
