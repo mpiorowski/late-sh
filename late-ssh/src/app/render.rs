@@ -163,6 +163,7 @@ struct DrawContext<'a> {
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
+    darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     dcss_state: Option<&'a mut crate::app::door::dcss::state::State>,
@@ -957,6 +958,7 @@ impl App {
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
                         greendragon_state: self.greendragon_state.as_ref(),
+                        darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         dcss_state: dcss_state_taken.as_mut(),
@@ -1331,6 +1333,17 @@ impl App {
                     &crate::app::door::greendragon::screen::GreenDragonScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.greendragon_state,
+                    },
+                    terminal_images,
+                );
+            }
+            Screen::Darkroom => {
+                crate::app::door::darkroom::screen::GAME.draw(
+                    frame,
+                    content_area,
+                    &crate::app::door::darkroom::screen::DarkroomScreenView {
+                        delete_confirm: ctx.door_delete_confirm,
+                        state: ctx.darkroom_state,
                     },
                     terminal_images,
                 );
@@ -1767,6 +1780,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
+        Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
@@ -1908,7 +1922,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),

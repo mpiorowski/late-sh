@@ -27,8 +27,12 @@ use crate::app::games::{
 };
 
 use super::{
-    backgammon::DailyBackgammonState, battleship::DailyBattleshipState,
-    checkers::DailyCheckersState, connect4::DailyConnect4State, games::DailyGame,
+    backgammon::DailyBackgammonState,
+    battleship::DailyBattleshipState,
+    briscola::{self, DailyBriscolaState},
+    checkers::DailyCheckersState,
+    connect4::DailyConnect4State,
+    games::DailyGame,
     reversi::DailyReversiState,
 };
 
@@ -333,9 +337,9 @@ impl DailyService {
         });
     }
 
-    /// Directed challenge addressed by username (the `/challenge @user` and
-    /// modal prompt path). Resolves against the DB so the target does not
-    /// need to be online.
+    /// Directed challenge addressed by username (the modal's directed-draft
+    /// prompt path). Resolves against the DB so the target does not need to
+    /// be online.
     pub fn post_challenge_to_username_task(
         &self,
         user_id: Uuid,
@@ -528,6 +532,14 @@ impl DailyService {
                 let first = state.white;
                 (serde_json::to_value(state)?, first)
             }
+            DailyGame::Briscola => {
+                // `new` shuffles the deck and flips the coin for seat 0, who
+                // leads the first trick. That shuffle is the match's whole
+                // supply of randomness: every draw after it replays this deal.
+                let state = DailyBriscolaState::new(challenge.challenger_id, user_id);
+                let first = state.user_of(0);
+                (serde_json::to_value(state)?, first)
+            }
         };
         // Usernames for the voice channel label, loaded before the claim
         // transaction opens.
@@ -646,6 +658,8 @@ impl DailyService {
             DailyGame::Checkers => bail!("checkers moves use the path channel"),
             // Backgammon likewise: a turn is up to four hops.
             DailyGame::Backgammon => bail!("backgammon moves use the turn channel"),
+            // A briscola "move" is one card; `to` carries its id.
+            DailyGame::Briscola => self.play_briscola_card(&client, row, user_id, to).await,
         }
     }
 
@@ -1227,6 +1241,93 @@ impl DailyService {
         Ok(())
     }
 
+    /// One card onto the table. The turn passes to the follower mid-trick and
+    /// to the trick winner once the trick closes, so the mover can come
+    /// straight back up. Passing 60 of the 120 points finishes the match; an
+    /// even split after the last trick draws it.
+    async fn play_briscola_card(
+        &self,
+        client: &tokio_postgres::Client,
+        row: DailyMatch,
+        user_id: Uuid,
+        card_id: usize,
+    ) -> Result<()> {
+        let match_id = row.id;
+        let mut state = DailyBriscolaState::parse(&row.state)?;
+        let seat = state
+            .seat_of(user_id)
+            .ok_or_else(|| anyhow::anyhow!("you are not playing in this match"))?;
+        // The prelude checked `next_turn`; the play history is the deeper
+        // truth, so a disagreement must fail loudly, not corrupt it.
+        ensure!(state.table().turn == seat, "not your turn");
+        let card = u8::try_from(card_id)
+            .ok()
+            .and_then(briscola::Card::from_id)
+            .ok_or_else(|| anyhow::anyhow!("that is not a card"))?;
+        let base_revision = state.revision as i64;
+        state.revision = state.revision.saturating_add(1);
+        // Holding the card is checked here, against the replayed hand.
+        let outcome = state.apply_play(card)?;
+        let label = outcome.label();
+        let state_value = serde_json::to_value(&state)?;
+
+        let finished = match outcome.finish {
+            Some(briscola::MatchEnd::Winner(seat)) => {
+                Some((Some(state.user_of(seat)), DailyMatch::RESULT_MOST_POINTS))
+            }
+            Some(briscola::MatchEnd::Draw) => Some((None, DailyMatch::RESULT_DRAW)),
+            None => None,
+        };
+        match finished {
+            Some((winner, result)) => {
+                let updated = DailyMatch::finish(
+                    client,
+                    match_id,
+                    winner,
+                    result,
+                    &state_value,
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+                self.finish_events(
+                    match_id,
+                    DailyGame::Briscola,
+                    row.challenger_id,
+                    row.opponent_id,
+                    winner,
+                    result,
+                );
+            }
+            None => {
+                let next_turn = state.turn_user();
+                let updated = DailyMatch::update_state(
+                    client,
+                    match_id,
+                    &state_value,
+                    user_id,
+                    next_turn,
+                    Utc::now() + chrono::Duration::hours(DAILY_MOVE_HOURS),
+                    base_revision,
+                )
+                .await?;
+                ensure!(updated == 1, "move was superseded, reload the match");
+                let _ = self.event_tx.send(DailyEvent::MovePlayed {
+                    match_id,
+                    by_user_id: user_id,
+                    label,
+                });
+            }
+        }
+        self.publish(client).await?;
+        Ok(())
+    }
+
     /// Game-agnostic: the winner is simply the other player on the row, and
     /// the revision bump happens on the raw state JSON, so resign never needs
     /// to know which game it is quitting.
@@ -1514,6 +1615,17 @@ impl DailyService {
                             state
                                 .as_ref()
                                 .map(DailyBackgammonState::move_count)
+                                .unwrap_or(0),
+                        )
+                    }
+                    DailyGame::Briscola => {
+                        let state = DailyBriscolaState::parse(&row.state).ok();
+                        (
+                            None,
+                            None,
+                            state
+                                .as_ref()
+                                .map(DailyBriscolaState::move_count)
                                 .unwrap_or(0),
                         )
                     }

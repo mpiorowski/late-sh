@@ -42,8 +42,71 @@ fn bot_context_includes_hub_guide_facts() {
     assert!(context.contains("## Economy\n"));
     assert!(context.contains("Monthly Top Chips counts net chip delta."));
     assert!(context.contains("Lateris, 2048, Snake, and Traffic record run scores."));
-    assert!(context.contains("Blackjack form: name, pace, stake."));
     assert!(context.contains("Four-seat fixed-stack Texas Hold'em"));
+}
+
+/// The Lobby replaced the rooms-era Tables screen: no table creation, no
+/// setup forms, and chess moved to the daily correspondence board. The guide
+/// described the old screen long after it was gone, so pin the new shape.
+#[test]
+fn hub_guide_describes_the_lobby_not_the_rooms_era_tables() {
+    let context = bot_app_context();
+    assert!(context.contains("There is one fixed table per game: no creating tables"));
+    assert!(context.contains("Poker, Blackjack, Asterion, Tron, and Super Snake."));
+    assert!(context.contains("Chess and the other daily games are correspondence matches now"));
+    for gone in [
+        "Open Tables with 4",
+        "Create Table Forms",
+        "Blackjack form: name, pace, stake",
+        "Room stacks: 100, 500, 1000",
+        "Tic-Tac-Toe",
+        "Clock presets",
+    ] {
+        assert!(!context.contains(gone), "hub guide still describes {gone}");
+    }
+}
+
+/// "How do I earn chips" is the question the bot gets most, so the Chips tab
+/// has to name every paying surface, not a sample of them.
+#[test]
+fn chips_guide_lists_every_earning_surface() {
+    let context = bot_app_context();
+    assert!(HelpTopic::ALL.iter().any(|topic| topic.title() == "Chips"));
+    assert!(context.contains("## Chips\n"));
+    let chips = lines_for(HelpTopic::Chips, false, "").join("\n");
+    for expected in [
+        "Arcade dailies",
+        "Solitaire draw-3",
+        "Le Word daily",
+        "Rubik's Cube daily",
+        "Quests",
+        "daily streak",
+        "Bonsai",
+        "Watering pays",
+        "Daily correspondence matches",
+        "Battleship",
+        "Backgammon",
+        "Asterion",
+        "Super Snake",
+        "Tron",
+        "Poker, Blackjack",
+        "Archdemon",
+        "King Who Was Promised Nothing",
+        "Amulet of Yendor",
+        "Green Dragon",
+        "/gift @user",
+    ] {
+        assert!(chips.contains(expected), "chips guide missing {expected}");
+    }
+    // Losing at a non-betting surface must never read as a chip risk, and the
+    // pay-nothing surfaces have to be called out or the bot invents payouts.
+    assert!(chips.contains("the losers lose nothing"));
+    assert!(chips.contains("pay no chips yet"));
+    assert!(chips.contains("no login bonus"));
+    // Economy keeps ranking rules; the amounts live here, in one place.
+    let economy = lines_for(HelpTopic::Economy, false, "").join("\n");
+    assert!(economy.contains("The Chips tab lists every way to earn chips"));
+    assert!(economy.contains("Monthly Top Chips counts net chip delta."));
 }
 
 #[test]
@@ -95,7 +158,6 @@ fn chat_guide_lists_user_facing_slash_commands() {
     let lines = chat_help_lines(false).join("\n");
     for expected in [
         "/brb [message]",
-        "/challenge [@user]",
         "/coffee",
         "/friend [@user]",
         "/friends",

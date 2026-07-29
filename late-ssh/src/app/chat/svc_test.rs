@@ -1208,15 +1208,19 @@ async fn admin_delete_event_carries_admin_user_id_not_author() {
     }
 
     let audit = ModerationAuditLog::all(&client).await.expect("audit log");
-    let audit_count = audit
+    let entries: Vec<_> = audit
         .iter()
         .filter(|entry| {
             entry.actor_user_id == admin.id
                 && entry.action == "message_delete"
                 && entry.target_id == Some(msg.id)
         })
-        .count();
-    assert_eq!(audit_count, 1);
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].metadata["body"], "admin will delete this",
+        "deleted body must survive in the audit log; it is the only pointer to uploaded image urls"
+    );
 }
 
 #[tokio::test]

@@ -55,7 +55,7 @@ permissions:
 # The published door image tag. Must match the pin in the root Dockerfile's
 # brogue-build stage; bump both together on any recipe change.
 env:
-  DOOR_IMAGE_TAG: 1.15.1-r1
+  DOOR_IMAGE_TAG: 1.15.1-r2
 
 jobs:
   build_validate:

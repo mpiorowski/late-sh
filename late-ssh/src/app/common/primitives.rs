@@ -69,6 +69,7 @@ pub enum Screen {
     Dopewars,
     Usurper,
     GreenDragon,
+    Darkroom,
     Artboard,
     Pinstar,
     Clubhouse,
@@ -105,7 +106,8 @@ impl Screen {
             | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
@@ -127,7 +129,8 @@ impl Screen {
             | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
             Screen::Scratchpad => Screen::Dashboard,
@@ -176,6 +179,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dopewars => "dopewars",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
+        Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",

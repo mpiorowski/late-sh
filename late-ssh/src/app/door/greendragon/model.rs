@@ -1311,59 +1311,69 @@ impl Character {
         ))
     }
 
-    /// Cost in gold to upgrade to `target_tier`, crediting a 75% trade-in on the
-    /// currently equipped item of `current_tier`. Returns `None` if the target
-    /// is not a strict upgrade or is out of range.
-    fn upgrade_cost(current_tier: u8, target_tier: u8) -> Option<u64> {
-        if target_tier == 0 || target_tier as usize > data::COST_LADDER.len() {
+    /// The 75% trade-in credit on the equipped item of `tier` (upstream:
+    /// `round(weaponvalue * .75)`, `weapons.php:12`), 0 when bare.
+    fn trade_in_value(tier: u8) -> u64 {
+        if tier == 0 {
+            return 0;
+        }
+        (data::COST_LADDER[(tier - 1) as usize] as f64 * data::TRADE_IN_FRACTION as f64).round()
+            as u64
+    }
+
+    /// Net gold to swap the equipped item of `current_tier` for the shop row
+    /// `target_tier`: the row's price less the trade-in. Negative means the
+    /// trade-in exceeds the price and the difference is paid out (upstream
+    /// charges `value` then credits the trade-in, downgrades included). The
+    /// shop sells its whole ladder regardless of player level — affordability
+    /// is the only purchase gate (`weapons.php`: `value > gold + tradein`
+    /// refuses). `None` only for an out-of-range row or the equipped row
+    /// itself (re-buying your own gear is pointless; a TUI nicety).
+    fn swap_cost(current_tier: u8, target_tier: u8) -> Option<i64> {
+        if target_tier == 0
+            || target_tier as usize > data::COST_LADDER.len()
+            || target_tier == current_tier
+        {
             return None;
         }
-        if target_tier <= current_tier {
+        let price = data::COST_LADDER[(target_tier - 1) as usize] as i64;
+        Some(price - Self::trade_in_value(current_tier) as i64)
+    }
+
+    /// Net cost to swap the weapon for shop row `tier`, or `None` if the row
+    /// is out of range or already equipped.
+    pub fn weapon_swap_cost(&self, tier: u8) -> Option<i64> {
+        Self::swap_cost(self.weapon_tier, tier)
+    }
+
+    /// Net cost to swap the armor for shop row `tier`, or `None` if the row
+    /// is out of range or already equipped.
+    pub fn armor_swap_cost(&self, tier: u8) -> Option<i64> {
+        Self::swap_cost(self.armor_tier, tier)
+    }
+
+    /// Attempt to buy weapon `tier`, settling the price less the trade-in
+    /// against on-hand gold. Returns the net gold paid (negative = refunded)
+    /// or `None` when refused (bad row, already equipped, can't afford).
+    pub fn buy_weapon(&mut self, tier: u8) -> Option<i64> {
+        let net = self.weapon_swap_cost(tier)?;
+        if (self.gold as i64) < net {
             return None;
         }
-        let cost = data::COST_LADDER[(target_tier - 1) as usize] as f64;
-        let trade_in = if current_tier == 0 {
-            0.0
-        } else {
-            data::COST_LADDER[(current_tier - 1) as usize] as f64 * data::TRADE_IN_FRACTION as f64
-        };
-        Some((cost - trade_in).max(0.0).round() as u64)
+        self.gold = (self.gold as i64 - net) as u64;
+        self.weapon_tier = tier;
+        Some(net)
     }
 
-    /// Cost to upgrade the weapon to `tier`, or `None` if not a valid upgrade.
-    pub fn weapon_upgrade_cost(&self, tier: u8) -> Option<u64> {
-        Self::upgrade_cost(self.weapon_tier, tier)
-    }
-
-    /// Cost to upgrade the armor to `tier`, or `None` if not a valid upgrade.
-    pub fn armor_upgrade_cost(&self, tier: u8) -> Option<u64> {
-        Self::upgrade_cost(self.armor_tier, tier)
-    }
-
-    /// Attempt to buy weapon `tier`, spending on-hand gold. Returns true on
-    /// success.
-    pub fn buy_weapon(&mut self, tier: u8) -> bool {
-        match self.weapon_upgrade_cost(tier) {
-            Some(cost) if self.gold >= cost => {
-                self.gold -= cost;
-                self.weapon_tier = tier;
-                true
-            }
-            _ => false,
+    /// Attempt to buy armor `tier`; same settlement as [`Self::buy_weapon`].
+    pub fn buy_armor(&mut self, tier: u8) -> Option<i64> {
+        let net = self.armor_swap_cost(tier)?;
+        if (self.gold as i64) < net {
+            return None;
         }
-    }
-
-    /// Attempt to buy armor `tier`, spending on-hand gold. Returns true on
-    /// success.
-    pub fn buy_armor(&mut self, tier: u8) -> bool {
-        match self.armor_upgrade_cost(tier) {
-            Some(cost) if self.gold >= cost => {
-                self.gold -= cost;
-                self.armor_tier = tier;
-                true
-            }
-            _ => false,
-        }
+        self.gold = (self.gold as i64 - net) as u64;
+        self.armor_tier = tier;
+        Some(net)
     }
 
     /// Gold cost to fully heal: `round(ln(level) * (damage_taken + 10))`. Free
@@ -1610,16 +1620,14 @@ impl Character {
     /// Resolve losing a PvP fight you started (`lib/pvpsupport.php`
     /// `pvpdefeat`): all on-hand gold lost, [`PVP_ATTACKER_LOSE_PCT`]% of
     /// experience lost, dead to the graveyard. Same death hygiene as
-    /// [`Character::die`] — companions and buffs don't follow past the grave
-    /// (ours die with every death; upstream's PvP path leaves them, a
-    /// documented adaptation).
+    /// [`Character::die`] — companions survive (only a dragon kill wipes
+    /// them upstream), buffs and drunkenness don't.
     pub fn pvp_die(&mut self) {
         self.gold = 0;
         self.experience =
             (self.experience as f64 * (100 - PVP_ATTACKER_LOSE_PCT) as f64 / 100.0).round() as u64;
         self.alive = false;
         self.hitpoints = 0;
-        self.companions.clear();
         self.persistent_buffs.clear();
         self.drunkenness = 0;
     }
@@ -1639,7 +1647,6 @@ impl Character {
         self.experience = self.experience.saturating_sub(lost_exp);
         self.alive = false;
         self.hitpoints = 0;
-        self.companions.clear();
         self.persistent_buffs.clear();
         self.drunkenness = 0;
     }
@@ -1651,10 +1658,11 @@ impl Character {
         self.experience = (self.experience as f64 * EXP_KEEP_ON_DEATH).round() as u64;
         self.alive = false;
         self.hitpoints = 0;
-        // Your companions don't follow you past the grave.
-        self.companions.clear();
-        // Neither do your buffs (upstream strips them at the graveyard), and
-        // death sobers you right up (the `header-graveyard` drinks hook).
+        // Companions survive the grave: upstream only wipes them on a dragon
+        // kill (`dragon.php:227`); the graveyard merely suspends any without
+        // `allowinshades`, which every stock companion carries, so they even
+        // fight the torments. Buffs do strip (graveyard entry) and death
+        // sobers you right up (the `header-graveyard` drinks hook).
         self.persistent_buffs.clear();
         self.drunkenness = 0;
     }
@@ -2125,7 +2133,11 @@ impl Character {
                 std::cmp::Ordering::Less => {
                     lines.push(format!("It goes down like a lit coal: {delta} hitpoints."))
                 }
-                std::cmp::Ordering::Equal => {}
+                // Say so even when the roll lands on zero, so the outcome
+                // never reads as unannounced (user feedback).
+                std::cmp::Ordering::Equal => {
+                    lines.push("It goes down smooth; no worse for wear.".into())
+                }
             }
         }
         if do_turn {

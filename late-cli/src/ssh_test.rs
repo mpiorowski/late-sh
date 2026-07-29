@@ -1,5 +1,9 @@
 use super::*;
 
+// The banner parser and the openssh command specs are Unix-only, so the tests
+// covering them compile only there. parse_session_token_response and
+// ParsedTarget below are platform-neutral and always run.
+#[cfg(unix)]
 fn test_config() -> Config {
     Config {
         ssh_target: "late.example".to_string(),
@@ -19,6 +23,7 @@ fn test_config() -> Config {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn parse_cli_banner_extracts_token_and_consumed_bytes() {
     let buf = b"LATE_SESSION_TOKEN=abc-123\r\n\x1b[?1049h";
@@ -31,6 +36,7 @@ fn parse_cli_banner_extracts_token_and_consumed_bytes() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn parse_cli_banner_passthroughs_regular_output() {
     let buf = b"hello\r\nworld";
@@ -40,6 +46,7 @@ fn parse_cli_banner_passthroughs_regular_output() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn openssh_master_command_uses_control_master_and_identity() {
     let config = test_config();
@@ -74,6 +81,7 @@ fn openssh_master_command_uses_control_master_and_identity() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn openssh_master_command_allows_config_or_agent_identity() {
     let config = test_config();
@@ -83,6 +91,7 @@ fn openssh_master_command_allows_config_or_agent_identity() {
     assert!(!spec.args_as_strings().contains(&"-i".to_string()));
 }
 
+#[cfg(unix)]
 #[test]
 fn openssh_token_command_uses_control_socket_and_exec_handshake() {
     let config = test_config();
@@ -107,6 +116,7 @@ fn openssh_token_command_uses_control_socket_and_exec_handshake() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn openssh_shell_command_uses_control_socket_and_tty() {
     let config = test_config();
@@ -131,6 +141,7 @@ fn openssh_shell_command_uses_control_socket_and_tty() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn openssh_cleanup_command_exits_control_master() {
     let config = test_config();

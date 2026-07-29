@@ -3,7 +3,7 @@
 # brogue door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/brogue.yml as
-# ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r1; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2; the root Dockerfile pins that
 # image as its brogue-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm
@@ -23,6 +23,14 @@ ARG DEBIAN_VERSION=bookworm
 # patch installs a hangup handler running the same quitImmediately save path.
 # The late-brogue host relies on it for teardown saves; the grep asserts it
 # landed, fail-closed. Re-verify the patch on Brogue CE version bumps.
+#
+# scripts/brogue_verify_isolation.sh then asserts the upstream properties that
+# per-player save isolation rests on (no path can reach a filename, files keep a
+# known suffix, the file browser lists only the cwd, nothing spawns a process).
+# Players are separated by their working directory alone, and only upstream's
+# own input filter makes that a wall, so a CE bump that relaxes it must fail the
+# build here: no Rust test can see it. Details in the brogue door's CONTEXT.md
+# section 4.
 #
 # The terminal build reads no data files (DATADIR only matters for tiles), and
 # opens every player file relative to its working directory; the host gives
@@ -48,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 COPY scripts/brogue_hangup_save.patch /build/brogue_hangup_save.patch
+COPY scripts/brogue_verify_isolation.sh /build/brogue_verify_isolation.sh
 RUN curl -fsSL -o "${BROGUE_TARBALL}" "${BROGUE_URL}" \
     && echo "${BROGUE_SHA256}  ${BROGUE_TARBALL}" | sha256sum -c - \
     && tar -xzf "${BROGUE_TARBALL}" \
@@ -56,6 +65,7 @@ RUN curl -fsSL -o "${BROGUE_TARBALL}" "${BROGUE_URL}" \
 WORKDIR /build/BrogueCE-${BROGUE_VERSION}
 RUN patch -p1 < /build/brogue_hangup_save.patch \
     && grep -q handleHangup src/platform/curses-platform.c \
+    && sh /build/brogue_verify_isolation.sh . \
     && make -j"$(nproc)" bin/brogue TERMINAL=YES GRAPHICS=NO RELEASE=YES \
     && test -x bin/brogue \
     && ./bin/brogue --version | grep -qx "Brogue version: CE ${BROGUE_VERSION}" \

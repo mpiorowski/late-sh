@@ -1,9 +1,9 @@
 # Door Games & MUDs - Candidate Research
 
 Investigation notes for slowly adding more door games / MUDs to late.sh.
-Status: **research notes.** Last updated 2026-07-25 (added the incremental /
-idle shelf: A Dark Room audited as the cheapest pattern-1 port on the list, plus
-a license sweep of the famous idle games). Previous cut 2026-07-21: Brogue CE
+Status: **research notes.** Last updated 2026-07-28 (A Dark Room v1 is playable
+end to end: the room and village acts, the pacing decision, and the door's own
+context file). Previous cut 2026-07-21: Brogue CE
 is the next door, one marketing beat before the Green Dragon push (see root
 `DRAGON.md`); TradeWars/twclone re-parked as future season/event content
 despite a green spike; museum wing passed on.
@@ -80,6 +80,7 @@ worth owning. Licensing is the gate before any of this matters.
 
 | Game | License | Notes |
 |---|---|---|
+| **DarkLands** ([darklands.cx](https://darklands.cx)) | Site calls it "an open-source project," but no license file or repo turned up; the download page's own author note says "I'm working on bringing this on a proper git system" - so today it's tarballs only, no source control, no explicit license text. | LORD/MUD-style BBS door, active on-and-off since 2000 (Nuitari & Snell productions, currently v0.21). Big character-generation surface (12 major races, 60+ subraces, 9 alignment combos, 12 gods or atheist, 200+ racial skills, 100+ rooms, 15+ monsters) plus a "build cities, raise armies" persistent-world angle - closer to a LORD/Usurper-style door than a roguelike. Ships a Linux tarball, a DOS/DPMI build, and BBS-door support (`Door.sys`/`doorfile.sr`/`chain.txt`), so pattern 2 is plausible in shape - but with no source repo and no stated license, we can't point at a pinned tarball with any license confidence yet, so it's not actionable until the author's promised git migration lands. Note the name collision: this is unrelated to both the 1992 MicroProse *Darklands* RPG and `darklands.net` (an unrelated MicroProse-abandonware mirror site). Revisit once a repo + explicit license shows up. |
 | **GWT (Galactic Warriors Tournament)** | Source on GitHub, license unclear | Sci-fi LORD-like, source available; confirm license before use. |
 | **Dominion** | Source on GitHub, license unclear | Fantasy RPG door; confirm license. |
 | **Candy Box 2** | GPL-3.0 | A Dark Room's 2013 twin: ASCII art, hidden depth, same cult status. Perfect aesthetic fit, **wrong license for a native port** - linking GPL code into late-ssh would relicense late-ssh, which our FSL cannot do. The only clean path is a standalone GPLv3 binary we spawn on a PTY (pattern 2), which for a browser game means writing the entire thing ourselves and then giving it away. Yellow, not red: legal, just a bad trade. |
@@ -282,7 +283,15 @@ honest options:
    it rebalances the whole game (the fire, the wanderers, the population curve)
    and needs caps or the wasteland is trivial after one night away.
 
-Pick this before writing code, not after.
+**Resolved 2026-07-27, and it is neither of the two:** the port credits time
+while the **SSH session is connected** (anywhere on late.sh, not just on the
+door's screen), runs the **village half at 5x slower**, and caps village time
+at **3 hours per UTC day**. Cooldowns, the fire and the room temperature stay
+at upstream speed, because the opening act is a click loop and slowing it
+produces dead air rather than a longer game; the slowdown lands only on worker
+income and new arrivals. The daily cap is what makes the "spans weeks" claim
+true regardless of who parks a terminal on a spare monitor. The whole design
+lives in one module (`pace.rs`) and nothing else knows about it.
 
 ### A Dark Room: license (the short version)
 
@@ -418,14 +427,17 @@ lands harder on an SSH server than it ever did on the web.
    the dragon ships**: a fresh small universe per season (`bigbang` makes
    regeneration cheap), a daily turn ration, "highest net worth by Sunday",
    #lounge coronation, universe dies. Do not build the always-on version.
-7. **A Dark Room** - **candidate, not scheduled.** Native Rust port (pattern 1),
-   audited 2026-07-25: MPL-2.0, 8.5k lines of backend-free JS, state already a
-   single JSON blob, timers already centralized, text already externalized for
-   i18n. Cheapest pattern-1 port on this page. Two things gate it, and neither
-   is effort: **send Townsend an email first** (live commercial product, and he
-   has been burned by brand-squatting clones), and **decide offline progress vs.
-   faithful** before writing code. Opens a new shelf rather than adding one
-   door; **Progress Quest** is the natural cheap follow-up on that shelf.
+7. **A Dark Room** - **v1 playable 2026-07-28, room + village acts.**
+   Native Rust port (pattern 1), the first game on the incremental shelf.
+   Both gates are closed: Townsend was emailed about **the name** (the MPL
+   covers the code, so the email is etiquette plus trademark, not permission),
+   and the **pacing question is decided** - see below. Built so far: the fire,
+   room temperature, the full builder arc, the forest unlock, gathering and
+   traps, huts/population, the worker income economy, and buildings through the
+   smokehouse. Still to come: the wasteland, the path/outfitting screen,
+   combat and events, the workshop crafting tier, the trading post's buy menu,
+   and the ship endgame. See `late-ssh/src/app/door/darkroom/CONTEXT.md`.
+   **Progress Quest** is the natural cheap follow-up on this shelf.
 
 MUDs are intentionally **not** in this list anymore - see Parked below.
 
@@ -440,9 +452,6 @@ MUDs are intentionally **not** in this list anymore - see Parked below.
 - Multiplayer state: dopewars/Wolfpack have their own servers - decide whether
   each player gets an isolated instance (NetHack-style) or shares one persistent
   world (Lateania-style).
-- For A Dark Room: offline progress or faithful-no-offline? See the incremental
-  shelf above. It changes the balance of the whole game, so it is a decision to
-  make before the port starts, not a feature to bolt on after.
 - General rule this research surfaced: **any pattern-1 native port has to be
   license-compatible with our FSL**, which rules out GPL sources (Candy Box 2,
   Swarm Simulator) that pattern 2 would have been fine with. MPL/MIT/BSD are the
@@ -487,4 +496,5 @@ not a native port.
 - Incremental shelf: [A Dark Room source](https://github.com/doublespeakgames/adarkroom) · [LICENSE.md (MPL-2.0)](https://github.com/doublespeakgames/adarkroom/blob/main/LICENSE.md) · ["A Dark Room goes open source"](http://blog.doublespeakgames.com/news/a-dark-room-goes-open-source/) · [LWN writeup](https://lwn.net/Articles/612829/) · [Wikipedia](https://en.wikipedia.org/wiki/A_Dark_Room) · [Haskell WIP terminal port](https://github.com/jordangedney/adarkroom-port)
 - Genre neighbours: [Evolve (MPL-2.0)](https://github.com/pmotschmann/Evolve) · [Antimatter Dimensions (MIT)](https://github.com/IvarK/AntimatterDimensionsSourceCode) · [Candy Box 2 (GPLv3)](https://github.com/candybox2/candybox2.github.io) · [Swarm Simulator (GPL-3.0)](https://github.com/swarmsim/swarm) · [Kittens Game (WET PAWS LICENSE)](https://github.com/nuclear-unicorn/kittensgame) · [Progress Quest](https://progressquest.com/) · [pq-cli terminal edition](https://github.com/rr-/pq-cli)
 - [DoorNode (DOSBox door launcher)](https://github.com/dinchak/doornode) · [BBS door game wiki](https://breakintochat.com/wiki/BBS_door_game) · [Dominion](https://github.com/mostlygeek/dominion) · [GWT](https://github.com/Rurik/GWT)
+- [DarkLands homepage](https://darklands.cx/) · [features](https://darklands.cx/features.php) · [downloads](https://darklands.cx/download.php)
 </content>

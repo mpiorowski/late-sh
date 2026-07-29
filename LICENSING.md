@@ -91,6 +91,14 @@ licenses. These are listed, with their source and attribution, in
 [`NOTICE`](NOTICE). For example, the NetHack door game runs the unmodified
 upstream NetHack under the NetHack General Public License.
 
+One component is not a bundled program but source we derived from: the A Dark
+Room door is our own port of an MPL-2.0 web game. MPL-2.0 is *file-level*
+copyleft, so the files carrying material derived from upstream
+(`late-ssh/src/app/door/darkroom/data.rs`, `model.rs`, `sim.rs`) stay under
+MPL-2.0 and say so in their headers, while the rest of late.sh, including the
+rest of that door, stays under FSL-1.1-MIT. MPL section 3.3 is what allows
+that arrangement. See [`NOTICE`](NOTICE) for the full entry.
+
 ## No legal advice
 
 This file is an explanatory policy for contributors and operators. The actual
