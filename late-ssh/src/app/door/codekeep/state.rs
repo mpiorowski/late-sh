@@ -11,8 +11,6 @@ pub enum Mode {
     Running,
 }
 
-const EXIT_GRACE_TICKS: u8 = 10;
-
 pub struct State {
     user_id: uuid::Uuid,
     host: String,
@@ -24,7 +22,6 @@ pub struct State {
     viewport: Rect,
     term: String,
     repaint: Option<Arc<RenderSignal>>,
-    exit_grace: u8,
 }
 
 impl State {
@@ -48,7 +45,6 @@ impl State {
             viewport: Rect::new(0, 0, 108, 24),
             term,
             repaint,
-            exit_grace: 0,
         }
     }
 
@@ -87,7 +83,6 @@ impl State {
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
-        self.exit_grace = 0;
     }
 
     pub fn tick(&mut self) {
@@ -99,15 +94,14 @@ impl State {
             if closed {
                 self.proxy = None;
                 self.mode = Mode::Launcher;
-                self.exit_grace = EXIT_GRACE_TICKS;
             }
-        } else if self.exit_grace > 0 {
-            self.exit_grace -= 1;
         }
     }
 
+    /// CodeKeep has no post-exit prompts or trailing key sequence to absorb, so
+    /// it returns directly to Games instead of holding on its launcher.
     pub fn in_exit_grace(&self) -> bool {
-        self.exit_grace > 0
+        false
     }
 
     pub fn proxy(&self) -> Option<&CodekeepProcess> {

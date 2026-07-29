@@ -34,15 +34,10 @@ fn strip_input_noise_keeps_keys_and_arrows() {
 }
 
 #[test]
-fn exit_grace_opens_on_close_and_counts_down() {
+fn closed_proxy_returns_to_launcher_without_exit_grace() {
     let mut state = disabled_state();
     state.mode = Mode::Running;
     state.tick();
     assert_eq!(state.mode(), Mode::Launcher);
-    assert!(state.in_exit_grace());
-    for _ in 0..EXIT_GRACE_TICKS {
-        assert!(state.in_exit_grace());
-        state.tick();
-    }
     assert!(!state.in_exit_grace());
 }

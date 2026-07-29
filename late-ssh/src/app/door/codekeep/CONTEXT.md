@@ -18,7 +18,7 @@ The game is the exact npm package `codekeep@1.0.9`. `docker/codekeep/package.jso
 - CodeKeep is the final card in the Games hub (`3`). `Enter` switches to `Screen::Codekeep`, constructs the per-session client state, and connects immediately.
 - While running, all ordinary terminal bytes go to CodeKeep. late.sh strips its own any-event mouse reports and bracketed-paste markers first.
 - Upstream owns its controls: arrows select, `Enter` confirms, `q`/`Esc` backs out, and `q` on the main menu exits. `Ctrl-C` invokes upstream's graceful save-and-exit handler.
-- When the remote channel closes, `State::tick` opens the standard short exit-input grace and then returns to `Screen::Games`.
+- When the remote channel closes, `State::tick` returns to `Screen::Games` on the same app tick. CodeKeep has no post-exit prompts, so it does not use the roguelike doors' trailing-input grace.
 - Upstream enforces a minimum 108x24 game viewport. Because late.sh keeps a top frame row, the user's terminal needs additional vertical room. A smaller terminal shows upstream's own size warning; late.sh does not alter or crop game logic.
 
 ## Identity and persistence
@@ -87,7 +87,7 @@ Host (`late-codekeep`):
 
 ## Tests and verification
 
-Pure tests cover key derivation, account-label validation, session-label stability, input filtering, disabled launch, exit grace, selector ordering, and Screen fallback. The PTY/network path is verified with the built runtime image and a real terminal.
+Pure tests cover key derivation, account-label validation, session-label stability, input filtering, disabled launch, immediate close-to-launcher transition, selector ordering, and Screen fallback. The PTY/network path is verified with the built runtime image and a real terminal.
 
 Focused checks:
 

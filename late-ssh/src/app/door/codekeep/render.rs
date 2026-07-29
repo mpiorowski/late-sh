@@ -4,6 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
+use super::proxy::ProxyStatus;
 use super::state::{Mode, State};
 use crate::app::common::theme;
 use crate::app::door::landing;
@@ -97,10 +98,16 @@ fn codekeep_logo() -> Vec<Line<'static>> {
 }
 
 fn draw_running(frame: &mut Frame, area: Rect, state: &State) {
-    let Some(proxy) = state.proxy().filter(|proxy| proxy.is_running()) else {
-        frame.render_widget(Paragraph::new("Starting CodeKeep..."), area);
+    let Some(proxy) = state.proxy() else {
         return;
     };
+    if proxy.status() == ProxyStatus::Connecting {
+        frame.render_widget(Paragraph::new("Starting CodeKeep..."), area);
+        return;
+    }
+    // Closed wakes the renderer before the app's next tick returns to Games.
+    // Preserve the final game frame during that sub-tick transition instead of
+    // mislabeling it as a new connection attempt.
     let buf = frame.buffer_mut();
     proxy.with_screen(|screen| blit_screen(buf, area, screen));
 }
