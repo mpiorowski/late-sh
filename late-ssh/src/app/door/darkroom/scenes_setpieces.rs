@@ -66,12 +66,10 @@ const fn torchlit(text: &'static str, next: Next) -> Button {
     }
 }
 
-/// A fight scene. Upstream's setpiece fights carry no death line of their
-/// own; the buttons underneath say what happens next.
-#[allow(clippy::too_many_arguments)]
-const fn brawl(
-    key: &'static str,
-    notification: &'static str,
+/// An enemy's stat line, exactly the fields upstream hangs off a combat
+/// scene. Bundled so a fight scene reads as "who" plus "what happens around
+/// the fight".
+struct Foe {
     enemy: &'static str,
     chara: char,
     health: i64,
@@ -79,6 +77,34 @@ const fn brawl(
     hit: f64,
     attack_delay: f64,
     ranged: bool,
+}
+
+const fn foe(
+    enemy: &'static str,
+    chara: char,
+    health: i64,
+    damage: i64,
+    hit: f64,
+    attack_delay: f64,
+    ranged: bool,
+) -> Foe {
+    Foe {
+        enemy,
+        chara,
+        health,
+        damage,
+        hit,
+        attack_delay,
+        ranged,
+    }
+}
+
+/// A fight scene. Upstream's setpiece fights carry no death line of their
+/// own; the buttons underneath say what happens next.
+const fn brawl(
+    key: &'static str,
+    notification: &'static str,
+    foe: Foe,
     spoils: &'static [Loot],
     buttons: &'static [Button],
 ) -> Scene {
@@ -86,13 +112,13 @@ const fn brawl(
         key,
         notification: Some(notification),
         combat: Some(Combat {
-            enemy,
-            chara,
-            health,
-            damage,
-            hit,
-            attack_delay,
-            ranged,
+            enemy: foe.enemy,
+            chara: foe.chara,
+            health: foe.health,
+            damage: foe.damage,
+            hit: foe.hit,
+            attack_delay: foe.attack_delay,
+            ranged: foe.ranged,
             death_message: "",
             loot: spoils,
             next: Next::End,
@@ -177,13 +203,7 @@ static HOUSE: Event = Event {
             ..brawl(
                 "occupied",
                 "a man charges down the hall, a rusty blade in his hand",
-                "squatter",
-                'E',
-                10,
-                3,
-                0.8,
-                2.0,
-                false,
+                foe("squatter", 'E', 10, 3, 0.8, 2.0, false),
                 &[
                     loot(Resource::CuredMeat, 0.8, 1, 10),
                     loot(Resource::Leather, 0.2, 1, 10),
@@ -223,13 +243,7 @@ static CAVE: Event = Event {
         brawl(
             "a1",
             "a startled beast defends its home",
-            "beast",
-            'R',
-            5,
-            1,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 5, 1, 0.8, 1.0, false),
             &[
                 loot(Resource::Fur, 1.0, 1, 10),
                 loot(Resource::Teeth, 0.8, 1, 5),
@@ -303,13 +317,7 @@ static CAVE: Event = Event {
         brawl(
             "b3",
             "a startled beast defends its home",
-            "beast",
-            'R',
-            5,
-            1,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 5, 1, 0.8, 1.0, false),
             &[
                 loot(Resource::Fur, 1.0, 1, 3),
                 loot(Resource::Teeth, 0.8, 1, 2),
@@ -322,13 +330,7 @@ static CAVE: Event = Event {
         brawl(
             "b4",
             "a cave lizard attacks",
-            "cave lizard",
-            'R',
-            6,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("cave lizard", 'R', 6, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::Scales, 1.0, 1, 3),
                 loot(Resource::Teeth, 0.8, 1, 2),
@@ -341,13 +343,7 @@ static CAVE: Event = Event {
         brawl(
             "c1",
             "a large beast charges out of the dark",
-            "beast",
-            'R',
-            10,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("beast", 'R', 10, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::Fur, 1.0, 1, 3),
                 loot(Resource::Teeth, 1.0, 1, 3),
@@ -360,13 +356,7 @@ static CAVE: Event = Event {
         brawl(
             "c2",
             "a giant lizard shambles forward",
-            "lizard",
-            'T',
-            10,
-            4,
-            0.8,
-            2.0,
-            false,
+            foe("lizard", 'T', 10, 4, 0.8, 2.0, false),
             &[
                 loot(Resource::Scales, 1.0, 1, 3),
                 loot(Resource::Teeth, 1.0, 1, 3),
@@ -461,13 +451,7 @@ static TOWN: Event = Event {
         brawl(
             "a2",
             "ambushed on the street.",
-            "thug",
-            'E',
-            30,
-            4,
-            0.8,
-            2.0,
-            false,
+            foe("thug", 'E', 30, 4, 0.8, 2.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 5, 10),
                 loot(Resource::Leather, 0.8, 5, 10),
@@ -508,13 +492,7 @@ static TOWN: Event = Event {
         brawl(
             "b2",
             "a scavenger waits just inside the door.",
-            "scavenger",
-            'E',
-            30,
-            4,
-            0.8,
-            2.0,
-            false,
+            foe("scavenger", 'E', 30, 4, 0.8, 2.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 5, 10),
                 loot(Resource::Leather, 0.8, 5, 10),
@@ -528,13 +506,7 @@ static TOWN: Event = Event {
         brawl(
             "b3",
             "a beast stands alone in an overgrown park.",
-            "beast",
-            'R',
-            25,
-            3,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 25, 3, 0.8, 1.0, false),
             &[
                 loot(Resource::Teeth, 1.0, 1, 5),
                 loot(Resource::Fur, 1.0, 5, 10),
@@ -565,13 +537,7 @@ static TOWN: Event = Event {
         brawl(
             "b5",
             "a madman attacks, screeching.",
-            "madman",
-            'E',
-            10,
-            6,
-            0.3,
-            1.0,
-            false,
+            foe("madman", 'E', 10, 6, 0.3, 1.0, false),
             &[
                 loot(Resource::Cloth, 0.3, 2, 4),
                 loot(Resource::CuredMeat, 0.9, 1, 5),
@@ -585,13 +551,7 @@ static TOWN: Event = Event {
         brawl(
             "c1",
             "a thug moves out of the shadows.",
-            "thug",
-            'E',
-            30,
-            4,
-            0.8,
-            2.0,
-            false,
+            foe("thug", 'E', 30, 4, 0.8, 2.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 5, 10),
                 loot(Resource::Leather, 0.8, 5, 10),
@@ -605,13 +565,7 @@ static TOWN: Event = Event {
         brawl(
             "c2",
             "a beast charges out of a ransacked classroom.",
-            "beast",
-            'R',
-            25,
-            3,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 25, 3, 0.8, 1.0, false),
             &[
                 loot(Resource::Teeth, 1.0, 1, 5),
                 loot(Resource::Fur, 1.0, 5, 10),
@@ -637,13 +591,7 @@ static TOWN: Event = Event {
         brawl(
             "c4",
             "another beast, draw by the noise, leaps out of a copse of trees.",
-            "beast",
-            'R',
-            25,
-            4,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 25, 4, 0.8, 1.0, false),
             &[
                 loot(Resource::Teeth, 1.0, 1, 5),
                 loot(Resource::Fur, 1.0, 5, 10),
@@ -681,13 +629,7 @@ static TOWN: Event = Event {
         brawl(
             "d1",
             "a panicked scavenger bursts through the door, screaming.",
-            "scavenger",
-            'E',
-            30,
-            5,
-            0.8,
-            2.0,
-            false,
+            foe("scavenger", 'E', 30, 5, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 1.0, 1, 5),
                 loot(Resource::Leather, 0.8, 5, 10),
@@ -701,13 +643,7 @@ static TOWN: Event = Event {
         brawl(
             "d2",
             "a man stands over a dead wanderer. notices he's not alone.",
-            "vigilante",
-            'D',
-            30,
-            6,
-            0.8,
-            2.0,
-            false,
+            foe("vigilante", 'D', 30, 6, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 1.0, 1, 5),
                 loot(Resource::Leather, 0.8, 5, 10),
@@ -894,13 +830,7 @@ static CITY: Event = Event {
         brawl(
             "b2",
             "a huge lizard scrambles up out of the darkness of an old metro station.",
-            "lizard",
-            'R',
-            20,
-            5,
-            0.8,
-            2.0,
-            false,
+            foe("lizard", 'R', 20, 5, 0.8, 2.0, false),
             &[
                 loot(Resource::Scales, 0.8, 5, 10),
                 loot(Resource::Teeth, 0.5, 5, 10),
@@ -914,13 +844,7 @@ static CITY: Event = Event {
         brawl(
             "b3",
             "the shot echoes in the empty street.",
-            "sniper",
-            'D',
-            30,
-            15,
-            0.8,
-            4.0,
-            true,
+            foe("sniper", 'D', 30, 15, 0.8, 4.0, true),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Bullets, 0.5, 1, 5),
@@ -934,13 +858,7 @@ static CITY: Event = Event {
         brawl(
             "b4",
             "the soldier steps out from between the buildings, rifle raised.",
-            "soldier",
-            'D',
-            50,
-            8,
-            0.8,
-            2.0,
-            true,
+            foe("soldier", 'D', 50, 8, 0.8, 2.0, true),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Bullets, 0.5, 1, 5),
@@ -954,13 +872,7 @@ static CITY: Event = Event {
         brawl(
             "b5",
             "a frail man stands defiantly, blocking the path.",
-            "frail man",
-            'E',
-            10,
-            1,
-            0.8,
-            2.0,
-            false,
+            foe("frail man", 'E', 10, 1, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Cloth, 0.5, 1, 5),
@@ -1002,13 +914,7 @@ static CITY: Event = Event {
         brawl(
             "b8",
             "an old man bursts through a door, wielding a scalpel.",
-            "old man",
-            'E',
-            10,
-            3,
-            0.5,
-            2.0,
-            false,
+            foe("old man", 'E', 10, 3, 0.5, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 0.5, 1, 3),
                 loot(Resource::Cloth, 0.8, 1, 5),
@@ -1025,13 +931,7 @@ static CITY: Event = Event {
         brawl(
             "c1",
             "a thug is waiting on the other side of the wall.",
-            "thug",
-            'E',
-            30,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("thug", 'E', 30, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::SteelSword, 0.5, 1, 1),
                 loot(Resource::CuredMeat, 0.5, 1, 3),
@@ -1045,13 +945,7 @@ static CITY: Event = Event {
         brawl(
             "c2",
             "a snarling beast jumps out from behind a car.",
-            "beast",
-            'R',
-            30,
-            2,
-            0.8,
-            1.0,
-            false,
+            foe("beast", 'R', 30, 2, 0.8, 1.0, false),
             &[
                 loot(Resource::Meat, 0.8, 1, 5),
                 loot(Resource::Fur, 0.8, 1, 5),
@@ -1171,13 +1065,7 @@ static CITY: Event = Event {
         brawl(
             "c11",
             "a tribe of elderly squatters is camped out in this ward.",
-            "squatters",
-            'E',
-            40,
-            2,
-            0.7,
-            0.5,
-            false,
+            foe("squatters", 'E', 40, 2, 0.7, 0.5, false),
             &[
                 loot(Resource::CuredMeat, 0.5, 1, 3),
                 loot(Resource::Cloth, 0.8, 3, 8),
@@ -1191,13 +1079,7 @@ static CITY: Event = Event {
         brawl(
             "c12",
             "a pack of lizards rounds the corner.",
-            "lizards",
-            'R',
-            30,
-            4,
-            0.7,
-            0.7,
-            false,
+            foe("lizards", 'R', 30, 4, 0.7, 0.7, false),
             &[
                 loot(Resource::Meat, 1.0, 3, 8),
                 loot(Resource::Teeth, 1.0, 2, 4),
@@ -1224,13 +1106,7 @@ static CITY: Event = Event {
         brawl(
             "d1",
             "a large bird nests at the top of the stairs.",
-            "bird",
-            'R',
-            45,
-            5,
-            0.7,
-            1.0,
-            false,
+            foe("bird", 'R', 45, 5, 0.7, 1.0, false),
             &[loot(Resource::Meat, 0.8, 5, 10)],
             &[
                 goes("continue", Next::Weighted(&[(0.5, "end1"), (1.0, "end2")])),
@@ -1258,13 +1134,7 @@ static CITY: Event = Event {
         brawl(
             "d3",
             "a swarm of rats rushes up the tunnel.",
-            "rats",
-            'R',
-            60,
-            1,
-            0.8,
-            0.25,
-            false,
+            foe("rats", 'R', 60, 1, 0.8, 0.25, false),
             &[
                 loot(Resource::Fur, 0.8, 5, 10),
                 loot(Resource::Teeth, 0.5, 5, 10),
@@ -1277,13 +1147,7 @@ static CITY: Event = Event {
         brawl(
             "d4",
             "a large man attacks, waving a bayonet.",
-            "veteran",
-            'D',
-            45,
-            6,
-            0.8,
-            2.0,
-            false,
+            foe("veteran", 'D', 45, 6, 0.8, 2.0, false),
             &[
                 loot(Resource::Bayonet, 0.5, 1, 1),
                 loot(Resource::CuredMeat, 0.8, 1, 5),
@@ -1296,13 +1160,7 @@ static CITY: Event = Event {
         brawl(
             "d5",
             "a second soldier opens fire.",
-            "soldier",
-            'D',
-            50,
-            8,
-            0.8,
-            2.0,
-            true,
+            foe("soldier", 'D', 50, 8, 0.8, 2.0, true),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Bullets, 0.5, 1, 5),
@@ -1316,13 +1174,7 @@ static CITY: Event = Event {
         brawl(
             "d6",
             "a masked soldier rounds the corner, gun drawn",
-            "commando",
-            'D',
-            55,
-            3,
-            0.9,
-            2.0,
-            true,
+            foe("commando", 'D', 55, 3, 0.9, 2.0, true),
             &[
                 loot(Resource::Rifle, 0.5, 1, 1),
                 loot(Resource::Bullets, 0.8, 1, 5),
@@ -1336,13 +1188,7 @@ static CITY: Event = Event {
         brawl(
             "d7",
             "the crowd surges forward.",
-            "squatters",
-            'E',
-            40,
-            2,
-            0.7,
-            0.5,
-            false,
+            foe("squatters", 'E', 40, 2, 0.7, 0.5, false),
             &[
                 loot(Resource::Cloth, 0.8, 1, 5),
                 loot(Resource::Teeth, 0.5, 1, 5),
@@ -1355,13 +1201,7 @@ static CITY: Event = Event {
         brawl(
             "d8",
             "a youth lashes out with a tree branch.",
-            "youth",
-            'E',
-            45,
-            2,
-            0.7,
-            1.0,
-            false,
+            foe("youth", 'E', 45, 2, 0.7, 1.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 1, 5),
                 loot(Resource::Teeth, 0.5, 1, 5),
@@ -1374,13 +1214,7 @@ static CITY: Event = Event {
         brawl(
             "d9",
             "a squatter stands firmly in the doorway of a small hut.",
-            "squatter",
-            'E',
-            20,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("squatter", 'E', 20, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 1, 5),
                 loot(Resource::Teeth, 0.5, 1, 5),
@@ -1393,13 +1227,7 @@ static CITY: Event = Event {
         brawl(
             "d10",
             "behind the door, a deformed figure awakes and attacks.",
-            "deformed",
-            'T',
-            40,
-            8,
-            0.6,
-            2.0,
-            false,
+            foe("deformed", 'T', 40, 8, 0.6, 2.0, false),
             &[
                 loot(Resource::Cloth, 0.8, 1, 5),
                 loot(Resource::Teeth, 1.0, 2, 2),
@@ -1411,13 +1239,7 @@ static CITY: Event = Event {
         brawl(
             "d11",
             "as soon as the door is open a little bit, hundreds of tentacles erupt.",
-            "tentacles",
-            'T',
-            60,
-            2,
-            0.6,
-            0.5,
-            false,
+            foe("tentacles", 'T', 60, 2, 0.6, 0.5, false),
             &[loot(Resource::Meat, 1.0, 10, 20)],
             &[goes("continue", Next::Scene("end13"))],
         ),
@@ -1787,13 +1609,7 @@ static IRON_MINE: Event = Event {
         brawl(
             "enter",
             "a large creature lunges, muscles rippling in the torchlight",
-            "beastly matriarch",
-            'T',
-            10,
-            4,
-            0.8,
-            2.0,
-            false,
+            foe("beastly matriarch", 'T', 10, 4, 0.8, 2.0, false),
             &[
                 loot(Resource::Teeth, 1.0, 5, 10),
                 loot(Resource::Scales, 0.8, 5, 10),
@@ -1834,13 +1650,7 @@ static COAL_MINE: Event = Event {
         brawl(
             "a1",
             "a man joins the fight",
-            "man",
-            'E',
-            10,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("man", 'E', 10, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Cloth, 0.8, 1, 5),
@@ -1850,13 +1660,7 @@ static COAL_MINE: Event = Event {
         brawl(
             "a2",
             "a man joins the fight",
-            "man",
-            'E',
-            10,
-            3,
-            0.8,
-            2.0,
-            false,
+            foe("man", 'E', 10, 3, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Cloth, 0.8, 1, 5),
@@ -1866,13 +1670,7 @@ static COAL_MINE: Event = Event {
         brawl(
             "a3",
             "only the chief remains.",
-            "chief",
-            'D',
-            20,
-            5,
-            0.8,
-            2.0,
-            false,
+            foe("chief", 'D', 20, 5, 0.8, 2.0, false),
             &[
                 loot(Resource::CuredMeat, 1.0, 5, 10),
                 loot(Resource::Cloth, 0.8, 5, 10),
@@ -1916,13 +1714,7 @@ static SULPHUR_MINE: Event = Event {
         brawl(
             "a1",
             "a soldier, alerted, opens fire.",
-            "soldier",
-            'D',
-            50,
-            8,
-            0.8,
-            2.0,
-            true,
+            foe("soldier", 'D', 50, 8, 0.8, 2.0, true),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Bullets, 0.5, 1, 5),
@@ -1933,13 +1725,7 @@ static SULPHUR_MINE: Event = Event {
         brawl(
             "a2",
             "a second soldier joins the fight.",
-            "soldier",
-            'D',
-            50,
-            8,
-            0.8,
-            2.0,
-            true,
+            foe("soldier", 'D', 50, 8, 0.8, 2.0, true),
             &[
                 loot(Resource::CuredMeat, 0.8, 1, 5),
                 loot(Resource::Bullets, 0.5, 1, 5),
@@ -1950,13 +1736,7 @@ static SULPHUR_MINE: Event = Event {
         brawl(
             "a3",
             "a grizzled soldier attacks, waving a bayonet.",
-            "veteran",
-            'D',
-            65,
-            10,
-            0.8,
-            2.0,
-            false,
+            foe("veteran", 'D', 65, 10, 0.8, 2.0, false),
             &[
                 loot(Resource::Bayonet, 0.5, 1, 1),
                 loot(Resource::CuredMeat, 0.8, 1, 5),

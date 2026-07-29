@@ -279,3 +279,31 @@ fn cooldowns_keep_running_after_the_daily_allowance_is_spent() {
         "a pacing rule must never leave a button stuck"
     );
 }
+
+#[test]
+fn the_thieves_take_what_is_there_and_it_is_all_booked_as_stolen() {
+    let session_start = clock();
+    let mut now = session_start;
+    let mut game = started(now);
+    game.thieves = super::model::Thieves::Active;
+    // Seven wood against a ten-wood skim: upstream drains it to zero and
+    // books the seven that were actually there, instead of skipping the
+    // round the way a starved trade would.
+    game.set_store(Resource::Wood, 7);
+    game.set_store(Resource::Fur, 100);
+    game.set_store(Resource::Meat, 0);
+
+    advance(
+        &mut game,
+        View::Room,
+        &mut now,
+        session_start,
+        i64::from(pace::slowed(data::INCOME_DELAY)),
+    );
+
+    assert_eq!(game.store(Resource::Wood), 0);
+    assert_eq!(game.stolen.get(&Resource::Wood).copied(), Some(7));
+    assert_eq!(game.store(Resource::Fur), 95);
+    assert_eq!(game.stolen.get(&Resource::Fur).copied(), Some(5));
+    assert_eq!(game.stolen.get(&Resource::Meat).copied(), None);
+}

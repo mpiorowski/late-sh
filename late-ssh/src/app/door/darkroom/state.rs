@@ -584,9 +584,17 @@ impl State {
             self.push_log(data::MSG_SEEN_FOREST.to_string());
             self.save();
         }
-        // The ship says its one line the first time it is looked at.
-        if self.view == View::Ship && !self.log().any(|line| line == space::MSG_SEEN_SHIP) {
+        // The ship says its one line the first time it is ever looked at
+        // (upstream latches this on the save, not on the log).
+        let first_look = self.view == View::Ship
+            && self
+                .game
+                .as_mut()
+                .and_then(|game| game.ship.as_mut())
+                .is_some_and(|ship| !std::mem::replace(&mut ship.seen_ship, true));
+        if first_look {
             self.push_log(space::MSG_SEEN_SHIP.to_string());
+            self.save();
         }
     }
 
@@ -595,6 +603,11 @@ impl State {
     /// Act on the selected row.
     pub fn select(&mut self) -> Acted {
         self.settle();
+        // The wasteland has no rows: Enter out there must never fall through
+        // to the Leave default and dump the player back in the hub.
+        if self.rows().is_empty() {
+            return Acted::Stay;
+        }
         let row = self.selected();
         match row {
             Row::LightFire => self.light_fire(),
@@ -924,14 +937,12 @@ impl State {
     }
 
     /// Park the trip and step out of the door. Nothing is spent by walking
-    /// away: supplies burn per move, so a parked trip costs nothing.
+    /// away: supplies burn per move, so a parked trip costs nothing. A fight
+    /// in progress is parked with it, so leaving the door is never a way to
+    /// flee one: coming back resumes it, the same as a dropped connection.
     pub fn park(&mut self) {
+        self.park_combat();
         self.event = None;
-        if let Some(game) = self.game.as_mut()
-            && let Some(trip) = game.expedition.as_mut()
-        {
-            trip.combat = None;
-        }
         self.save();
     }
 

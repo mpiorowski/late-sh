@@ -242,3 +242,20 @@ fn clearing_a_dungeon_leaves_an_outpost_and_a_road() {
         .any(|(x, y)| expedition.map.tile(x, y) == Tile::Road);
     assert!(road, "a cleared dungeon has to connect to the village");
 }
+
+#[test]
+fn embarking_packs_no_more_than_the_store_room_holds() {
+    let mut game = Game::new();
+    game.world = Some(generated());
+    game.set_store(Resource::CuredMeat, 2);
+    game.outfit.insert(Resource::CuredMeat, 5);
+
+    let trip = world::embark(&mut game);
+
+    assert_eq!(
+        trip.carrying(Resource::CuredMeat),
+        2,
+        "a stale loadout must not conjure supplies"
+    );
+    assert_eq!(game.store(Resource::CuredMeat), 0);
+}

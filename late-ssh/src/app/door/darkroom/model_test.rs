@@ -234,3 +234,19 @@ fn income_per_tick_totals_every_source() {
     assert_eq!(income.get(&Resource::Meat).copied(), Some(-4.0));
     assert_eq!(income.get(&Resource::CuredMeat).copied(), Some(1.0));
 }
+
+#[test]
+fn embarking_needs_meat_packed_and_still_on_the_shelf() {
+    let mut game = Game::new();
+    game.set_store(Resource::CuredMeat, 10);
+    assert!(
+        !game.can_embark(),
+        "a full store room means nothing until it is packed"
+    );
+    game.outfit.insert(Resource::CuredMeat, 2);
+    assert!(game.can_embark());
+    // The loadout is a plan: if the store room has since been emptied, there
+    // is nothing to actually take.
+    game.set_store(Resource::CuredMeat, 0);
+    assert!(!game.can_embark());
+}

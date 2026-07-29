@@ -241,3 +241,40 @@ fn a_delayed_reward_is_scheduled_and_not_paid_early() {
     }
     assert!(scheduled, "the wanderer never once promised to come back");
 }
+
+#[test]
+fn the_unarmed_master_punches_twice_as_fast() {
+    let beast = find(&super::scenes_encounters::ENCOUNTERS, "snarling beast");
+    let mut rng = StdRng::seed_from_u64(9);
+    let mut out = Vec::new();
+
+    let mut cooldown_after_punch = |game: &mut Game| {
+        // Nothing in the pack, so fists are the only row.
+        let mut trip = Expedition {
+            hp: 10,
+            water: 10,
+            ..Expedition::default()
+        };
+        let mut ctx = Ctx {
+            game,
+            trip: Some(&mut trip),
+            view: View::World,
+            now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+        };
+        let mut active = Active::start(beast, &mut ctx, &mut rng, &mut out);
+        active.press(Row::Attack(Weapon::Fists), &mut ctx, &mut rng, &mut out);
+        active
+            .fight()
+            .and_then(|fight| fight.weapon_cooldown.get(&Weapon::Fists).copied())
+            .expect("the punch went on cooldown")
+    };
+
+    let mut game = game();
+    assert_eq!(cooldown_after_punch(&mut game), 2.0);
+    game.add_perk(Perk::UnarmedMaster);
+    assert_eq!(
+        cooldown_after_punch(&mut game),
+        1.0,
+        "upstream halves the fists cooldown for the unarmed master"
+    );
+}

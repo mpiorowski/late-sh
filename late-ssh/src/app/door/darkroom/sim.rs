@@ -284,14 +284,16 @@ fn step_income(game: &mut Game) {
         pay(game, &[(resource, amount)]);
     }
     // The thieves take their cut off the top, and what they take is what the
-    // village gets back if the thief is hanged.
+    // village gets back if the thief is hanged. Unlike a starved trade, the
+    // skim never skips: upstream clamps the store at zero and books only what
+    // was actually there to steal (`addStolen`'s shortfall math).
     if game.thieves == Thieves::Active {
         for (resource, amount) in data::THIEF_SKIM {
-            if game.store(*resource) + *amount < 0 {
-                continue;
+            let taken = game.store(*resource).min(-amount);
+            if taken > 0 {
+                game.add_store(*resource, -taken);
+                *game.stolen.entry(*resource).or_insert(0) += taken;
             }
-            game.add_store(*resource, *amount);
-            *game.stolen.entry(*resource).or_insert(0) += -amount;
         }
     }
     let gatherers = f64::from(game.gatherers());

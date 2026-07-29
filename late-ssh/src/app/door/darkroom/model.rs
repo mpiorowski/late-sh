@@ -237,6 +237,9 @@ impl Expedition {
 pub struct ShipState {
     pub hull: i64,
     pub thrusters: i64,
+    /// Whether the ship's one arrival line has been printed (upstream's
+    /// persisted `spaceShip.seenShip`).
+    pub seen_ship: bool,
     /// Whether the "ready to leave?" warning has been shown.
     pub seen_warning: bool,
     /// Seconds left before liftoff is possible again.
@@ -248,6 +251,7 @@ impl Default for ShipState {
         Self {
             hull: 0,
             thrusters: 1,
+            seen_ship: false,
             seen_warning: false,
             liftoff_cooldown: 0,
         }
@@ -821,10 +825,13 @@ impl Game {
         }
     }
 
-    /// Whether the wanderer can set out: cured meat in the pack, and no death
-    /// cooldown running.
+    /// Whether the wanderer can set out: cured meat actually *packed* (and
+    /// still in the store room to take), and no death cooldown running.
+    /// Upstream disables the embark button off `Path.outfit['cured meat']`,
+    /// not off the store room.
     pub fn can_embark(&self) -> bool {
-        self.embark_cooldown == 0 && self.store(Resource::CuredMeat) > 0
+        let packed = self.outfit.get(&Resource::CuredMeat).copied().unwrap_or(0);
+        self.embark_cooldown == 0 && packed.min(self.store(Resource::CuredMeat)) > 0
     }
 
     /// The tile the map holds at a square, or the barrens beyond its edge.

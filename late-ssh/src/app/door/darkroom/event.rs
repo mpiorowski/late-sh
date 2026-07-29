@@ -691,7 +691,16 @@ impl Active {
                 None => ctx.game.add_store(ammo, -amount),
             }
         }
-        fight.weapon_cooldown.insert(weapon, weapon.cooldown());
+        // The unarmed master punches twice as fast (upstream halves the
+        // button's cooldown in `createAttackButton`).
+        let cooldown = if weapon.kind() == WeaponKind::Unarmed
+            && ctx.game.has_perk(Perk::UnarmedMaster)
+        {
+            weapon.cooldown() / 2.0
+        } else {
+            weapon.cooldown()
+        };
+        fight.weapon_cooldown.insert(weapon, cooldown);
 
         let landed = rng.r#gen::<f64>() <= ctx.game.hit_chance();
         match (landed, weapon.damage()) {
@@ -720,7 +729,11 @@ impl Active {
         let Some(combat) = self.scene.combat else {
             return;
         };
-        out.push(combat.death_message.to_string());
+        // Setpiece fights carry no death line of their own; only the wandering
+        // encounters announce the kill.
+        if !combat.death_message.is_empty() {
+            out.push(combat.death_message.to_string());
+        }
         self.loot = roll_loot(combat.loot, rng);
         self.phase = Phase::Spoils {
             leave_cooldown: world_data::LEAVE_COOLDOWN,

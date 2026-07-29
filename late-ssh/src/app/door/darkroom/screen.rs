@@ -134,8 +134,11 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
             };
             if let Some((dx, dy)) = steered {
                 state.steer(dx, dy);
-                return true;
             }
+            // Mid-flight the ship rows are still underneath; nothing but
+            // steering (and the Esc abort above) may reach them, or Enter
+            // could restart the ascent.
+            return true;
         }
         match byte {
             b'k' | b'K' | b'w' | b'W' => {

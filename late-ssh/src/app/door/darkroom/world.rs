@@ -263,10 +263,14 @@ pub fn compass_dir(map: &WorldMap) -> &'static str {
 /// Set out. The pack comes out of the store room, and the wanderer starts
 /// full of water and health at the village.
 pub fn embark(game: &mut Game) -> Expedition {
+    // The loadout is a plan, not a claim: the store room may have shrunk
+    // since it was packed (a charcutier ate the meat, a thief took the fur),
+    // so each line is clamped to what is actually on the shelf, exactly as
+    // upstream's outfitting screen re-clamps live.
     let outfit: Vec<(Resource, i64)> = game
         .outfit
         .iter()
-        .map(|(item, count)| (*item, *count))
+        .map(|(item, count)| (*item, (*count).min(game.store(*item))))
         .filter(|(_, count)| *count > 0)
         .collect();
     for (item, count) in &outfit {
