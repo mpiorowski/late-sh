@@ -1,8 +1,8 @@
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TrackMetadata {
@@ -16,6 +16,10 @@ pub(super) struct TrackMetadata {
     pub(super) url: Option<String>,
 }
 
+/// Position only ever reaches a real MPRIS server, so this is gated to the
+/// platform that has one. Left ungated it is dead code everywhere else, which
+/// `make check`'s `-D warnings` turns into a failed build on macOS/Windows.
+#[cfg(target_os = "linux")]
 impl TrackMetadata {
     fn position_ms(&self) -> i64 {
         let Some(started_at_ms) = self.started_at_ms else {
@@ -68,8 +72,20 @@ pub(super) struct RadioTrack {
     pub(super) title: String,
 }
 
+/// One published state of the desktop player. The publisher only ever cares
+/// about the latest one, which is what makes a `watch` the right channel: a
+/// burst of queue updates collapses to the track that survived it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MediaUpdate {
+    track: Option<TrackMetadata>,
+    muted: bool,
+    volume_percent: u8,
+}
+
 pub(super) struct DesktopMedia {
-    publisher: MprisPublisher,
+    /// Dropping this ends the publisher task: its `changed()` returns `Err`
+    /// once the last sender is gone.
+    updates: watch::Sender<MediaUpdate>,
     source: Option<MediaSource>,
     station: Option<String>,
     stream_url: Option<String>,
@@ -79,9 +95,28 @@ pub(super) struct DesktopMedia {
 }
 
 impl DesktopMedia {
-    pub(super) async fn new() -> Self {
+    /// Metadata projection stays on the caller's thread; every D-Bus await
+    /// happens in a task of its own. The pair WebSocket loop also carries
+    /// mute/volume and voice control, so it must never block on the session
+    /// bus: an unreachable or wedged bus would stall audio control with
+    /// nothing in the logs pointing at MPRIS.
+    pub(super) fn new() -> Self {
+        let (updates, mut rx) = watch::channel(MediaUpdate {
+            track: None,
+            muted: false,
+            volume_percent: 0,
+        });
+        tokio::spawn(async move {
+            let publisher = MprisPublisher::new().await;
+            while rx.changed().await.is_ok() {
+                let update = rx.borrow_and_update().clone();
+                publisher
+                    .update(update.track.as_ref(), update.muted, update.volume_percent)
+                    .await;
+            }
+        });
         Self {
-            publisher: MprisPublisher::new().await,
+            updates,
             source: None,
             station: None,
             stream_url: None,
@@ -91,10 +126,17 @@ impl DesktopMedia {
         }
     }
 
+    /// No publisher task, so sends land in a channel nobody reads. Tests here
+    /// cover metadata projection, which is pure.
     #[cfg(test)]
     fn for_test() -> Self {
+        let (updates, _) = watch::channel(MediaUpdate {
+            track: None,
+            muted: false,
+            volume_percent: 0,
+        });
         Self {
-            publisher: MprisPublisher::disabled(),
+            updates,
             source: None,
             station: None,
             stream_url: None,
@@ -104,7 +146,7 @@ impl DesktopMedia {
         }
     }
 
-    pub(super) async fn select_source(
+    pub(super) fn select_source(
         &mut self,
         source: MediaSource,
         station: Option<String>,
@@ -115,10 +157,10 @@ impl DesktopMedia {
         self.source = Some(source);
         self.station = station;
         self.stream_url = stream_url;
-        self.publish(muted, volume_percent).await;
+        self.publish(muted, volume_percent);
     }
 
-    pub(super) async fn update_youtube(
+    pub(super) fn update_youtube(
         &mut self,
         current: Option<YoutubeTrack>,
         muted: bool,
@@ -126,11 +168,11 @@ impl DesktopMedia {
     ) {
         self.youtube_current = current;
         if self.source == Some(MediaSource::Youtube) {
-            self.publish(muted, volume_percent).await;
+            self.publish(muted, volume_percent);
         }
     }
 
-    pub(super) async fn update_icecast(
+    pub(super) fn update_icecast(
         &mut self,
         mounts: HashMap<String, IcecastTrack>,
         muted: bool,
@@ -138,11 +180,11 @@ impl DesktopMedia {
     ) {
         self.icecast_tracks = mounts;
         if self.source == Some(MediaSource::Icecast) {
-            self.publish(muted, volume_percent).await;
+            self.publish(muted, volume_percent);
         }
     }
 
-    pub(super) async fn update_radio(
+    pub(super) fn update_radio(
         &mut self,
         stations: HashMap<String, RadioTrack>,
         muted: bool,
@@ -150,19 +192,25 @@ impl DesktopMedia {
     ) {
         self.radio_tracks = stations;
         if self.source == Some(MediaSource::Radio) {
-            self.publish(muted, volume_percent).await;
+            self.publish(muted, volume_percent);
         }
     }
 
-    pub(super) async fn update_audio_state(&self, muted: bool, volume_percent: u8) {
-        self.publish(muted, volume_percent).await;
+    pub(super) fn update_audio_state(&self, muted: bool, volume_percent: u8) {
+        self.publish(muted, volume_percent);
     }
 
-    async fn publish(&self, muted: bool, volume_percent: u8) {
-        let track = self.current_track();
-        self.publisher
-            .update(track.as_ref(), muted, volume_percent)
-            .await;
+    /// A closed receiver means the publisher task has ended (no session bus,
+    /// or the runtime is shutting down). There is nothing to publish to and
+    /// nothing the pair loop can do about it, so the send result is dropped
+    /// deliberately rather than logged on every track change.
+    fn publish(&self, muted: bool, volume_percent: u8) {
+        let update = MediaUpdate {
+            track: self.current_track(),
+            muted,
+            volume_percent,
+        };
+        drop(self.updates.send(update));
     }
 
     fn current_track(&self) -> Option<TrackMetadata> {
@@ -370,7 +418,7 @@ mod platform {
         }
     }
 
-    fn metadata_for_track(track: &TrackMetadata) -> Metadata {
+    pub(super) fn metadata_for_track(track: &TrackMetadata) -> Metadata {
         let mut hasher = DefaultHasher::new();
         track.identity.hash(&mut hasher);
         let track_id = TrackId::try_from(format!("/sh/late/track/{:016x}", hasher.finish()))
@@ -570,58 +618,34 @@ mod platform {
             Ok(false)
         }
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn metadata_includes_track_details() {
-            let metadata = metadata_for_track(&TrackMetadata {
-                identity: "youtube:item-1".to_string(),
-                title: "A track".to_string(),
-                artist: Some("A channel".to_string()),
-                album: Some("late.sh · YouTube".to_string()),
-                duration_ms: Some(123_000),
-                started_at_ms: None,
-                art_url: Some("https://example.com/cover.jpg".to_string()),
-                url: Some("https://example.com/watch".to_string()),
-            });
-
-            assert_eq!(metadata.title(), Some("A track"));
-            assert_eq!(metadata.artist(), Some(vec!["A channel".to_string()]));
-            assert_eq!(metadata.album(), Some("late.sh · YouTube"));
-            assert_eq!(metadata.length(), Some(Time::from_millis(123_000)));
-            assert_eq!(
-                metadata.art_url().as_deref(),
-                Some("https://example.com/cover.jpg")
-            );
-            assert_eq!(metadata.url().as_deref(), Some("https://example.com/watch"));
-            assert!(metadata.trackid().is_some());
-        }
-    }
 }
 
 #[cfg(not(target_os = "linux"))]
 mod platform {
     use super::TrackMetadata;
+    use std::{
+        convert::Infallible,
+        future::{Ready, ready},
+    };
 
     pub(super) struct Publisher;
 
+    /// These mirror the Linux publisher's awaited signatures so the shared
+    /// wrapper needs no `cfg`, but there is nothing to await off-Linux. They
+    /// return a ready future rather than being `async fn` so no suppression
+    /// is needed for a future that completes immediately.
     impl Publisher {
-        #[allow(clippy::unused_async)]
-        pub(super) async fn new() -> Result<Self, std::convert::Infallible> {
-            Ok(Self)
+        pub(super) fn new() -> Ready<Result<Self, Infallible>> {
+            ready(Ok(Self))
         }
 
-        #[allow(clippy::unused_async)]
-        pub(super) async fn update(
+        pub(super) fn update(
             &self,
             _track: Option<&TrackMetadata>,
             _muted: bool,
             _volume_percent: u8,
-        ) -> Result<(), std::convert::Infallible> {
-            Ok(())
+        ) -> Ready<Result<(), Infallible>> {
+            ready(Ok(()))
         }
     }
 }
@@ -671,57 +695,5 @@ impl MprisPublisher {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn desktop_media_selects_metadata_for_each_source() {
-        let mut media = DesktopMedia::for_test();
-        media.youtube_current = Some(YoutubeTrack {
-            id: "item-1".to_string(),
-            video_id: "video-1".to_string(),
-            title: Some("A track".to_string()),
-            channel: Some("A channel".to_string()),
-            duration_ms: Some(123_000),
-            started_at_ms: Some(10_000),
-        });
-        media.source = Some(MediaSource::Youtube);
-
-        let youtube = media.current_track().unwrap();
-        assert_eq!(youtube.title, "A track");
-        assert_eq!(youtube.artist.as_deref(), Some("A channel"));
-        assert_eq!(youtube.duration_ms, Some(123_000));
-        assert_eq!(
-            youtube.art_url.as_deref(),
-            Some("https://i.ytimg.com/vi/video-1/hqdefault.jpg")
-        );
-
-        media.source = Some(MediaSource::Icecast);
-        media.station = Some("classical".to_string());
-        media.icecast_tracks.insert(
-            "classical".to_string(),
-            IcecastTrack {
-                title: "Nocturne".to_string(),
-                artist: Some("A pianist".to_string()),
-                duration_seconds: Some(180),
-            },
-        );
-        let icecast = media.current_track().unwrap();
-        assert_eq!(icecast.title, "Nocturne");
-        assert_eq!(icecast.artist.as_deref(), Some("A pianist"));
-        assert_eq!(icecast.duration_ms, Some(180_000));
-
-        media.source = Some(MediaSource::Radio);
-        media.station = Some("chillsynth".to_string());
-        media.radio_tracks.insert(
-            "chillsynth".to_string(),
-            RadioTrack {
-                artist: "Synth Artist".to_string(),
-                title: "Night Drive".to_string(),
-            },
-        );
-        let radio = media.current_track().unwrap();
-        assert_eq!(radio.title, "Night Drive");
-        assert_eq!(radio.artist.as_deref(), Some("Synth Artist"));
-    }
-}
+#[path = "mpris_test.rs"]
+mod mpris_test;

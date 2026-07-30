@@ -747,12 +747,10 @@ async fn handle_pair_control(
         | PairControlMessage::VolumeUp
         | PairControlMessage::VolumeDown) => {
             apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
-            desktop_media
-                .update_audio_state(
-                    playback.muted.load(Ordering::Relaxed),
-                    playback.volume_percent.load(Ordering::Relaxed),
-                )
-                .await;
+            desktop_media.update_audio_state(
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(true)
         }
         PairControlMessage::SetPlaybackSource {
@@ -816,45 +814,37 @@ async fn handle_pair_control(
                 playback.muted.load(Ordering::Relaxed),
                 playback.volume_percent.load(Ordering::Relaxed),
             )?;
-            desktop_media
-                .select_source(
-                    source.into(),
-                    station,
-                    local_stream_url.map(str::to_string),
-                    playback.muted.load(Ordering::Relaxed),
-                    playback.volume_percent.load(Ordering::Relaxed),
-                )
-                .await;
+            desktop_media.select_source(
+                source.into(),
+                station,
+                local_stream_url.map(str::to_string),
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(false)
         }
         PairControlMessage::QueueUpdate { current } => {
-            desktop_media
-                .update_youtube(
-                    current,
-                    playback.muted.load(Ordering::Relaxed),
-                    playback.volume_percent.load(Ordering::Relaxed),
-                )
-                .await;
+            desktop_media.update_youtube(
+                current,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(false)
         }
         PairControlMessage::NowPlayingUpdate { mounts } => {
-            desktop_media
-                .update_icecast(
-                    mounts,
-                    playback.muted.load(Ordering::Relaxed),
-                    playback.volume_percent.load(Ordering::Relaxed),
-                )
-                .await;
+            desktop_media.update_icecast(
+                mounts,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(false)
         }
         PairControlMessage::RadioMetaUpdate { stations } => {
-            desktop_media
-                .update_radio(
-                    stations,
-                    playback.muted.load(Ordering::Relaxed),
-                    playback.volume_percent.load(Ordering::Relaxed),
-                )
-                .await;
+            desktop_media.update_radio(
+                stations,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(false)
         }
         PairControlMessage::RequestClipboardImage { request_id } => {
