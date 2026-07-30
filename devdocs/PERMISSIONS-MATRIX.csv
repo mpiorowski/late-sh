@@ -1,0 +1,88 @@
+action,domain,target_tier,regular,mod,admin,log_when_allowed,notes
+post_message_public_room,chat,any,allow,allow,allow,never,room membership enforced separately
+post_message_private_room_member,chat,any,allow,allow,allow,never,must be a member
+post_message_announcements,chat,system,deny,deny,allow,never,#announcements currently admin-only
+edit_own_message,chat,self,allow,allow,allow,never,owner rule
+edit_other_message,chat,regular,deny,deny,allow,on_admin,policy: mods cannot edit (no joke edits); current code permits mods - needs tightening
+edit_other_message,chat,mod,deny,deny,allow,on_admin,same rule; mod-owned target
+edit_other_message,chat,admin,deny,deny,allow,on_admin,admin-on-admin permitted per your note
+react_to_message,chat,any,allow,allow,allow,never,
+remove_own_reaction,chat,self,allow,allow,allow,never,
+delete_own_message,chat,self,allow,allow,allow,never,owner rule
+delete_other_message,chat,regular,deny,allow,allow,on_mod_or_admin,main mod-delete path
+delete_other_message,chat,mod,deny,deny,allow,on_admin,mods cannot act on peer-mod content
+delete_other_message,chat,admin,deny,deny,allow,on_admin,admin-on-admin permitted
+post_article,articles,any,allow,allow,allow,never,
+edit_own_article,articles,self,N/I,N/I,N/I,never,deferred; editing an article is not implemented
+edit_other_article,articles,regular,deny,deny,N/I,on_admin,deferred; editing an article is not implemented
+edit_other_article,articles,mod,deny,deny,N/I,on_admin,deferred; editing an article is not implemented
+edit_other_article,articles,admin,deny,deny,N/I,on_admin,deferred; editing an article is not implemented
+delete_own_article,articles,self,allow,allow,allow,never,owner rule
+delete_other_article,articles,regular,deny,allow,allow,on_mod_or_admin,
+delete_other_article,articles,mod,deny,deny,allow,on_admin,
+delete_other_article,articles,admin,deny,deny,allow,on_admin,
+create_topic_room,rooms,any,allow,allow,allow,never,ephemeral topic room via chat; verify current gate
+create_permanent_room,rooms,system,deny,deny,allow,never,/create-room - admin-only (current)
+join_public_room,rooms,any,allow,allow,allow,never,
+join_private_room_with_invite,rooms,any,allow,allow,allow,never,
+see_private_room_in_discover,rooms,any,deny,allow,allow,never,"matches your ""mods see and join private rooms"" note"
+invite_to_private_room,rooms,any,allow,allow,allow,never,actor must be a member
+leave_room,rooms,any,allow,allow,allow,never,
+kick_from_room,rooms,regular,deny,allow,allow,on_mod_or_admin,
+kick_from_room,rooms,mod,deny,deny,allow,on_admin,
+kick_from_room,rooms,admin,deny,deny,allow,on_admin,admin-on-admin permitted
+ban_from_room,rooms,regular,deny,allow,allow,on_mod_or_admin,currently audit-logged
+ban_from_room,rooms,mod,deny,deny,allow,on_admin,
+ban_from_room,rooms,admin,deny,deny,allow,on_admin,
+unban_from_room,rooms,regular,deny,allow,allow,on_mod_or_admin,
+unban_from_room,rooms,mod,deny,deny,allow,on_admin,
+unban_from_room,rooms,admin,deny,deny,allow,on_admin,
+rename_room,rooms,any,deny,allow,allow,on_mod_or_admin,your note lets mods rename; current code is admin-only - policy change
+rename_room_system,rooms,system,deny,deny,deny,never,#general / #announcements never renameable
+set_room_visibility,rooms,any,deny,deny,allow,on_admin,admin-only per your note (public<->private)
+delete_room_nonsystem,rooms,any,deny,deny,allow,on_admin,admin-only per your note
+delete_room_system,rooms,system,deny,deny,deny,never,never deletable
+kick_user_sessions,users,regular,deny,allow,allow,on_mod_or_admin,
+kick_user_sessions,users,mod,deny,deny,allow,on_admin,
+kick_user_sessions,users,admin,deny,deny,deny,never,
+temp_ban_user,users,regular,deny,allow,allow,on_mod_or_admin,mods get temp-ban only per your note
+temp_ban_user,users,mod,deny,deny,allow,on_admin,"NB: each ban has 3 ""rules"" (a username, an IP, a ssh fingerprint). A ban can use 1, 2, or all 3 of the fields. If any 1 rule matches, the whole ban applies."
+temp_ban_user,users,admin,deny,deny,deny,never,
+perma_ban_user,users,regular,deny,deny,allow,on_admin,admin-only per your note
+perma_ban_user,users,mod,deny,deny,allow,on_admin,
+perma_ban_user,users,admin,deny,deny,deny,never,
+unban_user,users,regular,deny,allow,allow,on_mod_or_admin,assumes mods can reverse bans of regulars; tweak if not
+unban_user,users,mod,deny,deny,allow,on_admin,
+unban_user,users,admin,deny,deny,deny,never,
+ban_from_artboard,users,regular,deny,allow,allow,on_mod_or_admin,prevents editing the shared artboard while preserving read-only viewing
+ban_from_artboard,users,mod,deny,deny,allow,on_admin,
+ban_from_artboard,users,admin,deny,deny,allow,on_admin,
+unban_from_artboard,users,regular,deny,allow,allow,on_mod_or_admin,
+unban_from_artboard,users,mod,deny,deny,allow,on_admin,
+unban_from_artboard,users,admin,deny,deny,allow,on_admin,
+view_user_fingerprint,users,any,deny,allow,allow,never,"deferred implementation; SSH fingerprints are public by PK design"
+view_user_ip,users,any,deny,allow,allow,never,deferred; passive view; privacy of an IP is a network-level concern
+delete_user_account_hard,users,any,N/I,N/I,N/I,never,"deferred; out-of-band superadmin task (DB/infra); not exposed in-app"
+deactivate_user_account,users,regular,deny,deny,N/I,on_admin,deferred; soft-delete not implemented
+rename_user_forced,users,regular,deny,deny,N/I,on_admin,deferred; remediation for bad usernames is kick/ban; superadmin can edit DB directly
+grant_moderator,users,any,deny,deny,allow,on_admin,Control Center Users tab (m key)
+revoke_moderator,users,any,deny,deny,allow,on_admin,Control Center Staff tab (r key)
+grant_admin,users,any,deny,deny,allow,on_admin,Control Center Staff tab (g key)
+revoke_admin,users,any,deny,deny,allow,on_admin,"deferred; admin-on-admin permitted; superadmin has infra/root as the nuclear option"
+edit_own_profile,profile,self,allow,allow,allow,never,self-service
+edit_other_profile,profile,regular,deny,deny,N/I,on_admin,deferred
+edit_other_profile,profile,mod,deny,deny,N/I,on_admin,deferred
+edit_other_profile,profile,admin,deny,deny,N/I,on_admin,deferred
+clear_other_profile_ugc,profile,regular,deny,allow,allow,on_mod_or_admin,UGC = User Generated Content = a class of content that is potentially offensive
+clear_other_profile_ugc,profile,mod,deny,deny,allow,on_admin,UGC = User Generated Content = a class of content that is potentially offensive
+clear_other_profile_ugc,profile,admin,deny,deny,allow,on_admin,UGC = User Generated Content = a class of content that is potentially offensive
+delete_own_account,profile,self,N/I,N/I,N/I,never,"deferred; self-delete not implemented but should be"
+ignore_user,social,any,allow,allow,allow,never,self-scoped; no impact on target
+open_control_center,staff,any,deny,allow,allow,never,screen 0
+view_staff_user_directory,staff,any,deny,allow,allow,never,
+view_live_sessions,staff,any,deny,allow,allow,never,
+view_audit_log_self,audit,self,deny,allow,allow,never,
+view_audit_log_other,audit,any,deny,allow,allow,never,"baseline: mods and admins see everything; finer seams (redaction/filtering) deferred"
+view_user_sanction_history,audit,any,deny,allow,allow,never,
+view_own_sanctions,audit,self,N/I,N/I,N/I,never,"deferred; user-facing sanction visibility planned but not implemented"
+launch_blackjack_arcade,misc,any,deny,deny,allow,never,"current: admin-only; one-off in-dev code, doesn't necessarily need to use the formal sec system"
