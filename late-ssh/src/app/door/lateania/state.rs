@@ -597,6 +597,13 @@ impl State {
         }
     }
 
+    /// Mount or dismount the companion (Wildbound rideable beasts).
+    pub fn toggle_mount(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.toggle_mount_task(self.user_id);
+        }
+    }
+
     /// Quaff the best healing potion without leaving the combat view, so you can
     /// keep an eye on both health bars instead of opening the inventory panel.
     pub fn quaff(&mut self) {

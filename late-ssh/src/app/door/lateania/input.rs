@@ -7,6 +7,8 @@
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
 //     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
 //     healing potion without leaving the view; z flee.
+//   - Mounts: G mounts/dismounts a rideable companion (one step then strides
+//     several rooms; the best beasts skip 5). Combat puts you back on foot.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
@@ -324,9 +326,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.follow();
             InputAction::Handled
         }
-        b'g' | b'G' => {
+        b'g' => {
             // Resurrection rite: revive the nearest fallen adventurer here.
             state.resurrect();
+            InputAction::Handled
+        }
+        b'G' => {
+            // Giddy-up: mount or dismount a rideable companion (Wildbound).
+            state.toggle_mount();
             InputAction::Handled
         }
         b'e' | b'E' => {

@@ -2441,3 +2441,89 @@ fn nearby_players_lists_adventurers_in_neighbouring_rooms() {
         "you don't count yourself"
     );
 }
+
+// Wildbound riding: mounted movement strides multiple rooms per keypress.
+#[test]
+fn a_mounted_step_strides_the_full_length_of_the_road() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Find a straight 6-room east chain inside one region (no gateways).
+    let chain = {
+        let mut found: Option<Vec<RoomId>> = None;
+        'scan: for (&start, _) in &s.world.rooms {
+            let mut chain = vec![start];
+            let mut cur = start;
+            for _ in 0..5 {
+                let Some(&next) = s.world.room(cur).and_then(|r| r.exits.get(&Dir::East)) else {
+                    continue 'scan;
+                };
+                // Stay well inside one id band so no progression gate triggers.
+                if next.abs_diff(start) > 300 {
+                    continue 'scan;
+                }
+                chain.push(next);
+                cur = next;
+            }
+            found = Some(chain);
+            break;
+        }
+        found.expect("the world has a straight six-room east road somewhere")
+    };
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = chain[0];
+        p.base_max_hp = 5000; // survive anything roaming the road
+        p.hp = 5000;
+        let serpent = super::super::taming::tameable_by_key("wb_worldserpent").unwrap();
+        p.pet = Some(Pet::new(serpent, 0));
+    }
+    s.toggle_mount(uid(1));
+    assert!(s.players[&uid(1)].mounted, "saddled up");
+    s.move_player(uid(1), Dir::East);
+    let landed = s.players[&uid(1)].room;
+    assert_eq!(
+        landed, chain[5],
+        "a stride-5 mount covers five rooms in one step"
+    );
+}
+
+#[test]
+fn you_cannot_ride_the_unrideable_and_combat_grounds_you() {
+    const ROOM: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // No pet at all: refused.
+    s.toggle_mount(uid(1));
+    assert!(!s.players[&uid(1)].mounted);
+    // A hare is not a horse: refused.
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let hare = super::super::taming::tameable_by_key("wt_hare").unwrap();
+        p.pet = Some(Pet::new(hare, 0));
+    }
+    s.toggle_mount(uid(1));
+    assert!(!s.players[&uid(1)].mounted, "a hare cannot carry a rider");
+    // A palfrey can - but starting a fight puts you back on your feet.
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let palfrey = super::super::taming::tameable_by_key("wb_palfrey").unwrap();
+        p.pet = Some(Pet::new(palfrey, 0));
+        p.room = ROOM;
+    }
+    s.toggle_mount(uid(1));
+    assert!(s.players[&uid(1)].mounted);
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+    }
+    s.engage(uid(1));
+    assert!(
+        !s.players[&uid(1)].mounted,
+        "combat slides you out of the saddle"
+    );
+}

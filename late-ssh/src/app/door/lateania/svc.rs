@@ -707,6 +707,9 @@ pub struct PlayerView {
     pub nearby_players: Vec<RoomId>,
     /// The live-map RPG view preference, persisted with the character.
     pub rpg_mode: bool,
+    /// What you're riding right now (Wildbound mounts), with its stride,
+    /// e.g. "Moonlit Unicorn (stride 4)". None on foot.
+    pub riding: Option<String>,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -812,6 +815,7 @@ impl PlayerView {
             nearby_foes: Vec::new(),
             nearby_players: Vec::new(),
             rpg_mode: true,
+            riding: None,
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -1409,6 +1413,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.cycle_appearance(user_id, field, delta));
     }
 
+    pub fn toggle_mount_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.toggle_mount(user_id));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
@@ -1795,6 +1803,8 @@ struct PlayerState {
     rpg_mode: bool,
     /// A weapon coated with poison: (damage per tick, strikes remaining). Each
     /// landed melee hit leaves a poison DoT and spends one charge. Transient.
+    /// Riding the companion (Wildbound mounts). Session-only.
+    mounted: bool,
     weapon_poison: Option<(i32, u8)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
@@ -2488,6 +2498,7 @@ impl WorldState {
             craft_skills: HashMap::new(),
             taming_xp: 0,
             rpg_mode: true,
+            mounted: false,
             weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
@@ -3079,6 +3090,114 @@ impl WorldState {
         self.describe_room(user_id);
         self.apply_critter_perks(user_id);
         self.move_followers(user_id, from, dest, dir);
+        self.continue_ride(user_id, dir);
+    }
+
+    /// Wildbound mounts: while riding, one keypress strides several rooms.
+    /// After a successful step, keep walking the same direction until the
+    /// mount's stride is spent, the way runs out, a fight starts, or a
+    /// gateway asks for its own confirmation (its early-return handles that).
+    fn continue_ride(&mut self, user_id: Uuid, dir: Dir) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if !player.mounted || player.target.is_some() {
+            return;
+        }
+        let stride = player
+            .pet
+            .as_ref()
+            .and_then(|pet| super::taming::mount_stride(pet.species.key))
+            .unwrap_or(1);
+        if stride <= 1 {
+            return;
+        }
+        for _ in 1..stride {
+            let Some(player) = self.players.get(&user_id) else {
+                return;
+            };
+            if player.target.is_some() || player.respawn_at.is_some() {
+                return;
+            }
+            let has_way = self
+                .world
+                .room(player.room)
+                .is_some_and(|room| room.exits.contains_key(&dir));
+            if !has_way {
+                return;
+            }
+            // Temporarily dismount for the inner step so it doesn't recurse
+            // into its own ride-continuation; remount after.
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            let before = self.players.get(&user_id).map(|p| p.room);
+            self.move_player(user_id, dir);
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = true;
+            }
+            // A gateway prompt or gate refusal leaves the room unchanged - stop.
+            if self.players.get(&user_id).map(|p| p.room) == before {
+                return;
+            }
+        }
+    }
+
+    /// Swing up onto the companion's back (or down off it). Needs a tamed
+    /// beast that can actually be ridden, and both feet out of combat.
+    fn toggle_mount(&mut self, user_id: Uuid) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "Not in the middle of a fight - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        if player.mounted {
+            let name = player
+                .pet
+                .as_ref()
+                .map(|p| p.species.name)
+                .unwrap_or("your mount");
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            self.log_to(user_id, LogKind::Normal, format!("You dismount {name}."));
+            return;
+        }
+        let Some(pet) = player.pet.as_ref() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no companion to ride - tame one of the great beasts of Broceliande."
+                    .to_string(),
+            );
+            return;
+        };
+        let Some(stride) = super::taming::mount_stride(pet.species.key) else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "{} is no riding beast. The rideable kind roam the deep Greenwood.",
+                    pet.species.name
+                ),
+            );
+            return;
+        };
+        let name = pet.species.name;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.mounted = true;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Normal,
+            format!("You swing up onto {name}'s back - each step now carries you {stride} rooms."),
+        );
     }
 
     fn is_frontier_gateway(&self, from: RoomId, dest: RoomId) -> bool {
@@ -4386,6 +4505,16 @@ impl WorldState {
             .get(&mob_id)
             .map(|m| m.spawn.name.to_string())
             .unwrap_or_default();
+        if self.players.get(&user_id).is_some_and(|p| p.mounted) {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You slide from the saddle - this is foot work.".to_string(),
+            );
+        }
         if let Some(player) = self.players.get_mut(&user_id) {
             player.target = Some(mob_id);
             // Opportunist: the Rogue's first strike of a fight always crits.
@@ -7437,6 +7566,14 @@ impl WorldState {
                     nearby_foes,
                     nearby_players,
                     rpg_mode: player.rpg_mode,
+                    riding: if player.mounted {
+                        player.pet.as_ref().and_then(|pet| {
+                            super::taming::mount_stride(pet.species.key)
+                                .map(|st| format!("{} (stride {st})", pet.species.name))
+                        })
+                    } else {
+                        None
+                    },
                     occupants,
                     following: player.following,
                     wildlife,

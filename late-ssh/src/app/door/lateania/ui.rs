@@ -1594,6 +1594,18 @@ fn room_panel(
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
+    // Mounted: say what carries you and how far each step goes.
+    if let Some(riding) = &view.riding {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  \u{265e} riding ".to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(riding.clone(), Style::default().fg(theme::AMBER_GLOW())),
+        ]));
+    }
     // Your companion, if any: glyph, name, level, and health.
     if let Some(pet) = &view.pet {
         let name_color = if pet.downed {
@@ -3424,6 +3436,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("i", "the ways (portal)"));
     }
     lines.push(hint("m", "world atlas"));
+    lines.push(hint("G", "mount / dismount"));
     lines.push(hint("Esc", "leave"));
     lines
 }
