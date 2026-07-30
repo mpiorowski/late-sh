@@ -288,12 +288,12 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
     } = load_arcade_session_preloads(state, user_id).await;
-    let (initial_bonsai_tree, initial_bonsai_care) =
+    let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) =
         match state.bonsai_service.ensure_tree_with_care(user_id).await {
-            Ok((tree, care)) => (Some(tree), Some(care)),
+            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
+                (None, None, None)
             }
         };
     let shop_snapshot_rx = state.shop_service.subscribe_snapshot(user_id);
@@ -432,6 +432,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_bonsai_tree,
         initial_bonsai_care,
         initial_bonsai_v2_tree,
+        initial_bonsai_decay_protection,
         pet_service: state.pet_service.clone(),
         initial_pet,
         quest_service: state.quest_service.clone(),

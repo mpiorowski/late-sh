@@ -926,6 +926,13 @@ impl App {
             if !self.shop_state.dynamic_bonsai_enabled() {
                 self.show_bonsai_v2_modal = false;
             }
+            // A Bonsai Decay Shield purchase takes effect immediately for the
+            // live in-session death check (`BonsaiState::tick`); Dynamic
+            // Bonsai has no in-session decay simulation to refresh, so this
+            // only matters there from the next login onward.
+            self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
+            self.bonsai_v2_state.decay_protection =
+                self.shop_state.active_bonsai_decay_protection();
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()

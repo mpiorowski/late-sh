@@ -55,9 +55,30 @@ fn is_wilting_depends_on_age_or_days_since_watered() {
 #[test]
 fn should_die_after_seven_dry_days() {
     let today = BonsaiService::today();
-    assert!(!should_die(today - Duration::days(6), today));
-    assert!(should_die(today - Duration::days(7), today));
-    assert!(should_die(today - Duration::days(20), today));
+    assert!(!should_die(today - Duration::days(6), today, None));
+    assert!(should_die(today - Duration::days(7), today, None));
+    assert!(should_die(today - Duration::days(20), today, None));
+}
+
+#[test]
+fn should_die_is_discounted_by_a_live_decay_shield() {
+    let today = BonsaiService::today();
+    let reference_date = today - Duration::days(10);
+    let shield = BonsaiDecayProtection {
+        starts_at: (reference_date + Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc(),
+        ends_at: (reference_date + Duration::days(6))
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc(),
+    };
+
+    // 10 dry days minus 6 protected days = 4 effective dry days: survives.
+    assert!(!should_die(reference_date, today, Some(shield)));
+    // Without the shield the same gap kills the tree.
+    assert!(should_die(reference_date, today, None));
 }
 
 #[test]

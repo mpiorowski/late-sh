@@ -27,3 +27,12 @@ fn remaining_label_floors_at_one_minute() {
     assert_eq!(remaining_label(now + Duration::seconds(5), now), "1m left");
     assert_eq!(remaining_label(now - Duration::minutes(3), now), "1m left");
 }
+
+#[test]
+fn remaining_label_switches_to_days_at_24_hours() {
+    use chrono::{Duration, Utc};
+    let now = Utc::now();
+    assert_eq!(remaining_label(now + Duration::hours(23), now), "23h left");
+    assert_eq!(remaining_label(now + Duration::days(1), now), "1d left");
+    assert_eq!(remaining_label(now + Duration::days(14), now), "14d left");
+}

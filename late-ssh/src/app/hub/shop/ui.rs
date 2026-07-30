@@ -351,6 +351,29 @@ fn draw_item_detail(
                 Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
             ]));
         }
+        if item.is_bonsai_decay_shield() {
+            if let Some(protection) = state.active_bonsai_decay_protection() {
+                lines.push(Line::from(vec![
+                    Span::raw("  shield "),
+                    Span::styled(
+                        format!(
+                            "protected, {}",
+                            remaining_label(protection.ends_at, chrono::Utc::now())
+                        ),
+                        Style::default()
+                            .fg(theme::SUCCESS())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(vec![
+                Span::raw("  lasts  "),
+                Span::styled(
+                    "14 days, stacks with any remaining shield time",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        }
     }
     if item.is_dynamic_bonsai() && item.owned {
         lines.push(Line::from(vec![
@@ -651,7 +674,9 @@ fn remaining_label(
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let minutes = (ends_at - now).num_minutes().max(1);
-    if minutes >= 60 {
+    if minutes >= 60 * 24 {
+        format!("{}d left", minutes / (60 * 24))
+    } else if minutes >= 60 {
         format!("{}h left", minutes / 60)
     } else {
         format!("{minutes}m left")

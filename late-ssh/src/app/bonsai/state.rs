@@ -3,6 +3,7 @@ use rand_core::{OsRng, RngCore};
 use uuid::Uuid;
 
 use late_core::models::bonsai::{MAX_GROWTH_POINTS, Tree};
+use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 
 use super::{
     care::{BonsaiCareState, branch_targets_for},
@@ -26,10 +27,20 @@ pub struct BonsaiState {
 
     // Whether water was pressed this session (for UI feedback)
     pub watered_this_session: bool,
+
+    /// The user's live Bonsai Decay Shield window, if any. Consulted by the
+    /// in-session death check in `tick()` so it agrees with the login-time
+    /// check in `BonsaiService::ensure_tree_with_care`.
+    pub decay_protection: Option<BonsaiDecayProtection>,
 }
 
 impl BonsaiState {
-    pub fn new(user_id: Uuid, svc: BonsaiService, tree: Tree) -> Self {
+    pub fn new(
+        user_id: Uuid,
+        svc: BonsaiService,
+        tree: Tree,
+        decay_protection: Option<BonsaiDecayProtection>,
+    ) -> Self {
         let today = chrono::Utc::now().date_naive();
         let created_date = tree.created.date_naive();
         let age_days = (today - created_date).num_days().max(0);
@@ -44,6 +55,7 @@ impl BonsaiState {
             age_days,
             created_date,
             watered_this_session: false,
+            decay_protection,
         }
     }
 
@@ -57,7 +69,11 @@ impl BonsaiState {
 
         // Check death during live session (not just on login)
         let reference_date = self.last_watered.unwrap_or(self.created_date);
-        if should_die(reference_date, BonsaiService::today()) {
+        if should_die(
+            reference_date,
+            BonsaiService::today(),
+            self.decay_protection,
+        ) {
             self.is_alive = false;
             // Fire-and-forget: the next login will also detect this and record the graveyard entry
             return true;
@@ -188,8 +204,16 @@ impl BonsaiState {
     }
 }
 
-fn should_die(reference_date: NaiveDate, today: NaiveDate) -> bool {
-    (today - reference_date).num_days() >= 7
+fn should_die(
+    reference_date: NaiveDate,
+    today: NaiveDate,
+    decay_protection: Option<BonsaiDecayProtection>,
+) -> bool {
+    let days_since = (today - reference_date).num_days();
+    let protected_days = decay_protection
+        .map(|protection| protection.protected_days_between(reference_date, today))
+        .unwrap_or(0);
+    (days_since - protected_days) >= 7
 }
 
 pub fn stage_for(is_alive: bool, growth_points: i32) -> Stage {

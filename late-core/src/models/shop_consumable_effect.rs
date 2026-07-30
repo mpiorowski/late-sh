@@ -159,6 +159,56 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
+    /// Activate-or-extend a user-scoped effect (`room_id IS NULL`). Unlike
+    /// `activate_user_effect_in_tx`, which always resets the clock to
+    /// `duration_secs` from now, this extends any live expiry of the same
+    /// kind by `duration_secs` instead of restarting it — so a stacking
+    /// consumable (the Bonsai Decay Shield) never discards time the player
+    /// already paid for. The prior row is deactivated in the same
+    /// transaction; only one active row per (user, effect_kind, room_id IS
+    /// NULL) ever exists.
+    pub async fn extend_user_effect_in_tx(
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        effect_kind: &str,
+        source_sku: &str,
+        duration_secs: i64,
+        payload: Value,
+    ) -> Result<Self> {
+        let duration_secs = duration_secs.max(1);
+        let now = Utc::now();
+
+        let existing_ends_at = tx
+            .query_opt(
+                "UPDATE shop_consumable_effects
+                 SET active = false, updated = current_timestamp
+                 WHERE user_id = $1
+                   AND effect_kind = $2
+                   AND room_id IS NULL
+                   AND active = true
+                 RETURNING ends_at",
+                &[&user_id, &effect_kind],
+            )
+            .await?
+            .map(|row| row.get::<_, DateTime<Utc>>("ends_at"));
+
+        let base = existing_ends_at
+            .filter(|ends_at| *ends_at > now)
+            .unwrap_or(now);
+        let ends_at = base + Duration::seconds(duration_secs);
+
+        let row = tx
+            .query_one(
+                "INSERT INTO shop_consumable_effects
+                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
+                 VALUES ($1, NULL, $2, $3, $4, $5)
+                 RETURNING *",
+                &[&user_id, &effect_kind, &source_sku, &payload, &ends_at],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     /// All live user-scoped effects of one kind, for seeding the in-process
     /// flair directory at startup.
     pub async fn active_user_effects(client: &Client, effect_kind: &str) -> Result<Vec<Self>> {

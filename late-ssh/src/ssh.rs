@@ -782,16 +782,16 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
-        let (initial_bonsai_tree, initial_bonsai_care) = match self
+        let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) = match self
             .state
             .bonsai_service
             .ensure_tree_with_care(user_id)
             .await
         {
-            Ok((tree, care)) => (Some(tree), Some(care)),
+            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
+                (None, None, None)
             }
         };
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
@@ -943,6 +943,7 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_tree,
             initial_bonsai_care,
             initial_bonsai_v2_tree,
+            initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
             quest_service: self.state.quest_service.clone(),

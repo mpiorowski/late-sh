@@ -19,6 +19,7 @@ pub mod birthday;
 mod birthday_test;
 pub mod blackjack;
 pub mod bonsai;
+pub mod bonsai_decay_protection;
 #[cfg(test)]
 mod bonsai_test;
 pub mod character_sheet;
