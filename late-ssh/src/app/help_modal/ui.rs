@@ -10,7 +10,7 @@ use crate::app::common::theme;
 
 use super::{data::HelpTopic, state::HelpModalState};
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, pair_url: &str) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, listen_url: &str) {
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
 
@@ -69,7 +69,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &HelpModalState, pair_u
     let body = columns[1].inner(Margin::new(2, 0));
     state.set_body_area(body);
     let lines: Vec<Line> = state
-        .current_lines(pair_url)
+        .current_lines(listen_url)
         .into_iter()
         .map(|line| Line::from(Span::styled(line, Style::default().fg(theme::TEXT()))))
         .collect();

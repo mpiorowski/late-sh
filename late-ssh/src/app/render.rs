@@ -23,8 +23,8 @@ use super::{
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    dashboard, help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_search_modal,
-    settings_modal, sheet_modal,
+    help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
+    room_search_modal, settings_modal, sheet_modal,
     state::App,
 };
 use crate::app::door::game::DoorGame;
@@ -141,7 +141,7 @@ fn push_quit_confirm_sayonara_placement(
 }
 
 struct DrawContext<'a> {
-    dashboard_view: dashboard::ui::DashboardRenderInput<'a>,
+    dashboard_view: chat::ui::DashboardChatView<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: usize,
     is_playing_game: bool,
@@ -163,6 +163,7 @@ struct DrawContext<'a> {
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
+    darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
     nethack_state: Option<&'a mut crate::app::door::nethack::state::State>,
     dcss_state: Option<&'a mut crate::app::door::dcss::state::State>,
@@ -184,6 +185,7 @@ struct DrawContext<'a> {
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
+    scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
     directory_tab: crate::app::directory::state::DirectoryTab,
     pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
@@ -248,9 +250,11 @@ struct DrawContext<'a> {
     show_splash: bool,
     splash_ticks: usize,
     splash_hint: &'a str,
-    pair_url: &'a str,
+    listen_url: &'a str,
     room_search_modal_open: bool,
     room_search_modal_state: &'a room_search_modal::state::RoomSearchModalState,
+    room_info_modal_open: bool,
+    room_info_modal_state: &'a room_info_modal::state::RoomInfoModalState,
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
@@ -258,7 +262,7 @@ struct DrawContext<'a> {
     youtube_source_count: usize,
     icecast_source_count: usize,
     radio_source_count: usize,
-    paired_browser_source: late_core::models::user::AudioSource,
+    paired_source: late_core::models::user::AudioSource,
     selected_icecast_stream: late_core::models::user::IcecastStream,
     selected_radio_station: late_core::models::user::RadioStation,
     radio_now_playing: Option<&'a str>,
@@ -278,6 +282,9 @@ struct DrawContext<'a> {
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
     mentions_unread_count: i64,
     chip_balance: i64,
+    /// Slot for where the top-border mentions text lands this frame, read by
+    /// the HUD click hit test in `input.rs`.
+    mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
     voice_badge: Option<String>,
     home_selected: bool,
 }
@@ -446,6 +453,7 @@ impl App {
                 }),
                 terminal_image_protocol: self.terminal_image_protocol,
             });
+        let dashboard_room = shell_active_room.and_then(|room_id| self.chat.room_by_id(room_id));
         let dashboard_messages = shell_active_room
             .map(|room_id| self.chat.messages_for_room(room_id))
             .unwrap_or(&[]);
@@ -485,68 +493,66 @@ impl App {
                         })
                     })
             });
-        let dashboard_view = dashboard::ui::DashboardRenderInput {
-            pinned_messages: self.chat.pinned_messages(),
-            chat_view: chat::ui::DashboardChatView {
-                pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
-                    state: &self.pet_state,
-                    pet_food_quantity: self.shop_state.pet_food_quantity(),
-                    pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
-                    food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
-                    water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
-                    travel_slot: Some(&self.last_pet_strip_travel),
-                }),
-                activity_ticker: self.chat.activity_ticker(),
-                messages: dashboard_messages,
-                overlay: self.chat.overlay(),
-                image_modal,
-                rows_cache: &mut self.dashboard_chat_rows_cache,
-                rows_versions: chat::ui::ChatRowsVersions {
-                    room_id: shell_active_room,
-                    room_version: shell_active_room
-                        .map(|room_id| self.chat.room_version(room_id))
-                        .unwrap_or(0),
-                    chat_ctx_epoch: self.chat.context_epoch(),
-                    app_ctx_epoch: self.chat_ctx_epoch,
-                },
-                usernames: chat_usernames,
-                countries: chat_countries,
-                friend_user_ids: self.chat.friend_user_ids(),
-                afk_user_ids: self.afk_user_ids.as_ref(),
-                message_reactions,
-                unread_marker: shell_active_room
-                    .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
-                    .flatten(),
-                current_user_id: self.user_id,
-                voice_channel_id: dashboard_voice_channel_id,
-                voice_snapshot,
-                voice_paired_cli_supports_voice: paired_cli_supports_voice,
-                show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                selected_message_id: self.chat.selected_message_id,
-                selected_image_message: dashboard_selected_image_message,
-                selected_news_message: dashboard_selected_news_message,
-                highlighted_message_id: self.chat.highlighted_message_id,
-                reaction_picker_active: self.chat.is_reaction_leader_active(),
-                composer: self.chat.composer(),
-                composing: self.chat.composing,
-                mention_matches: &self.chat.mention_ac.matches,
-                mention_selected: self.chat.mention_ac.selected,
-                mention_active: self.chat.mention_ac.active,
-                reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
-                is_editing: self.chat.edited_message_id.is_some(),
-                bonsai_glyphs,
-                chat_badges,
-                profile_award_badges,
-                drunk_levels: &self.drunk_levels,
-                name_styles: &self.name_styles,
-                active_room_effects: dashboard_room_effects,
-                active_poll: dashboard_active_poll,
-                inline_images: &self.chat.inline_image_cache,
-                keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-                composer_rect_slot: Some(&self.chat.last_composer_rect),
-                composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
-                chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+        let dashboard_view = chat::ui::DashboardChatView {
+            pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
+                state: &self.pet_state,
+                pet_food_quantity: self.shop_state.pet_food_quantity(),
+                pet_rect_slot: Some(&self.last_pet_strip_pet_rect),
+                food_bowl_rect_slot: Some(&self.last_pet_strip_food_rect),
+                water_bowl_rect_slot: Some(&self.last_pet_strip_water_rect),
+                travel_slot: Some(&self.last_pet_strip_travel),
+            }),
+            activity_ticker: self.chat.activity_ticker(),
+            room: dashboard_room,
+            messages: dashboard_messages,
+            overlay: self.chat.overlay(),
+            image_modal,
+            rows_cache: &mut self.dashboard_chat_rows_cache,
+            rows_versions: chat::ui::ChatRowsVersions {
+                room_id: shell_active_room,
+                room_version: shell_active_room
+                    .map(|room_id| self.chat.room_version(room_id))
+                    .unwrap_or(0),
+                chat_ctx_epoch: self.chat.context_epoch(),
+                app_ctx_epoch: self.chat_ctx_epoch,
             },
+            usernames: chat_usernames,
+            countries: chat_countries,
+            friend_user_ids: self.chat.friend_user_ids(),
+            afk_user_ids: self.afk_user_ids.as_ref(),
+            message_reactions,
+            unread_marker: shell_active_room
+                .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
+                .flatten(),
+            current_user_id: self.user_id,
+            voice_channel_id: dashboard_voice_channel_id,
+            voice_snapshot,
+            voice_paired_cli_supports_voice: paired_cli_supports_voice,
+            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+            selected_message_id: self.chat.selected_message_id,
+            selected_image_message: dashboard_selected_image_message,
+            selected_news_message: dashboard_selected_news_message,
+            highlighted_message_id: self.chat.highlighted_message_id,
+            reaction_picker_active: self.chat.is_reaction_leader_active(),
+            composer: self.chat.composer(),
+            composing: self.chat.composing,
+            mention_matches: &self.chat.mention_ac.matches,
+            mention_selected: self.chat.mention_ac.selected,
+            mention_active: self.chat.mention_ac.active,
+            reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+            is_editing: self.chat.edited_message_id.is_some(),
+            bonsai_glyphs,
+            chat_badges,
+            profile_award_badges,
+            drunk_levels: &self.drunk_levels,
+            name_styles: &self.name_styles,
+            active_room_effects: dashboard_room_effects,
+            active_poll: dashboard_active_poll,
+            inline_images: &self.chat.inline_image_cache,
+            keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+            composer_rect_slot: Some(&self.chat.last_composer_rect),
+            composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+            chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -582,10 +588,9 @@ impl App {
         };
         let showcase_unread_count = self.chat.showcase.unread_count();
         let showcase_composing = self.chat.showcase.composing();
-        let web_base_url = self
-            .connect_url
-            .rsplit_once('/')
-            .map_or(&*self.connect_url, |p| p.0);
+        let web_base_url = self.web_url.as_str();
+        // Built before the frame borrows `self` mutably below.
+        let listen_url = crate::app::state::listen_url(&self.web_url);
         let work_view = chat::work::ui::WorkListView {
             items: self.chat.work.all_items(),
             selected_index: self.chat.work.selected_index(),
@@ -953,6 +958,7 @@ impl App {
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
                         greendragon_state: self.greendragon_state.as_ref(),
+                        darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
                         nethack_state: nethack_state_taken.as_mut(),
                         dcss_state: dcss_state_taken.as_mut(),
@@ -971,6 +977,7 @@ impl App {
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
                         dartboard_state: self.dartboard_state.as_ref(),
+                        scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
                         directory_tab: self.directory_state.tab,
                         pinstar_state: pinstar_state_taken.as_mut(),
@@ -1032,9 +1039,11 @@ impl App {
                         show_splash: self.show_splash,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
-                        pair_url: &self.connect_url,
+                        listen_url: &listen_url,
                         room_search_modal_open: self.room_search_modal_state.is_open(),
                         room_search_modal_state: &self.room_search_modal_state,
+                        room_info_modal_open: self.room_info_modal_state.is_open(),
+                        room_info_modal_state: &self.room_info_modal_state,
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
@@ -1042,7 +1051,7 @@ impl App {
                         youtube_source_count: self.audio.youtube_source_count(),
                         icecast_source_count: self.audio.icecast_source_count(),
                         radio_source_count: self.audio.radio_source_count(),
-                        paired_browser_source: self.paired_browser_source,
+                        paired_source: self.paired_source,
                         selected_icecast_stream,
                         selected_radio_station,
                         radio_now_playing: radio_now_playing.as_deref(),
@@ -1060,6 +1069,7 @@ impl App {
                         icon_catalog: self.icon_catalog.as_ref(),
                         mentions_unread_count: self.chat.notifications.unread_count(),
                         chip_balance: self.chip_balance,
+                        mentions_hud_rect: &self.last_mentions_hud_rect,
                         voice_badge,
                         home_selected,
                     },
@@ -1122,6 +1132,9 @@ impl App {
         terminal_images: &mut TerminalImageFrame,
     ) {
         if ctx.show_splash {
+            // No HUD on the splash: keep the click slot in step with what is
+            // actually on screen.
+            ctx.mentions_hud_rect.set(None);
             let msg = "take a break, grab a coffee";
             // Animate typing the message (1 char per tick instead of 1 char per 2 ticks)
             let len = msg.len();
@@ -1197,12 +1210,25 @@ impl App {
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        if let Some(hud) = status_hud_title(
+        match status_hud_title(
             Some(ctx.chip_balance),
             ctx.mentions_unread_count,
             ctx.voice_badge.as_deref(),
         ) {
-            block = block.title_top(hud);
+            Some(hud) => {
+                // The right-aligned title's last cell sits just inside the
+                // top-right corner, and the mentions segment leads the line.
+                let total = hud.line.width() as u16;
+                let rect = (hud.mentions_width > 0).then(|| Rect {
+                    x: area.right().saturating_sub(total + 1),
+                    y: area.y,
+                    width: hud.mentions_width,
+                    height: 1,
+                });
+                ctx.mentions_hud_rect.set(rect);
+                block = block.title_top(hud.line);
+            }
+            None => ctx.mentions_hud_rect.set(None),
         }
         let (help_hint_title, sponsor_title) = app_frame_bottom_titles(area.width);
         block = block.title_bottom(help_hint_title);
@@ -1255,7 +1281,7 @@ impl App {
                 }
 
                 if ctx.home_selected {
-                    dashboard::ui::draw_dashboard(
+                    chat::ui::draw_dashboard_chat_card(
                         frame,
                         center_area,
                         ctx.dashboard_view,
@@ -1307,6 +1333,17 @@ impl App {
                     &crate::app::door::greendragon::screen::GreenDragonScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.greendragon_state,
+                    },
+                    terminal_images,
+                );
+            }
+            Screen::Darkroom => {
+                crate::app::door::darkroom::screen::GAME.draw(
+                    frame,
+                    content_area,
+                    &crate::app::door::darkroom::screen::DarkroomScreenView {
+                        delete_confirm: ctx.door_delete_confirm,
+                        state: ctx.darkroom_state,
                     },
                     terminal_images,
                 );
@@ -1425,6 +1462,11 @@ impl App {
                 ctx.house_chat_view.take(),
                 terminal_images,
             ),
+            Screen::Scratchpad => {
+                if let Some(scratchpad) = ctx.scratchpad {
+                    crate::app::scratchpad::ui::draw(frame, content_area, scratchpad);
+                }
+            }
         }
 
         if let Some(sidebar_area) = sidebar_area {
@@ -1443,7 +1485,7 @@ impl App {
                     youtube_source_count: ctx.youtube_source_count,
                     icecast_source_count: ctx.icecast_source_count,
                     radio_source_count: ctx.radio_source_count,
-                    paired_browser_source: ctx.paired_browser_source,
+                    paired_source: ctx.paired_source,
                     selected_icecast_stream: ctx.selected_icecast_stream,
                     selected_radio_station: ctx.selected_radio_station,
                     radio_now_playing: ctx.radio_now_playing,
@@ -1607,7 +1649,7 @@ impl App {
         }
 
         if ctx.show_help {
-            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.pair_url);
+            help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
         }
 
         if ctx.show_ultimate_modal {
@@ -1635,6 +1677,10 @@ impl App {
                 ctx.chat_state,
                 ctx.user_id,
             );
+        }
+
+        if ctx.room_info_modal_open {
+            room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
         }
 
         if ctx.booth_modal_open {
@@ -1734,6 +1780,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
+        Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
@@ -1741,6 +1788,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Scratchpad => "Scratchpad",
     };
     spans.push(Span::styled(
         " | ",
@@ -1874,7 +1922,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
             format!(
-                "· {} inside · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
+                "· {} inside · Tab/0-5 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance ",
                 ctx.clubhouse_state.headcount()
             ),
             Style::default().fg(theme::TEXT_DIM()),
@@ -1919,6 +1967,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
+    }
+
+    if screen == Screen::Scratchpad {
+        spans.push(Span::styled(
+            "by github.com/minavtafreshi ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
 
     if screen == Screen::Pinstar {
@@ -2048,6 +2103,7 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
         ("Hub", ctrl_hint("G", use_caret)),
         ("Lobby", ctrl_hint("Q", use_caret)),
         ("Guide", "?"),
+        ("Exit", "qq"),
     ];
 
     let mut spans = Vec::new();
@@ -2094,11 +2150,20 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
+/// The top-border status line plus the width of its leading mentions
+/// segment, so the click hit test can find the mentions text inside the
+/// right-aligned line (the voice/chips text after it is not clickable).
+struct StatusHud {
+    line: Line<'static>,
+    /// Display cells of the mentions segment, 0 when nothing is unread.
+    mentions_width: u16,
+}
+
 fn status_hud_title(
     balance: Option<i64>,
     unread: i64,
     voice_badge: Option<&str>,
-) -> Option<Line<'static>> {
+) -> Option<StatusHud> {
     if balance.is_none() && unread <= 0 && voice_badge.is_none() {
         return None;
     }
@@ -2116,6 +2181,7 @@ fn status_hud_title(
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }
+    let mentions_width = spans.iter().map(Span::width).sum::<usize>() as u16;
     if let Some(voice_badge) = voice_badge {
         if !spans.is_empty() {
             spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
@@ -2142,7 +2208,10 @@ fn status_hud_title(
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }
-    Some(Line::from(spans).right_aligned())
+    Some(StatusHud {
+        line: Line::from(spans).right_aligned(),
+        mentions_width,
+    })
 }
 
 #[cfg(test)]

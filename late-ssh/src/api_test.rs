@@ -67,6 +67,99 @@ async fn ws_pair_endpoint_rejects_unknown_token() {
     api_task.abort();
 }
 
+/// The listen page is unauthenticated, and the response is a published
+/// contract: internal snapshot fields (history, skip progress, submitter ids,
+/// vote scores) must not ride along just because someone swapped the handler
+/// back to serializing `QueueSnapshot` directly.
+#[tokio::test]
+async fn listen_endpoint_is_public_and_hides_internal_snapshot_fields() {
+    let test_db = new_test_db().await;
+    let config = test_config(test_db.db.config().clone());
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let api_task = tokio::spawn(async move {
+        let _ = run_api_server_with_listener(listener, state, None).await;
+    });
+
+    let (status, body) = http_get_with_retry(addr, "/api/listen", 10)
+        .await
+        .expect("listen request");
+    assert_eq!(status, 200);
+
+    let json: serde_json::Value = serde_json::from_str(&body).expect("listen json");
+    assert!(json.get("audio_mode").is_some());
+    assert!(json.get("listeners").is_some());
+    assert!(json["streams"].is_object());
+    assert!(json["stations"].is_object());
+    assert!(json["youtube"].get("current").is_some());
+    assert!(json["youtube"]["queue"].is_array());
+
+    for leaked in ["history", "skip_progress", "submitter_id", "vote_score"] {
+        assert!(
+            !body.contains(leaked),
+            "public listen response leaked internal field {leaked}: {body}"
+        );
+    }
+
+    api_task.abort();
+}
+
+async fn http_get_with_retry(
+    addr: SocketAddr,
+    path: &str,
+    retries: usize,
+) -> std::io::Result<(u16, String)> {
+    let mut last_err = None;
+    for attempt in 0..retries {
+        match http_get(addr, path).await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                if attempt + 1 == retries {
+                    return Err(err);
+                }
+                last_err = Some(err);
+                sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+    Err(last_err.expect("last error"))
+}
+
+/// `Connection: close` so the server hangs up after the body and a plain
+/// read-to-end sees the whole response.
+async fn http_get(addr: SocketAddr, path: &str) -> std::io::Result<(u16, String)> {
+    let mut stream = TcpStream::connect(addr).await?;
+    let request = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        host = addr
+    );
+    stream.write_all(request.as_bytes()).await?;
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    let response = String::from_utf8_lossy(&raw).into_owned();
+    let status = response
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+    Ok((status, body))
+}
+
 async fn ws_upgrade_status_with_retry(
     addr: SocketAddr,
     token: &str,

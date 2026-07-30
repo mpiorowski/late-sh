@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::theme;
 #[derive(Debug, Clone)]
@@ -68,6 +69,7 @@ pub enum Screen {
     Dopewars,
     Usurper,
     GreenDragon,
+    Darkroom,
     Artboard,
     Pinstar,
     Clubhouse,
@@ -78,6 +80,9 @@ pub enum Screen {
     /// from the Lobby modal, absent from the Tab cycle; Esc returns to the
     /// modal.
     HouseTable,
+    /// Paired live coding scratchpad. Entered only once both users have run
+    /// `/pair @other`, absent from the Tab cycle; Esc leaves the pairing.
+    Scratchpad,
 }
 
 impl Screen {
@@ -101,9 +106,11 @@ impl Screen {
             | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
         }
     }
 
@@ -122,11 +129,35 @@ impl Screen {
             | Screen::Brogue
             | Screen::Dopewars
             | Screen::Usurper
-            | Screen::GreenDragon => Screen::Games,
+            | Screen::GreenDragon
+            | Screen::Darkroom => Screen::Games,
             Screen::DailyMatch => Screen::Dashboard,
             Screen::HouseTable => Screen::Dashboard,
+            Screen::Scratchpad => Screen::Dashboard,
         }
     }
+}
+
+/// One row with `left` at the start and `right` flushed to the right edge, for
+/// header rows that pair live status with the keys that act on it. The right
+/// side is a hint, so a row too tight to hold both keeps the left side and
+/// drops the hint rather than wrapping or colliding.
+pub fn row_with_hint(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    width: usize,
+) -> Line<'static> {
+    let span_width =
+        |spans: &[Span<'static>]| -> usize { spans.iter().map(|s| s.content.width()).sum() };
+    let left_width = span_width(&left);
+    let right_width = span_width(&right);
+    if right_width == 0 || left_width + right_width + 2 > width {
+        return Line::from(left);
+    }
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+    spans.extend(right);
+    Line::from(spans)
 }
 
 pub fn format_duration_mmss(duration: Duration) -> String {
@@ -148,12 +179,14 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dopewars => "dopewars",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
+        Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Scratchpad => "Scratchpad",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

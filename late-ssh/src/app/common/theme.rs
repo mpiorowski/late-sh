@@ -4367,6 +4367,41 @@ pub fn SUDOKU_SAME_NUM_BG() -> Color {
     blend_toward(Color::Rgb(210, 180, 90), BG_CANVAS(), 0.72)
 }
 
+/// Background wash for a chat message that mentions you.
+#[allow(non_snake_case)]
+pub fn CHAT_MENTION_BG() -> Color {
+    attention_bg(MENTION())
+}
+
+/// Background wash for a chat message that replies to one of yours. Anchored
+/// on the author color rather than the mention color so a reply and a mention
+/// stay tellable apart at a glance.
+#[allow(non_snake_case)]
+pub fn CHAT_REPLY_BG() -> Color {
+    attention_bg(CHAT_AUTHOR())
+}
+
+/// An accent color blended most of the way to the active canvas, so it reads
+/// as a quiet wash behind body text on dark and light themes alike. Derived,
+/// so no per-palette field is needed. Palettes whose colors are not plain RGB
+/// (the terminal-default theme) fall back to the flat highlight background.
+fn attention_bg(accent: Color) -> Color {
+    const TOWARD_CANVAS: f32 = 0.84;
+    let Some((accent_r, accent_g, accent_b)) = color_rgb(accent) else {
+        return BG_HIGHLIGHT();
+    };
+    let Some((canvas_r, canvas_g, canvas_b)) = color_rgb(BG_CANVAS()) else {
+        return BG_HIGHLIGHT();
+    };
+    let mix =
+        |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * TOWARD_CANVAS).round() as u8;
+    Color::Rgb(
+        mix(accent_r, canvas_r),
+        mix(accent_g, canvas_g),
+        mix(accent_b, canvas_b),
+    )
+}
+
 /// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
 /// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
 pub(crate) fn blend_toward(a: Color, b: Color, t: f32) -> Color {

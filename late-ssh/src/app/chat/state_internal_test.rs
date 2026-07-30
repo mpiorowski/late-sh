@@ -634,6 +634,9 @@ fn make_room(
             language_code: None,
             dm_user_a: None,
             dm_user_b: None,
+            topic: None,
+            rules: None,
+            created_by: None,
         },
         Vec::new(),
     )
@@ -1023,6 +1026,9 @@ fn room_slug_for_uses_explicit_room_id() {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
+                topic: None,
+                rules: None,
+                created_by: None,
             },
             vec![],
         ),
@@ -1039,6 +1045,9 @@ fn room_slug_for_uses_explicit_room_id() {
                 language_code: None,
                 dm_user_a: None,
                 dm_user_b: None,
+                topic: None,
+                rules: None,
+                created_by: None,
             },
             vec![],
         ),
@@ -1459,7 +1468,6 @@ fn make_msg(id: Uuid) -> ChatMessage {
         id,
         created: chrono::Utc::now(),
         updated: chrono::Utc::now(),
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: Uuid::from_u128(999),
@@ -1758,6 +1766,9 @@ fn make_dm(user_a: Uuid, user_b: Uuid) -> ChatRoom {
         language_code: None,
         dm_user_a: Some(user_a),
         dm_user_b: Some(user_b),
+        topic: None,
+        rules: None,
+        created_by: None,
     }
 }
 
@@ -1897,6 +1908,25 @@ async fn refresh_and_drain(state: &mut ChatState) {
     )
     .await;
     state.drain_snapshot();
+}
+
+/// Pump the chat event stream until `ready` holds, the way the app tick loop
+/// drains events every frame. `wait_until` cannot serve here: its predicate
+/// borrows immutably, and draining needs `&mut ChatState`.
+async fn drain_events_until(
+    state: &mut ChatState,
+    label: &str,
+    ready: impl Fn(&ChatState) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        state.drain_events();
+        if ready(state) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for condition: {label}");
 }
 
 #[tokio::test]
@@ -2043,7 +2073,6 @@ async fn push_message_bumps_only_its_room_version() {
         id: Uuid::now_v7(),
         created: Utc::now(),
         updated: Utc::now(),
-        pinned: false,
         reply_to_message_id: None,
         reply_to_user_id: None,
         room_id: lounge.id,
@@ -2064,4 +2093,79 @@ async fn push_message_bumps_only_its_room_version() {
     edited.updated = Utc::now();
     state.replace_message(edited);
     assert_eq!(state.room_version(lounge.id), lounge_version + 2);
+}
+
+#[tokio::test]
+async fn stale_snapshot_does_not_roll_back_a_newer_ignore_list() {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "stale_ignore_viewer").await;
+    let target = late_core::test_utils::create_test_user(&test_db.db, "stale_ignore_target").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, target.id)
+        .await
+        .expect("join target");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    refresh_and_drain(&mut state).await;
+
+    // A snapshot whose read ran before the ignore was written, held back
+    // undrained: every live session has one of these in flight, and a slow
+    // host delivers it after the ignore lands.
+    state.refresh_tx.send(()).expect("force refresh");
+    crate::test_helpers::wait_until(
+        || async { state.snapshot_rx.has_changed().unwrap_or(false) },
+        "pre-ignore chat snapshot",
+    )
+    .await;
+
+    state
+        .service
+        .ignore_user_task(viewer.id, target.username.clone());
+    let target_id = target.id;
+    drain_events_until(&mut state, "ignore list updated", |state| {
+        state.ignored_user_ids().contains(&target_id)
+    })
+    .await;
+
+    // The stale read is older than the write it would overwrite, so it must
+    // not un-ignore the target and let their next message through.
+    state.drain_snapshot();
+    assert!(
+        state.ignored_user_ids().contains(&target_id),
+        "stale snapshot must not roll back the ignore list"
+    );
+}
+
+#[test]
+fn parse_pair_command_accepts_directed_form() {
+    assert_eq!(
+        parse_pair_command("/pair @alice"),
+        Some(Some(PairRequest::Directed("alice".to_string())))
+    );
+}
+
+#[test]
+fn parse_pair_command_rejects_bare_and_malformed_forms() {
+    assert_eq!(parse_pair_command("/pair"), Some(None), "no target");
+    assert_eq!(parse_pair_command("/pair @"), Some(None), "empty username");
+    assert_eq!(parse_pair_command("/pair alice"), Some(None), "missing @");
+    assert_eq!(
+        parse_pair_command("/pair @alice extra"),
+        Some(None),
+        "trailing token"
+    );
+}
+
+#[test]
+fn parse_pair_command_ignores_unrelated_input() {
+    assert_eq!(parse_pair_command("/pairing @alice"), None);
+    assert_eq!(parse_pair_command("hello /pair @alice"), None);
+    assert_eq!(parse_pair_command("/challenge @alice"), None);
 }

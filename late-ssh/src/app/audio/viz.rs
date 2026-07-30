@@ -56,16 +56,26 @@ fn cap_level(bar: usize, bars: usize, anim_frame: usize) -> u16 {
         .unwrap_or(1)
 }
 
-/// Ambient equalizer for the sidebar's music stage, always on while the
-/// stage is visible. No audio data and no stored state: bar heights are
-/// synthesized from the `wall_tick`-derived paid frame (the app's
-/// marquee_tick), so the same tick renders the same frame at any loop
-/// cadence. Heights step once per anim_half `/2` edge, which is exactly
-/// the edge tick() pays a frame on; sub-edge ticks render identically.
-/// The one nod to audio state: a muted paired client shows a steady flat
-/// line, the meter at rest (the cadence keeps running, its frames just
-/// diff to nothing).
-pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, muted: bool) {
+/// What the equalizer strip should be saying about this session's audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EqState {
+    /// A client is paired and unmuted: the band dances.
+    Playing,
+    /// A client is paired and muted: a steady flat line, the meter at rest.
+    Muted,
+    /// Nothing is paired, so this session has no audio surface at all. A
+    /// dancing band here would be claiming playback that cannot exist, so
+    /// the strip points at the guide instead.
+    Unpaired,
+}
+
+/// Ambient equalizer for the sidebar's music stage. No audio data and no
+/// stored state: bar heights are synthesized from the `wall_tick`-derived
+/// paid frame (the app's marquee_tick), so the same tick renders the same
+/// frame at any loop cadence. Heights step once per anim_half `/2` edge,
+/// which is exactly the edge tick() pays a frame on; sub-edge ticks render
+/// identically.
+pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
@@ -79,15 +89,38 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, muted: 
         lines.push(Line::from(""));
     }
 
-    if muted {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "─".repeat(width),
-            Style::default().fg(theme::AMBER_DIM()),
-        )));
-        lines.push(Line::from(""));
-        frame.render_widget(Paragraph::new(lines), area);
-        return;
+    match state {
+        EqState::Playing => {}
+        EqState::Muted => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "─".repeat(width),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+            lines.push(Line::from(""));
+            frame.render_widget(Paragraph::new(lines), area);
+            return;
+        }
+        EqState::Unpaired => {
+            lines.push(Line::from(""));
+            lines.push(
+                Line::from(Span::styled(
+                    "no audio here yet",
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ))
+                .centered(),
+            );
+            lines.push(
+                Line::from(vec![
+                    Span::styled("press ", Style::default().fg(theme::TEXT_FAINT())),
+                    Span::styled("?", Style::default().fg(theme::AMBER())),
+                    Span::styled(" to listen", Style::default().fg(theme::TEXT_FAINT())),
+                ])
+                .centered(),
+            );
+            frame.render_widget(Paragraph::new(lines), area);
+            return;
+        }
     }
 
     let bars = width.div_ceil(BAR_STRIDE);

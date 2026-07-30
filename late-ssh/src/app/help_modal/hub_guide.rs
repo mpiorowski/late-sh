@@ -1,7 +1,12 @@
 use asterion_core::MAX_MAZE_ID;
+
+use crate::app::lobby::house::{
+    ssnake::svc::{SSNAKE_WIN_CHIPS, SSNAKE_WIN_PAYOUT_COOLDOWN},
+    tron::svc::{TRON_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN},
+};
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
-    chips::difficulty_bonus,
+    drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 
@@ -25,6 +30,7 @@ struct GuideSection {
 fn guide_sections() -> Vec<GuideSection> {
     let mut sections = Vec::new();
     sections.extend(chip_sections());
+    sections.extend(bar_sections());
     sections.extend(quest_sections());
     sections.extend(leaderboard_sections());
     sections.extend(arcade_sections());
@@ -34,20 +40,13 @@ fn guide_sections() -> Vec<GuideSection> {
 
 fn chip_sections() -> Vec<GuideSection> {
     vec![
+        // Earning lives on the Chips tab, which lists every payout in the app.
+        // Keeping a second, shorter list here only invited the two to drift.
         GuideSection {
             title: "Earn Chips",
             body: vec![
+                "The Chips tab lists every way to earn chips, with amounts.".to_string(),
                 "New accounts start with 1,000 chips.".to_string(),
-                "Daily puzzle wins pay once per daily board:".to_string(),
-                format!("easy       {:>4} chips", difficulty_bonus("easy")),
-                format!("medium     {:>4} chips", difficulty_bonus("medium")),
-                format!("hard       {:>4} chips", difficulty_bonus("hard")),
-                "Solitaire draw-1 pays medium; draw-3 pays hard.".to_string(),
-                "Le Word daily pays easy.".to_string(),
-                format!(
-                    "Bonsai watering pays {} chips once per UTC day.",
-                    crate::app::bonsai::svc::WATER_CHIP_BONUS
-                ),
             ],
         },
         GuideSection {
@@ -57,6 +56,40 @@ fn chip_sections() -> Vec<GuideSection> {
                 "Betting losses offset betting wins; Shop spending does not lower your rank."
                     .to_string(),
                 "Floor restores are excluded from the board.".to_string(),
+            ],
+        },
+    ]
+}
+
+fn bar_sections() -> Vec<GuideSection> {
+    vec![
+        GuideSection {
+            title: "The Bar",
+            body: vec![
+                "Mention @bartender in the Lounge to order; press t at the bar.".to_string(),
+                "There is no menu. He invents the drink and prices it".to_string(),
+                format!(
+                    "{DRINK_PRICE_MIN}-{DRINK_PRICE_MAX} chips, never more than you can spend."
+                ),
+                "Your first ever drink is on the house.".to_string(),
+                "He only pours for you; use /gift @user <n> to send someone else chips."
+                    .to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Last Call",
+            body: vec![
+                "Drinks build a buzz: tipsy, buzzed, sloshed, wasted.".to_string(),
+                "Your level shows beside your name wherever you talk.".to_string(),
+                format!(
+                    "It wears off at {DRUNK_DECAY_PER_HOUR} points an hour, online or not, so a big night is gone by morning."
+                ),
+                "Wasted is last call: water and coffee only after that.".to_string(),
+                "A buzz also comes out in your typing, in public rooms only.".to_string(),
+                "Letters inside a word shuffle, more of them the drunker you".to_string(),
+                "are, but every word keeps its first and last letter so it".to_string(),
+                "stays readable. Handles, links, and code are never touched.".to_string(),
+                "What you typed is saved that way; sobering up will not fix it.".to_string(),
             ],
         },
     ]
@@ -109,6 +142,14 @@ fn leaderboard_sections() -> Vec<GuideSection> {
                 "Monthly boards use scores recorded this month.".to_string(),
                 "All-time boards use each user's saved best score.".to_string(),
                 "Traffic's saved best is the sum of your per-track bests.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Le Word Board",
+            body: vec![
+                "Monthly and all-time rows count solved daily words.".to_string(),
+                "Win streak ranks each user's longest run of consecutive solved puzzle dates."
+                    .to_string(),
             ],
         },
         GuideSection {
@@ -253,28 +294,33 @@ fn arcade_sections() -> Vec<GuideSection> {
 fn room_game_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
-            title: "Table Games",
+            title: "House Tables",
             body: vec![
-                "Open Tables with 4.".to_string(),
-                "Directory filters: All, Asterion, Blackjack, Chess, Poker, Tic-Tac-Toe, Tron."
+                "Ctrl+Q opens the Lobby; house tables sit below the daily matches.".to_string(),
+                "There is one fixed table per game: no creating tables, no settings forms."
                     .to_string(),
-                "j/k or arrows navigate tables.".to_string(),
-                "h/l or left/right cycles filters.".to_string(),
-                "/ searches by table name.".to_string(),
-                "Enter enters the selected table.".to_string(),
-                "n creates a new table when the selected game supports creation.".to_string(),
-                "Esc clears create/search/query/filter before leaving table state.".to_string(),
+                "Poker, Blackjack, Asterion, Tron, and Super Snake.".to_string(),
+                "j/k or arrows move; Enter sits at the selected table.".to_string(),
+                "The row shows live occupancy; empty tables are always joinable.".to_string(),
+                "q or Esc leaves the table screen; your seat follows that game's rules."
+                    .to_string(),
+                "Only Poker and Blackjack put your chips at risk. Everywhere else the winner is paid by the house and losers lose nothing."
+                    .to_string(),
             ],
         },
         GuideSection {
-            title: "Create Table Forms",
+            title: "Daily Matches",
             body: vec![
-                "Table name maxes at 48 chars; search query maxes at 32 chars.".to_string(),
-                "A user can have up to 10 open tables per game kind.".to_string(),
-                "Asterion form: name.".to_string(),
-                "Blackjack form: name, pace, stake.".to_string(),
-                "Poker form: name, pace, blinds, starting stack.".to_string(),
-                "Tic-Tac-Toe form: name.".to_string(),
+                "Press c (or C for a directed challenge) in the Lobby to post a daily correspondence match, open to anyone or aimed at one user."
+                    .to_string(),
+                "Chess, battleship, connect4, reversi, checkers, and backgammon.".to_string(),
+                "24h per move; Enter in the Lobby claims an open match or opens one of yours."
+                    .to_string(),
+                "Boards live outside the Tab cycle; Esc returns to the Lobby.".to_string(),
+                "` hops Home chat, boards waiting on your move, seated tables, and unfinished dailies."
+                    .to_string(),
+                "Nothing is staked and a draw pays nobody; only the winner is paid, once per match."
+                    .to_string(),
             ],
         },
         GuideSection {
@@ -288,7 +334,6 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "PageUp/PageDown scroll embedded chat.".to_string(),
                 "r/e/d/p/c/f reply, edit, delete, profile, copy, react selected chat message.".to_string(),
                 "g jumps to a reply's original message even when it contains an image.".to_string(),
-                "Ctrl+P pins or unpins selected embedded-chat message.".to_string(),
                 "Arrows go to the game first; otherwise embedded chat handles them.".to_string(),
             ],
         },
@@ -309,8 +354,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Blackjack",
             body: vec![
                 "Four seats, chips, 6-deck shoe, dealer stands soft 17, blackjack pays 3:2.".to_string(),
-                "Paces: Quick 2m, Standard 5m, Chill 10m.".to_string(),
-                "Stakes: 10, 50, 100, or 500 chips; max bet is 10x stake.".to_string(),
+                "The house table is fixed: 10-chip stake, standard pace (5m action timer)."
+                    .to_string(),
+                "Chip buttons are 10, 20, 50, and 100; the table max is 100 chips a hand."
+                    .to_string(),
                 "s or Enter sits in first open seat.".to_string(),
                 "l leaves seat when safe.".to_string(),
                 "[/a previous chip; ]/d next chip.".to_string(),
@@ -326,8 +373,10 @@ fn room_game_sections() -> Vec<GuideSection> {
             title: "Poker",
             body: vec![
                 "Four-seat fixed-stack Texas Hold'em with private hole cards, shared board, side pots, showdown ranking, and chip settlement.".to_string(),
-                "Room stacks: 100, 500, 1000, 2000, or 5000 chips.".to_string(),
-                "Blinds: 10/20, 25/50, 50/100, or 100/200.".to_string(),
+                "The house table is fixed: 1000-chip starting stack, 10/20 blinds, standard pace."
+                    .to_string(),
+                "The pot is what you win; it varies with how many players bet and how much."
+                    .to_string(),
                 "s or Enter sits in first open seat.".to_string(),
                 "n deals next hand.".to_string(),
                 "c, Space, or Enter checks or calls.".to_string(),
@@ -339,23 +388,14 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Chess",
-            body: vec![
-                "Two seats, White and Black. Decisive wins pay 500 chips.".to_string(),
-                "Clock presets: blitz, rapid, and 1d/move daily.".to_string(),
-                "s sits when not seated.".to_string(),
-                "n starts when both players are seated.".to_string(),
-                "w/a/s/d or arrows move cursor while seated.".to_string(),
-                "Space or Enter selects a piece, then destination.".to_string(),
-                "r resigns active game.".to_string(),
-                "l leaves seat before or after a game.".to_string(),
-            ],
-        },
-        GuideSection {
             title: "Tron",
             body: vec![
-                "Two to four riders. Wins pay 50/75/100 chips by rider count.".to_string(),
-                "Speeds: chill, standard, quick.".to_string(),
+                "Two to four riders on the fixed house table: quick speed, glitch mode."
+                    .to_string(),
+                format!(
+                    "Wins pay {TRON_WIN_CHIPS} chips whatever the rider count, one payout per {} minutes.",
+                    TRON_WIN_PAYOUT_COOLDOWN.as_secs() / 60
+                ),
                 "s, Space, or Enter sits when not seated.".to_string(),
                 "n starts when at least two riders are seated.".to_string(),
                 "w/a/s/d or arrows steer while seated.".to_string(),
@@ -363,15 +403,29 @@ fn room_game_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Tic-Tac-Toe",
+            title: "Super Snake",
             body: vec![
-                "Two seats, X and O, no chips.".to_string(),
+                "Four-seat snake arena with warp tunnels, relaxed speed.".to_string(),
+                format!(
+                    "Wins pay {SSNAKE_WIN_CHIPS} chips, one payout per {} minutes.",
+                    SSNAKE_WIN_PAYOUT_COOLDOWN.as_secs() / 60
+                ),
                 "s, Space, or Enter sits when not seated.".to_string(),
-                "1-9 places directly.".to_string(),
-                "w/a/s/d or arrows move cursor while seated.".to_string(),
-                "Space or Enter places on cursor.".to_string(),
-                "n starts a new round.".to_string(),
-                "l leaves seat and resets board.".to_string(),
+                "n starts another round.".to_string(),
+                "w/a/s/d, hjkl, or arrows steer while seated.".to_string(),
+                "[ and ] browse the arena between matches.".to_string(),
+                "l leaves seat; q or Esc leaves the table.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Daily Boards",
+            body: vec![
+                "Chess and the other daily games are correspondence matches now, not house tables."
+                    .to_string(),
+                "One move per turn, 24h to reply, played from the Lobby.".to_string(),
+                "w/a/s/d or arrows move the cursor; Space or Enter selects and moves.".to_string(),
+                "Esc returns to the Lobby; the match keeps waiting on whoever is to move."
+                    .to_string(),
             ],
         },
     ]

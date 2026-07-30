@@ -1438,30 +1438,97 @@ fn broceliande_beast_room() -> RoomId {
 #[test]
 fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
     let mut s = world();
-    s.join(uid(1));
-    s.choose_class(uid(1), Class::Ranger);
-    // Stand where the easiest beasts (level 1) gather, and be well-trained so
-    // the roll is a near-sure thing; force success by maxing the odds.
-    s.players.get_mut(&uid(1)).unwrap().room = broceliande_beast_room();
-    s.players.get_mut(&uid(1)).unwrap().taming_xp = super::super::skills::xp_for_skill_level(50);
+    let user_id = uid(1);
+    s.join(user_id);
+    s.choose_class(user_id, Class::Ranger);
+    s.players.get_mut(&user_id).unwrap().room = broceliande_beast_room();
     // The easiest beast in the room is the first tameable species.
     let beasts = super::super::taming::beasts_at(broceliande_beast_room());
     assert!(!beasts.is_empty(), "beasts roam the first forest gate");
-    let before_xp = s.players[&uid(1)].taming_xp;
-    // Try a few times; a master's odds cap at 95%, so one of a handful lands.
-    for _ in 0..40 {
-        if s.players[&uid(1)].pet.is_some() {
-            break;
+    let beast_index = beasts[0].species;
+    let species = &TAMEABLE[beast_index];
+    let cooldown_key = (user_id, beast_index);
+    let baseline_xp = super::super::skills::xp_for_skill_level(species.tame_level);
+    s.players.get_mut(&user_id).unwrap().taming_xp = baseline_xp;
+
+    // Exercise both real RNG outcomes. The old retry loop was flaky because a
+    // failed roll records a 30-second cooldown, so its immediate retries never
+    // rolled again. After proving that behavior, remove only that transient test
+    // token; after success, reset its side effects if a failure is still needed.
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut attempt_count = 0;
+    while success_count == 0 || failure_count == 0 {
+        attempt_count += 1;
+        assert!(
+            attempt_count <= 10_000,
+            "real taming RNG did not produce both outcomes: {success_count} successes, {failure_count} failures"
+        );
+
+        let before_xp = s.players[&user_id].taming_xp;
+        s.tame(user_id, 0);
+
+        if let Some(pet) = s.players[&user_id].pet {
+            success_count += 1;
+            assert_eq!(pet.species.key, species.key);
+            assert!(
+                pet.species.is_tameable(),
+                "the companion is a tamed wild beast"
+            );
+            assert_eq!(
+                s.players[&user_id].taming_xp,
+                before_xp + tame_xp(species) as i64,
+                "taming trains Animal Taming xp"
+            );
+            assert!(!s.tame_cooldowns.contains_key(&cooldown_key));
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .iter()
+                    .any(|line| line.text.contains("You've earned its trust!"))
+            );
+
+            if failure_count == 0 {
+                let player = s.players.get_mut(&user_id).unwrap();
+                player.pet = None;
+                player.taming_xp = baseline_xp;
+            }
+        } else {
+            failure_count += 1;
+            assert_eq!(s.players[&user_id].taming_xp, before_xp);
+            let failed_at = *s
+                .tame_cooldowns
+                .get(&cooldown_key)
+                .expect("a failed tame records the tamer-beast cooldown");
+            assert!(failed_at.elapsed() < TAME_COOLDOWN);
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .last()
+                    .is_some_and(|line| line.text.contains("shies, then bolts"))
+            );
+
+            s.tame(user_id, 0);
+            assert!(s.players[&user_id].pet.is_none());
+            assert_eq!(s.players[&user_id].taming_xp, before_xp);
+            assert_eq!(s.tame_cooldowns.get(&cooldown_key), Some(&failed_at));
+            assert!(
+                s.players[&user_id]
+                    .log
+                    .last()
+                    .unwrap()
+                    .text
+                    .contains("still wary")
+            );
+
+            if success_count == 0 {
+                assert_eq!(s.tame_cooldowns.remove(&cooldown_key), Some(failed_at));
+            }
         }
-        s.tame(uid(1), 0);
     }
-    let p = &s.players[&uid(1)];
-    assert!(p.pet.is_some(), "a successful tame yields a companion");
-    assert!(
-        p.pet.unwrap().species.is_tameable(),
-        "the companion is a tamed wild beast"
-    );
-    assert!(p.taming_xp > before_xp, "taming trains Animal Taming xp");
+
+    assert!(success_count > 0);
+    assert!(failure_count > 0);
 }
 
 #[test]
@@ -1701,6 +1768,66 @@ fn equipping_a_weapon_raises_attack() {
 }
 
 #[test]
+fn taking_off_gear_returns_it_to_the_pack_and_drops_its_stats() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let base = s.players[&uid(1)].attack();
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006); // greatsword +16
+    s.equip(uid(1), 1006);
+    assert!(s.players[&uid(1)].attack() > base, "worn gear counts");
+
+    s.unequip(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert!(
+        p.inventory.contains(&1006),
+        "the greatsword goes back in the pack"
+    );
+    assert!(
+        p.equipped.values().all(|id| *id != 1006),
+        "and is no longer worn"
+    );
+    assert_eq!(p.attack(), base, "its attack bonus comes off with it");
+}
+
+#[test]
+fn taking_off_gear_you_are_not_wearing_does_nothing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let before = s.players[&uid(1)].inventory.clone();
+    s.unequip(uid(1), 1006); // in the pack, not on the body
+    assert_eq!(
+        s.players[&uid(1)].inventory,
+        before,
+        "a pack item is not duplicated by taking it off"
+    );
+}
+
+#[test]
+fn worn_gear_cannot_be_sold_out_from_under_you() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Stand at Embergate's merchant so the sell path gets past the shop gate.
+    s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    s.equip(uid(1), 1006);
+    let gold = s.players[&uid(1)].gold;
+
+    s.sell(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, gold, "no silent sale of worn gear");
+    assert!(p.equipped.values().any(|id| *id == 1006), "still worn");
+    assert!(
+        p.log.iter().any(|l| l.text.contains("take off")),
+        "and the refusal says why: {:?}",
+        p.log.iter().map(|l| &l.text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));
@@ -1882,8 +2009,8 @@ fn final_bosses_map_to_lifetime_achievements() {
     let archdemon_payout = archdemon.payout.expect("archdemon pays chips");
     assert_eq!(archdemon_payout.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
     assert_eq!(
-        archdemon_payout.ledger_reason,
-        LATEANIA_ARCHDEMON_LEDGER_REASON
+        archdemon_payout.chip_move,
+        ChipMove::LateaniaArchdemonDefeat
     );
     assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
@@ -1891,10 +2018,7 @@ fn final_bosses_map_to_lifetime_achievements() {
         .expect("last Frontier boss should grant an achievement");
     let king_payout = frontier_king.payout.expect("frontier king pays chips");
     assert_eq!(king_payout.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
-    assert_eq!(
-        king_payout.ledger_reason,
-        LATEANIA_FRONTIER_KING_LEDGER_REASON
-    );
+    assert_eq!(king_payout.chip_move, ChipMove::LateaniaFrontierKingDefeat);
     assert_eq!(
         frontier_king.award_category,
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY

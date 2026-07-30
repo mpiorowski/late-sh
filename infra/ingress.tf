@@ -40,7 +40,7 @@ resource "kubernetes_ingress_v1" "service_web" {
 }
 
 # api.late.sh → late-ssh HTTP API (port 4000)
-# WebSocket support for /api/ws/pair browser pairing
+# WebSocket support for /api/ws/pair CLI/webview pairing
 resource "kubernetes_ingress_v1" "service_ssh_api" {
   metadata {
     name = "service-ssh-api-ingress"

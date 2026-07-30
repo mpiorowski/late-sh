@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::ActiveUser;
+use axum::http::HeaderValue;
 use ipnet::IpNet;
 use std::{
     collections::HashMap,
@@ -7,18 +8,6 @@ use std::{
     time::Instant,
 };
 use uuid::Uuid;
-
-#[test]
-fn parse_allowed_origin_accepts_valid_origin() {
-    let value = parse_allowed_origin("https://late.sh");
-    assert_eq!(value, HeaderValue::from_static("https://late.sh"));
-}
-
-#[test]
-#[should_panic(expected = "invalid LATE_ALLOWED_ORIGINS entry")]
-fn parse_allowed_origin_panics_for_invalid_origin() {
-    let _ = parse_allowed_origin("bad\norigin");
-}
 
 #[test]
 fn ws_payload_heartbeat_parses() {
@@ -69,7 +58,6 @@ fn ws_payload_client_state_parses() {
             capabilities,
             muted,
             volume_percent,
-            icecast_output_available,
         } => {
             assert_eq!(client_kind, ClientKind::Cli);
             assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -77,7 +65,6 @@ fn ws_payload_client_state_parses() {
             assert!(capabilities.is_empty());
             assert!(muted);
             assert_eq!(volume_percent, 35);
-            assert!(icecast_output_available);
         }
         _ => panic!("expected ClientState"),
     }
@@ -135,7 +122,6 @@ fn ws_payload_android_client_state_parses() {
             capabilities,
             muted,
             volume_percent,
-            icecast_output_available,
         } => {
             assert_eq!(client_kind, ClientKind::Cli);
             assert_eq!(ssh_mode, ClientSshMode::Native);
@@ -143,7 +129,6 @@ fn ws_payload_android_client_state_parses() {
             assert!(capabilities.is_empty());
             assert!(!muted);
             assert_eq!(volume_percent, 30);
-            assert!(icecast_output_available);
         }
         _ => panic!("expected ClientState"),
     }
@@ -168,7 +153,6 @@ fn ws_payload_openssh_client_state_parses() {
             capabilities,
             muted,
             volume_percent,
-            icecast_output_available,
         } => {
             assert_eq!(client_kind, ClientKind::Cli);
             assert_eq!(ssh_mode, ClientSshMode::OpenSsh);
@@ -176,7 +160,6 @@ fn ws_payload_openssh_client_state_parses() {
             assert!(capabilities.is_empty());
             assert!(!muted);
             assert_eq!(volume_percent, 30);
-            assert!(icecast_output_available);
         }
         _ => panic!("expected ClientState"),
     }

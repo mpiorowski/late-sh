@@ -35,7 +35,6 @@ pub(super) struct PlaybackState<'a> {
     pub(super) sample_rate: u32,
     pub(super) muted: &'a AtomicBool,
     pub(super) volume_percent: &'a AtomicU8,
-    pub(super) icecast_output_available: &'a AtomicBool,
     pub(super) source_is_icecast: &'a AtomicBool,
     pub(super) native_source_selected: &'a AtomicBool,
     pub(super) stream_url: &'a Arc<Mutex<String>>,
@@ -62,8 +61,6 @@ enum PairControlMessage {
         stream_url: Option<String>,
         #[serde(default)]
         station: Option<String>,
-        #[serde(default = "default_embedded_webview_enabled")]
-        embedded_webview_enabled: bool,
     },
     VoiceJoin {
         room: String,
@@ -98,10 +95,6 @@ const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];
 
-const fn default_embedded_webview_enabled() -> bool {
-    true
-}
-
 const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
 const WEBVIEW_CRASH_LIMIT: u8 = 3;
 const WEBVIEW_CRASH_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -133,15 +126,13 @@ impl WebviewPlaybackController {
     fn apply_playback_source(
         &mut self,
         source: PairAudioSource,
-        embedded_webview_enabled: bool,
         muted: bool,
         volume_percent: u8,
     ) -> Result<()> {
-        match (source, embedded_webview_enabled) {
-            (PairAudioSource::Youtube, true) => self.enter_youtube(muted, volume_percent),
-            (PairAudioSource::Youtube, false) => self.enter_browser_youtube(),
-            (PairAudioSource::Icecast, _) => self.enter_icecast(),
-            (PairAudioSource::Radio, _) => self.enter_radio(),
+        match source {
+            PairAudioSource::Youtube => self.enter_youtube(muted, volume_percent),
+            PairAudioSource::Icecast => self.enter_icecast(),
+            PairAudioSource::Radio => self.enter_radio(),
         }
     }
 
@@ -252,8 +243,8 @@ impl WebviewPlaybackController {
                 warn!(
                     error = %err,
                     "late-webview helper binary not found; embedded YouTube playback is \
-                     unavailable (reinstall the CLI or set LATE_WEBVIEW_BIN); radio, icecast, \
-                     and browser-paired YouTube still work"
+                     unavailable (reinstall the CLI or set LATE_WEBVIEW_BIN); radio and \
+                     icecast still work, and the queue is listenable at late.sh/listen"
                 );
                 self.record_helper_start_failure();
                 return Ok(());
@@ -274,16 +265,6 @@ impl WebviewPlaybackController {
         }
         self.child = Some(child);
         info!("started embedded YouTube webview helper");
-        Ok(())
-    }
-
-    fn enter_browser_youtube(&mut self) -> Result<()> {
-        if !self.wants_youtube && self.child.is_none() {
-            return Ok(());
-        }
-        self.wants_youtube = false;
-        self.stop_helper();
-        info!("using paired browser for YouTube playback");
         Ok(())
     }
 
@@ -376,11 +357,15 @@ impl WebviewPlaybackController {
 
         if self.crash_count >= WEBVIEW_CRASH_LIMIT {
             self.disabled_until = Some(now + WEBVIEW_CRASH_BACKOFF);
+            // Nothing takes over when the helper is disabled. Browser pairing
+            // used to hand YouTube off automatically; now the user has to go
+            // listen elsewhere, so the message has to say so rather than imply
+            // a fallback kicked in.
             warn!(
                 crash_count = self.crash_count,
                 backoff_secs = WEBVIEW_CRASH_BACKOFF.as_secs(),
                 log_path = ?self.helper_log_path.as_deref(),
-                "{message}; temporarily disabling embedded YouTube fallback"
+                "{message}; pausing embedded YouTube playback, listen at late.sh/listen meanwhile"
             );
         }
     }
@@ -632,8 +617,6 @@ pub(super) async fn run_pair_ws(
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     let mut voice_speaking_poll = interval(Duration::from_millis(250));
     send_client_state(&mut ws, client, playback).await?;
-    let mut last_icecast_output_available =
-        playback.icecast_output_available.load(Ordering::Relaxed);
     if voice.joined {
         send_voice_state(&mut ws, voice).await?;
     }
@@ -651,12 +634,6 @@ pub(super) async fn run_pair_ws(
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
-                let current_icecast_output_available =
-                    playback.icecast_output_available.load(Ordering::Relaxed);
-                if current_icecast_output_available != last_icecast_output_available {
-                    last_icecast_output_available = current_icecast_output_available;
-                    send_client_state(&mut ws, client, playback).await?;
-                }
                 webview.maintain_helper(
                     playback.muted.load(Ordering::Relaxed),
                     playback.volume_percent.load(Ordering::Relaxed),
@@ -707,7 +684,6 @@ async fn send_client_state(
         "capabilities": CLIENT_CAPABILITIES,
         "muted": playback.muted.load(Ordering::Relaxed),
         "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
-        "icecast_output_available": playback.icecast_output_available.load(Ordering::Relaxed),
     });
     ws.send(Message::Text(payload.to_string().into())).await?;
     Ok(())
@@ -740,7 +716,6 @@ async fn handle_pair_control(
             source,
             stream_url: server_stream_url,
             station,
-            embedded_webview_enabled,
         } => {
             // Only reachable against an old server that omits stream_url for
             // radio; current servers resolve URLs in late-ssh stations.rs.
@@ -795,7 +770,6 @@ async fn handle_pair_control(
             }
             webview.apply_playback_source(
                 source,
-                embedded_webview_enabled,
                 playback.muted.load(Ordering::Relaxed),
                 playback.volume_percent.load(Ordering::Relaxed),
             )?;

@@ -37,7 +37,7 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
 fn select_active_stream(app: &mut App, index: u8) -> bool {
     use late_core::models::user::AudioSource;
 
-    match app.paired_browser_source {
+    match app.paired_source {
         AudioSource::Icecast => {
             let Some(stream) = super::stations::icecast_stream_by_index(index) else {
                 return true;

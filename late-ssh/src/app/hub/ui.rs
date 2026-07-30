@@ -25,6 +25,12 @@ pub(crate) struct HubDrawProps<'a> {
     pub is_admin: bool,
 }
 
+struct HubLayout {
+    popup: Rect,
+    body: Rect,
+    footer: Rect,
+}
+
 pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let HubDrawProps {
         state,
@@ -37,6 +43,39 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
         is_admin,
     } = props;
 
+    let layout = draw_hub_shell(frame, area, state, is_admin);
+    // Every tab but the leaderboard renders inside the body row and gets the
+    // shell's footer. The leaderboard spans the whole popup so its grid can
+    // meet the border, which means it draws its own footer.
+    match state.selected_tab() {
+        HubTab::Leaderboard => crate::app::hub::leaderboard::draw(
+            frame,
+            layout.popup,
+            layout.footer,
+            leaderboard,
+            user_id,
+            is_admin,
+        ),
+        HubTab::Dailies => {
+            crate::app::hub::dailies::ui::draw(frame, layout.body, quest_state);
+            draw_footer(frame, layout.footer, is_admin);
+        }
+        HubTab::Shop => {
+            crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet_species);
+            draw_footer(frame, layout.footer, is_admin);
+        }
+        HubTab::Events => {
+            crate::app::hub::events::draw(frame, layout.body);
+            draw_footer(frame, layout.footer, is_admin);
+        }
+        HubTab::Admin => {
+            crate::app::hub::admin::ui::draw(frame, layout.body, admin_state, is_admin);
+            draw_footer(frame, layout.footer, is_admin);
+        }
+    }
+}
+
+fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) -> HubLayout {
     let popup = centered_percent_rect(80, 85, area);
     frame.render_widget(Clear, popup);
 
@@ -52,7 +91,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let layout = Layout::vertical([
+    let rows = Layout::vertical([
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // tabs
         Constraint::Length(1), // breathing room
@@ -62,17 +101,12 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     ])
     .split(inner);
 
-    draw_tabs(frame, layout[1], state, is_admin);
-    match state.selected_tab() {
-        HubTab::Leaderboard => {
-            crate::app::hub::leaderboard::draw(frame, layout[3], leaderboard, user_id)
-        }
-        HubTab::Dailies => crate::app::hub::dailies::ui::draw(frame, layout[3], quest_state),
-        HubTab::Shop => crate::app::hub::shop::ui::draw(frame, layout[3], shop_state, pet_species),
-        HubTab::Events => crate::app::hub::events::draw(frame, layout[3]),
-        HubTab::Admin => crate::app::hub::admin::ui::draw(frame, layout[3], admin_state, is_admin),
+    draw_tabs(frame, rows[1], state, is_admin);
+    HubLayout {
+        popup,
+        body: rows[3],
+        footer: rows[5],
     }
-    draw_footer(frame, layout[5], state.selected_tab(), is_admin);
 }
 
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
@@ -111,7 +145,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, _tab: HubTab, is_admin: bool) {
+pub(super) fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
     let mut spans = vec![

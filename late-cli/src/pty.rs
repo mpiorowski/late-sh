@@ -1,8 +1,10 @@
+#[cfg(unix)]
 use anyhow::{Context, Result};
 #[cfg(unix)]
 use nix::{libc, pty::Winsize};
 #[cfg(unix)]
 use std::{fs, io, os::fd::AsRawFd, sync::Arc};
+#[cfg(unix)]
 use tracing::debug;
 
 #[cfg(unix)]

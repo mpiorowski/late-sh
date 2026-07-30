@@ -1,18 +1,45 @@
 use std::time::{Duration, Instant};
 
 use late_core::models::user::RightSidebarMode;
-use tokio::time::sleep;
+use late_core::models::user_ssh_key::KeyLayout;
+use tokio::time::{sleep, timeout};
 
+use crate::app::chat::svc::ChatEvent;
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, HOT_TICK, IDLE_TICK};
 use crate::test_helpers::chat_compose_app;
 
-/// The ambient sidebar wave paints on anim_half edges whenever the right
-/// sidebar is visible, so a session showing it never settles by design.
-/// Settle-based tests turn the sidebar off to exercise the gate beneath;
-/// `sidebar_wave_holds_half_rate_and_paints_on_edges` covers the wave path.
+const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
+/// Watchdog, not the assertion: `CLEAN_SETTLE_WINDOW` is what the gate is
+/// judged on. It has to outlast the whole session-startup prefetch cascade,
+/// because every landing prefetch legitimately dirties a tick and restarts the
+/// window. That cascade is a couple of seconds locally and much longer on a
+/// loaded CI runner sharing one Postgres with the rest of the suite, so this is
+/// sized like `test_helpers::ASYNC_TEST_TIMEOUT`: generously, and well inside
+/// nextest's 5-minute terminate-after.
+const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The sidebar's animated panels (eq strip + bonsai sway) paint on anim_half
+/// edges whenever the right sidebar is visible, so a session showing it never
+/// settles by design. Settle-based tests turn the sidebar off to exercise the
+/// gate beneath; `sidebar_holds_half_rate_and_paints_on_edges` covers the
+/// visible-sidebar path.
+///
+/// This writes the per-device rails rather than the profile. `ProfileState::
+/// drain_snapshot` replaces the whole profile every time a `ProfileService`
+/// snapshot lands, so a profile-level edit here survives only until the
+/// session's first profile prefetch arrives. That prefetch is async: on an
+/// unloaded machine it lands before the settle loop starts, but under load it
+/// lands mid-settle, silently restores the account's `On`, and switches the
+/// sidebar back on -- at which point the app dirties every anim_half edge
+/// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
+/// takes precedence over the profile in `device_rails_or_profile` and nothing
+/// async overwrites it, so the sidebar stays off for the whole test.
 fn hide_sidebar(app: &mut App) {
-    app.profile_state.profile.right_sidebar_mode = RightSidebarMode::Off;
+    app.device_rails = Some(KeyLayout {
+        room_list_mode: app.rail_modes().0,
+        right_sidebar_mode: RightSidebarMode::Off,
+    });
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
@@ -23,22 +50,27 @@ fn drain_frame(app: &mut App) {
     let _ = std::mem::take(&mut app.pending_terminal_commands);
 }
 
-/// Drive ticks until `consecutive` in a row report no change. Initial
+/// Drive ticks until the app stays clean for a wall-clock window. Initial
 /// prefetches, the splash, chat refresh cadence, and at most one clock
-/// rollover may keep early ticks dirty, so this loops with a deadline
-/// instead of asserting on a fixed tick count.
-async fn settle_clean(app: &mut App, consecutive: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut clean = 0usize;
-    while Instant::now() < deadline {
-        if app.tick() {
-            clean = 0;
+/// rollover may keep early ticks dirty. Wall time, rather than a count of
+/// 5ms sleeps, keeps scheduler load from changing the success condition.
+async fn settle_clean(app: &mut App) {
+    let deadline = Instant::now() + CLEAN_SETTLE_TIMEOUT;
+    let mut clean_since = None;
+    loop {
+        let changed = app.tick();
+        let now = Instant::now();
+        if changed {
+            clean_since = None;
             drain_frame(app);
         } else {
-            clean += 1;
-            if clean >= consecutive {
+            let since = clean_since.get_or_insert(now);
+            if now.duration_since(*since) >= CLEAN_SETTLE_WINDOW {
                 return;
             }
+        }
+        if Instant::now() >= deadline {
+            break;
         }
         sleep(Duration::from_millis(5)).await;
     }
@@ -47,11 +79,12 @@ async fn settle_clean(app: &mut App, consecutive: usize) {
     let screen_before = app.screen;
     let dirty_again = app.tick();
     panic!(
-        "app never settled to {consecutive} consecutive clean ticks\n\
+        "app never stayed clean for {}ms\n\
          one more tick changed={dirty_again} screen={screen_before:?}->{:?}\n\
          chat_epoch {context_epoch_before}->{} app_epoch {app_epoch_before}->{}\n\
          splash={} banner={} outbox={} term_cmds={} clipboard={} image_modal={}\n\
          settings={} ultimate={} hub={} lobby={} profile={} bonsai={} bonsai2={} poll={} icon={} booth={} search={}",
+        CLEAN_SETTLE_WINDOW.as_millis(),
         app.screen,
         app.chat.context_epoch(),
         app.chat_ctx_epoch,
@@ -83,22 +116,38 @@ async fn idle_ticks_settle_clean_and_chat_send_marks_changed() {
     let (_test_db, mut app) = chat_compose_app("tick-gate").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
+    let mut chat_events = app.chat.service.subscribe_events();
+    let user_id = app.user_id;
     app.handle_input(b"hello\r");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut woke = false;
-    while Instant::now() < deadline {
-        if app.tick() {
-            woke = true;
-            drain_frame(&mut app);
-            break;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match chat_events.recv().await {
+                Ok(ChatEvent::MessageCreated { message, .. })
+                    if message.user_id == user_id && message.body == "hello" =>
+                {
+                    return;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    panic!("chat event receiver lagged by {skipped} events");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("chat event channel closed before the message was created");
+                }
+            }
         }
-        sleep(Duration::from_millis(5)).await;
-    }
-    assert!(woke, "chat send never produced a changed tick");
+    })
+    .await
+    .expect("chat send never produced MessageCreated");
+    assert!(
+        app.tick(),
+        "queued chat message event did not dirty the tick"
+    );
+    drain_frame(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
 /// The adaptive loop's cadence contract: a settled idle session on a
@@ -110,7 +159,7 @@ async fn wake_hint_idles_when_settled_and_heats_on_input() {
     let (_test_db, mut app) = chat_compose_app("wake-hint").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     // Age the app past the post-input hot window.
     app.last_input_at = Instant::now() - Duration::from_secs(10);
@@ -129,7 +178,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-ultimate").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.ultimate_state.set_cooldown(
         crate::app::ultimates::UltimateKind::Wonderland.id(),
@@ -137,7 +186,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     );
     app.show_ultimate_modal = true;
     drain_frame(&mut app);
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.ultimate_state.set_cooldown(
         crate::app::ultimates::UltimateKind::Wonderland.id(),
@@ -155,7 +204,7 @@ async fn open_ultimate_modal_settles_clean_then_fires_once_on_ready() {
     }
     assert!(woke, "cooldown expiry never produced a changed tick");
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
 /// Phase-1 tightening: an open, untouched modal is static between async
@@ -167,21 +216,21 @@ async fn open_settings_modal_settles_clean() {
     let (_test_db, mut app) = chat_compose_app("tick-gate-modal").await;
     hide_sidebar(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 
     app.handle_input(&[0x0F]); // Ctrl+O
     assert!(app.show_settings, "ctrl+o opens the settings modal");
     drain_frame(&mut app);
 
-    settle_clean(&mut app, 30).await;
+    settle_clean(&mut app).await;
 }
 
-/// The always-on ambient wave: a session showing the sidebar never goes
+/// The always-on sidebar edge: a session showing the sidebar never goes
 /// idle. It holds the half-rate wake tier, and ticks pay frames only on
 /// anim_half edges (~every 132ms), not on every wake.
 #[tokio::test]
-async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
-    let (_test_db, mut app) = chat_compose_app("wave-cadence").await;
+async fn sidebar_holds_half_rate_and_paints_on_edges() {
+    let (_test_db, mut app) = chat_compose_app("sidebar-cadence").await;
 
     // Flush startup churn (prefetches, splash, first clock render).
     let warmup = Instant::now() + Duration::from_secs(1);
@@ -192,15 +241,16 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
         sleep(Duration::from_millis(5)).await;
     }
 
-    // Age past the post-input window so the hot tier can't mask the wave's.
+    // Age past the post-input window so the hot tier can't mask the
+    // sidebar's own tier.
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "visible sidebar holds the half-rate tier for the wave"
+        "visible sidebar holds the half-rate tier for its animated panels"
     );
 
-    // 500ms of dense ticks spans at least three anim_half edges; the wave
+    // 500ms of dense ticks spans at least three anim_half edges; the sidebar
     // must pay those frames and only those.
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut changed = 0usize;
@@ -215,10 +265,10 @@ async fn sidebar_wave_holds_half_rate_and_paints_on_edges() {
     }
     assert!(
         changed >= 2,
-        "wave never paid an edge frame ({changed}/{total})"
+        "sidebar never paid an edge frame ({changed}/{total})"
     );
     assert!(
         changed < total / 2,
-        "wave must skip between edges ({changed}/{total})"
+        "sidebar must skip between edges ({changed}/{total})"
     );
 }

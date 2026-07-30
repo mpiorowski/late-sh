@@ -1,9 +1,9 @@
 use crate::{
     models::{
-        chips::{CHIP_FLOOR, DRINK_PURCHASE_REASON, DRINK_PURCHASE_SOURCE_KIND, UserChips},
+        chips::{CHIP_FLOOR, ChipMove, UserChips},
         drinks::{
-            DRUNK_DECAY_PER_HOUR, MAX_DRUNK_POINTS, UserDrinks, WELCOME_DRINK_POINTS,
-            decayed_points, drunk_label_word, drunk_level,
+            DRUNK_DECAY_PER_HOUR, DRUNK_SOBER_UP_HOURS, MAX_DRUNK_POINTS, UserDrinks,
+            WELCOME_DRINK_POINTS, decayed_points, drunk_label_word, drunk_level,
         },
     },
     test_utils::{create_test_user, test_db},
@@ -13,11 +13,25 @@ use uuid::Uuid;
 
 #[test]
 fn decayed_points_wears_off_linearly() {
-    assert_eq!(decayed_points(600, 0), 600);
-    assert_eq!(decayed_points(600, 3600), 450);
-    assert_eq!(decayed_points(600, 7200), 300);
-    assert_eq!(decayed_points(600, 14400), 0);
-    assert_eq!(decayed_points(600, 36000), 0);
+    assert_eq!(decayed_points(2_000, 0), 2_000);
+    assert_eq!(decayed_points(2_000, 3600), 2_000 - DRUNK_DECAY_PER_HOUR);
+    assert_eq!(
+        decayed_points(2_000, 3 * 3600),
+        2_000 - 3 * DRUNK_DECAY_PER_HOUR
+    );
+    assert_eq!(decayed_points(2_000, 24 * 3600), 0);
+}
+
+#[test]
+fn a_full_binge_sobers_up_in_half_a_day() {
+    // The product dial: a maxed-out night is gone by the next evening, not a
+    // full day later, and merely reaching "wasted" clears in half of that.
+    assert!(decayed_points(MAX_DRUNK_POINTS, (DRUNK_SOBER_UP_HOURS - 1) * 3600) > 0);
+    assert_eq!(
+        decayed_points(MAX_DRUNK_POINTS, DRUNK_SOBER_UP_HOURS * 3600),
+        0
+    );
+    assert_eq!(decayed_points(2_000, DRUNK_SOBER_UP_HOURS / 2 * 3600), 0);
 }
 
 #[test]
@@ -59,9 +73,9 @@ fn drunk_label_word_starts_at_level_one() {
 
 #[test]
 fn max_cap_dries_out_within_active_window() {
-    // The 36h window in all_active must cover the slowest sober-up.
+    // The 18h window in all_active must cover the slowest sober-up.
     let hours_to_sober = (MAX_DRUNK_POINTS + DRUNK_DECAY_PER_HOUR - 1) / DRUNK_DECAY_PER_HOUR;
-    assert!(hours_to_sober <= 36);
+    assert!(hours_to_sober <= 18);
     assert_eq!(decayed_points(MAX_DRUNK_POINTS, hours_to_sober * 3600), 0);
 }
 
@@ -75,8 +89,8 @@ fn effective_points_uses_last_drink_at() {
         drink_count: 1,
         last_drink_at: now - chrono::Duration::hours(1),
     };
-    assert_eq!(drinks.effective_points(now), 450);
-    assert_eq!(drinks.level(now), 2);
+    assert_eq!(drinks.effective_points(now), 600 - DRUNK_DECAY_PER_HOUR);
+    assert_eq!(drinks.level(now), 1);
 }
 
 #[tokio::test]
@@ -139,16 +153,28 @@ async fn deduct_for_drink_respects_the_floor_and_writes_the_ledger() {
     UserChips::ensure(&client, user.id).await.expect("chips"); // 1000
 
     // 950 would leave 50, below the floor: refused.
-    let refused = UserChips::deduct_for_drink(&client, user.id, 950, "top shelf")
-        .await
-        .expect("attempt");
+    let refused = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::DrinkPurchase,
+        950,
+        Some("top shelf"),
+    )
+    .await
+    .expect("attempt");
     assert!(refused.is_none());
 
     // 900 leaves exactly the floor: poured.
-    let poured = UserChips::deduct_for_drink(&client, user.id, 900, "Segfault Sour")
-        .await
-        .expect("attempt")
-        .expect("poured");
+    let poured = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::DrinkPurchase,
+        900,
+        Some("Segfault Sour"),
+    )
+    .await
+    .expect("attempt")
+    .expect("poured");
     assert_eq!(poured.balance, CHIP_FLOOR);
 
     let ledger = client
@@ -156,14 +182,14 @@ async fn deduct_for_drink_respects_the_floor_and_writes_the_ledger() {
             "SELECT delta, reason, source_kind, source_ref
              FROM chip_ledger
              WHERE user_id = $1 AND reason = $2",
-            &[&user.id, &DRINK_PURCHASE_REASON],
+            &[&user.id, &ChipMove::DrinkPurchase.reason()],
         )
         .await
         .expect("ledger row");
     assert_eq!(ledger.get::<_, i64>("delta"), -900);
     assert_eq!(
         ledger.get::<_, String>("source_kind"),
-        DRINK_PURCHASE_SOURCE_KIND
+        ChipMove::DrinkPurchase.source_kind()
     );
     assert_eq!(ledger.get::<_, String>("source_ref"), "Segfault Sour");
 }
@@ -177,10 +203,16 @@ async fn drink_purchase_composes_into_one_transaction() {
 
     // Mirrors ChipService::buy_drink: debit + buzz upsert atomically.
     let tx = client.transaction().await.expect("transaction");
-    let chips = UserChips::deduct_for_drink(&tx, user.id, 400, "Bash Old Fashioned")
-        .await
-        .expect("debit")
-        .expect("poured");
+    let chips = UserChips::apply(
+        &*tx,
+        user.id,
+        ChipMove::DrinkPurchase,
+        400,
+        Some("Bash Old Fashioned"),
+    )
+    .await
+    .expect("debit")
+    .expect("poured");
     let drinks = UserDrinks::record_purchase(&tx, user.id, 400)
         .await
         .expect("buzz");

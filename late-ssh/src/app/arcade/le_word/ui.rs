@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
+use super::state::{DAILY_WIN_REWARD_CHIPS, LetterScore, MAX_GUESSES, State, WORD_LEN};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, keys_line, status_line, tip_line,
 };
@@ -137,7 +137,9 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from("A new daily answer appears once per day."),
-        Line::from("Solving the daily earns 100 chips."),
+        Line::from(format!(
+            "Solving the daily earns {DAILY_WIN_REWARD_CHIPS} chips."
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "! / q / Esc closes",

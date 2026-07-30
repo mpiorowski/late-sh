@@ -3,7 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientKind {
-    Browser,
+    /// The CLI's embedded YouTube webview helper. It is a real browser engine,
+    /// which is why it used to register as `browser`, but since browser
+    /// pairing was removed it is the only one left, so the alias keeps helpers
+    /// from older `late` releases registering correctly.
+    #[serde(alias = "browser")]
+    Webview,
     Cli,
     #[default]
     Unknown,
@@ -12,13 +17,15 @@ pub enum ClientKind {
 impl ClientKind {
     pub fn label(self) -> &'static str {
         match self {
-            ClientKind::Browser => "Browser",
+            ClientKind::Webview => "Webview",
             ClientKind::Cli => "CLI",
             ClientKind::Unknown => "Unknown",
         }
     }
 }
 
+/// How the user reached the SSH session. The webview helper is a sidecar, not
+/// an SSH mode, so it has no variant here: `ClientKind::Webview` identifies it.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientSshMode {
@@ -26,8 +33,12 @@ pub enum ClientSshMode {
     #[serde(rename = "openssh")]
     OpenSsh,
     Old,
-    Webview,
+    /// Also the landing spot for any mode string we don't recognize, including
+    /// the `webview` that helpers from older `late` releases still send. An
+    /// unknown value must degrade, not fail the whole `client_state` message
+    /// and leave that client without mute and volume.
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -37,7 +48,6 @@ impl ClientSshMode {
             Self::Native => Some("native"),
             Self::OpenSsh => Some("openssh"),
             Self::Old => Some("old"),
-            Self::Webview => None,
             Self::Unknown => None,
         }
     }
@@ -77,8 +87,6 @@ pub struct ClientAudioState {
     pub capabilities: Vec<String>,
     pub muted: bool,
     pub volume_percent: u8,
-    #[serde(default = "default_icecast_output_available")]
-    pub icecast_output_available: bool,
 }
 
 impl Default for ClientAudioState {
@@ -90,13 +98,8 @@ impl Default for ClientAudioState {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            icecast_output_available: true,
         }
     }
-}
-
-const fn default_icecast_output_available() -> bool {
-    true
 }
 
 impl ClientAudioState {

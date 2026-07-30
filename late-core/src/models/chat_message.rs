@@ -10,7 +10,6 @@ crate::model! {
     params = ChatMessageParams;
     struct ChatMessage {
         @generated
-        pub pinned: bool,
         pub reply_to_message_id: Option<Uuid>,
         pub reply_to_user_id: Option<Uuid>;
         @data
@@ -21,38 +20,6 @@ crate::model! {
 }
 
 impl ChatMessage {
-    pub async fn last_message_at_for_rooms(
-        client: &Client,
-        room_ids: &[Uuid],
-    ) -> Result<HashMap<Uuid, Option<DateTime<Utc>>>> {
-        if room_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let rows = client
-            .query(
-                "SELECT room_ids.room_id,
-                        latest.created AS last_message_at
-                 FROM unnest($1::uuid[]) AS room_ids(room_id)
-                 LEFT JOIN LATERAL (
-                    SELECT created
-                    FROM chat_messages
-                    WHERE room_id = room_ids.room_id
-                    ORDER BY created DESC, id DESC
-                    LIMIT 1
-                 ) latest ON true",
-                &[&room_ids],
-            )
-            .await?;
-
-        let mut last_message_at = HashMap::with_capacity(rows.len());
-        for row in rows {
-            last_message_at.insert(row.get("room_id"), row.get("last_message_at"));
-        }
-
-        Ok(last_message_at)
-    }
-
     pub async fn list_recent_for_rooms(
         client: &Client,
         room_ids: &[Uuid],
@@ -99,21 +66,6 @@ impl ChatMessage {
                  ORDER BY created DESC, id DESC
                  LIMIT $2",
                 &[&room_id, &limit],
-            )
-            .await?;
-
-        Ok(rows.into_iter().map(Self::from).collect())
-    }
-
-    pub async fn list_pinned(client: &Client, limit: i64) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "SELECT *
-                 FROM chat_messages
-                 WHERE pinned = true
-                 ORDER BY created DESC, id DESC
-                 LIMIT $1",
-                &[&limit],
             )
             .await?;
 
@@ -468,19 +420,6 @@ impl ChatMessage {
             .execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
             .await?;
         Ok(count)
-    }
-
-    pub async fn set_pinned(client: &Client, message_id: Uuid, pinned: bool) -> Result<Self> {
-        let row = client
-            .query_one(
-                "UPDATE chat_messages
-                 SET pinned = $2, updated = current_timestamp
-                 WHERE id = $1
-                 RETURNING *",
-                &[&message_id, &pinned],
-            )
-            .await?;
-        Ok(Self::from(row))
     }
 
     /// Delete news announcement chat messages posted by a specific user

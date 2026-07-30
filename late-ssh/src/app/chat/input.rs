@@ -216,6 +216,27 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_settings_modal() {
         open_settings_modal(app);
     }
+    if let Some(request) = app.chat.take_requested_room_info_modal() {
+        use crate::app::chat::state::RoomInfoRequest;
+        match request {
+            RoomInfoRequest::Create { slug } => app.room_info_modal_state.open_create(slug),
+            RoomInfoRequest::Edit {
+                room_id,
+                room_label,
+                owner_label,
+                topic,
+                rules,
+            } => {
+                app.room_info_modal_state.open_edit(
+                    room_id,
+                    room_label,
+                    owner_label,
+                    topic.as_deref(),
+                    rules.as_deref(),
+                );
+            }
+        }
+    }
     if app.chat.take_requested_mod_modal() {
         open_mod_modal(app);
     }
@@ -225,18 +246,11 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
     }
-    if let Some(request) = app.chat.take_requested_daily_challenge() {
-        use crate::app::chat::state::DailyChallengeRequest;
+    if let Some(request) = app.chat.take_requested_pair() {
+        use crate::app::chat::state::PairRequest;
         match request {
-            DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
-            // Success is surfaced from the resulting DailyEvent::ChallengePosted
-            // (and failures from DailyEvent::Error), so a rejected challenge
-            // (self, unknown user, over the entry cap) never flashes success.
-            DailyChallengeRequest::Open(game) => {
-                app.daily.post_open_challenge(game);
-            }
-            DailyChallengeRequest::Directed(username, game) => {
-                app.daily.post_directed_challenge(&username, game);
+            PairRequest::Directed(username) => {
+                crate::app::scratchpad::pair::request_pair(app, &username);
             }
         }
     }
@@ -435,16 +449,9 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     // reap a run of your own messages with repeated presses.
     // `r` enters reply mode and drops the selection.
     // `e` enters edit mode and drops the selection.
-    // `Ctrl-P` toggles the selected message's pinned dashboard status.
     // `p` opens a read-only profile modal for the selected author.
     match byte {
         b'f' | b'F' if app.chat.begin_reaction_leader() => return true,
-        0x10 => {
-            if let Some(b) = app.chat.toggle_pin_selected_message_in_room(room_id) {
-                app.banner = Some(b);
-                return true;
-            }
-        }
         b'd' | b'D' => {
             if let Some(b) = app.chat.delete_selected_message_in_room(room_id) {
                 app.banner = Some(b);

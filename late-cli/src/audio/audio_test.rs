@@ -35,9 +35,4 @@ fn disabled_runtime_uses_zeroed_playback_state() {
         0
     );
     assert!(!runtime.muted.load(std::sync::atomic::Ordering::Relaxed));
-    assert!(
-        !runtime
-            .icecast_output_available
-            .load(std::sync::atomic::Ordering::Relaxed)
-    );
 }

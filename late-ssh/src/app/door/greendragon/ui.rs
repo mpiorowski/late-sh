@@ -82,7 +82,13 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         stat(
             "HP",
             format!("{}/{}", c.hitpoints, c.max_hitpoints()),
-            Style::default().fg(theme::SUCCESS()),
+            // Overheal glows gold (user feedback: show when HP sits above
+            // max — a mending draught, the bard's ballad).
+            if c.hitpoints > c.max_hitpoints() {
+                gold
+            } else {
+                Style::default().fg(theme::SUCCESS())
+            },
         ),
         stat("Attack", c.attack().to_string(), bright),
         stat("Defense", c.defense().to_string(), bright),
@@ -104,7 +110,13 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
             } else {
                 format!("{}/{}", c.experience, exp_target)
             },
-            dim,
+            // Lights up when the master challenge is within reach (user
+            // feedback: make "enough to level" visible at a glance).
+            if c.level < data::MAX_LEVEL && c.experience >= exp_target {
+                Style::default().fg(theme::SUCCESS())
+            } else {
+                dim
+            },
         ),
         stat("Turns", c.turns.to_string(), bright),
         stat("Dragons", c.dragon_kills.to_string(), gold),
@@ -144,6 +156,28 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
                     "{} ({}/{} HP)",
                     comp.name, comp.hitpoints, comp.max_hitpoints
                 ),
+                dim,
+            ));
+        }
+    }
+
+    // Active bonuses with their remaining span (user feedback: surface the
+    // mount and drink/ward buffs where the player can see them run out).
+    if c.mount_rounds_left > 0 || !c.persistent_buffs.is_empty() {
+        lines.push(Line::raw(""));
+        if let Some(mount) = c.mount_data()
+            && c.mount_rounds_left > 0
+        {
+            lines.push(stat(
+                "Mount",
+                format!("{} ({} rounds today)", mount.name, c.mount_rounds_left),
+                dim,
+            ));
+        }
+        for pb in &c.persistent_buffs {
+            lines.push(stat(
+                "Boon",
+                format!("{} ({} rounds)", pb.name, pb.rounds_left),
                 dim,
             ));
         }
@@ -200,6 +234,27 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
     {
         lines.push(Line::raw(""));
         let target = enc.target();
+        // Torment fights run on the soul pool, not the body's hitpoints.
+        let (you, max) = if enc.kind == FoeKind::Torment {
+            ("Your soul", c.max_soulpoints())
+        } else {
+            ("You", c.max_hitpoints())
+        };
+        // Column layout: every HP readout starts at the same offset, yours
+        // directly under the foes' (user feedback).
+        let name_w = enc
+            .foes
+            .iter()
+            .map(|f| f.name.chars().count())
+            .chain([you.chars().count()])
+            .max()
+            .unwrap();
+        let wield_w = enc
+            .foes
+            .iter()
+            .map(|f| f.weapon.chars().count() + 7)
+            .max()
+            .unwrap_or(0);
         for (i, foe) in enc.foes.iter().enumerate() {
             let dead = foe.hp == 0;
             let name_style = if dead {
@@ -210,9 +265,9 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
                     .add_modifier(Modifier::BOLD)
             };
             let mut spans = vec![
-                Span::styled(foe.name.clone(), name_style),
+                Span::styled(format!("{:<name_w$}", foe.name), name_style),
                 Span::styled(
-                    format!("  wields {}", foe.weapon),
+                    format!("  {:<wield_w$}", format!("wields {}", foe.weapon)),
                     Style::default().fg(theme::TEXT_DIM()),
                 ),
                 Span::styled("  ", Style::default()),
@@ -237,18 +292,22 @@ fn draw_panel(frame: &mut Frame, area: Rect, state: &State, c: &Character) {
             }
             lines.push(Line::from(spans));
         }
-        // Torment fights run on the soul pool, not the body's hitpoints.
-        let (label, max) = if enc.kind == FoeKind::Torment {
-            ("Your soul ", c.max_soulpoints())
+        // Overheal glows gold (user feedback: show when HP sits above max).
+        let hp_style = if c.hitpoints > max {
+            Style::default().fg(theme::BADGE_GOLD())
         } else {
-            ("Your HP ", c.max_hitpoints())
+            Style::default().fg(theme::SUCCESS())
         };
         lines.push(Line::from(vec![
-            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
-                format!("{}/{}", c.hitpoints, max),
-                Style::default().fg(theme::SUCCESS()),
+                format!("{you:<name_w$}"),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(format!("  {:<wield_w$}", ""), Style::default()),
+            Span::styled("  ", Style::default()),
+            Span::styled(format!("{}/{} HP", c.hitpoints, max), hp_style),
         ]));
     }
 

@@ -193,6 +193,7 @@ pub struct SessionConfig {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects — consuming a
@@ -273,6 +274,9 @@ pub struct SessionConfig {
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
+    /// Process-global `/pair` intents and shared scratchpad buffers. `None`
+    /// on headless/test paths, which disables `/pair`.
+    pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
     /// True once this user finished (or skipped) the clubhouse tutorial.
     pub clubhouse_tutorial_done: bool,
     /// Whether the aquarium tray was open when the user last toggled it.
@@ -309,7 +313,7 @@ pub struct SessionConfig {
 
     /// Display config
     pub initial_theme_id: String,
-    /// Initial audio source for the paired browser, loaded from
+    /// Initial audio source for the paired client, loaded from
     /// `users.settings.audio_source` (default `Icecast`). v+x mutates this and
     /// persists the new value.
     pub initial_audio_source: late_core::models::user::AudioSource,
@@ -378,7 +382,9 @@ pub struct App {
     pub(super) shared: SharedBuffer,
 
     /// Session / connection
-    pub(super) connect_url: String,
+    /// Public site base (`LATE_WEB_URL`), no trailing slash. Profile links and
+    /// the listen-page URL in the guide are built from it.
+    pub(super) web_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
     pub(super) paired_client_registry: Option<PairedClientRegistry>,
     pub(super) session_token: String,
@@ -438,6 +444,10 @@ pub struct App {
     /// Wander travel width of the pet strip drawn last frame; `None` when the
     /// strip was not drawn. Gates the strip animation's frame cost in tick.
     pub(crate) last_pet_strip_travel: std::cell::Cell<Option<usize>>,
+    /// Where the top-border "N unread mentions" text was drawn last frame,
+    /// for the HUD click hit test; `None` when nothing is unread. Only the
+    /// mentions segment is clickable, not the voice/chips text after it.
+    pub(crate) last_mentions_hud_rect: std::cell::Cell<Option<Rect>>,
     pub(crate) audio: crate::app::audio::state::AudioState,
     pub(crate) voice: crate::app::voice::state::VoiceState,
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
@@ -462,13 +472,14 @@ pub struct App {
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
+    pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
     /// Server-authoritative audio source for the paired playback surface.
     /// Mirrors `users.settings.audio_source`. v+x flips this, persists it to
-    /// the DB, and pushes `SetPlaybackSource` to browsers and YouTube-capable
-    /// CLI control-plane clients. On browser pair-up the current value is
-    /// replayed so a refresh lands in the right mode.
-    pub(crate) paired_browser_source: late_core::models::user::AudioSource,
+    /// the DB, and pushes `SetPlaybackSource` to the paired CLI and its
+    /// webview helper. On pair-up the current value is replayed so a
+    /// reconnect lands in the right mode.
+    pub(crate) paired_source: late_core::models::user::AudioSource,
     pub(crate) selected_icecast_stream: late_core::models::user::IcecastStream,
     pub(crate) selected_radio_station: late_core::models::user::RadioStation,
 
@@ -521,10 +532,12 @@ pub struct App {
     pub(crate) door_delete_confirm: bool,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub(crate) darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
     pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
+    pub(crate) darkroom_state: Option<crate::app::door::darkroom::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
     /// Per-session TERM string (from the PTY request), used to size the rebels
     /// PTY.
@@ -610,6 +623,14 @@ pub struct App {
     /// `Option` → the underlying client, so the seat is released on logout
     /// or connection loss.
     pub(crate) dartboard_state: Option<crate::app::artboard::state::State>,
+    /// Process-global `/pair` registry handle. `None` on headless/test paths.
+    pub(crate) scratchpad_registry:
+        Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
+    /// `Some` while this session is inside a paired scratchpad. Constructed
+    /// once both sides have run `/pair @other` and dropped on leave;
+    /// `ScratchpadState`'s own `Drop` impl notifies the partner even on a
+    /// hard disconnect.
+    pub(crate) scratchpad: Option<crate::app::scratchpad::state::ScratchpadState>,
     /// `true` while the dedicated Artboard screen is in editing mode.
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
@@ -685,6 +706,14 @@ pub struct App {
     /// username converts to `@mention` insertion instead. Resolved from
     /// `App::tick`.
     pub(crate) pending_chat_profile_open: Option<super::input::PendingChatProfileOpen>,
+}
+
+/// Public listen page for a site base url. Static and shareable: it carries no
+/// session token, because it follows the same global streams and YouTube queue
+/// for everyone. Takes the base rather than `&App` so callers can build it
+/// while other fields of `App` are mutably borrowed.
+pub(super) fn listen_url(web_url: &str) -> String {
+    format!("{web_url}/listen")
 }
 
 impl App {
@@ -1132,7 +1161,7 @@ impl App {
             vt_input: crate::app::input::VtInputParser::default(),
             terminal,
             shared,
-            connect_url: format!("{}/{}", config.web_url, config.session_token),
+            web_url: config.web_url.trim_end_matches('/').to_string(),
             session_registry: config.session_registry,
             paired_client_registry: config.paired_client_registry,
             session_token: config.session_token.clone(),
@@ -1168,6 +1197,7 @@ impl App {
             last_pet_strip_food_rect: std::cell::Cell::new(None),
             last_pet_strip_water_rect: std::cell::Cell::new(None),
             last_pet_strip_travel: std::cell::Cell::new(None),
+            last_mentions_hud_rect: std::cell::Cell::new(None),
             audio: crate::app::audio::state::AudioState::new(config.audio_service, config.user_id),
             voice: crate::app::voice::state::VoiceState::new(config.voice_service),
             voice_service,
@@ -1201,8 +1231,10 @@ impl App {
             poll_modal_state: chat::polls::state::PollModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
+            room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
+            ),
             booth_modal_state: crate::app::audio::booth::state::BoothModalState::default(),
-            paired_browser_source: config.initial_audio_source,
+            paired_source: config.initial_audio_source,
             selected_icecast_stream: config.initial_icecast_stream,
             selected_radio_station: config.initial_radio_station,
             music_prefix_armed: false,
@@ -1223,8 +1255,19 @@ impl App {
             ),
             settings_modal_state,
             sheet_modal_state: sheet_modal::state::SheetModalState::new(),
+            // Seed from what is already published. `watch::Sender::subscribe`
+            // marks the current value as seen, so the `has_changed()` gate in
+            // `tick.rs` is false against a snapshot sitting right there: without
+            // this the session renders empty leaderboard panels until the next
+            // refresh lands, up to `REFRESH_INTERVAL` later. Deliberately does
+            // not touch `chip_balance` — that is loaded accurately at login, and
+            // this snapshot may predate it.
+            leaderboard: config
+                .leaderboard_rx
+                .as_ref()
+                .map(|rx| rx.borrow().clone())
+                .unwrap_or_default(),
             leaderboard_rx: config.leaderboard_rx,
-            leaderboard: Arc::new(LeaderboardData::default()),
             bonsai_state,
             bonsai_care_state,
             bonsai_v2_state,
@@ -1242,8 +1285,10 @@ impl App {
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             greendragon_service: config.greendragon_service,
+            darkroom_service: config.darkroom_service,
             lateania_state: None,
             greendragon_state: None,
+            darkroom_state: None,
             rebels_state: None,
             rebels_term: config.term.clone(),
             rebels_enabled: config.rebels_enabled,
@@ -1301,6 +1346,8 @@ impl App {
             minesweeper_state,
             traffic_state,
             dartboard_state: None,
+            scratchpad_registry: config.scratchpad_registry,
+            scratchpad: None,
             directory_state: crate::app::directory::state::DirectoryState::new(),
             pinstar_state: None,
             pinstar_browser: crate::app::pinstar::browser::DiagramBrowser::default(),
@@ -1408,6 +1455,26 @@ impl App {
 
     pub(crate) fn leave_greendragon(&mut self) {
         self.greendragon_state = None;
+    }
+
+    pub(crate) fn enter_darkroom(&mut self) {
+        if self.darkroom_state.is_some() {
+            return;
+        }
+        // The session's connect time is what bounds how much elapsed time the
+        // game may credit, so the door has to be told when the session began,
+        // not when the door was opened.
+        let session_start = chrono::Utc::now()
+            - chrono::Duration::from_std(self.started_at.elapsed()).unwrap_or_default();
+        self.darkroom_state = Some(crate::app::door::darkroom::state::State::new(
+            self.darkroom_service.clone(),
+            self.user_id,
+            session_start,
+        ));
+    }
+
+    pub(crate) fn leave_darkroom(&mut self) {
+        self.darkroom_state = None;
     }
 
     /// Store the active transport's render-loop wakeup so the rebels proxy can
@@ -1818,6 +1885,16 @@ impl App {
 
         if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
             self.house.close();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
+            // Dropping `scratchpad` here (rather than an explicit
+            // `leave_scratchpad` method) runs `ScratchpadState`'s `Drop`
+            // impl, which notifies the registry so the partner sees
+            // "left the pairing" on their next sync, the same RAII
+            // teardown Artboard uses for its color slot.
+            self.scratchpad = None;
             self.force_full_repaint();
         }
 
@@ -2250,32 +2327,20 @@ impl App {
         registry.send_control(&self.session_token, PairControlMessage::VolumeDown)
     }
 
-    /// Push the currently-stored audio source to all paired entries. Called
-    /// when a browser registers so every playback surface reflects the
-    /// persisted choice plus the current surface policy: browser Icecast only
-    /// when no CLI is paired, and embedded CLI webview only when no real
-    /// browser is paired.
-    pub fn replay_paired_browser_source(&self) {
-        let Some(registry) = self.paired_client_registry.as_ref() else {
-            return;
-        };
-        registry.broadcast_playback_source_for_token(&self.session_token);
-    }
-
     /// Flip the per-user audio source preference. Persisted server-side; the
     /// `persist_audio_source` task then pushes `SetPlaybackSource` to every
-    /// paired entry (CLI and browser) for this user. Works whether a browser
-    /// is paired or not — the preference is meaningful even with only a CLI,
-    /// because the CLI gates its Icecast decoder on the received source.
+    /// paired entry for this user. Meaningful with only a CLI paired: the CLI
+    /// gates its direct-stream decoder on the received source and starts or
+    /// stops its webview helper for YouTube.
     pub fn toggle_paired_playback_source(&mut self) -> late_core::models::user::AudioSource {
         use late_core::models::user::AudioSource;
         // Dock order in the sidebar music stage: radio → youtube → icecast.
-        let next = match self.paired_browser_source {
+        let next = match self.paired_source {
             AudioSource::Radio => AudioSource::Youtube,
             AudioSource::Youtube => AudioSource::Icecast,
             AudioSource::Icecast => AudioSource::Radio,
         };
-        self.paired_browser_source = next;
+        self.paired_source = next;
         if let Some(active_users) = &self.active_users
             && let Some(active) = active_users.lock_recover().get_mut(&self.user_id)
         {

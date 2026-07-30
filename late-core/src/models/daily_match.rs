@@ -41,6 +41,7 @@ impl DailyMatch {
     pub const RESULT_MOST_DISCS: &'static str = "most_discs";
     pub const RESULT_NO_MOVES: &'static str = "no_moves";
     pub const RESULT_BORNE_OFF: &'static str = "borne_off";
+    pub const RESULT_MOST_POINTS: &'static str = "most_points";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
     pub const GAME_KIND_BATTLESHIP: &'static str = "battleship";
@@ -48,6 +49,7 @@ impl DailyMatch {
     pub const GAME_KIND_REVERSI: &'static str = "reversi";
     pub const GAME_KIND_CHECKERS: &'static str = "checkers";
     pub const GAME_KIND_BACKGAMMON: &'static str = "backgammon";
+    pub const GAME_KIND_BRISCOLA: &'static str = "briscola";
 
     /// Open challenges posted by the user plus active matches they play in.
     pub async fn count_active_entries(client: &Client, user_id: Uuid) -> Result<i64> {

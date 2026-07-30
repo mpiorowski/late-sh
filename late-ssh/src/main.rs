@@ -222,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         db.clone(),
     );
+    let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(db.clone());
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
@@ -295,6 +296,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
+    let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
     let ghost_service = GhostService::new(
         db.clone(),
         chat_service.clone(),
@@ -342,6 +344,7 @@ async fn main() -> anyhow::Result<()> {
         minesweeper_service,
         lateania_service,
         greendragon_service,
+        darkroom_service,
         arcade_handle_service,
         daily_service,
         bonsai_service,
@@ -360,6 +363,7 @@ async fn main() -> anyhow::Result<()> {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
+        scratchpad_registry,
         afk_users,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
@@ -445,7 +449,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Audio rides session_shutdown (fires after ssh drain) rather than
-    // singleton_shutdown (fires at drain begin) so paired browsers keep
+    // singleton_shutdown (fires at drain begin) so paired clients keep
     // hearing music through the entire drain window. Liquidsoap/Icecast
     // streams from a separate process and is unaffected either way.
     let audio_shutdown = session_shutdown.clone();

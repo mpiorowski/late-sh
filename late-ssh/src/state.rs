@@ -133,6 +133,7 @@ pub struct State {
     pub chip_service: ChipService,
     pub lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
+    pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
@@ -150,6 +151,8 @@ pub struct State {
     pub active_users: ActiveUsers,
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
+    /// Process-global `/pair` intents and shared scratchpad buffers.
+    pub scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry,
     pub afk_users: AfkUsers,
     pub username_directory: UsernameDirectory,
     /// Live 24h username effects (snapshot-swap; seeded and written by

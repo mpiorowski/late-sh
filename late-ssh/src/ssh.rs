@@ -928,6 +928,7 @@ impl russh::server::Handler for ClientHandler {
             initial_minesweeper_games,
             lateania_service: self.state.lateania_service.clone(),
             greendragon_service: self.state.greendragon_service.clone(),
+            darkroom_service: self.state.darkroom_service.clone(),
             arcade_handle_service: self.state.arcade_handle_service.clone(),
             daily_service: self.state.daily_service.clone(),
             house_registry: self.state.house_registry.clone(),
@@ -998,6 +999,7 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
             ),

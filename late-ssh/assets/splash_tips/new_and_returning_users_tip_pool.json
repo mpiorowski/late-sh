@@ -1,4 +1,5 @@
 [
+  "late.sh is 18+ ~ house rules at late.sh/terms, reports to admin@dwarfforge.io",
   "Try our games! ~Rank up on the leaderboards~",
   "Water your bonsai once a day with the w key",
   "You can open a public room with /public #room",
@@ -32,5 +33,7 @@
   "In the Clubhouse your words float over your head; the full chat lives on Home (1)",
   "Walk up to the Clubhouse dog and press Enter. Everyone sees the pet",
   "Press ` on Home to hop through games waiting on you: your-move boards, seated tables, unfinished daily puzzles",
-  "Type /search in chat to find old messages across all your rooms"
+  "Type /search in chat to find old messages across all your rooms",
+  "Made a private room? /roominfo sets what it is about and its rules",
+  "Lost in Lateania? Press m for the overhead map: it fills in only where you have walked"
 ]

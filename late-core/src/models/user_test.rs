@@ -360,3 +360,53 @@ async fn ignored_user_ids_require_existing_user() {
         .expect_err("expected missing user error");
     assert!(err.to_string().to_ascii_lowercase().contains("not found"));
 }
+
+#[tokio::test]
+async fn friend_and_ignored_user_ids_reads_both_lists_from_one_row() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let make = async |fingerprint: &str, username: &str| {
+        User::create(
+            &client,
+            UserParams {
+                fingerprint: fingerprint.to_string(),
+                username: username.to_string(),
+                settings: json!({}),
+            },
+        )
+        .await
+        .expect("create user")
+    };
+    let owner = make("combined-lists-owner", "combined_owner").await;
+    let friend = make("combined-lists-friend", "combined_friend").await;
+    let ignored = make("combined-lists-ignored", "combined_ignored").await;
+
+    User::add_friend_user_id(&client, owner.id, friend.id)
+        .await
+        .expect("add friend");
+    User::add_ignored_user_id(&client, owner.id, ignored.id)
+        .await
+        .expect("add ignored");
+
+    let (friends, ignores) = User::friend_and_ignored_user_ids(&client, owner.id)
+        .await
+        .expect("combined lists");
+
+    assert_eq!(friends, vec![friend.id]);
+    assert_eq!(ignores, vec![ignored.id]);
+    assert_eq!(
+        friends,
+        User::friend_user_ids(&client, owner.id)
+            .await
+            .expect("friends"),
+        "the combined read must agree with the single-list helper"
+    );
+    assert_eq!(
+        ignores,
+        User::ignored_user_ids(&client, owner.id)
+            .await
+            .expect("ignores"),
+        "the combined read must agree with the single-list helper"
+    );
+}

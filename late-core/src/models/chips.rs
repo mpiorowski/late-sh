@@ -1,18 +1,13 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 use chrono::NaiveDate;
-use deadpool_postgres::GenericClient;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient, Transaction};
 use uuid::Uuid;
 
 pub const CHIP_FLOOR: i64 = 100;
 pub const INITIAL_CHIP_BALANCE: i64 = 1_000;
 pub const CHIP_USER_CHANGED_CHANNEL: &str = "chip_user_changed";
-pub const CHIP_GIFT_SENT_REASON: &str = "chip_gift_sent";
-pub const CHIP_GIFT_RECEIVED_REASON: &str = "chip_gift_received";
-pub const DRINK_PURCHASE_REASON: &str = "drink_purchase";
-pub const DRINK_PURCHASE_SOURCE_KIND: &str = "bartender";
 
 pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
     client
@@ -28,6 +23,208 @@ pub fn difficulty_bonus(key: &str) -> i64 {
         "medium" | "mid" | "draw-1" => 250,
         "hard" | "draw-3" => 500,
         _ => 100,
+    }
+}
+
+/// Defines [`ChipMove`] and its `ALL` roster from one variant list: a
+/// variant cannot exist without an `ALL` entry, so roster-derived lists
+/// (like the earnings exclusions) can never silently skip one.
+macro_rules! chip_moves {
+    ($($(#[$doc:meta])* $variant:ident),+ $(,)?) => {
+        /// Every way chips move. Adding a variant forces a decision in each
+        /// match below: the persisted ledger reason, the direction and floor
+        /// guard, the source kind, and whether the move counts toward the
+        /// monthly chip-earner leaderboard. Call sites name their move
+        /// instead of passing raw strings, and the `user_chips` triggers
+        /// (migration 128) own the `chip_user_changed` notify, so no move
+        /// can forget it.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ChipMove {
+            $($(#[$doc])* $variant,)+
+        }
+
+        impl ChipMove {
+            /// Every variant in declaration order, generated from the same
+            /// list as the enum itself.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+        }
+    };
+}
+
+chip_moves!(
+    /// Generic game credit: house-table payouts, bonsai watering bonus.
+    Credit,
+    /// Generic wager debit: house-table bets, may drain the balance to zero
+    /// (losing settlements restore the floor afterwards).
+    Bet,
+    /// Post-settlement top-up back to [`CHIP_FLOOR`]. Has its own write path
+    /// ([`UserChips::restore_floor`]), never goes through [`UserChips::apply`].
+    FloorRestore,
+    GiftSent,
+    GiftReceived,
+    DrinkPurchase,
+    ShopPurchase,
+    QuestReward,
+    DailyQuestStreakReward,
+    DailyPuzzleWin,
+    AsterionEscape,
+    DailyChessWin,
+    DailyBattleshipWin,
+    DailyConnectFourWin,
+    DailyReversiWin,
+    DailyCheckersWin,
+    DailyBackgammonWin,
+    DailyBriscolaWin,
+    TronWin,
+    SsnakeWin,
+    GreendragonDragonSlain,
+    NethackAmuletAcquired,
+    NethackAscension,
+    LateaniaArchdemonDefeat,
+    LateaniaFrontierKingDefeat,
+);
+
+/// Which way a move touches the balance, and under what guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipDirection {
+    Credit,
+    /// The debit only succeeds while `balance - amount >= floor`.
+    Debit {
+        floor: i64,
+    },
+    /// Not a delta at all; handled by [`UserChips::restore_floor`].
+    Restore,
+}
+
+impl ChipMove {
+    /// The persisted `chip_ledger.reason` value.
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Credit => "chip_credit",
+            Self::Bet => "chip_debit",
+            Self::FloorRestore => "floor_restore",
+            Self::GiftSent => "chip_gift_sent",
+            Self::GiftReceived => "chip_gift_received",
+            Self::DrinkPurchase => "drink_purchase",
+            Self::ShopPurchase => "shop_purchase",
+            Self::QuestReward => "quest_reward",
+            Self::DailyQuestStreakReward => "daily_quest_streak_reward",
+            Self::DailyPuzzleWin => "daily_puzzle_win",
+            Self::AsterionEscape => "asterion_escape",
+            Self::DailyChessWin => "daily_chess_win",
+            Self::DailyBattleshipWin => "daily_battleship_win",
+            Self::DailyConnectFourWin => "daily_connect4_win",
+            Self::DailyReversiWin => "daily_reversi_win",
+            Self::DailyCheckersWin => "daily_checkers_win",
+            Self::DailyBackgammonWin => "daily_backgammon_win",
+            Self::DailyBriscolaWin => "daily_briscola_win",
+            Self::TronWin => "tron_win",
+            Self::SsnakeWin => "ssnake_win",
+            Self::GreendragonDragonSlain => "greendragon_dragon_slain",
+            Self::NethackAmuletAcquired => "nethack_amulet_acquired",
+            Self::NethackAscension => "nethack_ascension",
+            Self::LateaniaArchdemonDefeat => "lateania_archdemon_defeat",
+            Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
+        }
+    }
+
+    /// The persisted `chip_ledger.source_kind` value.
+    pub const fn source_kind(self) -> &'static str {
+        match self {
+            Self::Credit | Self::Bet | Self::FloorRestore | Self::GiftSent | Self::GiftReceived => {
+                "user_chips"
+            }
+            Self::DrinkPurchase => "bartender",
+            Self::ShopPurchase => "marketplace_item",
+            Self::QuestReward => "quest_assignment",
+            Self::DailyQuestStreakReward => "daily_quest_streak",
+            Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::TronWin
+            | Self::SsnakeWin
+            | Self::GreendragonDragonSlain
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat => "game_payout_claims",
+        }
+    }
+
+    pub const fn direction(self) -> ChipDirection {
+        match self {
+            Self::Credit
+            | Self::GiftReceived
+            | Self::QuestReward
+            | Self::DailyQuestStreakReward
+            | Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::TronWin
+            | Self::SsnakeWin
+            | Self::GreendragonDragonSlain
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat => ChipDirection::Credit,
+            Self::Bet | Self::ShopPurchase => ChipDirection::Debit { floor: 0 },
+            Self::GiftSent | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
+            Self::FloorRestore => ChipDirection::Restore,
+        }
+    }
+
+    /// Whether the move counts toward the monthly chip-earner leaderboard
+    /// and the permanent monthly award snapshot.
+    pub const fn counts_as_earnings(self) -> bool {
+        match self {
+            Self::FloorRestore | Self::ShopPurchase => false,
+            Self::Credit
+            | Self::Bet
+            | Self::GiftSent
+            | Self::GiftReceived
+            | Self::DrinkPurchase
+            | Self::QuestReward
+            | Self::DailyQuestStreakReward
+            | Self::DailyPuzzleWin
+            | Self::AsterionEscape
+            | Self::DailyChessWin
+            | Self::DailyBattleshipWin
+            | Self::DailyConnectFourWin
+            | Self::DailyReversiWin
+            | Self::DailyCheckersWin
+            | Self::DailyBackgammonWin
+            | Self::DailyBriscolaWin
+            | Self::TronWin
+            | Self::SsnakeWin
+            | Self::GreendragonDragonSlain
+            | Self::NethackAmuletAcquired
+            | Self::NethackAscension
+            | Self::LateaniaArchdemonDefeat
+            | Self::LateaniaFrontierKingDefeat => true,
+        }
+    }
+
+    /// The `chip_ledger.reason` values excluded from earnings queries.
+    /// Both consumers (monthly leaderboard, monthly award snapshot) build
+    /// their exclusion list here, so they can never drift apart.
+    pub fn excluded_earning_reasons() -> Vec<&'static str> {
+        Self::ALL
+            .iter()
+            .filter(|mv| !mv.counts_as_earnings())
+            .map(|mv| mv.reason())
+            .collect()
     }
 }
 
@@ -83,123 +280,82 @@ impl UserChips {
         }
     }
 
-    /// Add bonus chips (e.g. from completing a daily puzzle).
-    pub async fn add_bonus(client: &Client, user_id: Uuid, amount: i64) -> Result<Self> {
-        let row = client
-            .query_one(
-                "WITH upserted AS (
-                    INSERT INTO user_chips (user_id, balance)
-                    VALUES ($1, $2)
-                    ON CONFLICT (user_id) DO UPDATE SET
-                      balance = user_chips.balance + $2,
-                      updated = current_timestamp
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, $2, 'chip_credit', 'user_chips'
-                    FROM upserted
-                    WHERE $2 <> 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, user_id::text)
-                    FROM upserted
-                    WHERE $2 <> 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT upserted.*
-                 FROM upserted, chip_notified",
-                &[&user_id, &amount, &CHIP_USER_CHANGED_CHANNEL],
-            )
-            .await?;
-        Ok(Self::from(row))
-    }
-
-    /// Deduct chips (for betting). The floor is restored after losing settlements,
-    /// so a user can wager their visible balance.
-    /// Returns None if the user doesn't have enough chips for the bet.
-    pub async fn deduct(client: &Client, user_id: Uuid, amount: i64) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
-                "WITH updated AS (
-                    UPDATE user_chips
-                    SET balance = balance - $2, updated = current_timestamp
-                    WHERE user_id = $1 AND balance >= $2
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, -$2, 'chip_debit', 'user_chips'
-                    FROM updated
-                    WHERE $2 <> 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, user_id::text)
-                    FROM updated
-                    WHERE $2 <> 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT updated.*
-                 FROM updated, chip_notified",
-                &[&user_id, &amount, &CHIP_USER_CHANGED_CHANNEL],
-            )
-            .await?;
-        Ok(row.map(Self::from))
-    }
-
-    /// Deduct chips for a bartender drink. Unlike [`Self::deduct`], the
-    /// gift-style guard applies: the pour only succeeds when the balance
-    /// stays at or above [`CHIP_FLOOR`], so the bar can't leave a user broke.
-    /// The ledger row carries the drink name so the tab is auditable.
-    /// Returns None if the user can't cover the drink and keep the floor.
-    pub async fn deduct_for_drink(
+    /// The single write path for delta chip moves: one guarded balance
+    /// update plus its ledger row, in one statement. Credits upsert (a
+    /// missing row starts at the credited amount); debits enforce the floor
+    /// from [`ChipMove::direction`] and return `None` when the balance
+    /// cannot cover the move. The `chip_user_changed` notify comes from the
+    /// `user_chips` triggers, never from here.
+    pub async fn apply(
         client: &impl GenericClient,
         user_id: Uuid,
+        mv: ChipMove,
         amount: i64,
-        drink: &str,
+        source_ref: Option<&str>,
     ) -> Result<Option<Self>> {
-        ensure!(amount > 0, "drink price must be positive");
-        let row = client
-            .query_opt(
-                "WITH updated AS (
-                    UPDATE user_chips
-                    SET balance = balance - $2, updated = current_timestamp
-                    WHERE user_id = $1 AND balance - $2 >= $3
-                    RETURNING *
-                 ),
-                 ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-                    SELECT user_id, -$2, $4, $5, $6
-                    FROM updated
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($7, user_id::text)
-                    FROM updated
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
-                 )
-                 SELECT updated.*
-                 FROM updated, chip_notified",
-                &[
-                    &user_id,
-                    &amount,
-                    &CHIP_FLOOR,
-                    &DRINK_PURCHASE_REASON,
-                    &DRINK_PURCHASE_SOURCE_KIND,
-                    &drink,
-                    &CHIP_USER_CHANGED_CHANNEL,
-                ],
-            )
-            .await?;
-        Ok(row.map(Self::from))
+        ensure!(amount > 0, "chip move amount must be positive");
+        match mv.direction() {
+            ChipDirection::Credit => {
+                let row = client
+                    .query_one(
+                        "WITH upserted AS (
+                            INSERT INTO user_chips (user_id, balance)
+                            VALUES ($1, $2)
+                            ON CONFLICT (user_id) DO UPDATE SET
+                              balance = user_chips.balance + $2,
+                              updated = current_timestamp
+                            RETURNING *
+                         ),
+                         ledger AS (
+                            INSERT INTO chip_ledger
+                              (user_id, delta, reason, source_kind, source_ref)
+                            SELECT user_id, $2, $3, $4, $5
+                            FROM upserted
+                         )
+                         SELECT * FROM upserted",
+                        &[
+                            &user_id,
+                            &amount,
+                            &mv.reason(),
+                            &mv.source_kind(),
+                            &source_ref,
+                        ],
+                    )
+                    .await?;
+                Ok(Some(Self::from(row)))
+            }
+            ChipDirection::Debit { floor } => {
+                let row = client
+                    .query_opt(
+                        "WITH updated AS (
+                            UPDATE user_chips
+                            SET balance = balance - $2, updated = current_timestamp
+                            WHERE user_id = $1 AND balance - $2 >= $3
+                            RETURNING *
+                         ),
+                         ledger AS (
+                            INSERT INTO chip_ledger
+                              (user_id, delta, reason, source_kind, source_ref)
+                            SELECT user_id, -$2, $4, $5, $6
+                            FROM updated
+                         )
+                         SELECT * FROM updated",
+                        &[
+                            &user_id,
+                            &amount,
+                            &floor,
+                            &mv.reason(),
+                            &mv.source_kind(),
+                            &source_ref,
+                        ],
+                    )
+                    .await?;
+                Ok(row.map(Self::from))
+            }
+            ChipDirection::Restore => {
+                bail!("floor restore has a dedicated write path, use restore_floor")
+            }
+        }
     }
 
     pub async fn restore_floor(client: &Client, user_id: Uuid) -> Result<Self> {
@@ -224,29 +380,30 @@ impl UserChips {
                  ),
                  ledger AS (
                     INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT $1, delta, 'floor_restore', 'user_chips'
+                    SELECT $1, delta, $3, $4
                     FROM restored
                     WHERE delta > 0
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($3, $1::text)
-                    FROM restored
-                    WHERE delta > 0
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
                  )
                  SELECT upserted.*
-                 FROM upserted, chip_notified",
-                &[&user_id, &CHIP_FLOOR, &CHIP_USER_CHANGED_CHANNEL],
+                 FROM upserted",
+                &[
+                    &user_id,
+                    &CHIP_FLOOR,
+                    &ChipMove::FloorRestore.reason(),
+                    &ChipMove::FloorRestore.source_kind(),
+                ],
             )
             .await?;
         Ok(Self::from(row))
     }
 
+    /// Move chips from sender to recipient: a [`ChipMove::GiftSent`] debit
+    /// (floor-guarded) and a [`ChipMove::GiftReceived`] credit. The debit and
+    /// credit are separate statements, so this takes the transaction that
+    /// makes them atomic. Returns `None` when the sender cannot cover the
+    /// gift and keep the floor.
     pub async fn transfer_gift(
-        client: &impl GenericClient,
+        tx: &Transaction<'_>,
         sender_id: Uuid,
         recipient_id: Uuid,
         amount: i64,
@@ -254,89 +411,27 @@ impl UserChips {
         ensure!(amount > 0, "gift amount must be positive");
         ensure!(sender_id != recipient_id, "cannot gift yourself");
 
-        // Ensure both chip rows exist as a separate statement. Data-modifying
-        // CTEs in a single statement all run against one snapshot, so an inline
-        // upsert would not be visible to the debit/credit UPDATEs that follow,
-        // and gifting to a user without a pre-existing row would spuriously fail
-        // as "insufficient chips".
-        client
-            .execute(
-                "INSERT INTO user_chips (user_id, balance)
-                 VALUES ($1, $3), ($2, $3)
-                 ON CONFLICT (user_id) DO NOTHING",
-                &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
-            )
-            .await?;
+        // Ensure both chip rows exist first, so gifting to a user without a
+        // pre-existing row credits on top of the initial balance instead of
+        // spuriously failing.
+        tx.execute(
+            "INSERT INTO user_chips (user_id, balance)
+             VALUES ($1, $3), ($2, $3)
+             ON CONFLICT (user_id) DO NOTHING",
+            &[&sender_id, &recipient_id, &INITIAL_CHIP_BALANCE],
+        )
+        .await?;
 
-        let row = client
-            .query_opt(
-                "WITH debited AS (
-                    UPDATE user_chips
-                    SET balance = balance - $3, updated = current_timestamp
-                    WHERE user_id = $1 AND balance - $3 >= $4
-                    RETURNING *
-                 ),
-                 credited AS (
-                    UPDATE user_chips
-                    SET balance = balance + $3, updated = current_timestamp
-                    WHERE user_id = $2 AND EXISTS (SELECT 1 FROM debited)
-                    RETURNING *
-                 ),
-                 sent_ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, -$3, $5, 'user_chips'
-                    FROM debited
-                    RETURNING 1
-                 ),
-                 received_ledger AS (
-                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind)
-                    SELECT user_id, $3, $6, 'user_chips'
-                    FROM credited
-                    RETURNING 1
-                 ),
-                 notify_sender AS (
-                    SELECT pg_notify($7, $1::text)
-                    WHERE EXISTS (SELECT 1 FROM debited)
-                 ),
-                 notify_recipient AS (
-                    SELECT pg_notify($7, $2::text)
-                    WHERE EXISTS (SELECT 1 FROM credited)
-                 )
-                 SELECT
-                    d.user_id AS sender_user_id,
-                    d.balance AS sender_balance,
-                    d.last_stipend_date AS sender_last_stipend_date,
-                    c.user_id AS recipient_user_id,
-                    c.balance AS recipient_balance,
-                    c.last_stipend_date AS recipient_last_stipend_date
-                 FROM debited d
-                 JOIN credited c ON true",
-                &[
-                    &sender_id,
-                    &recipient_id,
-                    &amount,
-                    &CHIP_FLOOR,
-                    &CHIP_GIFT_SENT_REASON,
-                    &CHIP_GIFT_RECEIVED_REASON,
-                    &CHIP_USER_CHANGED_CHANNEL,
-                ],
-            )
-            .await?;
-
-        Ok(row.map(|row| {
-            (
-                Self {
-                    user_id: row.get("sender_user_id"),
-                    balance: row.get("sender_balance"),
-                    last_stipend_date: row.get("sender_last_stipend_date"),
-                },
-                Self {
-                    user_id: row.get("recipient_user_id"),
-                    balance: row.get("recipient_balance"),
-                    last_stipend_date: row.get("recipient_last_stipend_date"),
-                },
-            )
-        }))
+        let Some(sender) = Self::apply(tx, sender_id, ChipMove::GiftSent, amount, None).await?
+        else {
+            return Ok(None);
+        };
+        let Some(recipient) =
+            Self::apply(tx, recipient_id, ChipMove::GiftReceived, amount, None).await?
+        else {
+            bail!("gift credit returned no row");
+        };
+        Ok(Some((sender, recipient)))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

@@ -171,6 +171,43 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
     }
 
+    // The overhead world map captures pan keys (wasd/hjkl) and Enter (re-centre)
+    // while it's open; every other key falls through, so panel keys still work
+    // and `m` closes the map.
+    if state.map_open() {
+        match byte {
+            b'w' | b'W' | b'k' | b'K' => {
+                state.pan_map(0, -1);
+                return InputAction::Handled;
+            }
+            b's' | b'S' | b'j' | b'J' => {
+                state.pan_map(0, 1);
+                return InputAction::Handled;
+            }
+            b'a' | b'A' | b'h' | b'H' => {
+                state.pan_map(-1, 0);
+                return InputAction::Handled;
+            }
+            b'd' | b'D' | b'l' | b'L' => {
+                state.pan_map(1, 0);
+                return InputAction::Handled;
+            }
+            b',' | b'<' => {
+                state.change_map_level(1); // view a level up
+                return InputAction::Handled;
+            }
+            b'.' | b'>' => {
+                state.change_map_level(-1); // view a level down (underground)
+                return InputAction::Handled;
+            }
+            b'\r' | b'\n' => {
+                state.recenter_map();
+                return InputAction::Handled;
+            }
+            _ => {}
+        }
+    }
+
     match byte {
         // Panels.
         b'c' | b'C' => {
@@ -385,6 +422,17 @@ fn select_row(state: &mut State, target: usize) {
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     // Arrow keys do nothing while composing a chat line (they'd otherwise move).
     if state.chat_active() {
+        return true;
+    }
+    // While the overhead map is open, arrows pan the camera instead of moving.
+    if state.map_open() {
+        match key {
+            b'A' => state.pan_map(0, -1),
+            b'B' => state.pan_map(0, 1),
+            b'C' => state.pan_map(1, 0),
+            b'D' => state.pan_map(-1, 0),
+            _ => return false,
+        }
         return true;
     }
     let in_list = matches!(

@@ -95,6 +95,12 @@ impl App {
 
         self.sync_visible_chat_room();
         self.tick_clubhouse();
+        changed |= crate::app::scratchpad::pair::poll(self);
+        if let Some(scratchpad) = self.scratchpad.as_mut()
+            && scratchpad.sync_from_shared()
+        {
+            changed = true;
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -276,9 +282,6 @@ impl App {
                         "{message}: #{slug}"
                     )));
                 }
-                SessionMessage::BrowserPaired => {
-                    self.replay_paired_browser_source();
-                }
                 SessionMessage::UltimateCast {
                     ultimate_id,
                     seed,
@@ -431,6 +434,13 @@ impl App {
             // Same off-screen drain rule as Lateania above.
             let greendragon_changed = state.tick();
             changed |= greendragon_changed && self.screen == Screen::GreenDragon;
+        }
+        if let Some(state) = self.darkroom_state.as_mut() {
+            // The village keeps growing while the player is elsewhere on
+            // late.sh, so this ticks off-screen too — it just doesn't dirty a
+            // frame nobody is looking at.
+            let darkroom_changed = state.tick();
+            changed |= darkroom_changed && self.screen == Screen::Darkroom;
         }
         // Door games are launched from the Games hub, so they return there when
         // they exit. Rebels flips out of Running the tick its proxy closes;
@@ -980,11 +990,15 @@ impl App {
         }
 
         let sidebar_visible = self.right_sidebar_visible();
-        // Ambient wave + bonsai sway: both are stateless, derived from the
-        // wall clock at draw time (viz::render_wave, the bonsai sway sines),
+        // Ambient equalizer + bonsai sway: both are stateless, derived from
+        // the wall clock at draw time (viz::render_eq, the bonsai sway sines),
         // so there is nothing to advance here — the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
-        // sidebar carries the wave and both bonsai panels; the modals sway).
+        // sidebar carries the eq strip and both bonsai panels; the modals
+        // sway). Deliberately NOT narrowed to sessions whose eq is actually
+        // animating: the bonsai sway holds this edge on its own, and Bonsai
+        // is enabled by default. An unpaired session repaints a static eq
+        // strip, which the frame diff then drops.
         changed |=
             anim_half && (sidebar_visible || self.show_bonsai_modal || self.show_bonsai_v2_modal);
 
@@ -1014,7 +1028,7 @@ impl App {
                 icecast_now_playing: icecast_now_playing.as_ref(),
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
-                source: self.paired_browser_source,
+                source: self.paired_source,
                 queue: Some(&queue),
             };
             changed |= crate::app::common::sidebar::sidebar_marquee_scrolling(&inputs);
@@ -1105,7 +1119,8 @@ impl App {
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so roaming and the strip ride the half tier they paint on. Bonsai
         // modals stay hot: the care watering animation still counts per
-        // tick call. A visible sidebar always carries the ambient wave.
+        // tick call. A visible sidebar always carries the eq strip and
+        // bonsai sway.
         if self.screen == Screen::Clubhouse
             || self.right_sidebar_visible()
             || self.pet_state.roaming_active()

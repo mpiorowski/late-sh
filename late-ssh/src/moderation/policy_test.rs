@@ -49,3 +49,35 @@ fn audit_only_privileged_actions_against_others() {
     assert!(Permissions::new(false, true).should_audit(false));
     assert!(Permissions::new(true, false).should_audit(false));
 }
+
+#[test]
+fn a_room_owner_may_kick_regulars_from_their_room_and_nothing_more() {
+    let owner = Permissions::new(false, false).as_room_owner();
+
+    assert!(
+        owner.can(Caps::KICK_FROM_ROOM, Tier::Regular),
+        "an owner keeps the door of the room they own"
+    );
+    assert!(
+        !owner.can(Caps::KICK_FROM_ROOM, Tier::Moderator),
+        "ownership carries no rank, so staff are untouchable"
+    );
+    assert!(!owner.can(Caps::KICK_FROM_ROOM, Tier::Admin));
+    assert!(
+        !owner.can(Caps::BAN_FROM_ROOM, Tier::Regular),
+        "kicking is the whole grant: banning stays with staff"
+    );
+    assert!(!owner.has(Caps::OPEN_MOD_SURFACE));
+    assert!(!owner.can_moderate());
+    assert_eq!(owner.tier(), Tier::Regular);
+    assert!(
+        owner.should_audit(false),
+        "an owner removing someone is still recorded"
+    );
+
+    let plain = Permissions::new(false, false);
+    assert!(
+        !plain.can(Caps::KICK_FROM_ROOM, Tier::Regular),
+        "without the grant a regular kicks nobody"
+    );
+}

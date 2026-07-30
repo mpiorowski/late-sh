@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
-use late_core::models::{chat_message::ChatMessage, chat_room::ChatRoom};
+use late_core::models::{
+    chat_message::ChatMessage, chat_room::ChatRoom, chat_room_member::ChatRoomMember,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -20,6 +22,7 @@ use uuid::Uuid;
 use crate::app::common::{
     composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
+    primitives::row_with_hint,
     theme,
     username_effect::NameStyle,
 };
@@ -71,6 +74,9 @@ pub struct DashboardChatView<'a> {
     /// Recent #lounge system-feed lines (newest first), packed left to
     /// right into the composer-gap row.
     pub activity_ticker: &'a [super::state::ActivityTickerEntry],
+    /// The room being shown, when it is loaded. Only its header (voice, topic,
+    /// `/rules`) is read here; messages arrive separately below.
+    pub room: Option<&'a ChatRoom>,
     pub messages: &'a [ChatMessage],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
@@ -1010,7 +1016,7 @@ fn pad_left_to_width(text: &str, width: usize) -> String {
     }
 }
 
-fn truncate_cells(text: &str, max_width: usize) -> String {
+pub(crate) fn truncate_cells(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {
         return text.to_string();
     }
@@ -1031,6 +1037,10 @@ fn truncate_cells(text: &str, max_width: usize) -> String {
     out.push('…');
     out
 }
+
+/// Rows the Lounge chat card needs before another surface may take space above
+/// it. The aquarium tray checks this before carving its strip off the top.
+pub(crate) const MIN_CHAT_HEIGHT_WITH_LOUNGE: u16 = 10;
 
 pub fn draw_dashboard_chat_card(
     frame: &mut Frame,
@@ -1070,25 +1080,25 @@ pub fn draw_dashboard_chat_card(
     if let Some(pet_strip) = &view.pet_strip {
         crate::app::pet::ui::draw_pet_strip(frame, pet_strip_area, pet_strip);
     }
-    if let Some(voice_channel_id) = view.voice_channel_id {
-        let voice_view = crate::app::voice::ui::VoiceRoomView {
+    // The Lounge gets the same header block as every other room: voice state
+    // and the topic in one place, rather than a bare voice strip.
+    let voice = view
+        .voice_channel_id
+        .map(|room_id| crate::app::voice::ui::VoiceRoomView {
             snapshot: view.voice_snapshot,
-            room_id: voice_channel_id,
+            room_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-        };
-        let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-        let strip = Rect {
-            height: strip_height,
-            ..messages_area
-        };
-        crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-        messages_area = Rect {
-            y: messages_area.y + strip_height,
-            height: messages_area.height.saturating_sub(strip_height),
-            ..messages_area
-        };
-    }
+        });
+    messages_area = draw_room_header(
+        frame,
+        messages_area,
+        RoomHeader {
+            voice,
+            topic: view.room.and_then(room_topic),
+            has_rules: view.room.is_some_and(room_has_rules),
+        },
+    );
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
 
     let lines: Vec<Line<'static>>;
@@ -1294,6 +1304,15 @@ enum RowKindLite {
     Image,
 }
 
+/// Why a chat message is painted with a background wash: it mentions you, or
+/// it is a reply to a message you wrote. Messages you wrote yourself never
+/// qualify, so talking about yourself does not light up the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatAttention {
+    Mention,
+    Reply,
+}
+
 /// Counter inputs that decide chat row cache validity. `room_version` bumps
 /// on any message-store change in the rendered room (new message, edit,
 /// delete, tail merge, reactions); the two epochs bump when author context
@@ -1328,6 +1347,10 @@ pub struct ChatRowsCache {
     all_rows: Vec<Line<'static>>,
     selected_ranges: HashMap<Uuid, (usize, usize)>,
     highlighted_ranges: HashMap<Uuid, (usize, usize)>,
+    /// Parallel to `all_rows`: the background wash each row should get, if
+    /// any. `None` on rows belonging to messages that neither mention you nor
+    /// reply to you, and on the blank separator and divider rows.
+    row_attention: Vec<Option<ChatAttention>>,
     /// Parallel to `all_rows`: which message id owns each painted row.
     /// `None` on the blank separator inserted between distinct authors.
     row_message: Vec<Option<Uuid>>,
@@ -1379,6 +1402,36 @@ fn is_unread_boundary_message(
     marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
 }
 
+/// Whether `body` mentions `username_lower`. Uses the same mention parser as
+/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
+/// does not, and a mention inside a code span does not count.
+fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
+    let Some(username_lower) = username_lower else {
+        return false;
+    };
+    crate::app::common::mentions::extract_mentions(body)
+        .iter()
+        .any(|mentioned| mentioned == username_lower)
+}
+
+/// Whether `message` is a reply to a message written by `user_id`. Human
+/// replies carry only the target message id, so the target's author is looked
+/// up in `message_authors`; bot replies carry the target user id directly.
+fn replies_to_user(
+    message: &ChatMessage,
+    user_id: Uuid,
+    message_authors: &HashMap<Uuid, Uuid>,
+) -> bool {
+    if message.reply_to_user_id == Some(user_id) {
+        return true;
+    }
+    message
+        .reply_to_message_id
+        .and_then(|target_id| message_authors.get(&target_id))
+        .copied()
+        == Some(user_id)
+}
+
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
     messages: Vec<&ChatMessage>,
@@ -1390,10 +1443,17 @@ fn ensure_chat_rows_cache(
         return;
     }
 
-    let our_mention = ctx
+    let our_username_lower = ctx
         .usernames
         .get(&ctx.current_user_id)
-        .map(|name| format!("@{name}"));
+        .map(|name| name.to_ascii_lowercase());
+    // Reply targets are stored as a message id, so resolving "is this a reply
+    // to me" needs the author of every message currently loaded. A reply whose
+    // target has scrolled out of the loaded window cannot be resolved and gets
+    // no wash.
+    let message_authors: HashMap<Uuid, Uuid> =
+        messages.iter().map(|msg| (msg.id, msg.user_id)).collect();
+    let mut attention_by_message: HashMap<Uuid, ChatAttention> = HashMap::new();
     let mut all_rows: Vec<Line> = Vec::new();
     let mut row_message: Vec<Option<Uuid>> = Vec::new();
     let mut row_kind: Vec<RowKindLite> = Vec::new();
@@ -1414,9 +1474,8 @@ fn ensure_chat_rows_cache(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
-        // A bumped `updated` marks a message that's been edited (an admin pin
-        // also bumps it; we treat that as close enough rather than tracking a
-        // dedicated edited flag).
+        // A bumped `updated` marks a message that's been edited; there is no
+        // dedicated edited flag.
         if msg.updated > msg.created {
             stamp.push_str(" (edited)");
         }
@@ -1498,9 +1557,22 @@ fn ensure_chat_rows_cache(
             .map(Vec::as_slice)
             .unwrap_or(&[]);
 
-        let mentions_us = our_mention
-            .as_ref()
-            .is_some_and(|m| msg.body.contains(m.as_str()));
+        // A reply is checked before a mention because the composer prepends a
+        // `> @author: …` quote line to every reply, which would otherwise make
+        // every reply to you look like a plain mention.
+        let attention = if is_own {
+            None
+        } else if replies_to_user(msg, ctx.current_user_id, &message_authors) {
+            Some(ChatAttention::Reply)
+        } else if mentions_user(&msg.body, our_username_lower.as_deref()) {
+            Some(ChatAttention::Mention)
+        } else {
+            None
+        };
+        if let Some(attention) = attention {
+            attention_by_message.insert(msg.id, attention);
+        }
+        let mentions_us = attention.is_some();
 
         // System-feed lines (authored by the system bot, prefix-marked)
         // render as one authorless row; consecutive ones stack with no
@@ -1587,8 +1659,16 @@ fn ensure_chat_rows_cache(
     debug_assert_eq!(all_rows.len(), row_message.len());
     debug_assert_eq!(all_rows.len(), row_kind.len());
 
+    // Derived from `row_message` rather than pushed alongside it, so the blank
+    // separator rows and the "new messages" divider need no special handling.
+    let row_attention = row_message
+        .iter()
+        .map(|owner| owner.and_then(|message_id| attention_by_message.get(&message_id).copied()))
+        .collect::<Vec<_>>();
+
     cache.key = Some(key);
     cache.all_rows = all_rows;
+    cache.row_attention = row_attention;
     cache.row_message = row_message;
     cache.row_kind = row_kind;
     cache.selected_ranges = selected_ranges;
@@ -1653,6 +1733,45 @@ fn visible_chat_rows(
         })
         .collect();
 
+    // Messages that mention you or reply to you get a background wash across
+    // the full row width. Painted before the jump-highlight and the selection
+    // marker so both of those still win on the rows they cover. The rows were
+    // laid out at the key's width, so the wash fills out to that same width
+    // instead of stopping where the text ends; no key means no cached rows,
+    // and the loop is empty anyway.
+    let row_width = cache.key.map_or(0, |key| key.width);
+    for (offset, idx) in (visible_start..visible_end).enumerate() {
+        let Some(attention) = cache.row_attention.get(idx).copied().flatten() else {
+            continue;
+        };
+        let (background, accent) = match attention {
+            ChatAttention::Mention => (theme::CHAT_MENTION_BG(), theme::MENTION()),
+            ChatAttention::Reply => (theme::CHAT_REPLY_BG(), theme::CHAT_AUTHOR()),
+        };
+        let row = &mut lines[offset];
+        for span in &mut row.spans {
+            span.style = span.style.bg(background);
+        }
+        // The left margin bar is drawn in the mention color by `ui_text`;
+        // recolor it here so a reply reads as a reply.
+        if let Some(first_span) = row.spans.first_mut()
+            && first_span.content == "│"
+        {
+            first_span.style = first_span.style.fg(accent);
+        }
+        let used: usize = row
+            .spans
+            .iter()
+            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        if used < row_width {
+            row.spans.push(Span::styled(
+                " ".repeat(row_width - used),
+                Style::default().bg(background),
+            ));
+        }
+    }
+
     if let Some((start, end)) = highlighted_row_range {
         let start = start.max(visible_start);
         let end = end.min(visible_end);
@@ -1671,7 +1790,13 @@ fn visible_chat_rows(
             if let Some(first_span) = row.spans.first()
                 && (first_span.content == " " || first_span.content == "│")
             {
-                row.spans[0] = Span::styled("▸", Style::default().fg(theme::AMBER()));
+                // Keep whatever background the row already has (the mention or
+                // reply wash), so the marker does not punch a hole in it.
+                let mut style = Style::default().fg(theme::AMBER());
+                if let Some(background) = first_span.style.bg {
+                    style = style.bg(background);
+                }
+                row.spans[0] = Span::styled("▸", style);
             }
         }
     }
@@ -2885,7 +3010,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         let prefix = room_jump_prefix(jump_key, view.room_jump_active, is_selected);
         let text = if unread > 0 {
-            format!("{prefix}{label} ({unread})")
+            format!("{prefix}{label} ({})", format_unread_badge(unread))
         } else {
             format!("{prefix}{label}")
         };
@@ -2964,7 +3089,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.notifications_unread_count > 0 {
-            format!("{prefix}mentions ({})", view.notifications_unread_count)
+            format!(
+                "{prefix}mentions ({})",
+                format_unread_badge(view.notifications_unread_count)
+            )
         } else {
             format!("{prefix}mentions")
         };
@@ -2990,7 +3118,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Style::default().fg(theme::TEXT())
         };
         let label = if view.news_unread_count > 0 {
-            format!("{prefix}news ({})", view.news_unread_count)
+            format!(
+                "{prefix}news ({})",
+                format_unread_badge(view.news_unread_count)
+            )
         } else {
             format!("{prefix}news")
         };
@@ -3013,7 +3144,10 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 Style::default().fg(theme::TEXT())
             };
             let label = if view.feeds_unread_count > 0 {
-                format!("{prefix}rss ({})", view.feeds_unread_count)
+                format!(
+                    "{prefix}rss ({})",
+                    format_unread_badge(view.feeds_unread_count)
+                )
             } else {
                 format!("{prefix}rss")
             };
@@ -3480,7 +3614,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         let display = format!("{key_prefix}{display_label}");
         let used = UnicodeWidthStr::width(display.as_str());
         let unread_str = if unread > 0 {
-            format!("{unread}")
+            format_unread_badge(unread)
         } else {
             String::new()
         };
@@ -3671,6 +3805,19 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     }
 }
 
+/// Unread badge text. Counts are capped in SQL at
+/// `ChatRoomMember::UNREAD_COUNT_CAP`, so anything at the cap means "at least
+/// this many" and renders as `99+` rather than a misleading exact number.
+/// Applies to feed badges too, which are uncapped in the DB but read the same
+/// way on screen.
+fn format_unread_badge(unread: i64) -> String {
+    if unread >= ChatRoomMember::UNREAD_COUNT_CAP {
+        format!("{}+", ChatRoomMember::UNREAD_COUNT_CAP - 1)
+    } else {
+        unread.to_string()
+    }
+}
+
 fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
@@ -3821,6 +3968,103 @@ fn dm_display_label(
     format!("@ {}", name)
 }
 
+/// The header block above a room's messages: the voice row (when the room has a
+/// voice channel), a divider, then the topic row. Each row pairs live state on
+/// the left with the keys or commands that act on it flushed to the right edge,
+/// so the eye finds status in one column and actions in another.
+struct RoomHeader<'a> {
+    voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
+    topic: Option<&'a str>,
+    has_rules: bool,
+}
+
+impl RoomHeader<'_> {
+    /// Rows this header wants: the voice row, a divider between voice and topic
+    /// (only when there is something on both sides of it), the topic row, and a
+    /// closing rule that separates the whole block from the messages.
+    fn height(&self) -> u16 {
+        let voice = u16::from(self.voice.is_some());
+        let topic = u16::from(self.topic.is_some());
+        if voice + topic == 0 {
+            return 0;
+        }
+        let divider = u16::from(self.voice.is_some() && self.topic.is_some());
+        voice + divider + topic + 1
+    }
+}
+
+/// Draw the header and return the area left for messages. A room with neither
+/// voice nor a topic (most of them) is left untouched, and the header yields
+/// entirely rather than squeeze the message area below one row.
+fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Rect {
+    let height = header.height();
+    if height == 0 || area.height <= height {
+        return area;
+    }
+    let width = area.width.max(1) as usize;
+
+    let rule = || {
+        Line::from(Span::styled(
+            "\u{2500}".repeat(width),
+            Style::default().fg(theme::BORDER_DIM()),
+        ))
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(voice) = &header.voice {
+        lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
+    }
+    if header.voice.is_some() && header.topic.is_some() {
+        lines.push(rule());
+    }
+    if let Some(topic) = header.topic {
+        let hint = if header.has_rules {
+            vec![Span::styled(
+                "/rules",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )]
+        } else {
+            Vec::new()
+        };
+        // The topic is clipped to whatever the hint leaves, so a long topic
+        // never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
+        lines.push(row_with_hint(
+            vec![Span::styled(
+                truncate_cells(topic, room_for_topic),
+                Style::default().fg(theme::TEXT_DIM()),
+            )],
+            hint,
+            width,
+        ));
+    }
+    // Closes the block off from the conversation below it.
+    lines.push(rule());
+
+    frame.render_widget(Paragraph::new(lines), Rect { height, ..area });
+    Rect {
+        y: area.y + height,
+        height: area.height.saturating_sub(height),
+        ..area
+    }
+}
+
+/// The room's topic, when it has a non-blank one.
+fn room_topic(room: &ChatRoom) -> Option<&str> {
+    room.topic
+        .as_deref()
+        .map(str::trim)
+        .filter(|topic| !topic.is_empty())
+}
+
+/// Whether the room has rules worth pointing at with `/rules`.
+fn room_has_rules(room: &ChatRoom) -> bool {
+    room.rules
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|rules| !rules.is_empty())
+}
+
 /// Center pane for the merged Home/Chat shell. The room rail is rendered by
 /// the outer shell, so this draws only the selected room/feed content plus the
 /// relevant composer or hint row.
@@ -3892,28 +4136,26 @@ fn draw_selected_content(
                     .find(|(room, _)| is_chat_list_room(room))
             });
 
-        // A voice channel shows a compact voice strip pinned at the very top;
-        // text-only rooms render unchanged with the messages at full height.
-        let messages_area = if let Some((room, _)) = selected_room
-            && let Some(channel) = view.voice_channels_by_room_id.get(&room.id)
-        {
-            let voice_view = crate::app::voice::ui::VoiceRoomView {
-                snapshot: view.voice_snapshot,
-                room_id: channel.id,
-                current_user_id,
-                paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
-            };
-            let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
-            let strip = Rect {
-                height: strip_height,
-                ..messages_area
-            };
-            crate::app::voice::ui::draw_voice_strip(frame, strip, &voice_view);
-            Rect {
-                y: messages_area.y + strip_height,
-                height: messages_area.height.saturating_sub(strip_height),
-                ..messages_area
-            }
+        // Voice state and the room's topic share one header block above the
+        // messages; a text-only room without a topic renders unchanged.
+        let messages_area = if let Some((room, _)) = selected_room {
+            let voice = view.voice_channels_by_room_id.get(&room.id).map(|channel| {
+                crate::app::voice::ui::VoiceRoomView {
+                    snapshot: view.voice_snapshot,
+                    room_id: channel.id,
+                    current_user_id,
+                    paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                }
+            });
+            draw_room_header(
+                frame,
+                messages_area,
+                RoomHeader {
+                    voice,
+                    topic: room_topic(room),
+                    has_rules: room_has_rules(room),
+                },
+            )
         } else {
             messages_area
         };

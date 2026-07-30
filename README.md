@@ -22,21 +22,22 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 
 - SSH TUI with dashboard, chat, profile, news, and arcade screens
 - Real-time global chat and shared activity feed
-- Audio streaming via Icecast/Liquidsoap with browser and CLI pairing
+- Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
 - Terminal games including 2048, Sudoku, Nonograms, Minesweeper, and Solitaire
-- Web frontend for landing, connect flow, and paired-client experiences
+- Web frontend for landing, profiles, and the token-less `/listen` page
 - Companion CLI for local audio playback and synced visualizer data
 
 ## Workspace
 
-This is a Rust workspace with four crates:
+This is a Rust workspace with five crates:
 
 | Crate | Role |
 |-------|------|
 | `late-cli` | Companion CLI for local audio playback, paired controls, and visualizer sync |
 | `late-core` | Shared domain code, database layer, migrations, and infrastructure helpers |
 | `late-ssh` | SSH server and terminal UI application |
-| `late-web` | Web server, landing page, connect flow, and browser pairing |
+| `late-web` | Web server, landing page, profiles/gallery, stream proxy, and the public `/listen` page |
+| `late-webview` | Helper process hosting the official YouTube IFrame Player for the CLI |
 
 The stack is backed by PostgreSQL, Icecast, and Liquidsoap.
 

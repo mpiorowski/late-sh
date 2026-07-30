@@ -22,6 +22,7 @@ pub mod svc;
 pub mod taming;
 pub mod ui;
 pub mod world;
+pub mod worldmap;
 
 #[cfg(test)]
 mod abilities_test;

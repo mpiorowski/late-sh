@@ -1,0 +1,261 @@
+{% extends "pages/layout.html" %}
+
+{% block title %}listen · late.sh{% endblock %}
+
+{% block page %}
+<div x-data="listen()" x-init="start()" class="max-w-lg mx-auto pt-8 sm:pt-16">
+
+    <div class="mb-10">
+        <div class="flex items-baseline justify-between gap-4">
+            <h1 class="text-3xl sm:text-4xl text-green-500 tracking-tight">late.sh</h1>
+            <div class="text-xs text-gray-400 shrink-0" x-show="listeners !== null">
+                <span x-text="listeners"></span> online
+            </div>
+        </div>
+        <p class="text-gray-300 mt-2">the music, without the clubhouse</p>
+        <p class="text-xs text-gray-400 mt-3 leading-relaxed">
+            the whole thing lives in the terminal: <span class="text-green-400">ssh late.sh</span>.
+            this page is here so you can listen from a phone, a work laptop, or anywhere you
+            can't run it.
+        </p>
+    </div>
+
+    <!-- nightride -->
+    <section class="mb-8">
+        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">nightride fm</h2>
+        <template x-for="(info, station) in stations" :key="station">
+            <button type="button" @click="playStation(station, info.stream_url)"
+                class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
+                :class="playing === 'station:' + station ? 'border-green-500 bg-gray-900' : ''">
+                <div class="flex items-baseline justify-between gap-3">
+                    <span class="text-green-400" x-text="stationLabel(station)"></span>
+                    <span class="text-xs text-gray-500"
+                        x-text="playing === 'station:' + station ? 'playing' : 'play'"></span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(info)"></div>
+            </button>
+        </template>
+        <p class="text-xs text-gray-500 mt-2">
+            streamed directly from
+            <a href="https://nightride.fm" rel="noopener"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">nightride.fm</a>
+        </p>
+    </section>
+
+    <!-- community queue -->
+    <section class="mb-8">
+        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">community queue</h2>
+        <button type="button" @click="playYoutube()"
+            class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 transition-colors"
+            :class="playing === 'youtube' ? 'border-green-500 bg-gray-900' : ''">
+            <div class="flex items-baseline justify-between gap-3">
+                <span class="text-green-400">youtube</span>
+                <span class="text-xs text-gray-500"
+                    x-text="playing === 'youtube' ? 'playing' : 'play'"></span>
+            </div>
+            <div class="text-xs text-gray-400 mt-1 truncate" x-text="youtubeLine()"></div>
+            <div class="text-xs text-gray-500 mt-1" x-show="current && current.submitter">
+                queued by <span class="text-gray-400" x-text="current && current.submitter"></span>
+            </div>
+        </button>
+
+        <!-- The IFrame player must stay in the DOM and audible while YouTube is
+             the selected source; it is visually collapsed, never display:none. -->
+        <div class="overflow-hidden transition-all" :class="playing === 'youtube' ? 'h-40 mt-3' : 'h-0'">
+            <div id="yt-player" class="w-full h-40"></div>
+        </div>
+
+        <div x-show="playing === 'youtube' && upNext.length" class="mt-3">
+            <div class="text-xs uppercase tracking-widest text-gray-500 mb-2">up next</div>
+            <template x-for="item in upNext" :key="item.video_id">
+                <div class="text-xs text-gray-400 truncate mb-1">
+                    <span x-text="item.title || item.video_id"></span>
+                    <span class="text-gray-600" x-text="' · ' + item.submitter"></span>
+                </div>
+            </template>
+        </div>
+
+        <p class="text-xs text-gray-500 mt-2" x-show="playing === 'youtube'">
+            queue something yourself from the terminal with <span class="text-gray-400">v+v</span>
+        </p>
+    </section>
+
+    <!-- house radio -->
+    <section class="mb-8">
+        <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">house radio</h2>
+        <template x-for="mount in ['chill', 'classical']" :key="mount">
+            <button type="button" @click="playStream(mount)"
+                class="w-full text-left border border-gray-700 hover:border-green-600 rounded px-3 py-2 mb-2 transition-colors"
+                :class="playing === 'stream:' + mount ? 'border-green-500 bg-gray-900' : ''">
+                <div class="flex items-baseline justify-between gap-3">
+                    <span class="text-green-400" x-text="mount"></span>
+                    <span class="text-xs text-gray-500"
+                        x-text="playing === 'stream:' + mount ? 'playing' : 'play'"></span>
+                </div>
+                <div class="text-xs text-gray-400 mt-1 truncate" x-text="air(streams[mount])"></div>
+            </button>
+        </template>
+        <p class="text-xs text-gray-500 mt-2">
+            every track CC0 or CC-BY.
+            <a href="https://github.com/mpiorowski/late-sh/blob/main/MUSIC.md" rel="noopener"
+                class="text-green-400 hover:text-green-300 underline underline-offset-2">full credits</a>
+        </p>
+    </section>
+
+    <p class="text-xs text-gray-500 border-t border-gray-800 pt-4">
+        want chat, games, art and the rest?
+        <span class="text-green-400">ssh late.sh</span>, or install the
+        <a href="https://github.com/mpiorowski/late-sh" rel="noopener"
+            class="text-green-400 hover:text-green-300 underline underline-offset-2">late CLI</a>
+        for local audio and voice.
+    </p>
+
+    <audio x-ref="audio" class="hidden"></audio>
+</div>
+
+<script>
+    const LISTEN_POLL_MS = 10000;
+    const STATION_LABELS = { rektify: 'ambient' };
+
+    function listen() {
+        return {
+            listeners: null,
+            streams: {},
+            stations: {},
+            current: null,
+            upNext: [],
+            playing: null,
+            ytPlayer: null,
+            ytReady: false,
+            ytLoadedVideo: null,
+
+            start() {
+                this.poll();
+                setInterval(() => this.poll(), LISTEN_POLL_MS);
+            },
+
+            async poll() {
+                let res;
+                try {
+                    res = await fetch('/listen/state');
+                } catch (e) {
+                    return; // keep whatever we last showed
+                }
+                if (!res.ok) return;
+                const data = await res.json();
+                this.listeners = data.listeners;
+                this.streams = data.streams || {};
+                this.stations = data.stations || {};
+                this.current = data.youtube ? data.youtube.current : null;
+                this.upNext = (data.youtube && data.youtube.queue) || [];
+                if (this.playing === 'youtube') this.syncYoutube();
+            },
+
+            air(info) {
+                if (!info) return 'no signal';
+                return info.artist ? info.artist + ' - ' + info.title : info.title;
+            },
+
+            stationLabel(station) {
+                return STATION_LABELS[station] || station;
+            },
+
+            youtubeLine() {
+                if (!this.current) return 'fallback stream';
+                const title = this.current.title || this.current.video_id;
+                return this.current.channel ? this.current.channel + ' - ' + title : title;
+            },
+
+            // One audible surface at a time: picking any source stops the others.
+            stopAll() {
+                this.$refs.audio.pause();
+                this.$refs.audio.removeAttribute('src');
+                this.$refs.audio.load();
+                if (this.ytPlayer && this.ytPlayer.pauseVideo) this.ytPlayer.pauseVideo();
+                this.ytLoadedVideo = null;
+            },
+
+            playUrl(key, url) {
+                if (this.playing === key) {
+                    this.stopAll();
+                    this.playing = null;
+                    return;
+                }
+                this.stopAll();
+                this.playing = key;
+                this.$refs.audio.src = url;
+                this.$refs.audio.play().catch(() => { });
+            },
+
+            playStream(mount) {
+                this.playUrl('stream:' + mount, '/stream/' + mount);
+            },
+
+            playStation(station, url) {
+                if (!url) return;
+                this.playUrl('station:' + station, url);
+            },
+
+            playYoutube() {
+                if (this.playing === 'youtube') {
+                    this.stopAll();
+                    this.playing = null;
+                    return;
+                }
+                this.stopAll();
+                this.playing = 'youtube';
+                this.ensureYoutube();
+            },
+
+            // The IFrame API is only fetched once someone actually picks
+            // YouTube, so radio-only listeners never load it.
+            ensureYoutube() {
+                if (this.ytReady) {
+                    this.syncYoutube();
+                    return;
+                }
+                if (!window.lateYoutubeApiRequested) {
+                    window.lateYoutubeApiRequested = true;
+                    const tag = document.createElement('script');
+                    tag.src = 'https://www.youtube.com/iframe_api';
+                    document.head.appendChild(tag);
+                }
+                window.onYouTubeIframeAPIReady = () => {
+                    this.ytPlayer = new YT.Player('yt-player', {
+                        height: '160',
+                        width: '100%',
+                        playerVars: { playsinline: 1, origin: window.location.origin },
+                        events: {
+                            onReady: () => {
+                                this.ytReady = true;
+                                this.syncYoutube();
+                            },
+                        },
+                    });
+                };
+            },
+
+            // Follow whatever the server says is current. A listener joining
+            // mid-track seeks in using started_at_ms rather than restarting it.
+            syncYoutube() {
+                // The IFrame API loads asynchronously, so onReady can fire
+                // after the listener has already moved to a stream. Without
+                // this guard the player would autoplay on top of it.
+                if (this.playing !== 'youtube') return;
+                if (!this.ytReady || !this.current) return;
+                if (this.ytLoadedVideo === this.current.video_id) return;
+                let startSeconds = 0;
+                if (this.current.started_at_ms) {
+                    const elapsed = (Date.now() - this.current.started_at_ms) / 1000;
+                    if (elapsed > 0) startSeconds = Math.floor(elapsed);
+                }
+                this.ytLoadedVideo = this.current.video_id;
+                this.ytPlayer.loadVideoById({
+                    videoId: this.current.video_id,
+                    startSeconds: startSeconds,
+                });
+            },
+        };
+    }
+</script>
+{% endblock %}

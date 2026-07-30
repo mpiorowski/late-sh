@@ -45,6 +45,11 @@ use tokio::sync::{Semaphore, broadcast, watch};
 use tokio::time::{Duration, Instant, sleep};
 use uuid::Uuid;
 
+/// Watchdog for exact asynchronous test conditions backed by real Postgres.
+/// CI runs several migration-heavy test databases concurrently, so startup
+/// can legitimately take longer than the condition itself needs once ready.
+const ASYNC_TEST_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub async fn new_test_db() -> TestDb {
     test_db().await
 }
@@ -129,7 +134,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         max_conns_per_ip: 3,
         ssh_idle_timeout: 60,
         server_key_path: std::env::temp_dir().join(format!("late-ssh-test-key-{}", Uuid::now_v7())),
-        allowed_origins: vec!["http://localhost:3000".to_string()],
         frame_drop_log_every: 100,
         ssh_max_attempts_per_ip: 30,
         ssh_rate_limit_window_secs: 60,
@@ -235,6 +239,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
+        scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
@@ -279,6 +284,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
@@ -315,7 +321,14 @@ pub fn make_app_with_permissions(
     session_token: &str,
     permissions: Permissions,
 ) -> App {
-    make_app_with_chat_service_and_permissions(db, user_id, session_token, permissions).0
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        permissions,
+        SessionWorld::default(),
+    )
+    .0
 }
 
 pub fn make_app_with_chat_service(
@@ -323,7 +336,40 @@ pub fn make_app_with_chat_service(
     user_id: Uuid,
     session_token: &str,
 ) -> (App, ChatService) {
-    make_app_with_chat_service_and_permissions(db, user_id, session_token, Permissions::default())
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        Permissions::default(),
+        SessionWorld::default(),
+    )
+}
+
+/// The process-global handles a test shares between two apps when it needs
+/// them to see each other. `make_app` leaves all of these unset, which keeps
+/// a single-app test session-local; a cross-session test (`/pair`, presence
+/// lookups) hands the same `SessionWorld` to both apps.
+#[derive(Clone, Default)]
+pub struct SessionWorld {
+    pub username: Option<String>,
+    pub active_users: Option<crate::state::ActiveUsers>,
+    pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
+    /// A leaderboard snapshot the session should find already published, as
+    /// `LeaderboardService` leaves one for every session after its first
+    /// refresh. Unset means the session gets no leaderboard channel at all.
+    pub leaderboard_rx:
+        Option<watch::Receiver<Arc<late_core::models::leaderboard::LeaderboardData>>>,
+}
+
+pub fn make_app_in_world(db: Db, user_id: Uuid, session_token: &str, world: SessionWorld) -> App {
+    make_app_with_chat_service_and_permissions(
+        db,
+        user_id,
+        session_token,
+        Permissions::default(),
+        world,
+    )
+    .0
 }
 
 fn make_app_with_chat_service_and_permissions(
@@ -331,8 +377,13 @@ fn make_app_with_chat_service_and_permissions(
     user_id: Uuid,
     session_token: &str,
     permissions: Permissions,
+    world: SessionWorld,
 ) -> (App, ChatService) {
-    let chat_service = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs: mention events broadcast on the instance's channel, so a second
+    // instance would never deliver them to the app.
+    let notification_service = NotificationService::new(db.clone());
+    let chat_service = ChatService::new(db.clone(), notification_service.clone());
     let activity_tx = broadcast::channel::<ActivityEvent>(64).0;
     let quest_service = QuestService::new(db.clone(), activity_tx.clone());
     let quest_snapshot_rx = quest_service.subscribe_snapshot(user_id);
@@ -352,7 +403,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
         chat_service: chat_service.clone(),
-        notification_service: NotificationService::new(db.clone()),
+        notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
@@ -406,6 +457,7 @@ fn make_app_with_chat_service_and_permissions(
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -417,7 +469,7 @@ fn make_app_with_chat_service_and_permissions(
         artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
             db.clone(),
         ),
-        username: "test-user".to_string(),
+        username: world.username.unwrap_or_else(|| "test-user".to_string()),
         bonsai_service: BonsaiService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
@@ -433,7 +485,7 @@ fn make_app_with_chat_service_and_permissions(
         nonogram_library: NonogramLibrary::default(),
         chip_service: chip_service.clone(),
         initial_chip_balance: 0,
-        leaderboard_rx: None,
+        leaderboard_rx: world.leaderboard_rx,
         web_url: "http://localhost:3000".to_string(),
         rebels_enabled: true,
         rebels_host: "frittura.org".to_string(),
@@ -472,8 +524,9 @@ fn make_app_with_chat_service_and_permissions(
         permissions,
         artboard_banned: false,
         artboard_ban_expires_at: None,
-        active_users: None,
+        active_users: world.active_users,
         clubhouse_lobby: None,
+        scratchpad_registry: world.scratchpad_registry,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
@@ -520,6 +573,9 @@ pub fn make_app_with_paired_client(
     let shop_snapshot_rx = shop_service.subscribe_snapshot(user_id);
     let ultimate_service = crate::app::UltimateService::new(db.clone());
     let chip_service = ChipService::new(db.clone());
+    // One shared instance between ChatService and SessionConfig, mirroring
+    // main.rs (see make_app_with_chat_service_and_permissions).
+    let notification_service = NotificationService::new(db.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -532,8 +588,8 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        chat_service: ChatService::new(db.clone(), NotificationService::new(db.clone())),
-        notification_service: NotificationService::new(db.clone()),
+        chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
             AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
@@ -587,6 +643,7 @@ pub fn make_app_with_paired_client(
             chip_service.clone(),
             db.clone(),
         ),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -655,6 +712,7 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         active_users: None,
         clubhouse_lobby: None,
+        scratchpad_registry: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
         // No SSH key: test apps follow the account default and persist no
@@ -693,7 +751,7 @@ where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
     while Instant::now() < deadline {
         if predicate().await {
             return;
@@ -727,7 +785,7 @@ pub async fn chat_compose_app(name: &str) -> (TestDb, App) {
 }
 
 pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
     let mut last_plain = String::new();
     while Instant::now() < deadline {
         app.tick();

@@ -30,3 +30,22 @@ fn error_has_no_prefix() {
         "ERROR :Closing Link"
     );
 }
+
+#[test]
+fn topic_is_332_when_set_and_331_when_not() {
+    assert_eq!(
+        topic("alice", "#books", Some("what we are reading"))
+            .to_string()
+            .trim_end(),
+        ":irc.late.sh 332 alice #books :what we are reading"
+    );
+    assert_eq!(
+        topic("alice", "#books", None).to_string().trim_end(),
+        ":irc.late.sh 331 alice #books :No topic is set"
+    );
+    assert_eq!(
+        topic("alice", "#books", Some("   ")).to_string().trim_end(),
+        ":irc.late.sh 331 alice #books :No topic is set",
+        "a blank topic is no topic"
+    );
+}

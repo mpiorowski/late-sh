@@ -7,6 +7,7 @@ fn item(slug: &str) -> DiscoverRoomItem {
     DiscoverRoomItem {
         room_id: Uuid::from_u128(1),
         slug: slug.to_string(),
+        topic: None,
         member_count: 1,
         message_count: 0,
         last_message_at: Some(Utc::now()),

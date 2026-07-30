@@ -1,15 +1,15 @@
 use crate::{
     models::{
         bonsai::{BonsaiV2Tree, Tree},
-        chips::UserChips,
+        chips::{ChipMove, UserChips},
         marketplace::{
             AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
             CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
-            ConsumableUseStatus, DYNAMIC_BONSAI_SKU, FishActiveStatus, MARKETPLACE_SOURCE_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus, SHOP_PURCHASE_REASON,
-            THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku, aquarium_is_hungry,
-            consume_aquarium_food_pinch, equip_owned_item_by_sku, purchase_durable_item_by_sku,
+            ConsumableUseStatus, DYNAMIC_BONSAI_SKU, FishActiveStatus, MarketplaceItem,
+            PET_COMPANION_SKU, PurchaseStatus, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND,
+            USERNAME_EFFECT_ITEM_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
+            adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
+            equip_owned_item_by_sku, purchase_durable_item_by_sku,
             purchase_item_by_sku_with_username_effect, unequip_slot,
         },
         pet::PetCompanion,
@@ -192,9 +192,15 @@ async fn aquarium_food_purchase_can_be_consumed_from_inventory() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-food-use").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, AQUARIUM_PRICE + AQUARIUM_FOOD_PRICE)
-        .await
-        .expect("fund chips");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        AQUARIUM_PRICE + AQUARIUM_FOOD_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
 
     assert!(
         !aquarium_is_hungry(&client, user.id)
@@ -329,10 +335,12 @@ async fn aquarium_fish_are_repeatable_and_active_count_is_owned_count_bound() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-repeatable").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(
-        &client,
+    UserChips::apply(
+        &**client,
         user.id,
+        ChipMove::Credit,
         AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * (AQUARIUM_MAX_FISH as i64 + 1),
+        None,
     )
     .await
     .expect("fund chips");
@@ -408,10 +416,12 @@ async fn aquarium_active_adjustment_rejects_projected_total_over_cap() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-projected-cap").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(
-        &client,
+    UserChips::apply(
+        &**client,
         user.id,
+        ChipMove::Credit,
         AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64 + AQUARIUM_FISH_PRICE * 2,
+        None,
     )
     .await
     .expect("fund chips");
@@ -454,10 +464,17 @@ async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-required-balance").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let balance = UserChips::add_bonus(&client, user.id, AQUARIUM_FISH_PRICE)
-        .await
-        .expect("fund chips")
-        .balance;
+    let balance = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        AQUARIUM_FISH_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips")
+    .expect("credited")
+    .balance;
 
     let result = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
         .await
@@ -513,7 +530,7 @@ async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-consumable-repeat").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, ROOM_SPARK_PRICE)
+    UserChips::apply(&**client, user.id, ChipMove::Credit, ROOM_SPARK_PRICE, None)
         .await
         .expect("fund chips");
 
@@ -534,9 +551,15 @@ async fn pet_companion_purchase_stamps_adoption_time() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-pet-adoption").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
-        .await
-        .expect("fund chips");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        PET_COMPANION_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
 
     let pet_before = PetCompanion::ensure(&client, user.id)
         .await
@@ -562,10 +585,17 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-purchase").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
-        .await
-        .expect("fund chips")
-        .balance;
+    let starting_balance = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        PET_COMPANION_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips")
+    .expect("credited")
+    .balance;
 
     let result = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
@@ -596,15 +626,18 @@ async fn durable_purchase_debits_chips_and_records_entitlement() {
                AND reason = $2
              ORDER BY created_at DESC
              LIMIT 1",
-            &[&user.id, &SHOP_PURCHASE_REASON],
+            &[&user.id, &ChipMove::ShopPurchase.reason()],
         )
         .await
         .expect("ledger row");
     assert_eq!(row.get::<_, i64>("delta"), -PET_COMPANION_PRICE);
-    assert_eq!(row.get::<_, String>("reason"), SHOP_PURCHASE_REASON);
+    assert_eq!(
+        row.get::<_, String>("reason"),
+        ChipMove::ShopPurchase.reason()
+    );
     assert_eq!(
         row.get::<_, Option<String>>("source_kind"),
-        Some(MARKETPLACE_SOURCE_KIND.to_string())
+        Some(ChipMove::ShopPurchase.source_kind().to_string())
     );
     assert_eq!(
         row.get::<_, Option<String>>("source_ref"),
@@ -654,9 +687,15 @@ async fn badge_purchase_equips_one_chat_badge_per_user() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "badge-equip").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, BASIC_BADGE_PRICE * 2)
-        .await
-        .expect("fund chips");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BASIC_BADGE_PRICE * 2,
+        None,
+    )
+    .await
+    .expect("fund chips");
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, "badge_cat")
         .await
@@ -728,9 +767,15 @@ async fn dynamic_bonsai_purchase_equips_bonsai_variant_slot() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "dynamic-bonsai-equip").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(&client, user.id, DYNAMIC_BONSAI_PRICE)
-        .await
-        .expect("fund chips");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        DYNAMIC_BONSAI_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
 
     let purchase = purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
         .await
@@ -781,9 +826,15 @@ async fn chat_author_metadata_marks_dynamic_bonsai_only_when_selected() {
     assert!(!metadata[0].dynamic_bonsai_selected);
     assert_eq!(metadata[0].bonsai_v2_badge_glyph.as_deref(), Some("DYN"));
 
-    UserChips::add_bonus(&client, user.id, DYNAMIC_BONSAI_PRICE)
-        .await
-        .expect("fund chips");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        DYNAMIC_BONSAI_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
     purchase_durable_item_by_sku(&mut client, user.id, DYNAMIC_BONSAI_SKU)
         .await
         .expect("purchase dynamic bonsai")
@@ -808,10 +859,17 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-idempotent").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let starting_balance = UserChips::add_bonus(&client, user.id, PET_COMPANION_PRICE)
-        .await
-        .expect("fund chips")
-        .balance;
+    let starting_balance = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        PET_COMPANION_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips")
+    .expect("credited")
+    .balance;
 
     let first = purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
         .await
@@ -848,7 +906,7 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
             "SELECT count(*)::bigint AS count
              FROM chip_ledger
              WHERE user_id = $1 AND reason = $2",
-            &[&user.id, &SHOP_PURCHASE_REASON],
+            &[&user.id, &ChipMove::ShopPurchase.reason()],
         )
         .await
         .expect("ledger count")
@@ -960,10 +1018,12 @@ async fn username_effect_rebuy_replaces_the_live_effect() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "username-effect-rebuy").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::add_bonus(
-        &client,
+    UserChips::apply(
+        &**client,
         user.id,
+        ChipMove::Credit,
         USERNAME_GLOW_PRICE * 2 + USERNAME_GRADIENT_PRICE,
+        None,
     )
     .await
     .expect("fund chips");

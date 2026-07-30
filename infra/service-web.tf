@@ -104,10 +104,6 @@ resource "kubernetes_deployment_v1" "service_web" {
             value = "http://service-ssh-sv:4000"
           }
           env {
-            name  = "LATE_SSH_PUBLIC_URL"
-            value = "api.${var.DOMAIN}"
-          }
-          env {
             name  = "LATE_AUDIO_URL"
             value = "http://icecast-sv:8000"
           }

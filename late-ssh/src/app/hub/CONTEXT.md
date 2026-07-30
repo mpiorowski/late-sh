@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-06-17
+- Last updated: 2026-07-27 (leaderboard sessions seed from the published snapshot; a connect refreshes one that has aged past `REFRESH_INTERVAL`)
 - Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -19,7 +19,23 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `state.rs`: selected Hub tab and tab cycling.
 - `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
 - `ui.rs`: modal frame, tabs, footer, and tab dispatch.
-- `leaderboard.rs`: compact leaderboard panels.
+- `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
+  formatting, and cell-exact reference geometry. It is the one tab handed the
+  whole popup rect instead of the body row, so it owns its footer: a shortened
+  one inside the grid, or the shell's full-width one when the popup is too
+  small to build a grid at all. A `48x139` terminal produces the `41x111` Hub
+  modal used by the dense-layout reference; above that width, surplus columns
+  are shared evenly across the panels in both rows, the five score games below
+  and the two boards plus the "More Leaderboards" placeholder above. The
+  placeholder is not a spare-space bin: it keeps its heading-sized minimum and
+  takes only its third of the surplus.
+  A top board measures every line it prints, heading and hints and empty-state
+  copy included, not just its ranked rows: a board with no rows still has to
+  fit "no chip earnings yet this month".
+  Each panel stops right-aligning scores once its widest visible line fits with
+  the full username, a two-cell name/score gap, and the trailing edge pad. Each
+  monthly score subsection reserves two rows after its top five for the optional
+  ellipsis/current-user tail before the all-time subsection begins.
 - `admin/`:
   - `state.rs`: admin reward-template and shop-item catalogs, editable draft state, cursor-aware inline edit buffer, async load/save result drain.
   - `input.rs`: Admin-tab row/category/field navigation, inline text edits with Left/Right/Home/End cursor movement, numeric/toggle edits, save/reload actions.
@@ -71,14 +87,36 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 ## Leaderboard Data
 
-`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 30 seconds and publishes it through a `watch::Receiver<Arc<LeaderboardData>>`.
+`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the pass is fourteen aggregate queries and was 13% of all DB execution time at the old 30s (SCALE.md DB Cost Ranking). Do not make it hot again without re-reading that ranking.
+
+Two rules keep that coarse cadence from reading as a broken screen:
+
+- **Sessions seed, they do not wait.** `App::new` copies the currently published snapshot out of the receiver with `borrow()`. `watch::Sender::subscribe` marks the current value as already seen, so the `has_changed()` gate in `app/tick.rs` is false against a snapshot that is sitting right there — a session that only waited for the gate would render empty panels for up to a full `REFRESH_INTERVAL`. The seed deliberately does not touch `chip_balance`, which is loaded accurately at login and may be newer than the snapshot.
+- **A connect can buy one refresh.** `subscribe` wakes the refresh loop through a `Notify`, and `should_refresh` (a pure function, unit-tested in `svc_test.rs`) grants the pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This covers the quiet-server case, where the subscriber gate skipped every pass and the first session back would otherwise seed from whatever the last session left behind. The age bound is what keeps a connect storm on a busy server from putting the pass back on the hot path.
 
 Current compact boards:
 - `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
 - `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
-- `Lateris`, `2048`, `Snake`: each score-game panel shows monthly score events and all-time high scores.
+- `Lateris`, `2048`, `Snake`, `Traffic`: each score-game panel shows monthly score events and all-time high scores.
+- `Le Word`: monthly and all-time daily solve counts, plus win-streak leaders
+  ranked by each user's longest consecutive-day solve streak. The win-streak
+  subsection uses leftover vertical space for up to five rows and disappears
+  before monthly or all-time rows are compressed. Like every score subsection
+  it shows the viewer's own row when they rank below the visible leaders, but
+  it has no reserved tail: it trades leader rows for yours out of the space it
+  was given. Every subsection drops the tail entirely rather than print the
+  ellipsis with no leader above it.
 
-Monthly windows use UTC calendar months. Score all-time boards persist.
+Monthly windows use UTC calendar months. Score and Le Word all-time boards persist;
+the Le Word win-streak board measures consecutive `puzzle_date` values across all
+recorded daily wins.
+
+An empty local database renders every panel as "no scores yet", which makes the
+responsive widths impossible to eyeball. `make seed-leaderboard`
+(`scripts/seed_leaderboard_test_data.{sh,sql}`) fills the Compose database with
+48 synthetic players spread across every board. Local development only: it owns
+the `seed:leaderboard:` fingerprints, prefixes their usernames with `lb_` to
+clear the unique index on real handles, and rewrites their stats on every rerun.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
@@ -165,7 +203,7 @@ Implemented:
 - Purchases debit `user_chips`, write `chip_ledger` with reason `shop_purchase`, then insert `user_purchases` in one transaction.
 - `ShopService` publishes per-user `ShopSnapshot` values through watch channels. UI/input reads the current snapshot and does not query the DB per keypress/render.
 - `ShopService::start_listener_task` opens a dedicated long-lived Postgres connection (outside the pool) and `LISTEN`s on marketplace channels via `late_core::models::marketplace::listen_for_shop_changes` and the generic chip channel via `late_core::models::chips::listen_for_chip_changes`; all SQL stays in `late-core`. `shop_user_changed` and `chip_user_changed` carry a `user_id` payload and refresh that user's snapshot when active; `shop_catalog_changed` refreshes every active user.
-- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Generic chip balance mutations notify `chip_user_changed`, which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, and room-game chip settlement. Chat room consumable purchases activate their `shop_consumable_effects` row in the same transaction as the chip debit and notify `shop_catalog_changed` on COMMIT so every SSH replica refreshes active room-effect projections.
+- `purchase_durable_item_by_sku` notifies `shop_user_changed` inside the purchase transaction so it fires on COMMIT. The buyer's own snapshot is already updated by a direct `refresh_user` call, so that notification is the cross-process / external-mutation path and is redundant in a single process. Chip balance mutations notify `chip_user_changed` via the `user_chips` triggers (migration 128, fires on any balance change including gifts), which keeps Shop balances fresh after daily puzzle rewards, bonsai rewards, gifts, and room-game chip settlement. Chat room consumable purchases activate their `shop_consumable_effects` row in the same transaction as the chip debit and notify `shop_catalog_changed` on COMMIT so every SSH replica refreshes active room-effect projections.
 - Pet Companion is the companion unlock. Current code uses `PET_COMPANION_SKU` (`pet_companion`) and `ShopEntitlements::has_pet_companion()`; migration 065 renames the legacy `cat_companion` seed item/table to pet terminology. It gates the pet strip above the chat composer (see `app/pet`). `show_pet_strip` defaults to true and `render.rs` ANDs it with `has_pet_companion()`, so buying the pet reveals the strip with no purchase hook; `show_aquarium_tray` works the same way (§ Aquarium). Neither surface is force-closed when its entitlement is absent, because the render gate already hides it, and a force-close would stamp the setting to false and defeat the default.
 - Dynamic Bonsai is a `feature_unlock` in Companions with slot `bonsai_variant`; buying auto-equips it, and pressing Enter on the owned/equipped item clears the slot and returns the user to classic Bonsai.
 - Chat and companion consumables are repeatable Shop purchases. Migration 071 seeds `chat_consumable` rows for Bot Username Color, Room Spark, Room Glow, Room Pulse, Hack Room, and Room Bump, plus `companion_consumable` rows for Cat/Dog Food and Aquarium Food. Migration 104 retires Bot Username Color (`chat_bot_username_color_day`, deactivated rather than deleted so `user_purchases` and `shop_consumable_effects.source_sku` keep their history), leaving Chat consumables room-targeted only. Catalog payloads carry `effect_kind`, optional `target = "room"`, optional `duration_secs`, and optional `daily_limit = true`. Room-targeted Chat consumables open a confirmation dialog before purchase/activation; the dialog names the current target room, effect, price, and daily limit, and accepts `Enter`/`y` to confirm or `Esc`/`n` to cancel. Bought Cat/Dog Food is inventory; `/feed` (or clicking the food bowl or the pet in the strip) consumes one food once per UTC day, updates `last_fed`, and starts a 30-minute session-local full-screen stroll. Feeding is the only pet-food sink, so the food bowl renders `?` and its `/feed` label turns amber while the inventory is empty, and a feed attempt with no food opens the Shop. Bought Aquarium Food is inventory; `/aquarium feed` while the tray is open consumes one food, updates persisted `user_aquarium_care.last_fed`, and shows falling food flakes. Migration 103 restates the four companion item descriptions (`pet_companion`, `pet_food`, `aquarium`, `aquarium_food`) in terms of the composer commands that run them; the seeded copy in 071 still describes the removed pet care modal and the old `Ctrl+Q`/`Ctrl+F` chords, so edit 103 (or add a later migration), never 071.
@@ -196,6 +234,6 @@ Future Events work:
 - `Events` is still a placeholder.
 - Hub Admin edits existing reward-template and marketplace item presentation/economy fields only; adding new quest templates or Shop SKUs, changing JSON params/payload/kind/cadence/slot/windows, and rerolling current assignments still require direct DB/migration work.
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
-- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications.
+- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the panels are never *empty* — just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
 - There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
 - Events-specific awards are not implemented.

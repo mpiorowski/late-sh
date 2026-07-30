@@ -38,6 +38,7 @@ pub mod chips;
 #[cfg(test)]
 mod chips_test;
 pub mod daily_match;
+pub mod darkroom_save;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;
@@ -56,6 +57,8 @@ pub mod le_word;
 #[cfg(test)]
 mod le_word_test;
 pub mod leaderboard;
+#[cfg(test)]
+mod leaderboard_test;
 pub mod marketplace;
 #[cfg(test)]
 mod marketplace_test;

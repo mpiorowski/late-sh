@@ -1,7 +1,7 @@
 use super::{
     audio::booth as audio_booth,
     chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_search_modal, settings_modal, sheet_modal,
+    room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -817,6 +817,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_input(app, event);
+        return;
+    }
+
     if is_room_search_shortcut(&event) {
         if app.room_search_modal_state.is_open() {
             app.room_search_modal_state.close();
@@ -1354,18 +1359,36 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
         return match event {
             ParsedInput::Byte(b'y' | b'Y' | b'\r' | b'\n') | ParsedInput::Char('y' | 'Y') => {
                 app.door_delete_confirm = false;
-                if selected == HubGame::GreenDragon {
-                    app.leave_greendragon();
-                    app.greendragon_service.delete_character(app.user_id);
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Green Dragon character reset. Enter the village to start over.",
-                    ));
-                } else {
-                    app.leave_lateania();
-                    app.lateania_service.delete_character_task(app.user_id);
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Lateania character reset. Enter the world to start over.",
-                    ));
+                match selected {
+                    HubGame::GreenDragon => {
+                        app.leave_greendragon();
+                        app.greendragon_service.delete_character(app.user_id);
+                        app.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Green Dragon character reset. Enter the village to start over.",
+                        ));
+                    }
+                    HubGame::Darkroom => {
+                        app.leave_darkroom();
+                        app.darkroom_service.delete_game(app.user_id);
+                        app.banner = Some(crate::app::common::primitives::Banner::success(
+                            "A Dark Room save reset. The fire is dead again.",
+                        ));
+                    }
+                    // Only the native saved-character doors offer a reset; the
+                    // proxied ones own their own saves upstream.
+                    HubGame::Lateania
+                    | HubGame::Rebels
+                    | HubGame::Nethack
+                    | HubGame::Dcss
+                    | HubGame::Brogue
+                    | HubGame::Usurper
+                    | HubGame::Dopewars => {
+                        app.leave_lateania();
+                        app.lateania_service.delete_character_task(app.user_id);
+                        app.banner = Some(crate::app::common::primitives::Banner::success(
+                            "Lateania character reset. Enter the world to start over.",
+                        ));
+                    }
                 }
                 true
             }
@@ -1400,7 +1423,10 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if selected == HubGame::Lateania || selected == HubGame::GreenDragon =>
+            if matches!(
+                selected,
+                HubGame::Lateania | HubGame::GreenDragon | HubGame::Darkroom
+            ) =>
         {
             app.door_delete_confirm = true;
             true
@@ -1496,6 +1522,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             if let Some(state) = app.dopewars_state.as_mut() {
                 state.connect();
             }
+        }
+        HubGame::Darkroom => {
+            app.set_screen(Screen::Darkroom);
+            app.enter_darkroom();
         }
     }
 }
@@ -1714,6 +1744,35 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    if ctx.screen == Screen::Darkroom {
+        // Native in-process door, handled like Green Dragon: forward all keys
+        // to the game, except let the global `?` guide through.
+        if app.darkroom_state.is_some() && door_games_allows_global_help(event) {
+            return false;
+        }
+        if app.darkroom_state.is_some() {
+            match event {
+                ParsedInput::Byte(byte) => {
+                    crate::app::door::darkroom::screen::GAME.handle_key(app, *byte);
+                }
+                ParsedInput::Char(ch) if ch.is_ascii() => {
+                    crate::app::door::darkroom::screen::GAME.handle_key(app, *ch as u8);
+                }
+                ParsedInput::Arrow(key) => {
+                    crate::app::door::darkroom::screen::GAME.handle_arrow(app, *key);
+                }
+                _ => {}
+            }
+            return true;
+        }
+        // Launcher fallback: Enter starts the game (the hub normally does this).
+        if let ParsedInput::Byte(b'\r' | b'\n') = event {
+            app.enter_darkroom();
+            return true;
+        }
+        return false;
+    }
+
     if ctx.screen == Screen::DailyMatch {
         // Full-screen daily board: forward everything to the board handler,
         // except let the global `?` guide through like the door games.
@@ -1729,6 +1788,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             return false;
         }
         return crate::app::lobby::house::input::handle_event(app, event);
+    }
+
+    if ctx.screen == Screen::Scratchpad {
+        // Unlike the daily board / house table above, this is a free-typing
+        // text editor, not a game board: '?' is a character someone can
+        // legitimately want to type, so it must not escape to the global
+        // help guide the way it does for those two. Forward everything.
+        return crate::app::scratchpad::input::handle_event(app, event);
     }
 
     if ctx.screen == Screen::Arcade && app.is_playing_game {
@@ -2376,6 +2443,10 @@ fn dispatch_escape(app: &mut App) {
         close_icon_picker(app);
         return;
     }
+    if app.room_info_modal_state.is_open() {
+        room_info_modal::input::handle_escape(app);
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();
@@ -2486,6 +2557,15 @@ fn dispatch_escape(app: &mut App) {
         crate::app::lobby::house::input::close_table(app);
         return;
     }
+    // Esc from the paired scratchpad leaves the pairing (notifying the partner
+    // via the registry) and returns to Home. This arm is not redundant with the
+    // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
+    // it is held as `pending_escape` and lands here via `flush_pending_escape`.
+    // The keymap only sees Esc when it arrives mid-chunk with other bytes.
+    if ctx.screen == Screen::Scratchpad {
+        app.set_screen(Screen::Dashboard);
+        return;
+    }
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
@@ -2502,6 +2582,16 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::door::greendragon::screen::GAME.handle_key(app, 0x1B);
+        return;
+    }
+    // Esc in A Dark Room settles the clock, saves, and returns to the hub. Same
+    // shape as Green Dragon: the game owns the leave, so forward it.
+    if ctx.screen == Screen::Darkroom {
+        if app.door_delete_confirm {
+            app.door_delete_confirm = false;
+            return;
+        }
+        crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
     // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
@@ -3216,16 +3306,19 @@ fn handle_notifications_hud_click(app: &mut App, mouse: MouseEvent) -> bool {
     if app.show_splash {
         return false;
     }
-
-    let unread = app.chat.notifications.unread_count();
-    // SGR mouse coords are 1-indexed; the top border row is y=1.
-    if unread == 0 || mouse.y != 1 {
+    // Where the last frame drew the "N unread mentions" text; `None` when
+    // nothing is unread. The voice/chips text after it is not clickable.
+    let Some(rect) = app.last_mentions_hud_rect.get() else {
         return false;
-    }
-
-    let noun = if unread == 1 { "mention" } else { "mentions" };
-    let hud_width = format!(" {unread} unread {noun} ").len() as u16;
-    if mouse.x < app.size.0.saturating_sub(hud_width) {
+    };
+    // SGR mouse coords are 1-indexed; the rect is in 0-indexed frame cells.
+    let Some(x) = mouse.x.checked_sub(1) else {
+        return false;
+    };
+    let Some(y) = mouse.y.checked_sub(1) else {
+        return false;
+    };
+    if !rect_contains(rect, x, y) {
         return false;
     }
 
@@ -3272,6 +3365,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
         Screen::GreenDragon => crate::app::door::greendragon::screen::GAME.handle_arrow(app, key),
+        Screen::Darkroom => crate::app::door::darkroom::screen::GAME.handle_arrow(app, key),
         // TODO(M5): forward arrows while Running; Launcher ignores them.
         Screen::Rebels => false,
         // Running-mode arrows are forwarded raw in App::handle_input; the
@@ -3294,6 +3388,8 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
         Screen::HouseTable => false,
+        // Scratchpad arrows are consumed in handle_dedicated_screen_input.
+        Screen::Scratchpad => false,
     }
 }
 
@@ -3982,6 +4078,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::GreenDragon => {
             crate::app::door::greendragon::screen::GAME.handle_key(app, byte);
         }
+        Screen::Darkroom => {
+            crate::app::door::darkroom::screen::GAME.handle_key(app, byte);
+        }
         Screen::Rebels => {
             // Launcher key dispatch (connect on Enter) is handled via
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
@@ -4031,6 +4130,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::HouseTable => {
             // House table keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Scratchpad => {
+            // Scratchpad keys are handled in handle_dedicated_screen_input.
         }
     }
 }

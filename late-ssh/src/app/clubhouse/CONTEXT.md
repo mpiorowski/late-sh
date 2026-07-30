@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-03 (bartender sells drinks for Late Chips: grounded JSON order flow in `ai/ghost.rs`, floor-guarded debit + `user_drinks` buzz tracking, drunk-level glow under username labels here and on chat author labels)
+- Last updated: 2026-07-27 (bartender only ever pours for the patron who mentions him: the `gift` action and the `@bartender round` house-round command are removed, since both forced the drunk-text shuffle onto someone who never chose to drink; he now points anyone buying for someone else at `/gift @user <n>` instead, which moves chips only, not a buzz)
 - Status: Active
 
 ## 1. Summary
@@ -47,9 +47,11 @@ room is the chat surface, and the full history lives in #lounge on Home.
   windows (`EMOTE_MS`, `DOG_PET_MS`), so every session plays them.
 - **Drunk glow:** the lobby also carries per-user drunk state (raw
   `drunk_points` + `last_drink_at`, mirrored from the `user_drinks` table).
-  `Presence.drunk_level` (0 sober .. 4 wasted, decayed at read time via
-  `late_core::models::drinks`) tints the background of the username label
-  (`theme::DRUNK_LABEL_BG`, light green -> yellow -> orange -> red).
+  `Presence.drunk_level` (0 sober .. 4 wasted, decayed at read time against
+  wall clock via `late_core::models::drinks`, so a drinker sobers up while
+  logged out) drives the walker's wobble and the passed-out figure here, and
+  the printed `(word)` beside the name on chat author labels. There is no
+  background tint anymore.
   `GhostService` seeds the map from DB every 60s (`run_drunk_glow_task`) and
   bumps the buyer instantly after a pour; the same map feeds chat author
   label tinting everywhere via `App.drunk_levels` (copied ~1/s in
