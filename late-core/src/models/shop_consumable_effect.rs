@@ -178,7 +178,7 @@ impl ShopConsumableEffect {
         let duration_secs = duration_secs.max(1);
         let now = Utc::now();
 
-        let existing_ends_at = tx
+        let existing = tx
             .query_opt(
                 "UPDATE shop_consumable_effects
                  SET active = false, updated = current_timestamp
@@ -186,24 +186,48 @@ impl ShopConsumableEffect {
                    AND effect_kind = $2
                    AND room_id IS NULL
                    AND active = true
-                 RETURNING ends_at",
+                 RETURNING starts_at, ends_at",
                 &[&user_id, &effect_kind],
             )
             .await?
-            .map(|row| row.get::<_, DateTime<Utc>>("ends_at"));
+            .map(|row| {
+                (
+                    row.get::<_, DateTime<Utc>>("starts_at"),
+                    row.get::<_, DateTime<Utc>>("ends_at"),
+                )
+            });
 
-        let base = existing_ends_at
-            .filter(|ends_at| *ends_at > now)
-            .unwrap_or(now);
+        // A row can sit in the table with `active = true` long after its
+        // `ends_at` has passed (expiry is enforced by the active-effect
+        // queries filtering on `ends_at`, not by a background job), so only
+        // treat the prior row as "still live" when its own expiry hasn't
+        // passed yet. When it is still live, the new row's `starts_at`
+        // carries forward the prior activation instead of resetting to now,
+        // so a mid-window rebuy doesn't erase the protection credit for days
+        // already covered by the row it replaces (see
+        // `BonsaiDecayProtection::protected_days_between`). When the prior
+        // row had already lapsed, this is a fresh window starting now — the
+        // gap during which the shield was not live must not count as
+        // protected.
+        let still_live = existing.filter(|(_, ends_at)| *ends_at > now);
+        let starts_at = still_live.map(|(starts_at, _)| starts_at).unwrap_or(now);
+        let base = still_live.map(|(_, ends_at)| ends_at).unwrap_or(now);
         let ends_at = base + Duration::seconds(duration_secs);
 
         let row = tx
             .query_one(
                 "INSERT INTO shop_consumable_effects
-                    (user_id, room_id, effect_kind, source_sku, payload, ends_at)
-                 VALUES ($1, NULL, $2, $3, $4, $5)
+                    (user_id, room_id, effect_kind, source_sku, payload, starts_at, ends_at)
+                 VALUES ($1, NULL, $2, $3, $4, $5, $6)
                  RETURNING *",
-                &[&user_id, &effect_kind, &source_sku, &payload, &ends_at],
+                &[
+                    &user_id,
+                    &effect_kind,
+                    &source_sku,
+                    &payload,
+                    &starts_at,
+                    &ends_at,
+                ],
             )
             .await?;
         Ok(Self::from(row))

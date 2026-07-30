@@ -122,6 +122,63 @@ async fn ensure_tree_survives_a_stale_gap_covered_by_a_bonsai_decay_shield() {
 }
 
 #[tokio::test]
+async fn ensure_tree_survives_a_gap_spanning_two_stacked_shield_purchases() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "bonsai-restacked-shield").await;
+    Tree::ensure(&client, user.id, 77).await.expect("ensure");
+    Tree::set_recorded_dates(
+        &client,
+        user.id,
+        chrono::Utc::now() - chrono::Duration::days(15),
+        Some(chrono::Utc::now().date_naive() - chrono::Duration::days(15)),
+    )
+    .await
+    .expect("age tree");
+
+    UserChips::apply(&**client, user.id, ChipMove::Credit, 4_000, None)
+        .await
+        .expect("fund chips");
+
+    // First purchase, backdated to look like it was bought before the dry
+    // spell began and is still live.
+    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("first buy")
+        .expect("item available");
+    client
+        .execute(
+            "UPDATE shop_consumable_effects
+             SET starts_at = current_timestamp - interval '9 days',
+                 ends_at = current_timestamp + interval '5 days'
+             WHERE user_id = $1 AND effect_kind = $2",
+            &[&user.id, &BONSAI_DECAY_PROTECTION_KIND],
+        )
+        .await
+        .expect("backdate first purchase");
+
+    // Rebuy while the first window is still live. If the rebuy reset
+    // starts_at to now instead of carrying the earlier purchase's starts_at
+    // forward, the protection credit for the first 9 days would be lost
+    // and this tree would die below.
+    purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("second buy")
+        .expect("item available");
+
+    let (tx, _rx) = broadcast::channel::<ActivityEvent>(16);
+    let svc = BonsaiService::new(test_db.db.clone(), tx);
+
+    let tree = svc.ensure_tree(user.id).await.expect("ensure tree");
+    assert!(tree.is_alive);
+
+    let graves = Grave::list_by_user(&client, user.id)
+        .await
+        .expect("list graves");
+    assert!(graves.is_empty());
+}
+
+#[tokio::test]
 async fn ensure_tree_still_dies_when_the_shield_only_covers_part_of_the_gap() {
     let test_db = new_test_db().await;
     let mut client = test_db.db.get().await.expect("db client");

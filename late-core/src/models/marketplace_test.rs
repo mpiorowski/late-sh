@@ -1337,6 +1337,7 @@ async fn bonsai_decay_shield_rebuy_extends_the_live_window_instead_of_resetting_
     assert_eq!(first.status, PurchaseStatus::Purchased);
     let first_rows = active_bonsai_decay_protection_rows(&client, user.id).await;
     assert_eq!(first_rows.len(), 1);
+    let first_starts_at = first_rows[0].starts_at;
     let first_ends_at = first_rows[0].ends_at;
 
     let second = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
@@ -1353,6 +1354,10 @@ async fn bonsai_decay_shield_rebuy_extends_the_live_window_instead_of_resetting_
     let expected_end = first_ends_at + chrono::Duration::seconds(BONSAI_DECAY_SHIELD_DURATION_SECS);
     assert!(second_rows[0].ends_at >= expected_end - chrono::Duration::seconds(60));
     assert!(second_rows[0].ends_at <= expected_end + chrono::Duration::seconds(60));
+    // The window's start carries forward from the first purchase rather
+    // than resetting to the rebuy time, so protection credit for the days
+    // already covered by the first purchase is never lost.
+    assert_eq!(second_rows[0].starts_at, first_starts_at);
 }
 
 #[tokio::test]
@@ -1397,6 +1402,10 @@ async fn bonsai_decay_shield_rebuy_after_expiry_starts_a_fresh_window_from_now()
     let expected_end = before + chrono::Duration::seconds(BONSAI_DECAY_SHIELD_DURATION_SECS);
     assert!(rows[0].ends_at >= expected_end - chrono::Duration::seconds(60));
     assert!(rows[0].ends_at <= expected_end + chrono::Duration::seconds(60));
+    // The row also does not carry forward the lapsed row's starts_at: the
+    // gap between the old expiry and this rebuy was genuinely unprotected,
+    // so it must not be credited.
+    assert!(rows[0].starts_at >= before - chrono::Duration::seconds(60));
 }
 
 #[tokio::test]
