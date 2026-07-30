@@ -1458,6 +1458,72 @@ fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
     );
 }
 
+// Wildbound doubled the player cap to 100, so the endgame must present a real
+// difficulty gradient across the new band instead of pinning every foe to the
+// clamp (the old single-slope `level()` made the whole Frontier->Kaelmyr arc
+// read as identically max-level). Verify: the displayed level tracks raw power
+// monotonically, the endgame spans a wide band rather than a flat wall, entry
+// endgame sits comfortably below the cap, and the world's toughest foe reaches
+// it - all while the early/mid roster keeps its familiar sub-60 levels.
+#[test]
+fn the_endgame_levels_span_a_gradient_up_to_the_new_cap() {
+    let world = seed_world();
+    let is_endgame = |id: u32| (FRONTIER_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id);
+    let endgame: Vec<&MobSpawn> = world.spawns.iter().filter(|s| is_endgame(s.id)).collect();
+    assert!(
+        endgame.len() > 20,
+        "the endgame regions field a full roster"
+    );
+
+    // Monotonic in raw power: a tougher foe never reads as a lower level.
+    let mut ranked = endgame.clone();
+    ranked.sort_by_key(|s| s.max_hp + s.damage * 4);
+    for w in ranked.windows(2) {
+        assert!(
+            w[1].level() >= w[0].level(),
+            "level must not fall as raw power rises ({} L{} vs {} L{})",
+            w[0].name,
+            w[0].level(),
+            w[1].name,
+            w[1].level()
+        );
+    }
+
+    // A real spread, not a flat clamp: entry endgame well below the cap, the
+    // deepest content at it, and a wide gap between the two.
+    let min_lvl = endgame.iter().map(|s| s.level()).min().unwrap();
+    let max_lvl = endgame.iter().map(|s| s.level()).max().unwrap();
+    assert!(
+        (55..=78).contains(&min_lvl),
+        "entry endgame should read in the 55-78 band, not the cap (got L{min_lvl})"
+    );
+    assert_eq!(
+        max_lvl,
+        super::super::classes::Class::MAX_LEVEL,
+        "the world's toughest foe should read at the level cap"
+    );
+    assert!(
+        max_lvl - min_lvl >= 20,
+        "the endgame should span a wide gradient, got L{min_lvl}..L{max_lvl}"
+    );
+
+    // The early/mid world is untouched: below the knee, the displayed level is
+    // exactly the old single-slope formula, so every foe a sub-60 player meets
+    // keeps its familiar level to the number. Only power past the knee bends
+    // onto the gentler endgame slope.
+    for s in &world.spawns {
+        let power = s.max_hp + s.damage * 4;
+        if power <= 60 * 14 {
+            assert_eq!(
+                s.level(),
+                (power / 14).clamp(1, 60),
+                "{} (power {power}) should keep its pre-Wildbound level",
+                s.name
+            );
+        }
+    }
+}
+
 // The iron rule of the minimap: a drawn line means you can walk it. The old
 // renderer drew a connector for every exit BY DIRECTION, so when the world's
 // non-Euclidean folds laid the destination elsewhere, a phantom corridor

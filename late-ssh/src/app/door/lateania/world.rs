@@ -119,8 +119,31 @@ pub struct MobSpawn {
 impl MobSpawn {
     /// A displayed level, derived from the mob's vitality and bite so it scales
     /// naturally across the whole roster without authoring a level per spawn.
+    ///
+    /// The curve is deliberately two-slope. The `/14` slope was calibrated for a
+    /// level-50 world, and it still governs everything up to the old ceiling so
+    /// the entire early/mid roster keeps its familiar levels untouched. But the
+    /// endgame regions (Frontier -> Reaches -> Kaelmyr) carry raw power far past
+    /// that ceiling - so on the old single slope every endgame foe pinned to the
+    /// clamp and the whole 60..=100 band looked identically max-level. Wildbound
+    /// doubled the player cap to 100, so past the knee we switch to a gentler
+    /// slope that spreads the endgame's real toughness across the new levels:
+    /// entry-Frontier foes read in the mid-60s and climb, tier by tier and deep
+    /// by deep, to the true hundreds of Yssgar and the Ashen Reach. No raw stat
+    /// changes - only what number the player sees over the foe's head.
     pub fn level(&self) -> i32 {
-        ((self.max_hp + self.damage * 4) / 14).clamp(1, super::classes::Class::MAX_LEVEL)
+        let power = self.max_hp + self.damage * 4;
+        // The knee: the power at which the old slope reached the old ceiling.
+        const KNEE_POWER: i32 = 60 * 14; // 840
+        const KNEE_LEVEL: i32 = 60;
+        let level = if power <= KNEE_POWER {
+            power / 14
+        } else {
+            // Spread the endgame's remaining power over the 60..=100 band. The
+            // toughest boss in the world (~6800 power) lands right at the cap.
+            KNEE_LEVEL + (power - KNEE_POWER) / 150
+        };
+        level.clamp(1, super::classes::Class::MAX_LEVEL)
     }
 
     /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
