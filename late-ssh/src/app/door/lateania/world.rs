@@ -120,7 +120,7 @@ impl MobSpawn {
     /// A displayed level, derived from the mob's vitality and bite so it scales
     /// naturally across the whole roster without authoring a level per spawn.
     pub fn level(&self) -> i32 {
-        ((self.max_hp + self.damage * 4) / 14).clamp(1, 60)
+        ((self.max_hp + self.damage * 4) / 14).clamp(1, super::classes::Class::MAX_LEVEL)
     }
 
     /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
