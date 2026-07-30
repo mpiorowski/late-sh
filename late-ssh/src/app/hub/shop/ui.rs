@@ -675,7 +675,11 @@ fn remaining_label(
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let minutes = (ends_at - now).num_minutes().max(1);
-    if minutes >= 60 * 24 {
+    // Strictly greater than a day, not >=: a 24h-exact remaining duration
+    // (every username effect's max) must still read "24h left" rather than
+    // flip to "1d left" for the single minute before it drops into the hour
+    // tier — otherwise "24h left" is never shown at all post-purchase.
+    if minutes > 60 * 24 {
         format!("{}d left", minutes / (60 * 24))
     } else if minutes >= 60 {
         format!("{}h left", minutes / 60)

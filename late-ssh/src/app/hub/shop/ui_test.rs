@@ -35,11 +35,18 @@ fn remaining_label_floors_at_one_minute() {
 }
 
 #[test]
-fn remaining_label_switches_to_days_at_24_hours() {
+fn remaining_label_switches_to_days_only_after_a_full_day() {
     use chrono::{Duration, Utc};
     let now = Utc::now();
     assert_eq!(remaining_label(now + Duration::hours(23), now), "23h left");
-    assert_eq!(remaining_label(now + Duration::days(1), now), "1d left");
+    // Exactly 24 hours remaining (every username effect's max duration) must
+    // still read "24h left", not flip to "1d left" for the one minute before
+    // it drops into the hour tier.
+    assert_eq!(remaining_label(now + Duration::days(1), now), "24h left");
+    assert_eq!(
+        remaining_label(now + Duration::days(1) + Duration::minutes(1), now),
+        "1d left"
+    );
     assert_eq!(remaining_label(now + Duration::days(14), now), "14d left");
 }
 
