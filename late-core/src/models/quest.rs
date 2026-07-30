@@ -9,12 +9,8 @@ use serde_json::Value;
 use tokio_postgres::{Client, GenericClient};
 use uuid::Uuid;
 
-use super::chips::{CHIP_USER_CHANGED_CHANNEL, INITIAL_CHIP_BALANCE};
+use super::chips::{ChipMove, UserChips};
 
-pub const QUEST_REWARD_REASON: &str = "quest_reward";
-pub const QUEST_SOURCE_KIND: &str = "quest_assignment";
-pub const DAILY_QUEST_STREAK_REWARD_REASON: &str = "daily_quest_streak_reward";
-pub const DAILY_QUEST_STREAK_SOURCE_KIND: &str = "daily_quest_streak";
 pub const QUEST_USER_CHANGED_CHANNEL: &str = "quest_user_changed";
 pub const QUEST_ASSIGNMENTS_CHANGED_CHANNEL: &str = "quest_assignments_changed";
 pub const MAX_DAILY_QUEST_STREAK_BONUS_LEVEL: i32 = 5;
@@ -775,8 +771,7 @@ pub async fn apply_progress_event(
             &tx,
             user_id,
             rewarded_chips,
-            QUEST_REWARD_REASON,
-            QUEST_SOURCE_KIND,
+            ChipMove::QuestReward,
             &assignment_id.to_string(),
         )
         .await?;
@@ -872,8 +867,7 @@ async fn record_daily_quest_streak_if_complete(
             client,
             user_id,
             advance.reward_chips,
-            DAILY_QUEST_STREAK_REWARD_REASON,
-            DAILY_QUEST_STREAK_SOURCE_KIND,
+            ChipMove::DailyQuestStreakReward,
             &completion_date.to_string(),
         )
         .await?;
@@ -891,40 +885,13 @@ async fn credit_chip_reward(
     client: &impl GenericClient,
     user_id: Uuid,
     amount: i64,
-    reason: &str,
-    source_kind: &str,
+    chip_move: ChipMove,
     source_ref: &str,
 ) -> Result<()> {
-    client
-        .execute(
-            "INSERT INTO user_chips (user_id, balance)
-             VALUES ($1, $2)
-             ON CONFLICT (user_id) DO NOTHING",
-            &[&user_id, &INITIAL_CHIP_BALANCE],
-        )
-        .await?;
-    client
-        .execute(
-            "UPDATE user_chips
-             SET balance = balance + $2, updated = current_timestamp
-             WHERE user_id = $1",
-            &[&user_id, &amount],
-        )
-        .await?;
-    client
-        .execute(
-            "INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-             VALUES ($1, $2, $3, $4, $5)",
-            &[&user_id, &amount, &reason, &source_kind, &source_ref],
-        )
-        .await?;
-    client
-        .execute(
-            "SELECT pg_notify($1, $2)",
-            &[&CHIP_USER_CHANGED_CHANNEL, &user_id.to_string()],
-        )
-        .await?;
-    Ok(())
+    match UserChips::apply(client, user_id, chip_move, amount, Some(source_ref)).await? {
+        Some(_) => Ok(()),
+        None => anyhow::bail!("quest chip credit returned no row"),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

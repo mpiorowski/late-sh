@@ -5,6 +5,7 @@
 //! win-payout reward template in a migration.
 
 use late_core::models::{
+    chips::ChipMove,
     daily_match::DailyMatch,
     reward::{
         DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
@@ -103,15 +104,15 @@ impl DailyGame {
         }
     }
 
-    pub const fn ledger_reason(self) -> &'static str {
+    pub const fn chip_move(self) -> ChipMove {
         match self {
-            Self::Chess => "daily_chess_win",
-            Self::Battleship => "daily_battleship_win",
-            Self::ConnectFour => "daily_connect4_win",
-            Self::Reversi => "daily_reversi_win",
-            Self::Checkers => "daily_checkers_win",
-            Self::Backgammon => "daily_backgammon_win",
-            Self::Briscola => "daily_briscola_win",
+            Self::Chess => ChipMove::DailyChessWin,
+            Self::Battleship => ChipMove::DailyBattleshipWin,
+            Self::ConnectFour => ChipMove::DailyConnectFourWin,
+            Self::Reversi => ChipMove::DailyReversiWin,
+            Self::Checkers => ChipMove::DailyCheckersWin,
+            Self::Backgammon => ChipMove::DailyBackgammonWin,
+            Self::Briscola => ChipMove::DailyBriscolaWin,
         }
     }
 

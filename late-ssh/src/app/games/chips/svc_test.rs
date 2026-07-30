@@ -1,6 +1,6 @@
 use crate::app::games::chips::svc::ChipService;
 use late_core::{
-    models::chips::{CHIP_GIFT_RECEIVED_REASON, CHIP_GIFT_SENT_REASON, UserChips},
+    models::chips::{ChipMove, UserChips},
     test_utils::create_test_user,
 };
 
@@ -40,17 +40,23 @@ async fn transfer_chips_records_atomic_gift_ledgers() {
             &[
                 &sender.id,
                 &recipient.id,
-                &CHIP_GIFT_SENT_REASON,
-                &CHIP_GIFT_RECEIVED_REASON,
+                &ChipMove::GiftSent.reason(),
+                &ChipMove::GiftReceived.reason(),
             ],
         )
         .await
         .expect("ledger rows");
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get::<_, i64>("delta"), -500);
-    assert_eq!(rows[0].get::<_, &str>("reason"), CHIP_GIFT_SENT_REASON);
+    assert_eq!(
+        rows[0].get::<_, &str>("reason"),
+        ChipMove::GiftSent.reason()
+    );
     assert_eq!(rows[1].get::<_, i64>("delta"), 500);
-    assert_eq!(rows[1].get::<_, &str>("reason"), CHIP_GIFT_RECEIVED_REASON);
+    assert_eq!(
+        rows[1].get::<_, &str>("reason"),
+        ChipMove::GiftReceived.reason()
+    );
 }
 
 #[tokio::test]
@@ -125,8 +131,8 @@ async fn transfer_chips_insufficient_funds_leaves_balances_and_ledger_untouched(
             &[
                 &sender.id,
                 &recipient.id,
-                &CHIP_GIFT_SENT_REASON,
-                &CHIP_GIFT_RECEIVED_REASON,
+                &ChipMove::GiftSent.reason(),
+                &ChipMove::GiftReceived.reason(),
             ],
         )
         .await

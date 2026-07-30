@@ -1474,7 +1474,7 @@ impl DailyService {
                     winner,
                     game.reward_key(),
                     &match_id.to_string(),
-                    game.ledger_reason(),
+                    game.chip_move(),
                 )
                 .await
             {

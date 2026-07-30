@@ -15,6 +15,7 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
+        chips::ChipMove,
         greendragon_bounty::GreenDragonBounty,
         greendragon_character::GreenDragonCharacter,
         greendragon_clan::{ClanNameClash, GreenDragonClan},
@@ -103,9 +104,6 @@ const NEWS_PAGE_LIMIT: i64 = 200;
 /// (upstream `LOGINTIMEOUT`, 900 seconds), ANDed with the blob's presence
 /// flag exactly as upstream pairs `laston` with `loggedin`.
 pub const ONLINE_WINDOW_SECS: i64 = 900;
-
-/// Chip-ledger reason for the once-per-account dragon-kill payout.
-const GREENDRAGON_DRAGON_LEDGER_REASON: &str = "greendragon_dragon_slain";
 
 /// One character as the warrior roster / Hall of Fame reads it: the ranked
 /// stats decoded out of the saved blob, plus the presence signals. The
@@ -1342,7 +1340,7 @@ impl GreenDragonService {
                 .credit_lifetime_reward_template(
                     user_id,
                     GREENDRAGON_DRAGON_REWARD_KEY,
-                    GREENDRAGON_DRAGON_LEDGER_REASON,
+                    ChipMove::GreendragonDragonSlain,
                 )
                 .await
             {
