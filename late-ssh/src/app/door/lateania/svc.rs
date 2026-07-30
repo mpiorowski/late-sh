@@ -4832,7 +4832,15 @@ impl WorldState {
             }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
-        self.grant_title(user_id, &mob_name, boss, mob_level);
+        // Titles used to mint one per distinct mob NAME on first kill - with 426
+        // distinct regular foes in the world, that buried the handful of titles
+        // that actually mean something under a wall of "Ratbane"/"Wolfbane"
+        // clutter. Only bosses (139 named encounters) grant a themed "Bane of..."
+        // title now; the Frontier zone "Champion of..." and final-boss lifetime
+        // achievements already sit alongside this and stay untouched.
+        if boss {
+            self.grant_title(user_id, &mob_name, boss, mob_level);
+        }
         // Bounty bounties: tick any accepted "slay N of X" board quest.
         self.bump_quests(user_id, |o| {
             u32::from(matches!(o, Objective::Bounty { name_contains, .. } if mob_name.contains(name_contains)))

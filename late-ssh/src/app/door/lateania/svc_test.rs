@@ -2003,6 +2003,43 @@ fn slaying_a_foe_grants_a_themed_title() {
 }
 
 #[test]
+fn only_bosses_grant_titles_on_a_real_kill() {
+    // 426 distinct regular foes used to each mint their own "...bane" title on
+    // first kill, burying the handful that mean anything under a wall of
+    // trash titles. Only a boss kill should add one now.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let regular_id = *s
+        .mobs
+        .iter()
+        .find(|(_, m)| !m.spawn.boss)
+        .map(|(id, _)| id)
+        .expect("world has a regular mob");
+    s.kill_mob(uid(1), regular_id);
+    assert!(
+        s.players[&uid(1)].titles.is_empty(),
+        "a regular kill should grant no title"
+    );
+    let boss_id = *s
+        .mobs
+        .iter()
+        .find(|(_, m)| m.spawn.boss)
+        .map(|(id, _)| id)
+        .expect("world has a boss");
+    s.kill_mob(uid(1), boss_id);
+    let titles = s.players[&uid(1)].titles.clone();
+    assert!(
+        !titles.is_empty(),
+        "a boss kill should grant at least its themed title"
+    );
+    assert!(
+        titles.iter().any(|t| t.starts_with("Bane of ")),
+        "a boss kill should grant its \"Bane of ...\" title; got {titles:?}"
+    );
+}
+
+#[test]
 fn final_bosses_map_to_lifetime_achievements() {
     let archdemon = boss_achievement_for("the Archdemon Mal'gareth")
         .expect("authored final boss should grant an achievement");
