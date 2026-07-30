@@ -97,7 +97,7 @@ async fn ensure_tree_survives_a_stale_gap_covered_by_a_bonsai_decay_shield() {
     // Backdate the shield as if it had been active the whole 8-day gap
     // (a fresh purchase only protects days from now on, so this simulates
     // "bought before the tree went dry" rather than "rescued after the
-    // fact" — see the companion test below for the partial-coverage case).
+    // fact". See the companion test below for the partial-coverage case.
     client
         .execute(
             "UPDATE shop_consumable_effects
@@ -197,8 +197,8 @@ async fn ensure_tree_still_dies_when_the_shield_only_covers_part_of_the_gap() {
         .await
         .expect("fund chips");
     // A fresh purchase only protects days from now on: it covers just
-    // today out of the 8-day-old gap, leaving 7 unprotected dry days —
-    // still enough to kill the tree. Protection is not retroactive.
+    // today out of the 8-day-old gap, leaving 7 unprotected dry days,
+    // still enough to kill the tree.
     purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
         .await
         .expect("buy shield")

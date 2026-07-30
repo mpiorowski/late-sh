@@ -678,7 +678,7 @@ fn remaining_label(
     // Strictly greater than a day, not >=: a 24h-exact remaining duration
     // (every username effect's max) must still read "24h left" rather than
     // flip to "1d left" for the single minute before it drops into the hour
-    // tier — otherwise "24h left" is never shown at all post-purchase.
+    // tier, otherwise "24h left" is never shown at all post-purchase.
     if minutes > 60 * 24 {
         format!("{}d left", minutes / (60 * 24))
     } else if minutes >= 60 {
@@ -915,8 +915,8 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
 
 /// True when the Bonsai Decay Shield is currently protecting the user's
 /// bonsai. Purchases of the shield never decrement a per-purchase stock the
-/// way Pet/Aquarium Food does — every purchase collapses into one running
-/// protection window — so this is the only way the shop list row can show
+/// way Pet/Aquarium Food does: every purchase collapses into one running
+/// protection window, so this is the only way the shop list row can show
 /// whether the shield is actually doing anything right now.
 fn bonsai_decay_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
     item.is_bonsai_decay_shield() && state.active_bonsai_decay_protection().is_some()
