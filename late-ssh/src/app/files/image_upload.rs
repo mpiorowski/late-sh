@@ -14,7 +14,9 @@ use uuid::Uuid;
 type HmacSha256 = Hmac<Sha256>;
 
 const DEFAULT_MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
-const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+// Kept short so deleting an object from R2 takes effect once caches expire,
+// without a CDN purge. The takedown promise in /terms depends on this.
+const CACHE_CONTROL: &str = "public, max-age=3600";
 pub(crate) const USER_AGENT: &str = "late-sh/1.0";
 
 struct ValidatedDownloadUrl {

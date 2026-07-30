@@ -119,6 +119,53 @@ fn a_gatherer_pays_at_the_slowed_rate() {
 }
 
 #[test]
+fn the_metal_trades_stall_when_their_inputs_run_dry() {
+    let session_start = clock();
+    let mut now = session_start;
+    let mut game = started(now);
+    game.raise(Building::Steelworks);
+    game.raise(Building::Armoury);
+    game.population = 2;
+    game.workers.insert(data::Job::Steelworker, 1);
+    game.workers.insert(data::Job::Armourer, 1);
+    // Exactly one round of inputs for each: the steelworker's iron and coal,
+    // and the sulphur the armourer needs to go with the steel that makes.
+    game.set_store(Resource::Iron, 1);
+    game.set_store(Resource::Coal, 1);
+    game.set_store(Resource::Sulphur, 1);
+
+    let one_payout = i64::from(pace::slowed(data::INCOME_DELAY));
+    advance(
+        &mut game,
+        View::Outside,
+        &mut now,
+        session_start,
+        one_payout,
+    );
+    assert_eq!(game.store(Resource::Iron), 0);
+    assert_eq!(game.store(Resource::Coal), 0);
+    assert_eq!(game.store(Resource::Sulphur), 0);
+    assert_eq!(
+        game.store(Resource::Bullets),
+        1,
+        "the steel made this round should have gone straight into a bullet"
+    );
+    assert_eq!(game.store(Resource::Steel), 0);
+
+    // With the inputs gone both trades stall rather than going into debt.
+    advance(
+        &mut game,
+        View::Outside,
+        &mut now,
+        session_start,
+        one_payout,
+    );
+    assert_eq!(game.store(Resource::Bullets), 1);
+    assert_eq!(game.store(Resource::Steel), 0);
+    assert_eq!(game.store(Resource::Iron), 0);
+}
+
+#[test]
 fn time_before_the_session_connected_is_worth_nothing() {
     // The save was last touched a day ago; this session connected a minute ago.
     let last_settled = clock();
@@ -231,4 +278,32 @@ fn cooldowns_keep_running_after_the_daily_allowance_is_spent() {
         game.gather_cooldown, 0,
         "a pacing rule must never leave a button stuck"
     );
+}
+
+#[test]
+fn the_thieves_take_what_is_there_and_it_is_all_booked_as_stolen() {
+    let session_start = clock();
+    let mut now = session_start;
+    let mut game = started(now);
+    game.thieves = super::model::Thieves::Active;
+    // Seven wood against a ten-wood skim: upstream drains it to zero and
+    // books the seven that were actually there, instead of skipping the
+    // round the way a starved trade would.
+    game.set_store(Resource::Wood, 7);
+    game.set_store(Resource::Fur, 100);
+    game.set_store(Resource::Meat, 0);
+
+    advance(
+        &mut game,
+        View::Room,
+        &mut now,
+        session_start,
+        i64::from(pace::slowed(data::INCOME_DELAY)),
+    );
+
+    assert_eq!(game.store(Resource::Wood), 0);
+    assert_eq!(game.stolen.get(&Resource::Wood).copied(), Some(7));
+    assert_eq!(game.store(Resource::Fur), 95);
+    assert_eq!(game.stolen.get(&Resource::Fur).copied(), Some(5));
+    assert_eq!(game.stolen.get(&Resource::Meat).copied(), None);
 }

@@ -243,6 +243,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
+        pomodoro_directory: crate::app::common::pomodoro::new_directory(),
         config,
         db: db.clone(),
         audio_service: crate::app::audio::svc::AudioService::new(
@@ -536,6 +537,7 @@ fn make_app_with_chat_service_and_permissions(
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
+        pomodoro_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,
@@ -722,6 +724,7 @@ pub fn make_app_with_paired_client(
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
+        pomodoro_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,

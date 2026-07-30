@@ -4235,7 +4235,9 @@ impl ChatService {
             "message_delete",
             "message",
             Some(message_id),
-            json!({ "room_id": msg.room_id }),
+            // The row is hard-deleted below, and the body is the only pointer
+            // to any uploaded image's R2 URL. Takedowns recover it from here.
+            json!({ "room_id": msg.room_id, "body": msg.body }),
         )
         .await?;
         tx.commit().await?;

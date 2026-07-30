@@ -5,7 +5,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::{
-    chips::INITIAL_CHIP_BALANCE,
+    chips::{ChipMove, INITIAL_CHIP_BALANCE, UserChips},
     shop_consumable_effect::ShopConsumableEffect,
     username_effect::{USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_KIND, UsernameEffect},
 };
@@ -27,8 +27,6 @@ pub const PET_FOOD_SKU: &str = "pet_food";
 pub const ULTIMATE_SPELL_KIND: &str = "ultimate_spell";
 pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
-pub const SHOP_PURCHASE_REASON: &str = "shop_purchase";
-pub const MARKETPLACE_SOURCE_KIND: &str = "marketplace_item";
 pub const SHOP_USER_CHANGED_CHANNEL: &str = "shop_user_changed";
 pub const SHOP_CATALOG_CHANGED_CHANNEL: &str = "shop_catalog_changed";
 
@@ -153,7 +151,7 @@ pub async fn update_marketplace_item_for_admin(
         !update.description.trim().is_empty(),
         "description cannot be empty"
     );
-    ensure!(update.price_chips >= 0, "price must be 0 or greater");
+    ensure!(update.price_chips > 0, "price must be positive");
 
     let row = client
         .query_opt(
@@ -470,26 +468,18 @@ async fn purchase_item_by_sku_inner(
             });
         }
 
-        let new_balance = balance - item.price_chips;
-        tx.execute(
-            "UPDATE user_chips
-             SET balance = $2, updated = current_timestamp
-             WHERE user_id = $1",
-            &[&user_id, &new_balance],
+        let new_balance = match UserChips::apply(
+            &tx,
+            user_id,
+            ChipMove::ShopPurchase,
+            item.price_chips,
+            Some(&item.sku),
         )
-        .await?;
-        tx.execute(
-            "INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-             VALUES ($1, $2, $3, $4, $5)",
-            &[
-                &user_id,
-                &(-item.price_chips),
-                &SHOP_PURCHASE_REASON,
-                &MARKETPLACE_SOURCE_KIND,
-                &item.sku,
-            ],
-        )
-        .await?;
+        .await?
+        {
+            Some(chips) => chips.balance,
+            None => anyhow::bail!("shop purchase debit failed despite locked balance"),
+        };
         tx.execute(
             "UPDATE user_purchases
              SET quantity = quantity + 1,
@@ -560,27 +550,18 @@ async fn purchase_item_by_sku_inner(
         });
     }
 
-    let new_balance = balance - item.price_chips;
-    tx.execute(
-        "UPDATE user_chips
-         SET balance = $2, updated = current_timestamp
-         WHERE user_id = $1",
-        &[&user_id, &new_balance],
+    let new_balance = match UserChips::apply(
+        &tx,
+        user_id,
+        ChipMove::ShopPurchase,
+        item.price_chips,
+        Some(&item.sku),
     )
-    .await?;
-
-    tx.execute(
-        "INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-         VALUES ($1, $2, $3, $4, $5)",
-        &[
-            &user_id,
-            &(-item.price_chips),
-            &SHOP_PURCHASE_REASON,
-            &MARKETPLACE_SOURCE_KIND,
-            &item.sku,
-        ],
-    )
-    .await?;
+    .await?
+    {
+        Some(chips) => chips.balance,
+        None => anyhow::bail!("shop purchase debit failed despite locked balance"),
+    };
 
     let active_quantity = 0;
     tx.execute(
@@ -1281,8 +1262,8 @@ async fn has_reached_daily_purchase_limit(
              ) AS purchased_today",
             &[
                 &user_id,
-                &SHOP_PURCHASE_REASON,
-                &MARKETPLACE_SOURCE_KIND,
+                &ChipMove::ShopPurchase.reason(),
+                &ChipMove::ShopPurchase.source_kind(),
                 &item.sku,
             ],
         )

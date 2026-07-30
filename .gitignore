@@ -60,3 +60,4 @@ upstream-brogue/
 
 # Symlink to personal AI guidelines (canonical copy in dotfiles).
 GUIDE.md
+/scripts/test/aggstats.json

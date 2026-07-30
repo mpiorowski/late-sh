@@ -39,11 +39,13 @@ pub fn bard_song(c: &mut Character, rng: &mut impl Rng) -> Vec<String> {
         4 => {
             // HP swells to 1.2x the larger of current and max (an overheal
             // the healer will later clip for free).
+            let before = c.hitpoints;
             c.hitpoints = (c.hitpoints.max(c.max_hitpoints()) as f64 * 1.2).round() as u32;
-            lines.push(
-                "The ballad swells and your heart with it; you feel larger than life itself."
-                    .into(),
-            );
+            let gained = c.hitpoints - before;
+            lines.push(format!(
+                "The ballad swells and your heart with it; you feel larger than life itself: \
+                 +{gained} hitpoints."
+            ));
         }
         5 | 11 => {
             c.turns = c.turns.saturating_sub(1);
