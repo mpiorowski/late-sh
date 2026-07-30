@@ -1,5 +1,6 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU,
+    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
+    PET_FOOD_SKU,
 };
 use ratatui::{
     Frame,
@@ -811,20 +812,23 @@ fn item_row(
     let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
         && !chat_room_bump_item(item)
         && chat_consumable_active(item, state);
-    let status_style =
-        if active_chat_consumable || item.equipped || username_effect_active(item, state) {
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD)
-        } else if item.is_consumable() || item.is_username_effect() {
-            Style::default().fg(theme::AMBER())
-        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-            Style::default().fg(theme::SUCCESS())
-        } else if item.is_aquarium_fish() {
-            Style::default().fg(theme::AMBER())
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
+    let status_style = if active_chat_consumable
+        || item.equipped
+        || username_effect_active(item, state)
+        || bonsai_decay_shield_active(item, state)
+    {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.is_consumable() || item.is_username_effect() {
+        Style::default().fg(theme::AMBER())
+    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+        Style::default().fg(theme::SUCCESS())
+    } else if item.is_aquarium_fish() {
+        Style::default().fg(theme::AMBER())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {
@@ -844,6 +848,7 @@ fn item_row(
                 format!(" {}/{}", item.active_quantity, item.quantity)
             } else if item.is_consumable()
                 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+                && item.item_kind != BONSAI_CONSUMABLE_ITEM_KIND
                 && item.quantity > 0
             {
                 format!(" x{}", item.quantity)
@@ -897,9 +902,20 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
         "confirm"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
+    } else if bonsai_decay_shield_active(item, state) {
+        "active"
     } else {
         "buy"
     }
+}
+
+/// True when the Bonsai Decay Shield is currently protecting the user's
+/// bonsai. Purchases of the shield never decrement a per-purchase stock the
+/// way Pet/Aquarium Food does — every purchase collapses into one running
+/// protection window — so this is the only way the shop list row can show
+/// whether the shield is actually doing anything right now.
+fn bonsai_decay_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    item.is_bonsai_decay_shield() && state.active_bonsai_decay_protection().is_some()
 }
 
 fn chat_room_bump_item(item: &ShopCatalogItem) -> bool {
