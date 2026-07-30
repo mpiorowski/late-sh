@@ -286,6 +286,10 @@ struct DrawContext<'a> {
     /// the HUD click hit test in `input.rs`.
     mentions_hud_rect: &'a std::cell::Cell<Option<Rect>>,
     voice_badge: Option<String>,
+    /// The running `/pomodoro` countdown, already rendered to `MM:SS label`.
+    /// Formatting once per frame here keeps the HUD builder a pure function
+    /// of its inputs (no clock read inside the draw path).
+    pomodoro_badge: Option<String>,
     home_selected: bool,
 }
 
@@ -493,6 +497,10 @@ impl App {
                         })
                     })
             });
+        let pomodoro_badge = self
+            .pomodoro
+            .as_ref()
+            .map(|timer| timer.badge(chrono::Utc::now()));
         let dashboard_view = chat::ui::DashboardChatView {
             pet_strip: pet_strip_enabled.then(|| crate::app::pet::ui::PetStripView {
                 state: &self.pet_state,
@@ -546,6 +554,7 @@ impl App {
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
+            peer_pomodoros: &self.peer_pomodoros,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             inline_images: &self.chat.inline_image_cache,
@@ -688,6 +697,7 @@ impl App {
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
+            peer_pomodoros: &self.peer_pomodoros,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -768,6 +778,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
+                    peer_pomodoros: &self.peer_pomodoros,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -827,6 +838,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
+                    peer_pomodoros: &self.peer_pomodoros,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1071,6 +1083,7 @@ impl App {
                         chip_balance: self.chip_balance,
                         mentions_hud_rect: &self.last_mentions_hud_rect,
                         voice_badge,
+                        pomodoro_badge,
                         home_selected,
                     },
                     &mut terminal_image_frame,
@@ -1206,15 +1219,19 @@ impl App {
         }
 
         let title = app_frame_title(screen, &ctx);
+        let title_width = line_width(&title) as u16;
         let mut block = Block::default()
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        match status_hud_title(
-            Some(ctx.chip_balance),
-            ctx.mentions_unread_count,
-            ctx.voice_badge.as_deref(),
-        ) {
+        match status_hud_title(StatusHudInputs {
+            balance: Some(ctx.chip_balance),
+            unread: ctx.mentions_unread_count,
+            voice_badge: ctx.voice_badge.as_deref(),
+            pomodoro_badge: ctx.pomodoro_badge.as_deref(),
+            border_width: area.width,
+            title_width,
+        }) {
             Some(hud) => {
                 // The right-aligned title's last cell sits just inside the
                 // top-right corner, and the mentions segment leads the line.
@@ -2159,14 +2176,37 @@ struct StatusHud {
     mentions_width: u16,
 }
 
-fn status_hud_title(
+/// Everything the status HUD needs, named: `voice_badge` and `pomodoro_badge`
+/// are both `Option<&str>`, so positional arguments would let a call site swap
+/// them without a compile error. `border_width` and `title_width` come in raw
+/// rather than pre-subtracted so the fitting math below is covered by the
+/// tests instead of living uncovered at the one call site.
+struct StatusHudInputs<'a> {
     balance: Option<i64>,
     unread: i64,
-    voice_badge: Option<&str>,
-) -> Option<StatusHud> {
-    if balance.is_none() && unread <= 0 && voice_badge.is_none() {
+    voice_badge: Option<&'a str>,
+    pomodoro_badge: Option<&'a str>,
+    /// Full width of the bordered frame, corners included.
+    border_width: u16,
+    /// Width of the left-aligned frame title sharing the top border row.
+    title_width: u16,
+}
+
+fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
+    let StatusHudInputs {
+        balance,
+        unread,
+        voice_badge,
+        pomodoro_badge,
+        border_width,
+        title_width,
+    } = inputs;
+    if balance.is_none() && unread <= 0 && voice_badge.is_none() && pomodoro_badge.is_none() {
         return None;
     }
+    // What the right-aligned HUD can use before it starts painting over the
+    // left title (both live on the top border row, corners excluded).
+    let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
     let mut spans = Vec::new();
     if unread > 0 {
         let noun = if unread == 1 { "mention" } else { "mentions" };
@@ -2181,7 +2221,11 @@ fn status_hud_title(
             Style::default().fg(theme::TEXT_MUTED()),
         ));
     }
+    // Mentions lead the line and everything below appends or inserts behind
+    // them, so the hit-test rect measured here stays correct whatever else the
+    // HUD carries.
     let mentions_width = spans.iter().map(Span::width).sum::<usize>() as u16;
+    let mentions_spans = spans.len();
     if let Some(voice_badge) = voice_badge {
         if !spans.is_empty() {
             spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
@@ -2207,6 +2251,49 @@ fn status_hud_title(
             " chips ",
             Style::default().fg(theme::TEXT_MUTED()),
         ));
+    }
+    // The HUD is a right-aligned title on the same border row as the left
+    // title, and ratatui paints it over anything already there: a HUD wider
+    // than `spare_cols` eats the page tabs. The three long-standing segments
+    // keep their existing behavior; the countdown, as the newcomer, is the one
+    // that yields -- full `MM:SS label` when it fits, bare `MM:SS` when only
+    // that does, dropped when neither does. Losing the badge is survivable
+    // because expiry still banners and notifies.
+    if let Some(pomodoro_badge) = pomodoro_badge {
+        // Mentions lead, so the badge goes behind them; the segment after the
+        // insertion point only carries its own divider when mentions built one
+        // first, hence the two placements.
+        let divider_before = mentions_spans > 0;
+        let divider_after = !divider_before && spans.len() > mentions_spans;
+        let used = spans.iter().map(Span::width).sum::<usize>() as u16;
+        let dividers = u16::from(divider_before) + u16::from(divider_after);
+        let time_only = pomodoro_badge
+            .split_once(' ')
+            .map_or(pomodoro_badge, |(time, _)| time);
+        let fitted = [pomodoro_badge, time_only].into_iter().find(|text| {
+            // +2 for the spaces padding the badge inside its segment.
+            used + dividers + UnicodeWidthStr::width(*text) as u16 + 2 <= spare_cols
+        });
+        if let Some(text) = fitted {
+            let divider = || Span::styled("|", Style::default().fg(theme::BORDER_DIM()));
+            let mut segment = Vec::new();
+            if divider_before {
+                segment.push(divider());
+            }
+            segment.push(Span::styled(
+                format!(" {text} "),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if divider_after {
+                segment.push(divider());
+            }
+            spans.splice(mentions_spans..mentions_spans, segment);
+        }
+    }
+    if spans.is_empty() {
+        return None;
     }
     Some(StatusHud {
         line: Line::from(spans).right_aligned(),

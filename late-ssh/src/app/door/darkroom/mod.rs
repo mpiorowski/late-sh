@@ -80,3 +80,6 @@ mod sim_test;
 
 #[cfg(test)]
 mod state_test;
+
+#[cfg(test)]
+mod ui_test;

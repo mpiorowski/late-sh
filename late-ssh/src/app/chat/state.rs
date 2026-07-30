@@ -555,6 +555,7 @@ pub struct ChatState {
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
+    requested_pomodoro: Option<PomodoroRequest>,
     requested_icon_picker: bool,
     /// Set by /search [query]; consumed by `App`, which opens the Ctrl+/
     /// modal pre-filled with `?query`.
@@ -741,6 +742,7 @@ impl ChatState {
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
+            requested_pomodoro: None,
             requested_icon_picker: false,
             requested_message_search: None,
             requested_petname: None,
@@ -1019,6 +1021,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_pair(&mut self) -> Option<PairRequest> {
         self.requested_pair.take()
+    }
+
+    pub(crate) fn take_requested_pomodoro(&mut self) -> Option<PomodoroRequest> {
+        self.requested_pomodoro.take()
     }
 
     pub(crate) fn take_requested_petname(&mut self) -> Option<PetnameRequest> {
@@ -2139,6 +2145,21 @@ impl ChatState {
                 }
                 None => {
                     return Some(Banner::error("Usage: /pair @user"));
+                }
+            }
+        }
+
+        if let Some(parsed) = parse_pomodoro_command(&body) {
+            self.clear_composer_after_submit();
+            match parsed {
+                PomodoroParse::Request(request) => {
+                    self.requested_pomodoro = Some(request);
+                    return None;
+                }
+                PomodoroParse::Invalid => {
+                    return Some(Banner::error(
+                        "Usage: /pomodoro [minutes] [label...] or /pomodoro stop",
+                    ));
                 }
             }
         }
@@ -4167,10 +4188,8 @@ impl ChatState {
                     user_id,
                     request_id,
                     message,
-                } if self.user_id == user_id => {
-                    if self.message_search.is_current(request_id) {
-                        self.message_search.fail(sentence_case(&message));
-                    }
+                } if self.user_id == user_id && self.message_search.is_current(request_id) => {
+                    self.message_search.fail(sentence_case(&message));
                 }
                 ChatEvent::MessageContextLoaded {
                     user_id,
@@ -4193,15 +4212,15 @@ impl ChatState {
                     user_id,
                     request_id,
                     message_id,
-                } if self.user_id == user_id => {
-                    if self.message_search.context_in_flight == Some((request_id, message_id)) {
-                        self.message_search.context_in_flight = None;
-                        // Cache an empty window so a persistent failure does
-                        // not refire every tick; the hit still renders alone.
-                        self.message_search
-                            .context
-                            .insert(message_id, MessageContext::default());
-                    }
+                } if self.user_id == user_id
+                    && self.message_search.context_in_flight == Some((request_id, message_id)) =>
+                {
+                    self.message_search.context_in_flight = None;
+                    // Cache an empty window so a persistent failure does not
+                    // refire every tick; the hit still renders alone.
+                    self.message_search
+                        .context
+                        .insert(message_id, MessageContext::default());
                 }
                 ChatEvent::MessageReactionsUpdated {
                     room_id,
@@ -5202,6 +5221,99 @@ fn parse_pair_command(input: &str) -> Option<Option<PairRequest>> {
         return Some(None);
     }
     Some(Some(PairRequest::Directed(username.to_string())))
+}
+
+/// One classic tomato when `/pomodoro` is given no duration.
+const POMODORO_DEFAULT_MINUTES: u32 = 25;
+/// Well past any real focus block, and short enough that the HUD badge stays
+/// two-digit minutes.
+const POMODORO_MAX_MINUTES: u32 = 180;
+/// The badge shares the top border with mentions, voice, and chips, so the
+/// label has to stay short. Display cells, not chars: a CJK or emoji label
+/// costs two cells per char and would otherwise crowd the border out.
+const POMODORO_LABEL_MAX_COLS: usize = 24;
+const POMODORO_DEFAULT_LABEL: &str = "Pomodoro";
+
+/// A `/pomodoro` request drained by `handle_post_submit_requests`. The timer
+/// itself lives on `App` (not here): `tick.rs` fires it and the status HUD
+/// draws it from every screen, not just chat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PomodoroRequest {
+    Start { minutes: u32, label: String },
+    Stop,
+}
+
+/// Outcome of parsing a `/pomodoro` line. Same shape as [`PetnameParse`]: a
+/// named variant per outcome instead of a nested `Option`, so a call site
+/// cannot read "malformed" as "absent".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PomodoroParse {
+    Request(PomodoroRequest),
+    /// `/pomodoro` with an out-of-range duration or a `stop` carrying
+    /// arguments.
+    Invalid,
+}
+
+/// `None` when the line isn't `/pomodoro` at all.
+///
+/// A leading integer is the duration and everything after it is the label, so
+/// `/pomodoro 50 deep work` and the label-only `/pomodoro deep work` (default
+/// duration) both work. Only an out-of-range duration is an error.
+fn parse_pomodoro_command(input: &str) -> Option<PomodoroParse> {
+    let rest = input.trim().strip_prefix("/pomodoro")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut words = rest.split_whitespace().peekable();
+    // `stop` is checked before the label path so it can never be read as one.
+    if words
+        .peek()
+        .is_some_and(|word| word.eq_ignore_ascii_case("stop"))
+    {
+        words.next();
+        return Some(match words.next() {
+            None => PomodoroParse::Request(PomodoroRequest::Stop),
+            Some(_) => PomodoroParse::Invalid,
+        });
+    }
+    let mut minutes = POMODORO_DEFAULT_MINUTES;
+    if words
+        .peek()
+        .is_some_and(|word| word.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        let digits = words.next().unwrap_or_default();
+        // Out of range (including a digit run too long for u32) is a usage
+        // banner rather than a silent clamp.
+        match digits.parse::<u32>() {
+            Ok(parsed) if (1..=POMODORO_MAX_MINUTES).contains(&parsed) => minutes = parsed,
+            _ => return Some(PomodoroParse::Invalid),
+        }
+    }
+    // Rejoining with single spaces drops any tabs/newlines; then strip control
+    // chars (the label reaches a desktop notification and the top border) and
+    // cap the width, same shape as the `/gift` note.
+    use unicode_width::UnicodeWidthChar;
+    let mut cols = 0usize;
+    let label: String = words
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take_while(|ch| {
+            cols += ch.width().unwrap_or(0);
+            cols <= POMODORO_LABEL_MAX_COLS
+        })
+        .collect();
+    let label = label.trim();
+    let label = if label.is_empty() {
+        POMODORO_DEFAULT_LABEL.to_string()
+    } else {
+        label.to_string()
+    };
+    Some(PomodoroParse::Request(PomodoroRequest::Start {
+        minutes,
+        label,
+    }))
 }
 
 fn parse_me_command(input: &str) -> Option<Option<String>> {

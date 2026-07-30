@@ -17,6 +17,16 @@ use super::model::{Game, View};
 use super::pace;
 use super::state::{Row, State};
 
+/// Label column width for the stores/pack sidebar rows: the longest label
+/// ("trading post", "sulphur mine") plus a two-space gutter, so a count never
+/// butts up against the name it belongs to.
+pub const SIDEBAR_LABEL_PAD: usize = 14;
+
+/// Total width of the stores/pack sidebar column: the two-space indent, the
+/// label column, and room for the widest value a long run reaches
+/// ("10000 +100/5s"). Too narrow and the income suffix clips off the edge.
+pub const SIDEBAR_WIDTH: u16 = 30;
+
 /// The live game page.
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     let Some(game) = state.game() else {
@@ -61,13 +71,13 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 
     // The wasteland is a map, not a column of buttons.
     if state.view == View::World {
-        let columns =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(rows[2]);
+        let columns = Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(rows[2]);
         super::ui_world::draw_world(frame, columns[0], state);
         frame.render_widget(Paragraph::new(pack_lines(state, game)), columns[1]);
     } else {
-        let columns =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(rows[2]);
+        let columns = Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(rows[2]);
         let (actions, cursor_line) = action_lines(state);
         let scroll = action_scroll(cursor_line, actions.len(), columns[0].height as usize);
         frame.render_widget(Paragraph::new(actions).scroll((scroll, 0)), columns[0]);
@@ -110,14 +120,18 @@ fn pack_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
         if *count <= 0 {
             continue;
         }
-        lines.push(landing::stat(item.label(), &count.to_string(), 12));
+        lines.push(landing::stat(
+            item.label(),
+            &count.to_string(),
+            SIDEBAR_LABEL_PAD,
+        ));
     }
     let free = game.capacity() - trip.load();
     lines.push(Line::from(""));
     lines.push(landing::stat(
         "free",
         &format!("{:.0}/{:.0}", free.max(0.0), game.capacity()),
-        12,
+        SIDEBAR_LABEL_PAD,
     ));
     lines
 }
@@ -296,7 +310,7 @@ fn stores_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
                 Some(rate) => format!("{} {}/{}s", game.store(resource), fmt_income(*rate), tick),
                 None => game.store(resource).to_string(),
             };
-            lines.push(landing::stat(resource.label(), &value, 12));
+            lines.push(landing::stat(resource.label(), &value, SIDEBAR_LABEL_PAD));
         }
     }
     let standing: Vec<&Building> = Building::ALL
@@ -316,17 +330,21 @@ fn stores_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
             if *building == Building::Trap {
                 let (bare, baited) = game.trap_rows();
                 if bare > 0 {
-                    lines.push(landing::stat("trap", &bare.to_string(), 12));
+                    lines.push(landing::stat("trap", &bare.to_string(), SIDEBAR_LABEL_PAD));
                 }
                 if baited > 0 {
-                    lines.push(landing::stat("baited trap", &baited.to_string(), 12));
+                    lines.push(landing::stat(
+                        "baited trap",
+                        &baited.to_string(),
+                        SIDEBAR_LABEL_PAD,
+                    ));
                 }
                 continue;
             }
             lines.push(landing::stat(
                 building.label(),
                 &game.building_count(*building).to_string(),
-                12,
+                SIDEBAR_LABEL_PAD,
             ));
         }
     }

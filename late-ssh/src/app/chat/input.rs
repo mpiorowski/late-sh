@@ -1,7 +1,10 @@
+use crate::app::chat::state::PomodoroRequest;
+use crate::app::common::pomodoro::PomodoroTimer;
 use crate::app::common::primitives::Banner;
 use crate::app::common::readline::ctrl_byte_to_input;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::state::App;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 fn is_next_room_key(byte: u8) -> bool {
@@ -254,6 +257,11 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             }
         }
     }
+    if let Some(request) = app.chat.take_requested_pomodoro() {
+        let banner = apply_pomodoro_request(&mut app.pomodoro, request, Utc::now());
+        app.publish_pomodoro();
+        app.banner = Some(banner);
+    }
     if app.chat.take_requested_icon_picker() {
         crate::app::input::try_open_icon_picker(app);
     }
@@ -276,6 +284,39 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
             app.banner = Some(Banner::error(
                 "No paired CLI with clipboard image support. Update and run `late`.",
             ));
+        }
+    }
+}
+
+/// Apply a parsed `/pomodoro` command to the session's timer and produce the
+/// banner to show. Takes the timer slot rather than the whole `App`: this is a
+/// pure state transition over session-local state, with no service to call and
+/// no other field to touch, so `now` comes from the caller the same way
+/// `PomodoroTimer::badge` takes it.
+fn apply_pomodoro_request(
+    timer: &mut Option<PomodoroTimer>,
+    request: PomodoroRequest,
+    now: DateTime<Utc>,
+) -> Banner {
+    match request {
+        PomodoroRequest::Stop => match timer.take() {
+            Some(stopped) => Banner::success(&format!("stopped {}", stopped.label)),
+            None => Banner::error("no pomodoro running, start one with /pomodoro [minutes]"),
+        },
+        PomodoroRequest::Start { minutes, label } => {
+            // A second /pomodoro replaces the running one instead of being
+            // refused: restarting a focus block is the common case, and the
+            // banner says which it was.
+            let verb = if timer.is_some() {
+                "restarted"
+            } else {
+                "started"
+            };
+            *timer = Some(PomodoroTimer {
+                label: label.clone(),
+                ends_at: now + chrono::Duration::minutes(i64::from(minutes)),
+            });
+            Banner::success(&format!("{verb} {label} for {minutes} min"))
         }
     }
 }

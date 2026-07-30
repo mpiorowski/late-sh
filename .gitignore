@@ -61,6 +61,4 @@ upstream-brogue/
 # Symlink to personal AI guidelines (canonical copy in dotfiles).
 GUIDE.md
 
-# Local-only arm64 override for running the docker compose stack under
-# linux/amd64 emulation on Apple Silicon; not meant to be committed.
-docker-compose.local-arm64.yml
+/scripts/test/aggstats.json

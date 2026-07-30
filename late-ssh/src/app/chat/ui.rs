@@ -112,6 +112,9 @@ pub struct DashboardChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
+    /// `tick.rs`); painted as a presence badge after AFK.
+    pub peer_pomodoros: &'a HashMap<Uuid, String>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -1131,6 +1134,7 @@ pub fn draw_dashboard_chat_card(
                 unread_marker: view.unread_marker,
                 drunk_levels: view.drunk_levels,
                 name_styles: view.name_styles,
+                peer_pomodoros: view.peer_pomodoros,
             },
         );
         let visible = visible_chat_rows(
@@ -1216,6 +1220,7 @@ struct ChatRowsContext<'a> {
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
     name_styles: &'a HashMap<Uuid, NameStyle>,
+    peer_pomodoros: &'a HashMap<Uuid, String>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1530,7 +1535,16 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        let afk_badge = ctx.afk_user_ids.contains(&msg.user_id).then_some(AFK_BADGE);
+        // Presence badges trail every earned badge: AFK first, then a
+        // running `/pomodoro` countdown (minutes only; the label never
+        // leaves its owner's session).
+        let mut presence_badges: Vec<&str> = Vec::new();
+        if ctx.afk_user_ids.contains(&msg.user_id) {
+            presence_badges.push(AFK_BADGE);
+        }
+        if let Some(badge) = ctx.peer_pomodoros.get(&msg.user_id) {
+            presence_badges.push(badge);
+        }
         let (prefix, segments, author_range) = build_author_prefix_and_segments_with_chat_badges(
             is_friend,
             &author,
@@ -1538,7 +1552,7 @@ fn ensure_chat_rows_cache(
             &chat_badge_refs,
             bonsai_opt,
             profile_award_badges,
-            afk_badge,
+            &presence_badges,
         );
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
@@ -2238,7 +2252,7 @@ fn build_author_prefix_and_segments(
     chat_badge: Option<&str>,
     bonsai_glyph: Option<&str>,
     profile_award_badges: Option<&str>,
-    afk_badge: Option<&str>,
+    presence_badges: &[&str],
 ) -> (String, Vec<HeaderSegment>) {
     let mut chat_badges = Vec::new();
     if let Some(chat_badge) = chat_badge {
@@ -2251,7 +2265,7 @@ fn build_author_prefix_and_segments(
         &chat_badges,
         bonsai_glyph,
         profile_award_badges,
-        afk_badge,
+        presence_badges,
     );
     (prefix, segments)
 }
@@ -2263,7 +2277,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
     chat_badges: &[(HeaderTarget, &str)],
     bonsai_glyph: Option<&str>,
     profile_award_badges: Option<&str>,
-    afk_badge: Option<&str>,
+    presence_badges: &[&str],
 ) -> (String, Vec<HeaderSegment>, (usize, usize)) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
@@ -2307,7 +2321,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
             + chat_badges.len()
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
-            + afk_badge.is_some() as usize,
+            + presence_badges.len(),
     );
     let award_group = profile_award_badges
         .map(str::trim)
@@ -2325,7 +2339,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
     for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
         typed_badges.push((target, s));
     }
-    if let Some(s) = afk_badge.filter(|s| !s.is_empty()) {
+    for s in presence_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
     }
     if !typed_badges.is_empty() {
@@ -2540,6 +2554,9 @@ pub struct ChatRenderInput<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
+    /// `tick.rs`); painted as a presence badge after AFK.
+    pub peer_pomodoros: &'a HashMap<Uuid, String>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2654,6 +2671,9 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
     pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
+    /// `tick.rs`); painted as a presence badge after AFK.
+    pub peer_pomodoros: &'a HashMap<Uuid, String>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -2741,6 +2761,7 @@ pub fn draw_embedded_room_chat(
             unread_marker: view.unread_marker,
             drunk_levels: view.drunk_levels,
             name_styles: view.name_styles,
+            peer_pomodoros: view.peer_pomodoros,
         },
     );
     let visible = visible_chat_rows(
@@ -4204,6 +4225,7 @@ fn draw_selected_content(
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
                     drunk_levels: view.drunk_levels,
                     name_styles: view.name_styles,
+                    peer_pomodoros: view.peer_pomodoros,
                 },
             );
             let visible = visible_chat_rows(

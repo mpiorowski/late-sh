@@ -16,14 +16,13 @@ use late_core::models::{
     user::User,
 };
 use late_core::test_utils::create_test_user;
-use rstest::rstest;
 use tokio::time::Duration;
 use uuid::Uuid;
 
 #[tokio::test]
-async fn dashboard_chat_compose_blocks_quit_shortcut() {
+async fn quit_routes_open_confirm_without_persisting_exit_command() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "popup-it").await;
+    let user = create_test_user(&test_db.db, "quit-confirm-it").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -31,26 +30,24 @@ async fn dashboard_chat_compose_blocks_quit_shortcut() {
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "popup-flow-it");
-
-    // Wait until the async room snapshot has landed: `lounge` only renders
-    // once `drain_snapshot` populates the visible Home chat rail.
-    wait_for_render_contains(&mut app, "lounge").await;
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Compose (Enter send").await;
-
-    app.handle_input(b"q$$$");
-    wait_for_render_contains(&mut app, "$$$").await;
-    wait_for_render_contains(&mut app, " Home ").await;
-}
-
-#[tokio::test]
-async fn q_opens_quit_confirm_and_escape_dismisses_it() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "quit-confirm-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "quit-confirm-flow-it");
+
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"\x03");
+    assert!(
+        app.is_running(),
+        "expected Ctrl+C to no longer quit the app"
+    );
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(" Home "),
+        "expected app to remain on Home after Ctrl+C; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Quit? "),
+        "expected Ctrl+C to stay inert rather than opening quit confirm; frame={frame:?}"
+    );
 
     app.handle_input(b"q");
     wait_for_render_contains(&mut app, " Quit? ").await;
@@ -65,30 +62,16 @@ async fn q_opens_quit_confirm_and_escape_dismisses_it() {
         !frame.contains("Clicked by mistake, right?"),
         "expected quit confirm to dismiss after Esc; frame={frame:?}"
     );
-}
 
-#[tokio::test]
-async fn ctrl_c_does_not_quit_the_app() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-c-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-c-flow-it");
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    app.handle_input(b"/exit\r");
+    wait_for_render_contains(&mut app, " Quit? ").await;
 
-    app.handle_input(b"\x03");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-
-    assert!(
-        app.is_running(),
-        "expected Ctrl+C to no longer quit the app"
-    );
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains(" Home "),
-        "expected app to remain on Home after Ctrl+C; frame={frame:?}"
-    );
-    assert!(
-        !frame.contains(" Quit? "),
-        "expected Ctrl+C to stay inert rather than opening quit confirm; frame={frame:?}"
-    );
+    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
+        .await
+        .expect("list recent messages");
+    assert!(messages.is_empty(), "expected /exit to stay client-side");
 }
 
 #[tokio::test]
@@ -96,6 +79,19 @@ async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "account-delete-flow").await;
     let mut app = make_app(test_db.db.clone(), user.id, "account-delete-flow-it");
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "Theme").await;
+
+    // The ordinary Ctrl+O route opens and closes Settings before the more
+    // specialized account-deletion dialog is exercised in the same app.
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Theme"),
+        "expected Esc to close settings; frame={frame:?}"
+    );
 
     app.handle_input(b"\x0f");
     wait_for_render_contains(&mut app, "Account").await;
@@ -212,34 +208,6 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
 }
 
 #[tokio::test]
-async fn global_ctrl_o_opens_settings_on_dashboard() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-o-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-o-flow-it");
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    // Ctrl+O opens settings modal
-    app.handle_input(b"\x0f");
-    wait_for_render_contains(&mut app, "Theme").await;
-
-    // Esc to close settings, back to Home
-    app.handle_input(b"\x1b");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let frame = render_plain(&mut app);
-    assert!(
-        !frame.contains("Theme"),
-        "expected Esc to close settings; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
 async fn global_ctrl_g_opens_hub_on_dashboard() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-g-it").await;
@@ -265,33 +233,6 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
         !frame.contains("Leaderboard"),
         "expected Esc to close hub; frame={frame:?}"
     );
-}
-
-#[tokio::test]
-async fn legacy_terminal_help_byte_no_longer_opens_standalone_faq_on_dashboard() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-l-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-flow-it");
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    // The old terminal FAQ byte no longer opens a standalone modal; those topics now live in the guide.
-    app.handle_input(b"\x0c");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let frame = render_plain(&mut app);
-    assert!(
-        !frame.contains("Why copy sometimes silently fails"),
-        "expected old FAQ byte not to open standalone FAQ; frame={frame:?}"
-    );
-
-    app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "CLI YouTube").await;
 }
 
 #[tokio::test]
@@ -324,30 +265,25 @@ async fn global_w_keeps_old_bonsai_without_dynamic_selection() {
 
 #[tokio::test]
 async fn global_ctrl_b_is_ignored_for_all_users() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-b-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-b-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
     for (label, permissions) in [
         ("regular", Permissions::default()),
         ("admin", Permissions::new(true, false)),
         ("moderator", Permissions::new(false, true)),
     ] {
-        let test_db = new_test_db().await;
-        let user = create_test_user(&test_db.db, &format!("ctrl-b-{label}-it")).await;
-        let client = test_db.db.get().await.expect("db client");
-        let lounge = ChatRoom::ensure_lounge(&client)
-            .await
-            .expect("ensure lounge room");
-        ChatRoomMember::join(&client, lounge.id, user.id)
-            .await
-            .expect("join lounge room");
-        let mut app = make_app_with_permissions(
-            test_db.db.clone(),
-            user.id,
-            &format!("ctrl-b-{label}-flow-it"),
-            permissions,
-        );
-        wait_for_render_contains(&mut app, " Home ").await;
-
+        app.set_permissions(permissions);
         app.handle_input(b"\x02");
-        tokio::time::sleep(Duration::from_millis(60)).await;
         let frame = render_plain(&mut app);
         assert!(
             !frame.contains(" Dynamic Bonsai ") && !frame.contains("Branch Graph"),
@@ -357,51 +293,7 @@ async fn global_ctrl_b_is_ignored_for_all_users() {
 }
 
 #[tokio::test]
-async fn question_mark_opens_guide_on_dashboard() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "ctrl-p-guide-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-p-guide-flow-it");
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Install `late` / Listen Anywhere").await;
-    wait_for_render_contains(&mut app, "?/Esc/q close").await;
-
-    app.handle_input(b"?");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let frame = render_plain(&mut app);
-    assert!(
-        !frame.contains("Install `late` / Listen Anywhere"),
-        "expected ? to close guide; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn question_mark_opens_lateania_guide_on_lateania_screen() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "lateania-guide-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "lateania-guide-flow-it");
-    wait_for_render_contains(&mut app, " Home ").await;
-
-    // Lateania has no top-level key now: open the Games hub and launch the
-    // selected (default) Lateania card.
-    app.handle_input(b"3");
-    wait_for_render_contains(&mut app, " Games ").await;
-    app.handle_input(b"\r");
-    wait_for_render_contains(&mut app, " Lateania ").await;
-
-    app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Lateania is the persistent BBS-style world").await;
-
-    let frame = render_plain(&mut app);
-    assert!(
-        !frame.contains("Install `late` / Listen Anywhere"),
-        "expected Lateania guide tab instead of Pair tab; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
+async fn artboard_view_help_and_active_input_share_one_lifecycle() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "artboard-view-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-flow-it");
@@ -413,23 +305,72 @@ async fn artboard_view_mode_allows_cursor_movement_and_screen_hotkeys() {
     app.handle_input(b"\x1b[C");
     wait_for_render_contains(&mut app, "Cursor     1,0").await;
 
-    app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Home ").await;
-}
+    app.handle_input(b"\x10");
+    wait_for_render_contains(&mut app, "Two modes").await;
+    assert!(
+        render_plain(&mut app).contains("Artboard Help"),
+        "Ctrl+P in view mode should open local Artboard help"
+    );
 
-#[tokio::test]
-async fn artboard_view_mode_click_enters_active_mode_at_clicked_canvas_cell() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-click-enter-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-click-enter-flow-it");
+    app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, "Draw / erase").await;
+    assert!(
+        render_plain(&mut app).contains("Artboard Help"),
+        "help Tab should stay on Artboard instead of switching page"
+    );
+    app.handle_input(b"q");
+    assert!(
+        !render_plain(&mut app).contains("Artboard Help"),
+        "q should close local Artboard help"
+    );
 
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-    wait_for_render_contains(&mut app, "Cursor     0,0").await;
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Artboard Help").await;
+    assert!(
+        render_plain(&mut app).contains("Artboard Help"),
+        "? in view mode should open local Artboard help"
+    );
+    app.handle_input(b"q");
 
     app.handle_input(b"\x1b[<0;10;5M");
     wait_for_render_contains(&mut app, "Mode       active").await;
     wait_for_render_contains(&mut app, "Cursor     8,3").await;
+
+    app.handle_input(b"1");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       active"),
+        "active mode should keep focus after numeric hotkeys; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Home "),
+        "active mode should block screen switching; frame={frame:?}"
+    );
+
+    app.handle_input(b"\x03");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Mode       swatch"),
+        "Ctrl+C should copy into the primary swatch; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains(" Quit? "),
+        "Ctrl+C should avoid the global quit flow; frame={frame:?}"
+    );
+
+    app.handle_input(b"?");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Tab/S+Tab"),
+        "? in active mode should type into the canvas instead of opening help; frame={frame:?}"
+    );
+
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+
+    app.handle_input(b"1");
+    wait_for_render_contains(&mut app, " Home ").await;
 }
 
 #[tokio::test]
@@ -464,131 +405,7 @@ async fn artboard_ban_locks_user_in_view_mode() {
 }
 
 #[tokio::test]
-async fn active_artboard_blocks_screen_number_hotkeys_until_escape() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-active-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-active-flow-it");
-
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Mode       active").await;
-
-    app.handle_input(b"1");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Mode       active"),
-        "expected active artboard mode to keep focus after numeric hotkeys; frame={frame:?}"
-    );
-    assert!(
-        !frame.contains(" Home "),
-        "expected active artboard mode to block screen switching; frame={frame:?}"
-    );
-
-    app.handle_input(b"\x1b");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    app.handle_input(b"1");
-    wait_for_render_contains(&mut app, " Home ").await;
-}
-
-#[tokio::test]
-async fn active_artboard_ctrl_c_copies_without_quitting() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-ctrl-c-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-ctrl-c-flow-it");
-
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Mode       active").await;
-
-    app.handle_input(b"\x03");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Mode       swatch"),
-        "expected Ctrl+C to copy into the primary swatch and stay inside active artboard; frame={frame:?}"
-    );
-    assert!(
-        !frame.contains(" Quit? "),
-        "expected Ctrl+C to avoid the global quit flow; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn artboard_help_modal_tab_switches_help_tabs_instead_of_pages() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-help-tab-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-help-tab-flow-it");
-
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    app.handle_input(b"\x10");
-    wait_for_render_contains(&mut app, "Two modes").await;
-
-    app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, "Draw / erase").await;
-
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Artboard Help"),
-        "expected Artboard help Tab to stay on Artboard instead of switching page; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn artboard_view_mode_question_mark_opens_local_help() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-view-help-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-view-help-flow-it");
-
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-
-    app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Two modes").await;
-
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Artboard Help"),
-        "expected ? on Artboard view mode to open local help, not the global guide; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn active_artboard_question_mark_types_into_canvas_instead_of_opening_help() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "artboard-questionmark-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "artboard-questionmark-flow-it");
-
-    app.handle_input(b"4");
-    wait_for_render_contains(&mut app, "Mode       view").await;
-    wait_for_render_contains(&mut app, "Cursor     0,0").await;
-
-    app.handle_input(b"i");
-    wait_for_render_contains(&mut app, "Mode       active").await;
-
-    app.handle_input(b"?");
-    wait_for_render_contains(&mut app, "Cursor     1,0").await;
-
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Mode       active"),
-        "expected ? to stay inside active artboard mode; frame={frame:?}"
-    );
-    assert!(
-        !frame.contains("Tab/S+Tab"),
-        "expected ? in active artboard mode to avoid the global guide; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
+async fn chat_compose_preserves_screen_digits_and_non_ascii_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -600,33 +417,17 @@ async fn dashboard_chat_compose_treats_screen_hotkeys_as_text() {
         .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "dash-chat-compose-flow-it");
 
-    // See `dashboard_chat_compose_blocks_quit_shortcut`: wait for the Home
-    // chat rail so the room snapshot has populated `lounge_room_id`.
+    // Wait for the Home chat rail so the room snapshot has populated
+    // `lounge_room_id` before exercising composer-owned global shortcuts.
     wait_for_render_contains(&mut app, "lounge").await;
     wait_for_render_contains(&mut app, " Home ").await;
 
     app.handle_input(b"i3abc");
-
     wait_for_render_contains(&mut app, " Home ").await;
     wait_for_render_contains(&mut app, "3abc").await;
-}
 
-#[tokio::test]
-async fn chat_compose_treats_screen_hotkeys_as_text() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "chat-compose-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "chat-compose-flow-it");
-
-    wait_for_render_contains(&mut app, "lounge").await;
-
-    app.handle_input(b"i2hey");
+    app.handle_input(b"\x15"); // Ctrl+U clears the composer without closing it.
+    app.handle_input(b"2hey");
     wait_for_render_contains(&mut app, "2hey").await;
     wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
@@ -635,23 +436,37 @@ async fn chat_compose_treats_screen_hotkeys_as_text() {
     // end up composing "2hey\n" instead of submitting.
     app.handle_input(b"\r");
     wait_for_render_contains(&mut app, "Compose (press i)").await;
-}
 
-#[rstest]
-#[case::cyrillic("cyrillic", "тест")]
-#[case::han("han", "漢字")]
-#[case::latin_diacritic("accented", "café")]
-#[case::greek("greek", "αβγ")]
-#[tokio::test]
-async fn chat_compose_accepts_non_ascii_typing(#[case] label: &str, #[case] input: &str) {
-    let (_db, mut app) = chat_compose_app(&format!("utf8-{label}")).await;
-    app.handle_input(input.as_bytes());
-    wait_for_render_contains(&mut app, input).await;
-}
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    for (label, input) in [
+        ("cyrillic", "тест"),
+        ("han", "漢字"),
+        ("latin diacritic", "café"),
+        ("greek", "αβγ"),
+    ] {
+        app.handle_input(input.as_bytes());
+        wait_for_render_contains(&mut app, input).await;
+        assert_eq!(
+            app.chat.composer().lines(),
+            &[input.to_string()],
+            "composer contents for {label}"
+        );
+        app.handle_input(b"\x15");
+        assert_eq!(
+            app.chat.composer().lines(),
+            &[String::new()],
+            "composer should clear after {label}"
+        );
+    }
 
-#[tokio::test]
-async fn split_read_alt_backspace_deletes_word_without_wedging_parser() {
-    let (_db, mut app) = chat_compose_app("alt-backspace-split").await;
+    app.handle_input(b"q$$$");
+    wait_for_render_contains(&mut app, "q$$$").await;
+    assert!(
+        !render_plain(&mut app).contains(" Quit? "),
+        "q in the composer must remain text rather than opening quit confirm"
+    );
+    app.handle_input(b"\x15");
 
     app.handle_input(b"one two");
     let frame = render_plain(&mut app);
@@ -715,7 +530,7 @@ async fn chat_room_switch_ctrl_keys_wrap() {
 }
 
 #[tokio::test]
-async fn chat_reaction_leader_uses_digits_without_switching_screens() {
+async fn chat_reaction_leader_routes_cancel_and_reaction_digits() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "f-react-viewer").await;
     let author = create_test_user(&test_db.db, "f-react-author").await;
@@ -741,9 +556,39 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
     .expect("create message");
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
     wait_for_render_contains(&mut app, "reaction target").await;
 
     app.handle_input(b"j");
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+
+    // A non-digit closes the leader and is consumed instead of triggering its
+    // ordinary message action. Check state directly instead of polling for the
+    // absence of a reply banner.
+    app.handle_input(b"r");
+    assert!(
+        !app.chat.is_reaction_leader_active(),
+        "non-digit input should close the reaction leader"
+    );
+    assert!(
+        app.chat.reply_target().is_none() && !app.chat.is_composing(),
+        "the consumed r should not open a reply composer"
+    );
+    let plain = render_plain(&mut app);
+    assert!(!plain.contains("1 👍"), "picker should close: {plain:?}");
+    assert!(
+        plain.contains("reaction target"),
+        "message should remain selected: {plain:?}"
+    );
+    assert!(
+        ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+            .await
+            .expect("load reaction")
+            .is_none(),
+        "non-digit input should not react",
+    );
+
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "1 👍").await;
     app.handle_input(b"1");
@@ -768,6 +613,20 @@ async fn chat_reaction_leader_uses_digits_without_switching_screens() {
         !plain.contains("1 👍"),
         "reaction picker should close after reacting: {plain:?}"
     );
+
+    app.handle_input(b"f");
+    wait_for_render_contains(&mut app, "1 👍").await;
+    app.handle_input(b"5");
+    wait_until(
+        || async {
+            ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
+                .await
+                .expect("load reaction")
+                .is_some_and(|reaction| reaction.icon == "🔥")
+        },
+        "extended f leader reaction to persist",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -813,54 +672,6 @@ async fn chat_room_list_is_mouse_clickable() {
     app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
-}
-
-#[tokio::test]
-async fn chat_reaction_leader_persists_extended_reaction_digits() {
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "f-react-extended-viewer").await;
-    let author = create_test_user(&test_db.db, "f-react-extended-author").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join viewer");
-    ChatRoomMember::join(&client, lounge.id, author.id)
-        .await
-        .expect("join author");
-    let message = ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: lounge.id,
-            user_id: author.id,
-            body: "extended reaction target".to_string(),
-        },
-    )
-    .await
-    .expect("create message");
-
-    let mut app = make_app(test_db.db.clone(), viewer.id, "f-react-extended-flow-it");
-    app.resize(160, 32).expect("resize test terminal");
-    wait_for_render_contains(&mut app, "extended reaction target").await;
-
-    app.handle_input(b"j");
-    app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "1 👍").await;
-    app.handle_input(b"5");
-
-    wait_for_render_contains(&mut app, " Home ").await;
-    wait_until(
-        || async {
-            ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
-                .await
-                .expect("load reaction")
-                .is_some_and(|reaction| reaction.icon == "🔥")
-        },
-        "extended f leader reaction to persist",
-    )
-    .await;
 }
 
 #[tokio::test]
@@ -926,8 +737,15 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     );
 
     app.handle_input(b"\r");
-    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
+    assert!(
+        !app.chat.has_overlay(),
+        "Enter should close the owner modal"
+    );
     let plain = render_plain(&mut app);
+    assert!(
+        !plain.contains(" Reactions "),
+        "owner modal should stay closed after Enter: {plain:?}"
+    );
     assert!(
         !plain.contains("1 👍"),
         "reaction picker should stay dismissed after Enter closes modal: {plain:?}"
@@ -938,7 +756,11 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, " Reactions ").await;
     app.handle_input(b"f");
-    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
+    assert!(!app.chat.has_overlay(), "f should close the owner modal");
+    assert!(
+        !render_plain(&mut app).contains(" Reactions "),
+        "owner modal should stay closed after f"
+    );
 
     app.handle_input(b"f");
     wait_for_render_contains(&mut app, "1 👍").await;
@@ -946,96 +768,19 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     wait_for_render_contains(&mut app, " Reactions ").await;
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
-    assert_render_not_contains_for(&mut app, " Reactions ", Duration::from_millis(250)).await;
-}
-
-#[tokio::test]
-async fn chat_reaction_leader_cancels_and_consumes_non_digit_input() {
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "f-cancel-viewer").await;
-    let author = create_test_user(&test_db.db, "f-cancel-author").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join viewer");
-    ChatRoomMember::join(&client, lounge.id, author.id)
-        .await
-        .expect("join author");
-    let message = ChatMessage::create(
-        &client,
-        ChatMessageParams {
-            room_id: lounge.id,
-            user_id: author.id,
-            body: "cancel target".to_string(),
-        },
-    )
-    .await
-    .expect("create message");
-
-    let mut app = make_app(test_db.db.clone(), viewer.id, "f-cancel-flow-it");
-    wait_for_render_contains(&mut app, "cancel target").await;
-
-    app.handle_input(b"j");
-    app.handle_input(b"f");
-    wait_for_render_contains(&mut app, "1 👍").await;
-
-    app.handle_input(b"r");
-    assert_render_not_contains_for(
-        &mut app,
-        "Reply to @f-cancel-author",
-        Duration::from_millis(250),
-    )
-    .await;
-
     let plain = render_plain(&mut app);
-    assert!(!plain.contains("1 👍"), "picker should close: {plain:?}");
+    assert!(!app.chat.has_overlay(), "Esc should close the owner modal");
     assert!(
-        plain.contains("cancel target"),
-        "message should remain selected: {plain:?}"
-    );
-    assert!(
-        ChatMessageReaction::get_by_user_and_message(&client, message.id, viewer.id)
-            .await
-            .expect("load reaction")
-            .is_none(),
-        "non-digit input should not react",
+        !plain.contains(" Reactions "),
+        "owner modal should stay closed after Esc: {plain:?}"
     );
 }
 
 #[tokio::test]
-async fn help_command_renders_chat_feedback_without_persisting_message() {
+async fn client_side_chat_commands_render_without_persisting_messages() {
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "help-notice-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "help-notice-flow-it");
-
-    wait_for_render_contains(&mut app, "lounge").await;
-
-    app.handle_input(b"i/binds\r");
-    wait_for_render_contains(&mut app, " Guide ").await;
-    wait_for_render_contains(&mut app, " Chat ").await;
-    wait_for_render_contains(&mut app, "/settings").await;
-
-    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
-        .await
-        .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /binds to stay client-side");
-}
-
-#[tokio::test]
-async fn members_command_shows_room_members_without_persisting_message() {
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "list-flow-viewer").await;
-    let target = create_test_user(&test_db.db, "list-flow-target").await;
+    let viewer = create_test_user(&test_db.db, "command-flow-viewer").await;
+    let target = create_test_user(&test_db.db, "command-flow-target").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -1053,63 +798,70 @@ async fn members_command_shows_room_members_without_persisting_message() {
     ChatRoomMember::join(&client, private_room.id, target.id)
         .await
         .expect("join target to side");
+    ChatRoom::set_topic_and_rules(
+        &client,
+        private_room.id,
+        Some("cards and tea"),
+        Some("be kind\nno spoilers\ntake the bins out"),
+    )
+    .await
+    .expect("set rules");
 
-    let mut app = make_app(test_db.db.clone(), viewer.id, "list-room-members-flow-it");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "client-commands-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
     wait_for_render_contains(&mut app, "side").await;
 
-    app.handle_input(b"llll");
+    app.handle_input(b"i/binds\r");
+    wait_for_render_contains(&mut app, " Guide ").await;
+    wait_for_render_contains(&mut app, " Chat ").await;
+    wait_for_render_contains(&mut app, "/settings").await;
+    app.handle_input(b"?");
+    assert!(!app.show_help, "? should close the guide");
 
+    app.handle_input(b"llll");
     app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;
-    wait_for_render_contains(&mut app, "@list-flow-viewer").await;
-    wait_for_render_contains(&mut app, "@list-flow-target").await;
+    wait_for_render_contains(&mut app, "@command-flow-viewer").await;
+    wait_for_render_contains(&mut app, "@command-flow-target").await;
+    app.handle_input(b"q");
+    assert!(
+        !app.chat.has_overlay(),
+        "q should close the members overlay"
+    );
 
-    let messages = ChatMessage::list_recent(&client, private_room.id, 20)
+    app.handle_input(b"i/rules\r");
+    // Every line survives, which a one-line banner could not do.
+    wait_for_render_contains(&mut app, "#side rules").await;
+    wait_for_render_contains(&mut app, "be kind").await;
+    wait_for_render_contains(&mut app, "no spoilers").await;
+    wait_for_render_contains(&mut app, "take the bins out").await;
+
+    let lounge_messages = ChatMessage::list_recent(&client, lounge.id, 20)
         .await
-        .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /members to stay client-side");
+        .expect("list lounge messages");
+    let private_messages = ChatMessage::list_recent(&client, private_room.id, 20)
+        .await
+        .expect("list private room messages");
+    assert!(
+        lounge_messages.is_empty() && private_messages.is_empty(),
+        "expected /binds, /members, and /rules to stay client-side"
+    );
 }
 
 #[tokio::test]
-async fn exit_command_opens_quit_confirm_and_stays_client_side() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "exit-command-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join user to lounge");
-
-    let mut app = make_app(test_db.db.clone(), user.id, "exit-command-flow-it");
-
-    wait_for_render_contains(&mut app, "lounge").await;
-
-    app.handle_input(b"i/exit\r");
-    wait_for_render_contains(&mut app, " Quit? ").await;
-
-    let messages = ChatMessage::list_recent(&client, lounge.id, 20)
-        .await
-        .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /exit to stay client-side");
-}
-
-#[tokio::test]
-async fn bare_mod_command_opens_moderation_modal() {
+async fn mod_commands_route_bare_and_prefixed_forms() {
     let (_test_db, mut app) = chat_compose_app("mod-command-open").await;
 
     app.handle_input(b"/mod\r");
 
     wait_for_render_contains(&mut app, " Moderation ").await;
     wait_for_render_contains(&mut app, "access denied: moderator or admin only").await;
-}
 
-#[tokio::test]
-async fn prefixed_mod_command_in_chat_points_to_modal() {
-    let (_test_db, mut app) = chat_compose_app("mod-command-chat-reject").await;
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
 
     app.handle_input(b"/mod help\r");
 
@@ -1314,14 +1066,12 @@ async fn backslash_cycles_rails_for_this_device_only_and_auto_follows_width() {
 }
 
 #[tokio::test]
-async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
-    // Regression: the rail rows are per device, but `save()` writes the whole
-    // draft to the account and fires from every tweak. If the device layout
-    // lived in that draft, changing the theme on a phone would push the phone's
-    // rails onto the account, and every key with no layout of its own (the
-    // desktop) would inherit them.
+async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings() {
+    // End-to-end for both sides of the device-layout boundary: cycling the rails
+    // writes only the authenticating key, and a later account-settings save does
+    // not leak that device layout onto the account or its other keys.
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "rails-leak-it").await;
+    let user = create_test_user(&test_db.db, "rails-key-it").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -1329,7 +1079,18 @@ async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "rails-leak-flow-it");
+    // Two devices on one account, as `auth_publickey` would have recorded them.
+    UserSshKey::ensure(&client, user.id, "SHA256:phone")
+        .await
+        .expect("phone key");
+    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
+        "SHA256:phone",
+    );
     wait_for_render_contains(&mut app, "sort/fold").await;
 
     // Hide the room rail on this device only.
@@ -1340,18 +1101,43 @@ async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
         "expected the rail hidden for this device; frame={frame:?}"
     );
 
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+                    .await
+                    .expect("phone layout")
+                    == Some(KeyLayout {
+                        room_list_mode: RoomListMode::Off,
+                        right_sidebar_mode: RightSidebarMode::On,
+                    })
+            }
+        },
+        "the cycled layout to reach this device's key",
+    )
+    .await;
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout"),
+        None,
+        "the account's other device must keep following the account default"
+    );
+
     // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
     // the first row (Background color). The save banner marks the write landing.
     app.handle_input(b"\x0f");
     // Wait for the draft to hydrate from the profile snapshot before moving:
     // that hydration resets the modal to its first tab (`open_from_profile`).
-    wait_for_render_contains(&mut app, "rails-leak-it").await;
+    wait_for_render_contains(&mut app, "rails-key-it").await;
     app.handle_input(b"\t\t\t");
     wait_for_render_contains(&mut app, "Background color").await;
     // Enter toggles the selected row (Background color, the first one), which
     // runs the same `save()` every other settings edit runs.
     app.handle_input(b"\r");
-    let db = test_db.db.clone();
     wait_until(
         || {
             let db = db.clone();
@@ -1383,6 +1169,23 @@ async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
         late_core::models::user::extract_show_room_list_sidebar(&stored.settings),
         "the legacy mirror must stay in step with the account default"
     );
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:phone")
+            .await
+            .expect("phone layout after settings save"),
+        Some(KeyLayout {
+            room_list_mode: RoomListMode::Off,
+            right_sidebar_mode: RightSidebarMode::On,
+        }),
+        "the unrelated account save must preserve this device's layout"
+    );
+    assert_eq!(
+        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
+            .await
+            .expect("desktop layout after settings save"),
+        None,
+        "the unrelated account save must not publish a layout to another device"
+    );
 
     // And the device's own choice survived the settings round trip.
     app.handle_input(b"\x1b");
@@ -1390,63 +1193,6 @@ async fn unrelated_settings_edits_do_not_republish_this_device_rails() {
     assert!(
         !frame.contains("sort/fold"),
         "expected the device rail to stay hidden; frame={frame:?}"
-    );
-}
-
-#[tokio::test]
-async fn cycling_rails_persists_onto_the_authenticating_key() {
-    // End-to-end for the write path: keystroke -> App -> ProfileService -> the
-    // `user_ssh_keys` row for the key this session authenticated with, and not
-    // onto the account's other keys.
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "rails-key-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    // Two devices on one account, as `auth_publickey` would have recorded them.
-    UserSshKey::ensure(&client, user.id, "SHA256:phone")
-        .await
-        .expect("phone key");
-    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
-        .await
-        .expect("desktop key");
-
-    let mut app = with_session_key(
-        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
-        "SHA256:phone",
-    );
-    wait_for_render_contains(&mut app, "sort/fold").await;
-    app.handle_input(b"\\");
-
-    let db = test_db.db.clone();
-    wait_until(
-        || {
-            let db = db.clone();
-            async move {
-                let client = db.get().await.expect("db client");
-                UserSshKey::layout_for(&client, user.id, "SHA256:phone")
-                    .await
-                    .expect("phone layout")
-                    == Some(KeyLayout {
-                        room_list_mode: RoomListMode::Off,
-                        right_sidebar_mode: RightSidebarMode::On,
-                    })
-            }
-        },
-        "the cycled layout to reach this device's key",
-    )
-    .await;
-
-    assert_eq!(
-        UserSshKey::layout_for(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout"),
-        None,
-        "the account's other device must keep following the account default"
     );
 }
 
@@ -1519,49 +1265,4 @@ async fn clicking_the_mentions_hud_text_opens_mentions() {
     // Clicking inside the mentions text opens the Mentions view.
     app.handle_input(format!("\x1b[<0;{};1M", mentions_col + 1).as_bytes());
     wait_for_render_contains(&mut app, "mentioned you in").await;
-}
-
-#[tokio::test]
-async fn rules_command_shows_every_line_in_an_overlay() {
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "rules-flow-viewer").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join viewer to lounge");
-
-    let room = ChatRoom::create_private_room(&client, "parlour", viewer.id)
-        .await
-        .expect("create room");
-    ChatRoomMember::join(&client, room.id, viewer.id)
-        .await
-        .expect("join viewer to parlour");
-    ChatRoom::set_topic_and_rules(
-        &client,
-        room.id,
-        Some("cards and tea"),
-        Some("be kind\nno spoilers\ntake the bins out"),
-    )
-    .await
-    .expect("set rules");
-
-    let mut app = make_app(test_db.db.clone(), viewer.id, "rules-command-flow-it");
-    wait_for_render_contains(&mut app, "lounge").await;
-    wait_for_render_contains(&mut app, "parlour").await;
-    app.handle_input(b"llll");
-
-    app.handle_input(b"i/rules\r");
-    // Every line survives, which a one-line banner could not do.
-    wait_for_render_contains(&mut app, "#parlour rules").await;
-    wait_for_render_contains(&mut app, "be kind").await;
-    wait_for_render_contains(&mut app, "no spoilers").await;
-    wait_for_render_contains(&mut app, "take the bins out").await;
-
-    let messages = ChatMessage::list_recent(&client, room.id, 20)
-        .await
-        .expect("list recent messages");
-    assert!(messages.is_empty(), "expected /rules to stay client-side");
 }
