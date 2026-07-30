@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-07-15 (webview helper resiliency: helper pair-WS reconnects with backoff instead of exiting on drops; parent respawns a dead helper from the 1s pair-WS heartbeat watchdog instead of waiting for the next `set_playback_source`; parent hands its current mute/volume to the helper at spawn via `LATE_WEBVIEW_INITIAL_MUTED`/`LATE_WEBVIEW_INITIAL_VOLUME` so respawns keep the session's mute)
+- Last updated: 2026-07-29 (Linux MPRIS publication: the CLI consumes queue, Icecast, and radio metadata snapshots from pair-WS and publishes the user's selected source as a read-only desktop media player; missing session D-Bus fails open)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -36,6 +36,7 @@ Primary responsibilities:
 - MP3 stream decoding via `symphonia`
 - FFT visualizer frames sent to the SSH TUI over WebSocket
 - Paired mute/volume controls received from the TUI
+- Linux MPRIS publication for the selected YouTube, Icecast, or radio track
 - LiveKit voice capture/playout for native desktop CLI users, controlled over the pair WebSocket
 - Cross-platform installer targets for Linux, macOS, Windows, and Android/Termux
 
@@ -84,6 +85,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
+- `src/mpris.rs` - Linux read-only MPRIS service and track metadata projection; other platforms compile a no-op publisher
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
@@ -354,6 +356,8 @@ Platform notes:
 - Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
 - Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if pairing repeatedly fails, the CLI releases startup mute after the 10 failed pair attempts. Volume uses squared scaling.
+- On Linux, the pair client consumes `queue_update`, `now_playing_update`, and `radio_meta_update` snapshots and publishes the currently selected source through `org.mpris.MediaPlayer2`. YouTube includes title/channel/duration, watch URL, thumbnail, and wall-clock-derived initial position; Icecast and radio select the metadata entry matching `set_playback_source.station`. Missing metadata falls back to the source/station label. MPRIS is intentionally read-only (`CanControl=false`) because source and playback controls remain owned by the paired TUI.
+- MPRIS startup and update errors fail open. Headless Linux, WSL, containers, and other environments without a usable session D-Bus continue SSH/audio normally without desktop publication.
 - The playback queue caps at roughly two seconds of output samples.
 - Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
 

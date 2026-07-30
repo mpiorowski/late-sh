@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
@@ -23,7 +24,11 @@ use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::{clipboard, voice::VoiceRuntimeState};
+use super::{
+    clipboard,
+    mpris::{DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    voice::VoiceRuntimeState,
+};
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
@@ -62,6 +67,18 @@ enum PairControlMessage {
         #[serde(default)]
         station: Option<String>,
     },
+    QueueUpdate {
+        #[serde(default)]
+        current: Option<YoutubeTrack>,
+    },
+    NowPlayingUpdate {
+        #[serde(default)]
+        mounts: HashMap<String, IcecastTrack>,
+    },
+    RadioMetaUpdate {
+        #[serde(default)]
+        stations: HashMap<String, RadioTrack>,
+    },
     VoiceJoin {
         room: String,
         url: String,
@@ -78,12 +95,22 @@ enum PairControlMessage {
     },
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum PairAudioSource {
     Icecast,
     Youtube,
     Radio,
+}
+
+impl From<PairAudioSource> for MediaSource {
+    fn from(source: PairAudioSource) -> Self {
+        match source {
+            PairAudioSource::Icecast => Self::Icecast,
+            PairAudioSource::Youtube => Self::Youtube,
+            PairAudioSource::Radio => Self::Radio,
+        }
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -605,6 +632,7 @@ pub(super) async fn run_pair_ws(
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
+    desktop_media: &mut DesktopMedia,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -654,7 +682,15 @@ pub(super) async fn run_pair_ws(
                 match msg? {
                     Message::Text(text) => {
                         let should_send_state =
-                            handle_pair_control(&text, &mut ws, playback, webview, voice).await?;
+                            handle_pair_control(
+                                &text,
+                                &mut ws,
+                                playback,
+                                webview,
+                                voice,
+                                desktop_media,
+                            )
+                            .await?;
                         if should_send_state {
                             send_client_state(&mut ws, client, playback).await?;
                         }
@@ -697,6 +733,7 @@ async fn handle_pair_control(
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
+    desktop_media: &mut DesktopMedia,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -710,6 +747,10 @@ async fn handle_pair_control(
         | PairControlMessage::VolumeUp
         | PairControlMessage::VolumeDown) => {
             apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
+            desktop_media.update_audio_state(
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(true)
         }
         PairControlMessage::SetPlaybackSource {
@@ -773,6 +814,37 @@ async fn handle_pair_control(
                 playback.muted.load(Ordering::Relaxed),
                 playback.volume_percent.load(Ordering::Relaxed),
             )?;
+            desktop_media.select_source(
+                source.into(),
+                station,
+                local_stream_url.map(str::to_string),
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
+            Ok(false)
+        }
+        PairControlMessage::QueueUpdate { current } => {
+            desktop_media.update_youtube(
+                current,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
+            Ok(false)
+        }
+        PairControlMessage::NowPlayingUpdate { mounts } => {
+            desktop_media.update_icecast(
+                mounts,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
+            Ok(false)
+        }
+        PairControlMessage::RadioMetaUpdate { stations } => {
+            desktop_media.update_radio(
+                stations,
+                playback.muted.load(Ordering::Relaxed),
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
             Ok(false)
         }
         PairControlMessage::RequestClipboardImage { request_id } => {
@@ -881,6 +953,9 @@ fn apply_audio_pair_control(
             info!(volume_percent = new_volume, "applied paired volume down");
         }
         PairControlMessage::SetPlaybackSource { .. }
+        | PairControlMessage::QueueUpdate { .. }
+        | PairControlMessage::NowPlayingUpdate { .. }
+        | PairControlMessage::RadioMetaUpdate { .. }
         | PairControlMessage::RequestClipboardImage { .. }
         | PairControlMessage::VoiceJoin { .. }
         | PairControlMessage::VoiceLeave

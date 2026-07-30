@@ -174,11 +174,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         activity_tx.subscribe(),
     );
-    let ai_service = AiService::new(
-        config.ai.enabled,
-        config.ai.api_key.clone(),
-        config.ai.model.clone(),
-    );
+    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())

@@ -252,11 +252,6 @@ variable "AI_API_KEY" {
   sensitive   = true
 }
 
-variable "AI_MODEL" {
-  description = "Gemini model name."
-  type        = string
-}
-
 variable "AI_ENABLED" {
   description = "Enable AI features."
   type        = string

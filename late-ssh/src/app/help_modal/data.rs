@@ -174,9 +174,9 @@ pub(crate) fn bot_app_context() -> String {
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        // Bot context is per-app, not per-user — describe the default Enter/
-        // Alt+S binding rather than any one user's `keep_composer_focused`
-        // tweak state.
+        // Bot context is per-app, not per-user, so describe the default
+        // Enter/Alt+S binding rather than any one user's
+        // `keep_composer_focused` tweak state.
         for line in lines_for(topic, false, "") {
             let line = line.trim();
             if line.is_empty() || is_restricted_bot_context_line(line) {
@@ -191,7 +191,7 @@ pub(crate) fn bot_app_context() -> String {
 }
 
 /// Trimmed app context for @bartender: navigation only, not the full guide.
-/// He is house furniture, not the help desk — @bot owns explaining features
+/// He is house furniture, not the help desk. @bot owns explaining features
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
@@ -202,7 +202,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Home's room rail also holds RSS, News, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
-    - For anything past basic directions — commands, game rules, settings, IRC, account stuff — don't guess: tell the patron to go ask @bot, that's what he's for.\n"
+    - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
         .to_string()
 }
 
@@ -254,6 +254,7 @@ fn pair_help_lines(listen_url: &str) -> Vec<String> {
         "  youtube     embedded webview hosts the shared queue locally".to_string(),
         "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
         "  voice       talk in voice rooms with your mic (linux + windows; plain SSH only shows status)".to_string(),
+        "  desktop     now playing shows in your desktop media widget (linux)".to_string(),
         "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
         "".to_string(),
         "Listen without the CLI".to_string(),
@@ -1475,6 +1476,13 @@ Direct stream playback is Icecast only. Pair the CLI or browser for source switc
 No sound from the paired CLI on Linux?
   The CLI plays audio through ALSA. On a PipeWire system with no ALSA compatibility layer, it finds no output device.
   Install pipewire-alsa (Arch: pacman -S pipewire-alsa, Debian/Ubuntu: apt install pipewire-alsa) and reconnect.
+
+Now playing on your desktop (Linux)
+  The paired CLI publishes the current track over MPRIS, the D-Bus standard your desktop already uses for media players.
+  GNOME's top bar, KDE's tray, lock screens, and panel applets pick it up on their own. There is nothing to switch on: it appears once `late` is running and paired.
+  Every source reports title and artist. YouTube tracks add duration, the video thumbnail, and a watch link; Icecast adds track length.
+  It is read only. Playback stays owned by this terminal, so the widget's buttons and your keyboard's media keys will not drive it.
+  Machines with no session bus (headless boxes, containers, some WSL setups) simply get nothing. Audio and everything else carry on as normal.
 
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs

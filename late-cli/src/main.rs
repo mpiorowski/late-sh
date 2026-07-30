@@ -12,6 +12,7 @@ mod clipboard;
 
 mod config;
 mod identity;
+mod mpris;
 mod pty;
 mod raw_mode;
 mod ssh;
@@ -292,6 +293,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let sample_rate = audio.sample_rate;
     let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
     let mut voice = voice::VoiceRuntimeState::default();
+    let mut desktop_media = mpris::DesktopMedia::new();
 
     let playback = PlaybackState {
         played_samples: &played_samples,
@@ -315,6 +317,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             &playback,
             &mut webview,
             &mut voice,
+            &mut desktop_media,
         )
         .await
         {

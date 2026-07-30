@@ -43,7 +43,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             if let Some(topic) = app.help_modal_state.topic_at_point(x, y) {
-                // Double-click on a tab is treated as a plain switch — there's
+                // Double-click on a tab is treated as a plain switch: there's
                 // no deeper verb here, and the scroll behavior already lives
                 // on the wheel.
                 let _ = app.help_modal_state.click_topic(topic);

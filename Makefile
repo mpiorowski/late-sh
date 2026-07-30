@@ -100,7 +100,6 @@ LATE_YOUTUBE_API_KEY ?=
 # --- AI (Gemini - used for @bot and @graybeard chat + URL extraction) ---
 LATE_AI_ENABLED ?= 1                                        # Enable AI-powered features
 LATE_AI_API_KEY ?=                                              # Gemini API key for AI features
-LATE_AI_MODEL ?= gemini-3.1-pro-preview                     # Gemini model to use
 
 # --- Files / uploads (optional; blank disables uploads) ---
 LATE_FILES_S3_ENDPOINT ?= https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com # S3/R2 endpoint URL
@@ -198,7 +197,6 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_YOUTUBE_API_KEY=$(LATE_YOUTUBE_API_KEY)" >> .env
 	@echo "LATE_AI_ENABLED=$(LATE_AI_ENABLED)" >> .env
 	@echo "LATE_AI_API_KEY=$(LATE_AI_API_KEY)" >> .env
-	@echo "LATE_AI_MODEL=$(LATE_AI_MODEL)" >> .env
 	@echo "LATE_FILES_S3_ENDPOINT=$(LATE_FILES_S3_ENDPOINT)" >> .env
 	@echo "LATE_FILES_S3_BUCKET=$(LATE_FILES_S3_BUCKET)" >> .env
 	@echo "LATE_FILES_PUBLIC_BASE_URL=$(LATE_FILES_PUBLIC_BASE_URL)" >> .env

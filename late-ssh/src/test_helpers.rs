@@ -144,7 +144,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ai: AiConfig {
             enabled: false,
             api_key: None,
-            model: "gemini-3.1-pro-preview".to_string(),
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
@@ -190,7 +189,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     )
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
-    let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
+    let ai_service = AiService::new(false, None);
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -407,7 +406,7 @@ fn make_app_with_chat_service_and_permissions(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -595,7 +594,7 @@ pub fn make_app_with_paired_client(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),

@@ -9,7 +9,6 @@ use crate::app::voice::svc::VoiceConfig;
 pub struct AiConfig {
     pub enabled: bool,
     pub api_key: Option<String>,
-    pub model: String,
 }
 
 /// Embedded ircd settings; see devdocs/FRD-IRCD.md. All env vars are optional
@@ -195,7 +194,7 @@ impl Config {
         );
         tracing::info!(
             ai_enabled = self.ai.enabled,
-            ai_model = %self.ai.model,
+            ai_model = crate::app::ai::svc::AI_MODEL,
             has_key = self.ai.api_key.is_some(),
             "ai: @bot chat responder model and status"
         );
@@ -370,7 +369,6 @@ impl Config {
             ai: AiConfig {
                 enabled: ai_enabled,
                 api_key: ai_api_key,
-                model: required("LATE_AI_MODEL")?,
             },
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice,
