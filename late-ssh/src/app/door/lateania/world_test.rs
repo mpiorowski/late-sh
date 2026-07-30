@@ -1603,3 +1603,36 @@ fn every_minimap_line_is_walkable() {
         "{phantoms} phantom corridors drawn (of {checked} connectors): a map line must always be walkable"
     );
 }
+
+#[test]
+fn regional_notables_carry_their_own_wildbound_finds() {
+    // Every zone/island's notable-loot table should genuinely include that
+    // zone's two new finds, not just the borrowed fallback catalog.
+    for zone in 0..14 {
+        let loot = lakes_notable_loot(zone);
+        for id in super::super::items::sunderlakes_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Sunderlakes zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for zone in 0..20 {
+        let loot = broceliande_notable_loot(zone);
+        for id in super::super::items::broceliande_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Broceliande zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for isle in 0..20 {
+        let loot = archipelago_boss_loot(isle);
+        for id in super::super::items::archipelago_find_ids(isle) {
+            assert!(
+                loot.contains(&id),
+                "Archipelago isle {isle}'s boss should carry find {id}"
+            );
+        }
+    }
+}

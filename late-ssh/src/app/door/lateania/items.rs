@@ -732,6 +732,133 @@ pub const ITEMS: &[Item] = &[
         1900,
         None,
     ),
+    // ---- Legs and Feet (the Outfitter, cont'd) ---------------------------
+    //
+    // These two slots used to have exactly one shop item apiece (the starting
+    // Common piece) and nothing past it, so there was no shop upgrade path for
+    // legs or boots at all. Filled out to match Head/Chest/Hands: Uncommon,
+    // Rare, and Epic rungs, each kept below the Frontier's tier-1 power for
+    // that slot so the Frontier still opens a real step up.
+    eq(
+        1126,
+        "Studded Greaves",
+        "Leather reinforced with a line of steel studs down each thigh.",
+        Slot::Legs,
+        Rarity::Uncommon,
+        0,
+        16,
+        3,
+        95,
+        None,
+    ),
+    eq(
+        1127,
+        "Chainmail Leggings",
+        "Riveted links, heavier than leather but they turn a blade.",
+        Slot::Legs,
+        Rarity::Uncommon,
+        0,
+        20,
+        4,
+        150,
+        Some(Class::Warrior),
+    ),
+    eq(
+        1128,
+        "Ranger's Legwraps",
+        "Close-fitted wraps that don't snag on bramble or bowstring.",
+        Slot::Legs,
+        Rarity::Rare,
+        3,
+        22,
+        3,
+        310,
+        Some(Class::Ranger),
+    ),
+    eq(
+        1129,
+        "Plate Greaves",
+        "Full steel plate from hip to knee; slow, but it holds.",
+        Slot::Legs,
+        Rarity::Rare,
+        0,
+        28,
+        5,
+        360,
+        None,
+    ),
+    eq(
+        1130,
+        "Saintly Legguards",
+        "Blessed steel etched with a line of scripture down each shin.",
+        Slot::Legs,
+        Rarity::Epic,
+        1,
+        34,
+        6,
+        850,
+        Some(Class::Cleric),
+    ),
+    eq(
+        1131,
+        "Reinforced Boots",
+        "Soled in good leather with a steel cap at the toe.",
+        Slot::Feet,
+        Rarity::Uncommon,
+        0,
+        10,
+        2,
+        85,
+        None,
+    ),
+    eq(
+        1132,
+        "Swiftstep Boots",
+        "Light as slippers, quiet as a held breath.",
+        Slot::Feet,
+        Rarity::Uncommon,
+        2,
+        8,
+        1,
+        110,
+        Some(Class::Rogue),
+    ),
+    eq(
+        1133,
+        "Ironclad Sabatons",
+        "Articulated steel plates that still let you run.",
+        Slot::Feet,
+        Rarity::Rare,
+        0,
+        16,
+        3,
+        270,
+        Some(Class::Warrior),
+    ),
+    eq(
+        1134,
+        "Boots of the Vigil",
+        "Never seem to tire, no matter how far the road runs.",
+        Slot::Feet,
+        Rarity::Epic,
+        0,
+        22,
+        3,
+        700,
+        None,
+    ),
+    eq(
+        1135,
+        "Battleworn Vambraces",
+        "Dented, re-strapped, and still going; the mark of a hand that's used them.",
+        Slot::Hands,
+        Rarity::Epic,
+        5,
+        18,
+        3,
+        750,
+        None,
+    ),
     // ---- Trinkets and rings (the Curio Cart) ----------------------------
     eq(
         1200,
@@ -1593,6 +1720,7 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
         .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
+        .or_else(|| regional_finds().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
         .or_else(|| crafted().iter().find(|i| i.id == id))
         .or_else(|| fish().iter().find(|i| i.id == id))
@@ -1834,6 +1962,273 @@ fn build_kaelmyr_items() -> Vec<Item> {
     })
 }
 
+// ---- Regional finds: Sunderlakes, Broceliande, Archipelago (Wildbound) ---
+//
+// Three continents had no gear identity of their own: the Sunderlakes traded
+// purely in fish, Broceliande just borrowed a slice of the Frontier's own
+// catalog, and every Archipelago boss dropped from the Reaches table again -
+// so exploring them for combat gear had nothing to offer past what the
+// Frontier already gave you. Every zone/island's notable now also has a
+// genuine shot at two uniquely named finds of its own: modest for the two
+// gentler continents (never outclassing the Frontier's own top tier), and a
+// real step past Kaelmyr for the Archipelago, which rides Kaelmyr's own
+// endgame curve. 14 + 20 + 20 zones x 2 pieces = 108 new pieces of loot.
+
+pub const SUNDERLAKES_FIND_BASE: u32 = 3600;
+pub const BROCELIANDE_FIND_BASE: u32 = 3700;
+pub const ARCHIPELAGO_FIND_BASE: u32 = 3800;
+
+const SUNDERLAKES_ZONE_WORDS: [&str; 14] = [
+    "Reedwrought",
+    "Mireglass",
+    "Duskwater",
+    "Loamforged",
+    "Sedgebound",
+    "Glimmerdeep",
+    "Fenlight",
+    "Coldspring",
+    "Marshwarden",
+    "Driftreed",
+    "Stillmere",
+    "Brackenmoor",
+    "Hollowfen",
+    "Willowdeep",
+];
+
+const BROCELIANDE_ZONE_WORDS: [&str; 20] = [
+    "Wildwood",
+    "Hartbound",
+    "Fawnlight",
+    "Thicketborn",
+    "Mossbound",
+    "Stagheart",
+    "Fernshade",
+    "Duskgrove",
+    "Hollowvine",
+    "Timberwrought",
+    "Nightgrove",
+    "Ashenbriar",
+    "Duskfawn",
+    "Elderoak",
+    "Wintermoss",
+    "Emberleaf",
+    "Foxglove",
+    "Bramblewrought",
+    "Greencrown",
+    "Verdantfall",
+];
+
+const ARCHIPELAGO_ZONE_WORDS: [&str; 20] = [
+    "Reefbound",
+    "Tideworn",
+    "Saltcursed",
+    "Wreckbound",
+    "Stormwrack",
+    "Gullborne",
+    "Driftmarked",
+    "Maelbound",
+    "Shoalwrought",
+    "Brinecursed",
+    "Tempestborn",
+    "Wraithtide",
+    "Duskreef",
+    "Hollowtide",
+    "Sunkenmark",
+    "Farshore",
+    "Deepcaller",
+    "Worldsedge",
+    "Abyssalis",
+    "Reefwarden",
+];
+
+/// Two items per zone/island: even zones get a weapon + ring, odd zones get a
+/// chest + trinket, so the roster reads as a real gear mix rather than one
+/// slot repeated. `stats` computes (attack, hp, armor) for a slot given the
+/// 1-based tier `t`.
+#[allow(clippy::too_many_arguments)]
+fn build_regional_pair(
+    base: u32,
+    zone: usize,
+    word: &'static str,
+    t: i32,
+    rarity: Rarity,
+    price: i64,
+    desc: &'static str,
+    stats: fn(Slot, i32) -> (i32, i32, i32),
+) -> [Item; 2] {
+    let (slot_a, suffix_a, slot_b, suffix_b) = if zone.is_multiple_of(2) {
+        (Slot::Weapon, "Blade", Slot::Ring, "Band")
+    } else {
+        (Slot::Chest, "Cuirass", Slot::Trinket, "Charm")
+    };
+    let name_a: &'static str = Box::leak(format!("{word} {suffix_a}").into_boxed_str());
+    let name_b: &'static str = Box::leak(format!("{word} {suffix_b}").into_boxed_str());
+    let (a1, h1, r1) = stats(slot_a, t);
+    let (a2, h2, r2) = stats(slot_b, t);
+    [
+        eq(
+            base + zone as u32 * 2,
+            name_a,
+            desc,
+            slot_a,
+            rarity,
+            a1,
+            h1,
+            r1,
+            price,
+            None,
+        ),
+        eq(
+            base + zone as u32 * 2 + 1,
+            name_b,
+            desc,
+            slot_b,
+            rarity,
+            a2,
+            h2,
+            r2,
+            price,
+            None,
+        ),
+    ]
+}
+
+fn build_sunderlakes_finds() -> Vec<Item> {
+    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+        match slot {
+            Slot::Weapon => (6 + t, 0, 0),
+            Slot::Chest => (0, 16 + t * 3, 2 + t / 2),
+            Slot::Ring => (1 + t / 4, 6 + t, t / 5),
+            Slot::Trinket => (1 + t / 3, 8 + (t * 3) / 2, t / 5),
+            _ => (0, 0, 0),
+        }
+    }
+    (0..SUNDERLAKES_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = zone as i32 + 1;
+            let rarity = if zone < 7 {
+                Rarity::Uncommon
+            } else {
+                Rarity::Rare
+            };
+            build_regional_pair(
+                SUNDERLAKES_FIND_BASE,
+                zone,
+                SUNDERLAKES_ZONE_WORDS[zone],
+                t,
+                rarity,
+                (150 + t * 40) as i64,
+                "A find from the Sunderlakes, water-worn and quietly well made.",
+                stats,
+            )
+        })
+        .collect()
+}
+
+fn build_broceliande_finds() -> Vec<Item> {
+    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+        match slot {
+            Slot::Weapon => (10 + t, 0, 0),
+            Slot::Chest => (0, 24 + t * 4, 3 + t / 2),
+            Slot::Ring => (2 + t / 2, 10 + t * 2, t / 3),
+            Slot::Trinket => (2 + t / 2, 14 + t * 2, 1 + t / 3),
+            _ => (0, 0, 0),
+        }
+    }
+    (0..BROCELIANDE_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = zone as i32 + 1;
+            // A named find is never just Common, even in the shallowest zone.
+            let rarity = match zone / 5 {
+                0 => Rarity::Uncommon,
+                1 => Rarity::Uncommon,
+                2 => Rarity::Rare,
+                _ => Rarity::Epic,
+            };
+            build_regional_pair(
+                BROCELIANDE_FIND_BASE,
+                zone,
+                BROCELIANDE_ZONE_WORDS[zone],
+                t,
+                rarity,
+                (220 + t * 60) as i64,
+                "A find from the deep Greenwood, grown as much as made.",
+                stats,
+            )
+        })
+        .collect()
+}
+
+fn build_archipelago_finds() -> Vec<Item> {
+    // Continues the exact curve `build_generated_items` leaves off at the end
+    // of Kaelmyr (power_offset 40, tier 20 -> t=60), so the Archipelago's
+    // finds pick up with zero discontinuity and keep climbing past it - the
+    // deadliest ground in the world outclasses even the Ashen Reach.
+    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+        match slot {
+            Slot::Weapon => (30 + t * 3, 0, 0),
+            Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
+            Slot::Ring => (8 + t, 26 + t * 4, 1 + t / 2),
+            Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
+            _ => (0, 0, 0),
+        }
+    }
+    (0..ARCHIPELAGO_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = 60 + zone as i32 + 1;
+            build_regional_pair(
+                ARCHIPELAGO_FIND_BASE,
+                zone,
+                ARCHIPELAGO_ZONE_WORDS[zone],
+                t,
+                Rarity::Legendary,
+                (220 + t * 85) as i64,
+                "A find from the Shattered Archipelago, salt-cursed and past all reason strong.",
+                stats,
+            )
+        })
+        .collect()
+}
+
+/// All 108 regional finds together, built once and leaked to 'static so they
+/// slot into the same `item(id)` lookup as everything else.
+pub fn regional_finds() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let mut out = build_sunderlakes_finds();
+        out.extend(build_broceliande_finds());
+        out.extend(build_archipelago_finds());
+        out
+    })
+}
+
+/// The two regional-find ids for a Sunderlakes zone's notable.
+pub fn sunderlakes_find_ids(zone: usize) -> [u32; 2] {
+    let z = zone.min(SUNDERLAKES_ZONE_WORDS.len() - 1) as u32;
+    [
+        SUNDERLAKES_FIND_BASE + z * 2,
+        SUNDERLAKES_FIND_BASE + z * 2 + 1,
+    ]
+}
+
+/// The two regional-find ids for a Broceliande zone's notable.
+pub fn broceliande_find_ids(zone: usize) -> [u32; 2] {
+    let z = zone.min(BROCELIANDE_ZONE_WORDS.len() - 1) as u32;
+    [
+        BROCELIANDE_FIND_BASE + z * 2,
+        BROCELIANDE_FIND_BASE + z * 2 + 1,
+    ]
+}
+
+/// The two regional-find ids for an Archipelago island's boss.
+pub fn archipelago_find_ids(isle: usize) -> [u32; 2] {
+    let z = isle.min(ARCHIPELAGO_ZONE_WORDS.len() - 1) as u32;
+    [
+        ARCHIPELAGO_FIND_BASE + z * 2,
+        ARCHIPELAGO_FIND_BASE + z * 2 + 1,
+    ]
+}
+
 struct GeneratedRealm {
     base_id: u32,
     /// Added to the 1-based tier before computing stats, so a later realm's
@@ -1876,8 +2271,14 @@ fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
                 Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
                 Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
                 Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
-                Slot::Ring => (6 + t, 20 + t * 3, t / 2),
-                Slot::Trinket => (4 + t / 2, 28 + t * 4, 2 + t / 2),
+                // Also raised: the Curio Cart's Vaultkeeper's Band (Epic, power
+                // 59) used to beat a Frontier tier-1 ring outright.
+                Slot::Ring => (8 + t, 26 + t * 4, 1 + t / 2),
+                // Trinket used to land just under the Curio Cart's shop-bought
+                // Epic (Wyrmscale Talisman, power 56): a Frontier tier-1 charm
+                // read as a downgrade. Raised so tier 1 clears every shop
+                // trinket with room to spare.
+                Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
             };
             out.push(Item {
                 id,
@@ -1936,15 +2337,21 @@ pub struct Shop {
 }
 
 /// Every storefront in Embergate, keyed to the room its NPC stands in.
+// Gold shops sell up to Epic; Legendary gear is earned, not bought - the King's
+// crown outclasses whatever coin can buy, not the other way round. That used
+// to be backwards: the Mythril Arming Sword, Masterwork Greathelm/Gauntlets,
+// Runic Warplate, and Dragonbone Reliquary were all plain gold purchases that
+// outclassed early Frontier drops, so a Frontier zone that was meant to feel
+// dangerous instead handed out a downgrade. Those five items still exist (ids
+// unchanged, so nothing already equipped breaks) - they've simply moved out of
+// the shops and into the world as real finds; see the Wildbound-era loot pass.
 pub const SHOPS: &[Shop] = &[
     Shop {
         room: 3, // Market Row -> the smithy
         npc_name: "Bruna Ironhand",
         shop_name: "The Ember Forge",
         greeting: "Bruna looks up from the anvil, soot on her brow. \"Steel for steel's work. What'll it be?\"",
-        stock: &[
-            1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
-        ],
+        stock: &[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009],
     },
     Shop {
         room: 201,
@@ -1953,7 +2360,7 @@ pub const SHOPS: &[Shop] = &[
         greeting: "A wiry man peers over a counter heaped with hide and mail. \"Armor keeps a body breathing. Browse, browse.\"",
         stock: &[
             1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
-            1120, 1121, 1122,
+            1126, 1127, 1128, 1129, 1130, 1131, 1132, 1133, 1134, 1135,
         ],
     },
     Shop {
@@ -1968,7 +2375,7 @@ pub const SHOPS: &[Shop] = &[
         npc_name: "Pell the Magpie",
         shop_name: "The Curio Cart",
         greeting: "A grinning fellow guards a cart of glittering oddments. \"Rings, charms, lucky bits and bobs! All genuine, mostly.\"",
-        stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207],
+        stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206],
     },
 ];
 

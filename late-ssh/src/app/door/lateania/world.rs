@@ -3843,6 +3843,23 @@ fn extend_villages(rooms: &mut HashMap<RoomId, Room>) {
 /// Reaches' actual ids.
 const ARCH_SPAWN_ID_START: u32 = 970_000;
 
+/// An island boss's loot: the Reaches table it always drew from, plus the
+/// island's own two Wildbound finds - a real step past even Kaelmyr, since
+/// the Archipelago rides the same endgame curve one continent further.
+fn archipelago_boss_loot(isle: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..super::archipelago::ISLAND_COUNT)
+            .map(|i| {
+                let mut v = super::items::reaches_loot(i).to_vec();
+                v.extend(super::items::archipelago_find_ids(i));
+                v
+            })
+            .collect()
+    });
+    tables[isle.min(super::archipelago::ISLAND_COUNT - 1)].as_slice()
+}
+
 #[allow(clippy::needless_range_loop, clippy::type_complexity)]
 fn extend_archipelago(
     rooms: &mut HashMap<RoomId, Room>,
@@ -4033,7 +4050,11 @@ fn extend_archipelago(
                     210 + tier * 40 + depth * 5
                 },
                 respawn_secs: if boss_mob { 600 } else { 90 },
-                loot: super::items::reaches_loot(isle),
+                loot: if boss_mob {
+                    archipelago_boss_loot(isle)
+                } else {
+                    super::items::reaches_loot(isle)
+                },
                 boss: boss_mob,
                 profile,
             });
@@ -6971,10 +6992,13 @@ fn extend_lakes(
                     28 + tier * 8 + depth * 2
                 },
                 respawn_secs: if boss_mob { 240 } else { 60 },
-                // The Sunderlakes have no generated gear catalog of their own -
-                // the reward here is the fishing. A slain notable/mob may drop a
-                // fish from the zone's band, which resolves through `item`.
-                loot: lakes_loot(z),
+                // Regular mobs drop from the zone's fish band; the zone's
+                // notable also carries a shot at its own two Wildbound finds.
+                loot: if boss_mob {
+                    lakes_notable_loot(z)
+                } else {
+                    lakes_loot(z)
+                },
                 boss: boss_mob,
                 profile,
             });
@@ -7025,6 +7049,23 @@ fn lakes_loot(z: usize) -> &'static [u32] {
             .map(|zone| {
                 // Each zone's fish band (see `lakes_fish_for_zone`).
                 lakes_fish_for_zone(zone).to_vec()
+            })
+            .collect()
+    });
+    tables[z.min(LAKES_ZONES - 1)].as_slice()
+}
+
+/// A Sunderlakes notable's loot: the zone's fish band plus its own two unique
+/// Wildbound finds, so the zone's guardian has a real shot at gear a fish
+/// stall would never sell.
+fn lakes_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..LAKES_ZONES)
+            .map(|zone| {
+                let mut v = lakes_fish_for_zone(zone);
+                v.extend(super::items::sunderlakes_find_ids(zone));
+                v
             })
             .collect()
     });
@@ -7588,6 +7629,23 @@ fn broceliande_loot(z: usize) -> &'static [u32] {
     super::items::frontier_loot(tier)
 }
 
+/// A Greenwood notable's loot: the borrowed Frontier tier plus Broceliande's
+/// own two uniquely named Wildbound finds for that zone.
+fn broceliande_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..BROCELIANDE_ZONES)
+            .map(|zone| {
+                let tier = (zone / 2).min(super::items::FRONTIER_TIERS - 1);
+                let mut v = super::items::frontier_loot(tier).to_vec();
+                v.extend(super::items::broceliande_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(BROCELIANDE_ZONES - 1)].as_slice()
+}
+
 /// Build Broceliande: twenty zones of braided briar-mazes and organic
 /// fern-caverns (rooms 22000+), each carved (never a grid), chained
 /// deepest-room -> next-entrance, and hung off the Verdant Highlands (the Faerie
@@ -7794,7 +7852,11 @@ fn extend_broceliande(
                     36 + tier * 9 + depth * 2
                 },
                 respawn_secs: if boss_mob { 260 } else { 62 },
-                loot: broceliande_loot(z),
+                loot: if boss_mob {
+                    broceliande_notable_loot(z)
+                } else {
+                    broceliande_loot(z)
+                },
                 boss: boss_mob,
                 profile,
             });
