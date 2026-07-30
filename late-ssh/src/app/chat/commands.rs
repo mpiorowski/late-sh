@@ -97,10 +97,6 @@ const COMMANDS: &[Command] = &[
     global("binds", "chat guide"),
     global("brb", "go AFK and mute audio"),
     global("bug", "report a bug to #bugs"),
-    global(
-        "challenge",
-        "post daily challenge (chess, battleship, connect4, reversi, checkers, backgammon)",
-    ),
     global("coffee", "post coffee cup"),
     global("dm", "open DM"),
     global("exit", "quit confirm"),

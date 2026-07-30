@@ -229,6 +229,10 @@ fn draw_match(
             super::backgammon_ui::draw(frame, area, daily, board, detail, backgammon);
             return;
         }
+        DailyGameDetail::Briscola(briscola) => {
+            super::briscola_ui::draw(frame, area, daily, board, detail, briscola);
+            return;
+        }
     };
 
     let show_sidebar = area.width >= INFO_SIDEBAR_MIN_WIDTH;
@@ -473,6 +477,9 @@ pub(super) fn result_banner(
         DailyMatch::RESULT_NO_MOVES => ("Game over", winner_text(detail.row.winner_user_id), color),
         DailyMatch::RESULT_BORNE_OFF => {
             ("Borne off", winner_text(detail.row.winner_user_id), color)
+        }
+        DailyMatch::RESULT_MOST_POINTS => {
+            ("Most points", winner_text(detail.row.winner_user_id), color)
         }
         DailyMatch::RESULT_TIMEOUT => (
             "Timeout",

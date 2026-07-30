@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::chips::CHIP_USER_CHANGED_CHANNEL;
+use super::chips::ChipMove;
 
 pub const GAME_PAYOUT_PERIOD_COOLDOWN: &str = "cooldown";
 pub const GAME_PAYOUT_PERIOD_UTC_DAY: &str = "utc_day";
@@ -24,7 +24,7 @@ pub struct GamePayoutPeriodGrant<'a> {
     pub period_kind: &'a str,
     pub period_key: &'a str,
     pub amount: i64,
-    pub ledger_reason: &'a str,
+    pub chip_move: ChipMove,
 }
 
 impl GamePayout {
@@ -77,7 +77,7 @@ impl GamePayout {
         payout_kind: &str,
         payout_date: NaiveDate,
         amount: i64,
-        ledger_reason: &str,
+        chip_move: ChipMove,
     ) -> Result<GamePayoutClaim> {
         let period_key = payout_date.to_string();
         Self::grant_period(
@@ -89,7 +89,7 @@ impl GamePayout {
                 period_kind: GAME_PAYOUT_PERIOD_UTC_DAY,
                 period_key: &period_key,
                 amount,
-                ledger_reason,
+                chip_move,
             },
         )
         .await
@@ -106,7 +106,7 @@ impl GamePayout {
             period_kind,
             period_key,
             amount,
-            ledger_reason,
+            chip_move,
         } = grant;
         ensure!(amount > 0, "game payout amount must be positive");
 
@@ -130,16 +130,8 @@ impl GamePayout {
                  ),
                  ledger AS (
                     INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-                    SELECT $1, $6, $7, 'game_payout_claims', id::text
+                    SELECT $1, $6, $7, $8, id::text
                     FROM inserted
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($8, $1::text)
-                    WHERE EXISTS (SELECT 1 FROM inserted)
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
                  )
                  SELECT
                    EXISTS (SELECT 1 FROM inserted) AS credited,
@@ -147,8 +139,7 @@ impl GamePayout {
                      (SELECT balance FROM upserted),
                      (SELECT balance FROM user_chips WHERE user_id = $1),
                      0
-                   )::bigint AS balance
-                 FROM chip_notified",
+                   )::bigint AS balance",
                 &[
                     &user_id,
                     &game,
@@ -156,8 +147,8 @@ impl GamePayout {
                     &period_kind,
                     &period_key,
                     &amount,
-                    &ledger_reason,
-                    &CHIP_USER_CHANGED_CHANNEL,
+                    &chip_move.reason(),
+                    &chip_move.source_kind(),
                 ],
             )
             .await?;
@@ -174,7 +165,7 @@ impl GamePayout {
         payout_kind: &str,
         cooldown: Duration,
         amount: i64,
-        ledger_reason: &str,
+        chip_move: ChipMove,
     ) -> Result<GamePayoutClaim> {
         ensure!(amount > 0, "game payout amount must be positive");
         let cooldown_secs = cooldown.as_secs_f64();
@@ -234,16 +225,8 @@ impl GamePayout {
                  ),
                  ledger AS (
                     INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
-                    SELECT $1, $6, $7, 'game_payout_claims', id::text
+                    SELECT $1, $6, $7, $8, id::text
                     FROM inserted
-                    RETURNING 1
-                 ),
-                 chip_notify AS (
-                    SELECT pg_notify($8, $1::text)
-                    WHERE EXISTS (SELECT 1 FROM inserted)
-                 ),
-                 chip_notified AS (
-                    SELECT count(*) FROM chip_notify
                  )
                  SELECT
                    EXISTS (SELECT 1 FROM inserted) AS credited,
@@ -251,8 +234,7 @@ impl GamePayout {
                      (SELECT balance FROM upserted),
                      (SELECT balance FROM user_chips WHERE user_id = $1),
                      0
-                   )::bigint AS balance
-                 FROM chip_notified",
+                   )::bigint AS balance",
                 &[
                     &user_id,
                     &game,
@@ -260,8 +242,8 @@ impl GamePayout {
                     &GAME_PAYOUT_PERIOD_COOLDOWN,
                     &cooldown_secs,
                     &amount,
-                    &ledger_reason,
-                    &CHIP_USER_CHANGED_CHANNEL,
+                    &chip_move.reason(),
+                    &chip_move.source_kind(),
                 ],
             )
             .await?;

@@ -4,6 +4,8 @@ pub mod battleship;
 pub mod battleship_ui;
 pub mod board_input;
 pub mod board_ui;
+pub mod briscola;
+pub mod briscola_ui;
 pub mod checkers;
 pub mod checkers_ui;
 pub mod connect4;

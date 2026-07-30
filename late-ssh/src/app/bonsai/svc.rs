@@ -4,7 +4,7 @@ use late_core::db::Db;
 use late_core::models::{
     bonsai::{BonsaiV2Tree, BonsaiV2TreeParams},
     bonsai::{DailyCare, Grave, Tree},
-    chips::UserChips,
+    chips::{ChipMove, UserChips},
 };
 use rand_core::{OsRng, RngCore};
 use tokio::sync::broadcast;
@@ -145,7 +145,7 @@ impl BonsaiService {
 
     async fn add_water_chip_bonus(&self, user_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        UserChips::add_bonus(&client, user_id, WATER_CHIP_BONUS).await?;
+        UserChips::apply(&**client, user_id, ChipMove::Credit, WATER_CHIP_BONUS, None).await?;
         Ok(())
     }
 

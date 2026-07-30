@@ -869,10 +869,10 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 - **Venue is the `lodged` flag**, not upstream's location string (we have
   no location column; the village/inn split is the only one that exists).
 - All engage/settle/news/report prose is original.
-- The victim's death applies our standard hygiene (companions, buffs,
-  drunkenness cleared) — upstream's victim UPDATE leaves them; ours keeps
-  the "companions don't follow past the grave" invariant every other death
-  path has.
+- The victim's death applies our standard hygiene (buffs and drunkenness
+  cleared) — upstream's victim UPDATE leaves them; ours keeps the hygiene
+  every other death path has. Companions survive it since the 2026-07
+  user-feedback sweep (upstream only wipes them on a dragon kill).
 - Abandoning mid-fight is only possible by leaving the door (Esc fights a
   round instead); the attack stays spent and the target stays flagged,
   matching upstream's walk-away.
@@ -1759,21 +1759,33 @@ HoF, forest spawn/jitter/payouts, bank formulas + transfers, clans core
 A veteran player's DM feedback (gathered 2026-07-29 via `scripts/dump_dms.sh`;
 he played a modded Bulgarian DragonPrime server, lotgd.digsys.bg, mid-2000s,
 so every claim was double-checked against the local `upstream-lotgd/` clone
-rather than taken at face value). **Investigation only, no code changed yet** —
-each finding below is a queued fix/decision.
+rather than taken at face value). **The fix pass landed 2026-07** (same
+session queue): every checked box below is implemented and tested; the mod
+idea pool stays unbuilt by decision (feature-scale, not QoL).
 
 ### Parity findings (real deviations his feedback caught)
 
-- [ ] **Game-day length: stock is 4 game days per real day.**
+- [x] **Game-day length: stock is 4 game days per real day.**
   `lib/datetime.php:127,138` — `getsetting("daysperday", 4)`; the game clock
-  runs 4× real time, so a new day rolls every 6 real hours. Ours rolls one
-  per UTC calendar day. This is the shipped default the defaults rule says
-  we port, and it was missed; it is the root of his "too few turns", "one
-  game day per calendar day", and most of the gems-too-rare / progress-slow
-  feel (his server ran 3/day, close to stock). **Decision needed**: adopt
-  the 4×-clock (or some multiple), or document 1/day as a deliberate
-  late.sh pacing deviation (the A Dark Room precedent).
-- [ ] **Shop gating: gear is NOT level-gated upstream.** `weapons.php:66` /
+  runs 4× real time, so a new day rolls every 6 real hours. Ours rolled one
+  per UTC calendar day — the shipped default the defaults rule says we
+  port, missed; it was the root of his "too few turns", "one game day per
+  calendar day", and most of the gems-too-rare / progress-slow feel (his
+  server ran 3/day). **Decided + fixed 2026-07: 2 game days per real day**
+  (12h, rolling 00:00/12:00 UTC) — a deliberate halving of stock's 4 for
+  late.sh's slower pace. `svc::today()` is anchored at 2026-07-29 00:00 UTC
+  = calendar day 20 663 so stored day numbers (blob `last_day`, commentary
+  watermarks, news rows) stay continuous; pre-switch rows age two game days
+  per real day, shortening their 180-game-day retention to 90 real days,
+  accepted.
+- [x] **Shop gating: gear is NOT level-gated upstream** — **fixed 2026-07**:
+  `shop_menu` now lists the full 15-row ladder with the equipped row
+  disabled; the only purchase gate is affordability against the net swap
+  cost (price less the 75% trade-in, `round(value·.75)`), and trading down
+  pays the difference out exactly as upstream's charge-then-credit does.
+  One name set (ours) stands in for upstream's names-only DK-tier reskins;
+  re-buying the equipped row is refused (a TUI nicety). Original finding:
+  `weapons.php:66` /
   `armor.php:59` pick the shop *tier* by `dragonkills`
   (`max(level) WHERE level <= dragonkills`), then list that tier's full 15
   rows (damage/defense 1..15); the only purchase gate is affordability
@@ -1787,7 +1799,11 @@ each finding below is a queued fix/decision.
   fights are harder here than upstream (his "lost to my teacher second day
   in a row with all appropriate gear" — upstream players out-gear their
   level with gold; the masters themselves audited clean).
-- [ ] **Companions are NOT wiped by player death upstream.** Only
+- [x] **Companions are NOT wiped by player death upstream** — **fixed
+  2026-07**: the `companions.clear()` came out of `die()`, `pvp_die()`,
+  and `pvp_slain()` (the dragon-kill wipe stays); torment fights already
+  fielded companions, so the dead now fight beside them exactly as
+  `allowinshades` allows. Original finding: only
   `dragon.php:227-228` clears companions. Forest/PvE death never touches
   them; the graveyard only `suspend_companions("allowinshades")`
   (`lib/graveyard/case_battle_search.php:8`), which every stock companion
@@ -1800,16 +1816,22 @@ each finding below is a queued fix/decision.
   matches. (His "resurrect the companion with gold after you revive" is
   his mod; stock companions simply survive, and wounded ones heal for gold
   at the camp/healer.)
-- [ ] **The Healer's Hut is a forest nav, not a village building.**
+- [x] **The Healer's Hut is a forest nav, not a village building** —
+  **fixed 2026-07**: the Mendery row moved from the village menu to the top
+  of the forest menu (upstream's "Heal" section precedes "Fight"), Esc from
+  the healer returns to the forest, companion mending and the free
+  overheal-normalize came along unchanged. Original finding:
   `lib/forest.php:11-12` ("Heal" section, `healer.php`); `village.php` has
-  no heal row at all. Ours is village-only ("The Mendery") with no forest
-  row — exactly his "when you need healing, you're almost always in the
-  forest".
-- [ ] **Multi-fight target picking is missing** (incidental find while
-  checking his autofight memory): `lib/fightnav.php` adds an *ungated*
-  "Targets" section whenever `count($newenemies) > 1` — the player chooses
-  which living foe to strike (`istarget`). Ours always strikes the first
-  living foe. Affects multi-fights (≥10 DKs) only.
+  no heal row at all — exactly his "when you need healing, you're almost
+  always in the forest".
+- [x] **Multi-fight target picking is missing** (incidental find while
+  checking his autofight memory) — **fixed 2026-07**: `Encounter.target_idx`
+  + "Strike <name>" rows for every living non-target foe; picking one
+  re-aims and fights the round (upstream's `op=fight&newtarget`), and the
+  aim falls back to the first living foe when the mark drops. Original
+  finding: `lib/fightnav.php` adds an *ungated* "Targets" section whenever
+  `count($newenemies) > 1` — the player chooses which living foe to strike
+  (`istarget`). Ours always struck the first living foe.
 
 ### Verified stock (his feel, not deviations)
 
@@ -1825,9 +1847,13 @@ each finding below is a queued fix/decision.
   mostly the day-length deviation plus his mod's extra gem sources.
 - **Autofight** (5/10 rounds, until-end) *is* stock code
   (`lib/fightnav.php`) but behind `getsetting("autofight", 0)` — default
-  **off**, so correctly absent under the defaults rule; his server enabled
-  it. Optional adoption candidate for the TUI (it would save a lot of
-  Enter-pressing in a terminal). (Surfaced via his #suggestions post.)
+  **off**, so its absence was correct under the defaults rule; his server
+  enabled it. **Adopted 2026-07 as a deliberate QoL deviation** (it saves a
+  lot of Enter-pressing in a terminal): "Auto: 5/10 rounds" plus the finish
+  row — "to the finish" single-foe, "until your target falls" multi-foe,
+  upstream's `auto=full` split — in every fight kind, exactly where
+  upstream's block sits (outside the `allowspecial` gate, so PvP and the
+  master's yard get it too). (Surfaced via his #suggestions post.)
 
 ### Mod content, not stock (idea pool only)
 
@@ -1849,18 +1875,28 @@ prose/names must stay ours, add-on module code/text is off-limits):
 
 ### UX notes (TUI-side, ours to design; no upstream counterpart)
 
-- Bard outcome 4 and drink results don't announce the HP change amount.
-- XP/HP bars alongside the numbers; HP color when overhealed, XP color when
-  the master challenge is within reach.
-- Align your HP directly under the foe's in the fight panel.
-- Stat-rail lines for active bonuses (mount/companion/drink buffs) with
-  remaining duration. (Upstream has no persistent buff list either — buffs
-  only announce per round and on wear-off — so this is pure UX.)
-- More creature name variety: ours is 64 names over 16 levels vs upstream's
-  291 seed rows; `data::CREATURE_NAMES` appends per level without touching
-  the stat tables.
-- Forest menu default highlight on "Look for Something to Kill" (accidental
-  slumming picks after a fight ends). (From his #suggestions post.)
+Landed 2026-07 with the fix pass:
+
+- [x] Bard outcome 4 and drink results announce the HP change amount (a
+  zero-delta drink now says so instead of staying silent).
+- [x] HP glows gold when overhealed; Exp lights up when the master
+  challenge is within reach.
+- [x] The fight panel is column-aligned: your HP sits directly under the
+  foes' readouts.
+- [x] Stat-rail lines for active bonuses (the mount's rounds today, each
+  persistent buff's remaining rounds). (Upstream has no persistent buff
+  list either — buffs only announce per round and on wear-off — pure UX.)
+- [x] The forest menu cursor defaults to "Look for Something to Kill", so
+  a stray Enter after a fight can't slum by accident. (From his
+  #suggestions post.)
+
+Still open:
+
+- [ ] XP/HP *bars* alongside the numbers (the color cues landed; drawn
+  bars are a design decision for a later UI pass).
+- [ ] More creature name variety: ours is 64 names over 16 levels vs
+  upstream's 291 seed rows; `data::CREATURE_NAMES` appends per level
+  without touching the stat tables.
 
 ## Out of scope (not stock / not portable)
 

@@ -16,6 +16,7 @@ pub const REWARD_CLAIM_POLICY_UTC_DAY: &str = "utc_day";
 pub const ASTERION_DAILY_ESCAPE_REWARD_KEY: &str = "asterion_daily_escape";
 pub const DAILY_BACKGAMMON_WIN_REWARD_KEY: &str = "daily_backgammon_win_payout";
 pub const DAILY_BATTLESHIP_WIN_REWARD_KEY: &str = "daily_battleship_win_payout";
+pub const DAILY_BRISCOLA_WIN_REWARD_KEY: &str = "daily_briscola_win_payout";
 pub const DAILY_CHECKERS_WIN_REWARD_KEY: &str = "daily_checkers_win_payout";
 pub const DAILY_CHESS_WIN_REWARD_KEY: &str = "daily_chess_win_payout";
 pub const DAILY_CONNECT4_WIN_REWARD_KEY: &str = "daily_connect4_win_payout";
