@@ -79,7 +79,7 @@ impl BonsaiService {
         };
 
         if tree.is_alive {
-            self.apply_care_penalties(&client, user_id, today, protection, &mut tree)
+            self.apply_care_penalties(&client, user_id, today, &mut tree)
                 .await?;
         }
 
@@ -297,30 +297,27 @@ impl BonsaiService {
         client: &tokio_postgres::Client,
         user_id: Uuid,
         today: NaiveDate,
-        protection: Option<BonsaiDecayProtection>,
         tree: &mut Tree,
     ) -> Result<()> {
         for care in DailyCare::unapplied_before(client, user_id, today).await? {
             let missed_water = !care.watered && !care.water_penalty_applied;
-            let protected =
-                protection.is_some_and(|protection| protection.covers_day(care.care_date));
+            // The Bonsai Decay Shield covers decay only: it keeps a dry spell
+            // from killing the tree, but pruning discipline is still on the
+            // player, so it deliberately has no say here.
             let missed_prune = (care.cut_branch_ids.len() as i32) < care.branch_goal
-                && !care.prune_penalty_applied
-                && !protected;
+                && !care.prune_penalty_applied;
 
             if missed_prune {
                 tree.growth_points = tree.growth_points.saturating_sub(MISSED_PRUNE_GROWTH_LOSS);
                 Tree::lose_growth(client, user_id, MISSED_PRUNE_GROWTH_LOSS).await?;
             }
 
-            // A protected day is still marked settled (both flags), so it is
-            // never re-evaluated once the shield expires.
             DailyCare::mark_penalties_applied(
                 client,
                 user_id,
                 care.care_date,
-                missed_water || protected,
-                missed_prune || protected,
+                missed_water,
+                missed_prune,
             )
             .await?;
         }
