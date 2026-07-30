@@ -693,13 +693,12 @@ impl Active {
         }
         // The unarmed master punches twice as fast (upstream halves the
         // button's cooldown in `createAttackButton`).
-        let cooldown = if weapon.kind() == WeaponKind::Unarmed
-            && ctx.game.has_perk(Perk::UnarmedMaster)
-        {
-            weapon.cooldown() / 2.0
-        } else {
-            weapon.cooldown()
-        };
+        let cooldown =
+            if weapon.kind() == WeaponKind::Unarmed && ctx.game.has_perk(Perk::UnarmedMaster) {
+                weapon.cooldown() / 2.0
+            } else {
+                weapon.cooldown()
+            };
         fight.weapon_cooldown.insert(weapon, cooldown);
 
         let landed = rng.r#gen::<f64>() <= ctx.game.hit_chance();
