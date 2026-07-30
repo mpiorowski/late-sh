@@ -99,7 +99,7 @@ fn quest_sections() -> Vec<GuideSection> {
     vec![GuideSection {
         title: "Quests",
         body: vec![
-            "Hub Quests draws two daily quests and one weekly quest on UTC boundaries.".to_string(),
+            "Two daily quests and one weekly quest are drawn on UTC boundaries; they render at the top of The Arcade (page 2).".to_string(),
             "Daily slot 1 is an easy Arcade quest; slot 2 is a medium one.".to_string(),
             "The weekly slot is a hard Arcade quest.".to_string(),
             "Quest rewards pay automatically when the progress target completes.".to_string(),
@@ -145,11 +145,10 @@ fn leaderboard_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
-            title: "Le Word Board",
+            title: "Daily Win Boards",
             body: vec![
-                "Monthly and all-time rows count solved daily words.".to_string(),
-                "Win streak ranks each user's longest run of consecutive solved puzzle dates."
-                    .to_string(),
+                "Every daily puzzle has its own board on Leaderboards (page 6).".to_string(),
+                "Monthly and all-time columns count solved daily boards.".to_string(),
             ],
         },
         GuideSection {
@@ -157,7 +156,7 @@ fn leaderboard_sections() -> Vec<GuideSection> {
             body: vec![
                 "Monthly boards reset on the 1st, UTC.".to_string(),
                 "All-time score boards persist.".to_string(),
-                "Hub refreshes from the server about every 30 seconds.".to_string(),
+                "Leaderboards refresh from the server about every 5 minutes.".to_string(),
             ],
         },
     ]
@@ -296,7 +295,7 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "House Tables",
             body: vec![
-                "Ctrl+Q opens the Lobby; house tables sit below the daily matches.".to_string(),
+                "Ctrl+G opens the Lobby; house tables sit below the daily matches.".to_string(),
                 "There is one fixed table per game: no creating tables, no settings forms."
                     .to_string(),
                 "Poker, Blackjack, Asterion, Tron, and Super Snake.".to_string(),

@@ -6,32 +6,22 @@ use ratatui::layout::Rect;
 /// Max gap between two left-clicks (on the same tab) to count as a double-click.
 pub(crate) const HUB_DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 
+/// What remains of the old five-tab Hub: the modal is the Shop now. Quests
+/// render at the top of The Arcade and leaderboards moved to their own
+/// top-level page, so the only second tab is the admin editor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HubTab {
-    Leaderboard,
-    Dailies,
     Shop,
-    Events,
     Admin,
 }
 
 impl HubTab {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::Dailies,
-        Self::Shop,
-        Self::Leaderboard,
-        Self::Events,
-        Self::Admin,
-    ];
-    pub(crate) const PUBLIC: [Self; 4] =
-        [Self::Dailies, Self::Shop, Self::Leaderboard, Self::Events];
+    pub(crate) const ALL: [Self; 2] = [Self::Shop, Self::Admin];
+    pub(crate) const PUBLIC: [Self; 1] = [Self::Shop];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Leaderboard => "Leaderboard",
-            Self::Dailies => "Quests",
             Self::Shop => "Shop",
-            Self::Events => "Events",
             Self::Admin => "Admin",
         }
     }
@@ -56,7 +46,7 @@ pub(crate) struct HubState {
 impl HubState {
     pub(crate) fn new() -> Self {
         Self {
-            selected_tab: HubTab::Dailies,
+            selected_tab: HubTab::Shop,
             tab_rects: Cell::new([Rect::new(0, 0, 0, 0); HubTab::ALL.len()]),
             last_click: None,
         }

@@ -226,6 +226,7 @@ struct DrawContext<'a> {
     show_aquarium_tray: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
     hub_state: &'a crate::app::hub::state::HubState,
+    leaderboard_page: &'a crate::app::leaderboard::state::LeaderboardPageState,
     quest_state: &'a crate::app::hub::dailies::state::QuestState,
     shop_state: &'a crate::app::hub::shop::state::ShopState,
     hub_admin_state: &'a crate::app::hub::admin::state::AdminState,
@@ -1023,6 +1024,7 @@ impl App {
                         show_aquarium_tray: self.show_aquarium_tray,
                         aquarium_state: &self.aquarium_state,
                         hub_state: &self.hub_state,
+                        leaderboard_page: &self.leaderboard_page,
                         quest_state: &self.quest_state,
                         shop_state: &self.shop_state,
                         hub_admin_state: &self.hub_admin_state,
@@ -1447,6 +1449,16 @@ impl App {
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
                     daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
+                    quest_state: ctx.quest_state,
+                },
+            ),
+            Screen::Leaderboard => crate::app::leaderboard::ui::draw(
+                frame,
+                content_area,
+                &crate::app::leaderboard::ui::LeaderboardPageView {
+                    state: ctx.leaderboard_page,
+                    data: ctx.leaderboard,
+                    user_id: ctx.user_id,
                 },
             ),
             Screen::Clubhouse => crate::app::clubhouse::ui::draw(
@@ -1573,11 +1585,8 @@ impl App {
                 inner,
                 crate::app::hub::ui::HubDrawProps {
                     state: ctx.hub_state,
-                    quest_state: ctx.quest_state,
                     shop_state: ctx.shop_state,
                     admin_state: ctx.hub_admin_state,
-                    leaderboard: ctx.leaderboard,
-                    user_id: ctx.user_id,
                     pet_species: ctx.pet_species,
                     is_admin: ctx.is_admin,
                 },
@@ -1753,6 +1762,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
         (Screen::Pinstar, "5"),
+        (Screen::Leaderboard, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
         if idx > 0 {
@@ -1802,6 +1812,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
+        Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
@@ -2117,8 +2128,8 @@ fn app_frame_help_hint_title(hint_style: HelpHintStyle) -> Line<'static> {
     let use_caret = matches!(hint_style, HelpHintStyle::SpacedCaret);
     let hints = [
         ("Settings", ctrl_hint("O", use_caret)),
-        ("Hub", ctrl_hint("G", use_caret)),
-        ("Lobby", ctrl_hint("Q", use_caret)),
+        ("Lobby", ctrl_hint("G", use_caret)),
+        ("Shop", "/shop"),
         ("Guide", "?"),
         ("Exit", "qq"),
     ];
@@ -2141,10 +2152,8 @@ fn ctrl_hint(key: &'static str, use_caret: bool) -> &'static str {
     match (use_caret, key) {
         (true, "O") => "^O",
         (true, "G") => "^G",
-        (true, "Q") => "^Q",
         (false, "O") => "Ctrl+O",
         (false, "G") => "Ctrl+G",
-        (false, "Q") => "Ctrl+Q",
         _ => key,
     }
 }

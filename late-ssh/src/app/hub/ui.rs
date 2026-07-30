@@ -1,4 +1,3 @@
-use late_core::models::leaderboard::LeaderboardData;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -6,27 +5,22 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use uuid::Uuid;
 
 use crate::app::{
     common::theme,
     hub::state::{HubState, HubTab},
-    hub::{admin::state::AdminState, dailies::state::QuestState, shop::state::ShopState},
+    hub::{admin::state::AdminState, shop::state::ShopState},
 };
 
 pub(crate) struct HubDrawProps<'a> {
     pub state: &'a HubState,
-    pub quest_state: &'a QuestState,
     pub shop_state: &'a ShopState,
     pub admin_state: &'a AdminState,
-    pub leaderboard: &'a LeaderboardData,
-    pub user_id: Uuid,
     pub pet_species: &'a str,
     pub is_admin: bool,
 }
 
 struct HubLayout {
-    popup: Rect,
     body: Rect,
     footer: Rect,
 }
@@ -34,45 +28,22 @@ struct HubLayout {
 pub(crate) fn draw(frame: &mut Frame, area: Rect, props: HubDrawProps<'_>) {
     let HubDrawProps {
         state,
-        quest_state,
         shop_state,
         admin_state,
-        leaderboard,
-        user_id,
         pet_species,
         is_admin,
     } = props;
 
     let layout = draw_hub_shell(frame, area, state, is_admin);
-    // Every tab but the leaderboard renders inside the body row and gets the
-    // shell's footer. The leaderboard spans the whole popup so its grid can
-    // meet the border, which means it draws its own footer.
     match state.selected_tab() {
-        HubTab::Leaderboard => crate::app::hub::leaderboard::draw(
-            frame,
-            layout.popup,
-            layout.footer,
-            leaderboard,
-            user_id,
-            is_admin,
-        ),
-        HubTab::Dailies => {
-            crate::app::hub::dailies::ui::draw(frame, layout.body, quest_state);
-            draw_footer(frame, layout.footer, is_admin);
-        }
         HubTab::Shop => {
             crate::app::hub::shop::ui::draw(frame, layout.body, shop_state, pet_species);
-            draw_footer(frame, layout.footer, is_admin);
-        }
-        HubTab::Events => {
-            crate::app::hub::events::draw(frame, layout.body);
-            draw_footer(frame, layout.footer, is_admin);
         }
         HubTab::Admin => {
             crate::app::hub::admin::ui::draw(frame, layout.body, admin_state, is_admin);
-            draw_footer(frame, layout.footer, is_admin);
         }
     }
+    draw_footer(frame, layout.footer, is_admin);
 }
 
 fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) -> HubLayout {
@@ -80,7 +51,7 @@ fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: boo
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Hub ")
+        .title(" Shop ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -103,13 +74,18 @@ fn draw_hub_shell(frame: &mut Frame, area: Rect, state: &HubState, is_admin: boo
 
     draw_tabs(frame, rows[1], state, is_admin);
     HubLayout {
-        popup,
         body: rows[3],
         footer: rows[5],
     }
 }
 
+/// The tab strip only exists for admins: everyone else has exactly one tab
+/// and the modal title already names it.
 fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
+    if HubTab::visible_tabs(is_admin).len() < 2 {
+        state.set_tab_rects([Rect::new(0, 0, 0, 0); HubTab::ALL.len()]);
+        return;
+    }
     let selected = state.selected_tab();
     let mut spans = vec![Span::raw("  ")];
     let mut rects: [Rect; HubTab::ALL.len()] = [Rect::new(0, 0, 0, 0); HubTab::ALL.len()];
@@ -148,14 +124,17 @@ fn draw_tabs(frame: &mut Frame, area: Rect, state: &HubState, is_admin: bool) {
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, is_admin: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let text = Style::default().fg(theme::TEXT_DIM());
-    let mut spans = vec![
-        Span::raw("  "),
-        Span::styled("Tab/S+Tab", key),
-        Span::styled(" switch tabs  ", text),
-        Span::styled(if is_admin { "1-5" } else { "1-4" }, key),
-        Span::styled(" jump  ", text),
-    ];
-    spans.extend([Span::styled("click", key), Span::styled(" tab  ", text)]);
+    let mut spans = vec![Span::raw("  ")];
+    if is_admin {
+        spans.extend([
+            Span::styled("Tab/S+Tab", key),
+            Span::styled(" switch tabs  ", text),
+            Span::styled("1-2", key),
+            Span::styled(" jump  ", text),
+            Span::styled("click", key),
+            Span::styled(" tab  ", text),
+        ]);
+    }
     spans.extend([Span::styled("Esc/q", key), Span::styled(" close", text)]);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

@@ -10,10 +10,9 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::quest::{
-        DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, DailyQuestStreakSnapshot,
-        MAX_DAILY_QUEST_STREAK_BONUS_LEVEL, QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
-        QUEST_USER_CHANGED_CHANNEL, QuestProgressUpdate, QuestSnapshotRow, RewardTemplateAdminRow,
-        RewardTemplateAdminUpdate, apply_progress_event, ensure_current_assignments,
+        DailyQuestStreakSnapshot, QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL,
+        QuestProgressUpdate, QuestSnapshotRow, RewardTemplateAdminRow, RewardTemplateAdminUpdate,
+        apply_progress_event, ensure_current_assignments,
         get_daily_quest_streak_snapshot, list_active_snapshot_rows,
         list_reward_templates_for_admin, listen_for_quest_changes,
         update_reward_template_for_admin,
@@ -446,12 +445,4 @@ fn match_login_once(event: &ActivityEvent) -> Option<QuestProgressUpdate> {
 
 fn param_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
     params.get(key).and_then(Value::as_str)
-}
-
-pub(crate) fn daily_streak_bonus_label(level: i32) -> String {
-    format!(
-        "{} chips",
-        i64::from(level.clamp(0, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL))
-            * DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL
-    )
 }

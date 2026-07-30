@@ -16,13 +16,47 @@ pub async fn listen_for_chip_changes(client: &Client) -> Result<()> {
     Ok(())
 }
 
-/// Map a difficulty key to its chip bonus.
-pub fn difficulty_bonus(key: &str) -> i64 {
-    match key {
-        "easy" => 100,
-        "medium" | "mid" | "draw-1" => 250,
-        "hard" | "draw-3" => 500,
-        _ => 100,
+/// The three daily-puzzle difficulty tiers. One enum owns both reward
+/// scales: the chip bonus a daily win pays (mirrored in seeded
+/// `reward_templates` rows) and the Arcade Wins leaderboard points, so the
+/// two can never drift apart in string-matched copies. Solitaire's draw
+/// modes are not tiers: draw-1 pays [`Difficulty::Medium`] chips but scores
+/// [`Difficulty::Easy`] points, so its mapping lives at each consumer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Difficulty {
+    Easy,
+    Medium,
+    Hard,
+}
+
+impl Difficulty {
+    pub const ALL: &'static [Self] = &[Self::Easy, Self::Medium, Self::Hard];
+
+    /// The persisted `difficulty_key` value.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// Chip bonus for a daily win at this tier.
+    pub const fn chips(self) -> i64 {
+        match self {
+            Self::Easy => 100,
+            Self::Medium => 250,
+            Self::Hard => 500,
+        }
+    }
+
+    /// Monthly Arcade Wins leaderboard points for a daily win at this tier.
+    pub const fn points(self) -> i64 {
+        match self {
+            Self::Easy => 1,
+            Self::Medium => 3,
+            Self::Hard => 5,
+        }
     }
 }
 
@@ -444,34 +478,4 @@ impl UserChips {
             .map(|row| (row.get("user_id"), row.get("balance")))
             .collect())
     }
-
-    /// Top chip balances for the leaderboard.
-    pub async fn top_balances(client: &Client, limit: i64) -> Result<Vec<ChipLeader>> {
-        let rows = client
-            .query(
-                "SELECT u.username, c.user_id, c.balance
-                 FROM user_chips c
-                 JOIN users u ON u.id = c.user_id
-                 WHERE c.balance > 0
-                 ORDER BY c.balance DESC
-                 LIMIT $1",
-                &[&limit],
-            )
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| ChipLeader {
-                username: row.get("username"),
-                user_id: row.get("user_id"),
-                balance: row.get("balance"),
-            })
-            .collect())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChipLeader {
-    pub username: String,
-    pub user_id: Uuid,
-    pub balance: i64,
 }

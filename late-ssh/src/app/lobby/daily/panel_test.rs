@@ -95,7 +95,7 @@ fn outcome_rows_announce_results() {
 fn hints_line_shows_both_lobby_keys() {
     let props = props_with(Vec::new(), 0);
     let hint = line_text(&daily_panel_lines(21, &props)[5]);
-    assert_eq!(hint.trim_end(), "ctrl+q · ` toggle");
+    assert_eq!(hint.trim_end(), "ctrl+g · ` toggle");
 }
 
 #[test]

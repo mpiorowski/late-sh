@@ -78,15 +78,33 @@ async fn transfer_gift_notifies_both_parties() {
     }
 }
 
+/// Both reward scales hang off the one tier enum; these are the user-facing
+/// numbers documented in the Hub guide and CONTEXT.md, so a change here is a
+/// product decision, not a refactor.
 #[test]
-fn difficulty_bonus_mapping() {
-    assert_eq!(difficulty_bonus("easy"), 100);
-    assert_eq!(difficulty_bonus("medium"), 250);
-    assert_eq!(difficulty_bonus("mid"), 250);
-    assert_eq!(difficulty_bonus("hard"), 500);
-    assert_eq!(difficulty_bonus("draw-1"), 250);
-    assert_eq!(difficulty_bonus("draw-3"), 500);
-    assert_eq!(difficulty_bonus("unknown"), 100);
+fn difficulty_tiers() {
+    assert_eq!(
+        Difficulty::ALL,
+        &[Difficulty::Easy, Difficulty::Medium, Difficulty::Hard]
+    );
+    assert_eq!(
+        Difficulty::ALL.iter().map(|d| d.key()).collect::<Vec<_>>(),
+        ["easy", "medium", "hard"]
+    );
+    assert_eq!(
+        Difficulty::ALL
+            .iter()
+            .map(|d| d.chips())
+            .collect::<Vec<_>>(),
+        [100, 250, 500]
+    );
+    assert_eq!(
+        Difficulty::ALL
+            .iter()
+            .map(|d| d.points())
+            .collect::<Vec<_>>(),
+        [1, 3, 5]
+    );
 }
 
 #[test]

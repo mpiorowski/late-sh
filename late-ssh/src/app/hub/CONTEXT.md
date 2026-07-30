@@ -2,50 +2,32 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-07-27 (leaderboard sessions seed from the published snapshot; a connect refreshes one that has aged past `REFRESH_INTERVAL`)
-- Purpose: local working context for the Hub domain: global modal, leaderboard, quests, admin reward-template/shop-item editing, shop, Shop-unlocked aquarium, and future event surfaces.
+- Last updated: 2026-07-30 (Hub modal reduced to the Shop, opened by `/shop`, no chord; Leaderboard tab replaced by the top-level Leaderboards page fed by roster-generated boards; Quests tab replaced by the Arcade-top strip; Events tab deleted)
+- Purpose: local working context for the Hub domain: the Shop modal, the leaderboard data/service behind the top-level Leaderboards page, the quest service behind the Arcade strip, admin reward-template/shop-item editing, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the global Hub modal opened with reserved global `Ctrl+G` (except active Artboard editing) and the cross-product domains surfaced inside it: Shop, Leaderboard, Quests, Events, and the admin-only reward-template/shop-item editor. Former Guide content now lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled with the `/aquarium` composer command (alias `/aq`).
+`late-ssh/src/app/hub` owns the Shop modal (opened with the `/shop` composer command or a locked-feature nudge; there is no global chord) and the cross-product services that outgrew it: `LeaderboardService` feeding the top-level Leaderboards page (`late-ssh/src/app/leaderboard/`, screen `6`), `QuestService` feeding the quest strip at the top of The Arcade lobby, and the admin-only reward-template/shop-item editor as the modal's second tab. Former Guide content lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled with the `/aquarium` composer command (alias `/aq`).
 
-Hub is a cross-product domain surface. It may render Arcade, Lobby, economy, marketplace, and event information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
+Hub is a cross-product domain surface. Its services may summarize Arcade, Lobby, economy, and marketplace information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
 Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 ## Source Map
 
-- `state.rs`: selected Hub tab and tab cycling.
-- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, `5 Admin` for admins, `Esc/q` close).
-- `ui.rs`: modal frame, tabs, footer, and tab dispatch.
-- `leaderboard.rs`: responsive dense leaderboard grid, compact ranked-row
-  formatting, and cell-exact reference geometry. It is the one tab handed the
-  whole popup rect instead of the body row, so it owns its footer: a shortened
-  one inside the grid, or the shell's full-width one when the popup is too
-  small to build a grid at all. A `48x139` terminal produces the `41x111` Hub
-  modal used by the dense-layout reference; above that width, surplus columns
-  are shared evenly across the panels in both rows, the five score games below
-  and the two boards plus the "More Leaderboards" placeholder above. The
-  placeholder is not a spare-space bin: it keeps its heading-sized minimum and
-  takes only its third of the surplus.
-  A top board measures every line it prints, heading and hints and empty-state
-  copy included, not just its ranked rows: a board with no rows still has to
-  fit "no chip earnings yet this month".
-  Each panel stops right-aligning scores once its widest visible line fits with
-  the full username, a two-cell name/score gap, and the trailing edge pad. Each
-  monthly score subsection reserves two rows after its top five for the optional
-  ellipsis/current-user tail before the all-time subsection begins.
+- `state.rs`: selected Hub tab (`Shop`, admin-only `Admin`) and tab cycling.
+- `input.rs`: Hub-only key routing (`Tab`/arrows cycle, `1 Shop`, `2 Admin` for admins, `Esc/q` close).
+- `ui.rs`: modal frame (titled " Shop "), the admin-only tab strip (hidden when only one tab is visible), footer, and tab dispatch.
 - `admin/`:
   - `state.rs`: admin reward-template and shop-item catalogs, editable draft state, cursor-aware inline edit buffer, async load/save result drain.
   - `input.rs`: Admin-tab row/category/field navigation, inline text edits with Left/Right/Home/End cursor movement, numeric/toggle edits, save/reload actions.
   - `ui.rs`: admin-only two-pane reward-template/shop-item editor.
-- `dailies.rs`: module root for the Quests surface.
+- `dailies.rs`: module root for the quest surface.
 - `dailies/`:
   - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots including daily streak state, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
-  - `state.rs`: snapshot/event drains for the Quests tab.
-  - `ui.rs`: two daily quests, daily streak status, plus one weekly quest progress rendering.
-- `events.rs`: placeholder product surface.
+  - `state.rs`: snapshot/event drains for the quest strip and completion banners.
+  - `ui.rs`: `draw_arcade_strip`, the compact heading + two dailies + weekly strip rendered at the top of The Arcade lobby (`ARCADE_STRIP_HEIGHT` rows; the lobby drops it below 18 rows of height).
 - `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
   - `ui.rs`: top tray and aquarium renderer.
@@ -62,17 +44,17 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 ## Tabs
 
 - `Shop`: functional marketplace surface. Pet Companion is the durable companion unlock.
-- `Leaderboard`: functional compact leaderboard view.
-- `Quests`: functional daily/weekly quest surface.
-- `Events`: placeholder for seasonal/monthly event surfaces.
 - `Admin`: admin-only editor for quest titles/descriptions/requirements/rewards/weights/active state, fixed reward payouts, and Shop item names/descriptions/prices/sort order/active state.
+- Former `Leaderboard`: replaced by the top-level Leaderboards page (screen `6`, `late-ssh/src/app/leaderboard/`).
+- Former `Quests`: replaced by the strip at the top of The Arcade lobby (`dailies/ui.rs::draw_arcade_strip`).
+- Former `Events`: deleted; the events pillar is parked (DRAGON.md graveyard note).
 - Former `Guide`: moved to the global guide's Economy topic.
 
-Hub opens on Quests. Tab order and jump keys are `1 Quests`, `2 Shop`, `3 Leaderboard`, `4 Events`, and `5 Admin` for admins. If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
+The modal opens on Shop; the tab strip renders only for admins (jump keys `1 Shop`, `2 Admin`). It is opened by the `/shop` composer command (`ChatState` request drained in `chat/input.rs`, calling `input::open_shop_modal_globally`) and by locked pet/aquarium nudges; there is no global chord. If another tab is added, update `HubTab::ALL`, `HubTab::PUBLIC` if visibility differs, `HubTab::label`, `input.rs`, `ui.rs` dispatch, footer jump copy, and this file.
 
 ## Aquarium
 
-Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips, lives in the Companions Shop category, and unlocks Aquarium ownership/use. The Aquarium Shop category is fish-only and browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. The `/aquarium` composer command (alias `/aq`) toggles the owned user's 11-row tray, rendered only in the Home Lounge view where it is carved from the top of the lounge chat column (sidebars and other screens are untouched); the open/closed state persists in user settings (`show_aquarium_tray`); locked users are sent to Hub Shop with a banner. `carve_top_tray` skips the tray entirely when the chat column cannot also hold `dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE` rows below it — since `/aquarium` is typed into the composer, a tray that eats the composer would strand an owner on a short terminal with no way to hide it. `/aquarium feed` replaces the old `Ctrl+F` feed chord. `show_aquarium_tray` defaults to true, so buying the Aquarium reveals the tray with no purchase hook, exactly as `show_pet_strip` reveals the pet strip on unlock; rendering ANDs the setting with `has_aquarium()`, so the default stays inert until the feature is owned and no code force-closes the tray when the entitlement is absent.
+Aquarium is a Shop unlock, not an admin/mod preview. The Aquarium feature costs 10,000 chips, lives in the Companions Shop category, and unlocks Aquarium ownership/use. The Aquarium Shop category is fish-only and browseable before unlock so users can preview fish, but fish purchases and active-count changes are blocked until the Aquarium feature is owned. The `/aquarium` composer command (alias `/aq`) toggles the owned user's 11-row tray, rendered only in the Home Lounge view where it is carved from the top of the lounge chat column (sidebars and other screens are untouched); the open/closed state persists in user settings (`show_aquarium_tray`); locked users are sent to the Shop modal with a banner. `carve_top_tray` skips the tray entirely when the chat column cannot also hold `dashboard::ui::MIN_CHAT_HEIGHT_WITH_LOUNGE` rows below it — since `/aquarium` is typed into the composer, a tray that eats the composer would strand an owner on a short terminal with no way to hide it. `/aquarium feed` replaces the old `Ctrl+F` feed chord. `show_aquarium_tray` defaults to true, so buying the Aquarium reveals the tray with no purchase hook, exactly as `show_pet_strip` reveals the pet strip on unlock; rendering ANDs the setting with `has_aquarium()`, so the default stays inert until the feature is owned and no code force-closes the tray when the entitlement is absent.
 
 The runtime is ambient-only for now:
 - Fish ownership and active counts persist through `marketplace_items` / `user_purchases`.
@@ -87,29 +69,22 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 ## Leaderboard Data
 
-`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the pass is fourteen aggregate queries and was 13% of all DB execution time at the old 30s (SCALE.md DB Cost Ranking). Do not make it hot again without re-reading that ranking.
+`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the old fourteen-query pass was 13% of all DB execution time at 30s (SCALE.md DB Cost Ranking); the roster rewrite brought the pass down to nine queries while adding the per-game boards, because each board family is one union query ranked with `PARTITION BY game`. Do not make it hot again without re-reading that ranking.
 
 Two rules keep that coarse cadence from reading as a broken screen:
 
 - **Sessions seed, they do not wait.** `App::new` copies the currently published snapshot out of the receiver with `borrow()`. `watch::Sender::subscribe` marks the current value as already seen, so the `has_changed()` gate in `app/tick.rs` is false against a snapshot that is sitting right there — a session that only waited for the gate would render empty panels for up to a full `REFRESH_INTERVAL`. The seed deliberately does not touch `chip_balance`, which is loaded accurately at login and may be newer than the snapshot.
 - **A connect can buy one refresh.** `subscribe` wakes the refresh loop through a `Notify`, and `should_refresh` (a pure function, unit-tested in `svc_test.rs`) grants the pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This covers the quiet-server case, where the subscriber gate skipped every pass and the first session back would otherwise seed from whatever the last session left behind. The age bound is what keeps a connect storm on a busy server from putting the pass back on the hot path.
 
-Current compact boards:
-- `Top Chips`: monthly net chip delta from `chip_ledger`, excluding `floor_restore` and `shop_purchase`. Betting losses offset betting wins; Shop spending does not reduce this rank.
-- `Arcade Wins`: monthly weighted daily-puzzle completions across Sudoku, Nonogram, Solitaire, Minesweeper, Le Word, and Rubik's Cube.
-- `Lateris`, `2048`, `Snake`, `Traffic`: each score-game panel shows monthly score events and all-time high scores.
-- `Le Word`: monthly and all-time daily solve counts, plus win-streak leaders
-  ranked by each user's longest consecutive-day solve streak. The win-streak
-  subsection uses leftover vertical space for up to five rows and disappears
-  before monthly or all-time rows are compressed. Like every score subsection
-  it shows the viewer's own row when they rank below the visible leaders, but
-  it has no reserved tail: it trades leader rows for yours out of the space it
-  was given. Every subsection drops the tail entirely rather than print the
-  ellipsis with no leader above it.
+The data model is roster-generated (`late-core/src/models/leaderboard.rs`):
+- `DailyPuzzle` (Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube) is the daily-puzzle roster. Iterating `ALL` generates the SQL for every derived surface: the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, and per-user daily completion statuses. Adding a variant enrolls the game in all four at once; the compiler walks you through `key`, `title`, `wins_table`, `points_sql`, and `status_difficulty_sql`.
+- `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic) is the score-game roster: monthly boards union `game_score_events` with legacy best-score rows touched this month; all-time boards read only the legacy tables of record.
+- Both per-game families land in `BoardWindows { monthly, all_time }` maps keyed by roster variant; every roster key is present after a fetch, empty boards included.
+- `Top Chips` (monthly net chip delta from `chip_ledger`, exclusions derived from `ChipMove::excluded_earning_reasons()`) and `Arcade Wins` stay bespoke monthly-only boards.
+- Arcade Wins weights come from `Difficulty::points` in `late-core/src/models/chips.rs` (easy 1 / medium 3 / hard 5; solitaire draw-1 scores Easy points, draw-3 Hard; Le Word fixed Easy, Rubik's fixed Medium). The same enum's `chips()` is the daily-win payout tier display, so points and payouts cannot drift apart in string-matched copies. Unknown difficulty keys score 0, never a default.
+- The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass; every board is now uniformly monthly + all-time).
 
-Monthly windows use UTC calendar months. Score and Le Word all-time boards persist;
-the Le Word win-streak board measures consecutive `puzzle_date` values across all
-recorded daily wins.
+Monthly windows use UTC calendar months. All-time daily boards count every recorded win; all-time score boards read the legacy best-score tables.
 
 An empty local database renders every panel as "no scores yet", which makes the
 responsive widths impossible to eyeball. `make seed-leaderboard`
@@ -218,7 +193,7 @@ Future Shop work:
 - Keep user-provided free text and uploads out of MVP; use curated pools to avoid moderation load.
 - Cosmetic render hooks should read purchase/equip state, not duplicate marketplace state in chat/profile/game modules.
 
-Future Events work:
+Future Events work (the tab is deleted; these hold for whenever events return):
 - Add event/season-specific award categories on top of the monthly leaderboard-award table.
 - Do not delete source ledger/event rows; monthly boards naturally re-window.
 - Monthly placement should remain a permanent profile/status badge, not a chip bonus.
@@ -231,9 +206,8 @@ Future Events work:
 
 ## Known Gaps
 
-- `Events` is still a placeholder.
 - Hub Admin edits existing reward-template and marketplace item presentation/economy fields only; adding new quest templates or Shop SKUs, changing JSON params/payload/kind/cadence/slot/windows, and rerolling current assignments still require direct DB/migration work.
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
-- Leaderboard refresh is polling-based, so Activity events can appear before leaderboard panels catch up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the panels are never *empty* — just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
-- There is no paginated detail view yet; compact panels only show top rows plus an around-you tail where implemented.
-- Events-specific awards are not implemented.
+- Leaderboard refresh is polling-based, so Activity events can appear before the Leaderboards page catches up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the boards are never *empty*, just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
+- The Leaderboards page has no scrolling inside a board's standings beyond the around-you tail; a board deeper than the pane clips.
+- Door games (DCSS, NetHack attempts, Lateania level, Green Dragon) have no boards yet: each needs its own fact table/ingestion before it can join a roster.

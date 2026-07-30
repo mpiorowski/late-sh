@@ -1,14 +1,14 @@
 # House Tables Context
 
 ## Metadata
-- Scope: `late-ssh/src/app/lobby/house` — the fixed multiplayer "house tables" behind the Lobby modal (`Ctrl+Q`), plus the five game runtimes (Poker, Blackjack, Asterion, Tron, Super Snake).
+- Scope: `late-ssh/src/app/lobby/house` — the fixed multiplayer "house tables" behind the Lobby modal (`Ctrl+G`), plus the five game runtimes (Poker, Blackjack, Asterion, Tron, Super Snake).
 - Last updated: 2026-07-17 (Super Snake joined the roster: a 4-seat real-time DOS-snake port with 20 embedded text-asset arenas in `late-ssh/assets/ssnake_levels/`, warp-tunnel edges, and a 300-chip cooldown win payout via `ssnake_win`, migration 118)
 - Parent context: `../CONTEXT.md` (the Lobby domain), then the root `CONTEXT.md`; read `../daily/CONTEXT.md` for the daily correspondence domain.
 - Status: Active.
 
 ## 1. Summary
 
-House tables replaced the demolished Rooms directory: one fixed table per game, no creation flow, no settings forms, no DB rows (the `game_rooms` table is dropped, migration 111). The Lobby modal (`Ctrl+Q`) lists them in a fixed bottom section with live occupancy; Enter opens `Screen::HouseTable` (outside the Tab cycle, `q`/Esc back to the modal). A second stake tier later is a new `HouseTable` enum variant, not config.
+House tables replaced the demolished Rooms directory: one fixed table per game, no creation flow, no settings forms, no DB rows (the `game_rooms` table is dropped, migration 111). The Lobby modal (`Ctrl+G`) lists them in a fixed bottom section with live occupancy; Enter opens `Screen::HouseTable` (outside the Tab cycle, `q`/Esc back to the modal). A second stake tier later is a new `HouseTable` enum variant, not config.
 
 Locked shape (owner decisions):
 - Roster: Poker (1k stack, 10/20 blinds), Blackjack (10-chip stake), Asterion (the maze), Tron (quick speed + glitch mode), Super Snake (relaxed speed, 4 seats, random arena — seated players cycle the arena pick between matches).
