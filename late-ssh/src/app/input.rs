@@ -812,6 +812,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // The one-time first-run prompt blocks the app until a mode is chosen (but
+    // reserved chords above, like quit, still work).
+    if app.needs_interaction_onboarding {
+        crate::app::onboarding::input::handle_input(app, event);
+        return;
+    }
+
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
         return;
@@ -1050,6 +1057,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {
+            // Keyboard-only mode ignores the mouse entirely, so the terminal's
+            // own selection/copy is untouched (belt-and-suspenders: capture is
+            // also off at the terminal, but a client may still send reports).
+            if !app.interaction_mode.mouse_enabled() {
+                return;
+            }
             if handle_mouse_click(app, ctx.screen, mouse) {
                 return;
             }
@@ -3583,6 +3596,8 @@ fn open_settings_modal_globally(app: &mut App) {
     let device_rails = app.rail_modes();
     app.settings_modal_state
         .open_from_profile(app.profile_state.profile(), device_rails);
+    app.settings_modal_state
+        .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;
 }
 

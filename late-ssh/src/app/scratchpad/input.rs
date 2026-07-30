@@ -25,6 +25,21 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     let Some(state) = app.scratchpad.as_mut() else {
         return false;
     };
+    // Mouse: click positions the caret; the wheel pages through the buffer.
+    if let ParsedInput::Mouse(mouse) = event {
+        use crate::app::input::{MouseButton, MouseEventKind};
+        let clicked = mouse.kind == MouseEventKind::Down
+            && mouse.button == Some(MouseButton::Left)
+            && state.click_to_cursor(mouse.x, mouse.y);
+        if clicked {
+            state.publish();
+        } else if mouse.kind == MouseEventKind::ScrollUp {
+            state.scroll_lines(true);
+        } else if mouse.kind == MouseEventKind::ScrollDown {
+            state.scroll_lines(false);
+        }
+        return true;
+    }
     // Ctrl+L cycles the shared highlighting language. Unbound anywhere else
     // in this app (root CONTEXT.md notes it's no longer a global help key),
     // so it's free to use here without colliding with a reserved chord.

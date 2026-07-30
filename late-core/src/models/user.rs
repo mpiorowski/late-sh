@@ -41,6 +41,52 @@ impl AudioSource {
     }
 }
 
+/// How a session is driven. Chosen on first entry (see the onboarding prompt),
+/// then editable in settings. The key behavioural lever is whether the terminal
+/// mouse reporting is turned on: off in `Keyboard` so native selection/copy keep
+/// working; on in `Mouse` and `Hybrid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    /// Keyboard only, the classic terminal/programmer experience; mouse
+    /// reporting stays off so the terminal's own text selection works.
+    Keyboard,
+    /// Mouse-first, Discord-like: everything is clickable, mouse reporting on.
+    Mouse,
+    /// Both keyboard shortcuts and the mouse work. The safe default.
+    #[default]
+    Hybrid,
+}
+
+impl InteractionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
+            Self::Hybrid => "hybrid",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "keyboard" => Self::Keyboard,
+            "mouse" => Self::Mouse,
+            _ => Self::Hybrid,
+        }
+    }
+
+    /// Whether the terminal's mouse reporting should be enabled in this mode.
+    pub fn mouse_enabled(self) -> bool {
+        matches!(self, Self::Mouse | Self::Hybrid)
+    }
+
+    /// Whether keyboard shortcuts are the primary/expected input (for which set
+    /// of on-screen hints to show). Both keyboard-only and hybrid say yes.
+    pub fn keyboard_primary(self) -> bool {
+        matches!(self, Self::Keyboard | Self::Hybrid)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IcecastStream {
@@ -305,6 +351,7 @@ pub fn normalize_right_sidebar_components(
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
+const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
 const ICECAST_STREAM_KEY: &str = "icecast_stream";
@@ -749,6 +796,28 @@ impl User {
         Ok(())
     }
 
+    /// Persist the chosen interaction mode (keyboard / mouse / hybrid).
+    pub async fn set_interaction_mode(
+        client: &Client,
+        user_id: Uuid,
+        mode: InteractionMode,
+    ) -> Result<()> {
+        let value = mode.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&INTERACTION_MODE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
     /// Persist whether the aquarium tray is open so it survives reconnects.
     pub async fn set_show_aquarium_tray(client: &Client, user_id: Uuid, shown: bool) -> Result<()> {
         let updated = client
@@ -1086,6 +1155,17 @@ pub fn extract_birthday(settings: &Value) -> Option<String> {
         .get(BIRTHDAY_KEY)
         .and_then(Value::as_str)
         .and_then(crate::models::birthday::normalize_birthday)
+}
+
+/// The chosen interaction mode, or `None` if the user has never picked one -
+/// which is the signal to show the first-run onboarding prompt.
+pub fn extract_interaction_mode(settings: &Value) -> Option<InteractionMode> {
+    settings
+        .get(INTERACTION_MODE_KEY)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(InteractionMode::from_settings_str)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {

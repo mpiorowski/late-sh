@@ -39,6 +39,10 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SheetModalState) {
     ])
     .split(inner);
 
+    // Record the two fields so a click can focus one. The Name field spans its
+    // row plus the label above it; the Body spans its header + text area.
+    state.record_field_rect(SheetField::Name, layout[1]);
+    state.record_field_rect(SheetField::Body, layout[2].union(layout[3]));
     draw_name_row(frame, layout[1], state);
     draw_body_header(frame, layout[2], state);
     frame.render_widget(state.body_input(), layout[3].inner(Margin::new(2, 0)));

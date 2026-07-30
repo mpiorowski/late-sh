@@ -15,6 +15,19 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // A click on a field focuses it; other mouse events are swallowed so they
+    // don't leak to the app behind the modal.
+    if let ParsedInput::Mouse(mouse) = event {
+        use crate::app::input::{MouseButton, MouseEventKind};
+        if mouse.kind == MouseEventKind::Down
+            && mouse.button == Some(MouseButton::Left)
+            && let Some(field) = app.room_info_modal_state.field_at(mouse.x, mouse.y)
+        {
+            app.room_info_modal_state.set_focus(field);
+        }
+        return;
+    }
+
     let focus = app.room_info_modal_state.focus();
     let max = focus.max_len();
     let field = app.room_info_modal_state.field_mut(focus);

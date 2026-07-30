@@ -27,6 +27,7 @@ mod input_flow_test;
 pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
+pub(crate) mod onboarding;
 pub mod pet;
 pub mod pinstar;
 pub mod profile;

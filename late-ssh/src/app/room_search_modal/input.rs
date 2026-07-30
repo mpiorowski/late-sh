@@ -45,6 +45,25 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::PageDown => app.room_search_modal_state.move_selection(8, len),
         ParsedInput::PageUp => app.room_search_modal_state.move_selection(-8, len),
         ParsedInput::Char(ch) => app.room_search_modal_state.push(ch),
+        // Click a result row to select and jump to it; wheel moves the cursor.
+        // (Room list only; message-mode hits render as context and aren't 1:1
+        // with rows, so a click there just moves through them.)
+        ParsedInput::Mouse(mouse) => {
+            use crate::app::input::{MouseButton, MouseEventKind};
+            match mouse.kind {
+                MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
+                    if !message_mode
+                        && let Some(index) = app.room_search_modal_state.item_at(mouse.y)
+                    {
+                        app.room_search_modal_state.set_selected(index);
+                        submit(app);
+                    }
+                }
+                MouseEventKind::ScrollDown => app.room_search_modal_state.move_selection(1, len),
+                MouseEventKind::ScrollUp => app.room_search_modal_state.move_selection(-1, len),
+                _ => {}
+            }
+        }
         ParsedInput::Byte(byte) if byte.is_ascii_graphic() || byte == b' ' => {
             app.room_search_modal_state.push(byte as char);
         }
