@@ -27,7 +27,7 @@ impl RoomScopedCommand {
 
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            Self::Sheet => "view character sheets",
+            Self::Sheet => "view a character sheet (/sheet @user)",
         }
     }
 
@@ -91,45 +91,53 @@ const fn room(command: RoomScopedCommand) -> Command {
 /// All slash commands: globals (kept alphabetical for readability) followed by
 /// room-scoped commands. `rank_command_matches` sorts matches before returning,
 /// so registry order does not affect the autocomplete display.
+///
+/// A description carries the argument shape inline (`/gift @user 50 [note]`)
+/// whenever the command takes one, since the popup is where a user learns the
+/// syntax: the usage banner only shows up after they have already got it
+/// wrong. Keep them at 46 columns or under. The popup sizes itself to the
+/// longest description in the match set and then clips to the composer width,
+/// so a long one silently truncates on an 80-col terminal.
 const COMMANDS: &[Command] = &[
-    global("active", "list active users"),
+    global("active", "list users online right now"),
     global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
-    global("binds", "chat guide"),
-    global("brb", "go AFK and mute audio"),
-    global("bug", "report a bug to #bugs"),
+    global("binds", "open the chat guide (same as ?)"),
+    global("brb", "go AFK and mute audio (/brb back in 5)"),
+    global("bug", "report a bug to #bugs (/bug <what broke>)"),
     global("coffee", "post coffee cup"),
-    global("dm", "open DM"),
+    global("dm", "open a DM (/dm @user)"),
     global("exit", "quit confirm"),
     global("feed", "feed your pet with pet food"),
-    global("friend", "mark user"),
+    global("friend", "mark a friend (/friend @user; bare lists)"),
     global("friends", "list friends"),
-    global("gift", "send chips"),
+    global("gift", "send chips (/gift @user 50 [note])"),
     global("icons", "open icon picker"),
-    global("ignore", "mute user"),
-    global("invite", "add user"),
-    global("kick", "remove a user from your private room"),
+    global("ignore", "mute a user (/ignore @user; bare lists)"),
+    global("invite", "add a user to this room (/invite @user)"),
+    global("kick", "remove a user from your room (/kick @user)"),
     global("leave", "leave room"),
-    global("list", "public rooms"),
-    global("me", "send action"),
+    global("list", "list public rooms"),
+    global("me", "send an action line (/me waves)"),
     global("members", "room members"),
-    global("pair", "pair with @user in a shared coding scratchpad"),
+    global("pair", "shared coding scratchpad; both run /pair @user"),
     global("paste-image", "upload image from CLI clipboard"),
     global("pet", "toggle the pet strip"),
-    global("petname", "name your pet"),
-    global("poll", "start room poll"),
-    global("private", "new private room"),
-    global("profile", "view user profile"),
-    global("public", "open public room for everyone"),
-    global("roll", "roll dice (e.g. /roll 3d6)"),
+    global("petname", "name your pet (/petname Mochi; bare shows)"),
+    global("poll", "start a Home room poll (2-3 options)"),
+    global("pomodoro", "focus countdown (/pomodoro 50 deep work; stop)"),
+    global("private", "create a private room (/private #room)"),
+    global("profile", "view a profile (/profile @user; bare = you)"),
+    global("public", "open/create a public room (/public #room)"),
+    global("roll", "roll dice (/roll 3d6 2d20; default d20)"),
     global("roominfo", "set this room's topic and rules"),
     global("rules", "show this room's rules"),
     global("search", "search messages (?query in Ctrl+/)"),
     global("settings", "open settings"),
-    global("suggest", "send a suggestion to #suggestions"),
+    global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
     global("tea", "post tea cup"),
-    global("unfriend", "unmark user"),
-    global("unignore", "unmute user"),
-    global("upload", "upload image from url"),
+    global("unfriend", "remove a friend mark (/unfriend @user)"),
+    global("unignore", "unmute a user (/unignore @user)"),
+    global("upload", "upload an image by url (/upload <url>)"),
     global("water", "water your pet"),
     room(RoomScopedCommand::Sheet),
 ];

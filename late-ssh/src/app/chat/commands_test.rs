@@ -45,6 +45,21 @@ fn rank_command_matches_lists_user_commands_for_empty_query() {
     assert!(!ranked_names.contains(&"music"));
 }
 
+/// The popup sizes itself to the longest description and then clips to the
+/// composer width, so an over-long one truncates instead of wrapping.
+#[test]
+fn command_descriptions_fit_the_popup_on_a_narrow_terminal() {
+    let over_budget = rank_command_matches("", None)
+        .into_iter()
+        .filter(|m| m.description.is_some_and(|d| d.len() > 46))
+        .map(|m| m.name)
+        .collect::<Vec<_>>();
+    assert!(
+        over_budget.is_empty(),
+        "descriptions too long: {over_budget:?}"
+    );
+}
+
 #[test]
 fn rank_command_matches_excludes_admin_commands() {
     assert!(rank_command_matches("delete", None).is_empty());
@@ -83,7 +98,10 @@ fn rank_command_matches_includes_room_command_in_owning_room() {
         .find(|m| m.name == "sheet")
         .expect("/sheet should be available in #dnd");
     assert_eq!(sheet.prefix, "/");
-    assert_eq!(sheet.description, Some("view character sheets"));
+    assert_eq!(
+        sheet.description,
+        Some("view a character sheet (/sheet @user)")
+    );
 }
 
 #[test]
@@ -116,7 +134,7 @@ fn room_owns_command_only_in_owning_room() {
 fn room_scoped_command_metadata_is_consistent() {
     let command = room_scoped_command_named("sheet").expect("sheet command");
     assert_eq!(command.name(), "sheet");
-    assert_eq!(command.description(), "view character sheets");
+    assert_eq!(command.description(), "view a character sheet (/sheet @user)");
     assert_eq!(command.room_slug(), "dnd");
 }
 

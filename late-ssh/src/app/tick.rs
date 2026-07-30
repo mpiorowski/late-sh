@@ -101,6 +101,24 @@ impl App {
         {
             changed = true;
         }
+        // A countdown reaching zero is not urgent to the millisecond, so this
+        // rides the existing 1Hz edge rather than checking every tick. A
+        // running timer dirties every one of those edges because the HUD badge
+        // counts down in seconds; an idle session (no timer) still settles.
+        if one_hz && let Some(pomodoro) = &self.pomodoro {
+            let finished = chrono::Utc::now() >= pomodoro.ends_at;
+            let label = pomodoro.label.clone();
+            if finished {
+                self.pomodoro = None;
+                self.publish_pomodoro();
+                self.banner = Some(crate::app::common::primitives::Banner::success(&format!(
+                    "{label} done!"
+                )));
+                self.notifier
+                    .push(crate::app::notify::Notification::pomodoro_done(&label));
+            }
+            changed = true;
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -819,6 +837,20 @@ impl App {
                 );
                 if self.name_styles != name_styles {
                     self.name_styles = name_styles;
+                    self.chat_ctx_epoch += 1;
+                }
+            }
+            // Peer countdowns resolve on the same edge, and only the minute
+            // rollovers survive the comparison: a badge that reads the same
+            // must not bump the epoch, or every second would invalidate every
+            // cached chat row for the whole room.
+            if let Some(directory) = &self.pomodoro_directory {
+                let peer_pomodoros = crate::app::common::pomodoro::resolve_all(
+                    &crate::app::common::pomodoro::snapshot(directory),
+                    chrono::Utc::now(),
+                );
+                if self.peer_pomodoros != peer_pomodoros {
+                    self.peer_pomodoros = peer_pomodoros;
                     self.chat_ctx_epoch += 1;
                 }
             }

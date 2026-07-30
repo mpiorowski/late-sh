@@ -3,6 +3,7 @@ pub mod markdown;
 pub(crate) mod marquee;
 pub(crate) mod mentions;
 pub mod overlay;
+pub mod pomodoro;
 pub mod primitives;
 pub mod qr;
 pub mod readline;

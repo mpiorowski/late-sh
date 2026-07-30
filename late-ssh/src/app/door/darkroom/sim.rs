@@ -29,7 +29,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use super::data::{self, Fire, Job, Resource, Temperature};
-use super::model::{Builder, Game, View};
+use super::model::{Builder, Game, Thieves, View};
 
 /// What a settle did, for the caller's log and status line.
 #[derive(Clone, Debug, Default)]
@@ -96,9 +96,16 @@ pub fn settle(
                 .to_string(),
         );
     }
+    pay_pending(game, now, &mut settled.messages);
+    check_thieves(game);
+    // Only the buildings have a line to announce; a new craft or trade row
+    // just appears, exactly as upstream's buttons do.
     for building in game.refresh_build_options() {
-        settled.messages.push(building.available_msg().to_string());
+        if let Some(message) = building.available_msg() {
+            settled.messages.push(message.to_string());
+        }
     }
+    game.refresh_item_options();
     settled
 }
 
@@ -106,6 +113,41 @@ fn tick_cooldowns(game: &mut Game, elapsed: u32) {
     game.stoke_cooldown = game.stoke_cooldown.saturating_sub(elapsed);
     game.gather_cooldown = game.gather_cooldown.saturating_sub(elapsed);
     game.traps_cooldown = game.traps_cooldown.saturating_sub(elapsed);
+    game.embark_cooldown = game.embark_cooldown.saturating_sub(elapsed);
+    if let Some(ship) = game.ship.as_mut() {
+        ship.liftoff_cooldown = ship.liftoff_cooldown.saturating_sub(elapsed);
+    }
+}
+
+/// Pay out anything that has come due on the wall clock. This is the one part
+/// of an event that outlives the modal it started in, so it is the one part
+/// that is persisted (upstream's `Events.saveDelay`).
+fn pay_pending(game: &mut Game, now: DateTime<Utc>, messages: &mut Vec<String>) {
+    let now = now.timestamp();
+    let mut due = Vec::new();
+    game.pending_rewards.retain(|reward| {
+        if reward.due <= now {
+            due.push(reward.clone());
+            return false;
+        }
+        true
+    });
+    for reward in due {
+        game.add_store(reward.resource, reward.amount);
+        messages.push(reward.message);
+    }
+}
+
+/// The thieves start skimming once the village is rich enough to be worth
+/// robbing, and only once there is a wasteland for them to have come from
+/// (upstream `Room.updateStoresView`).
+fn check_thieves(game: &mut Game) {
+    if game.thieves != Thieves::None || !game.path_unlocked {
+        return;
+    }
+    if game.stores.values().any(|amount| *amount > 5000) {
+        game.thieves = Thieves::Active;
+    }
 }
 
 /// One second of village time. Every clock is an explicit countdown, so this
@@ -240,6 +282,19 @@ fn step_income(game: &mut Game) {
     if game.builder == Builder::Helping {
         let (resource, amount) = data::BUILDER_YIELD;
         pay(game, &[(resource, amount)]);
+    }
+    // The thieves take their cut off the top, and what they take is what the
+    // village gets back if the thief is hanged. Unlike a starved trade, the
+    // skim never skips: upstream clamps the store at zero and books only what
+    // was actually there to steal (`addStolen`'s shortfall math).
+    if game.thieves == Thieves::Active {
+        for (resource, amount) in data::THIEF_SKIM {
+            let taken = game.store(*resource).min(-amount);
+            if taken > 0 {
+                game.add_store(*resource, -taken);
+                *game.stolen.entry(*resource).or_insert(0) += taken;
+            }
+        }
     }
     let gatherers = f64::from(game.gatherers());
     if gatherers > 0.0 {

@@ -2104,3 +2104,117 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("hello /pair @alice"), None);
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
+
+fn pomodoro_start(minutes: u32, label: &str) -> Option<PomodoroParse> {
+    Some(PomodoroParse::Request(PomodoroRequest::Start {
+        minutes,
+        label: label.to_string(),
+    }))
+}
+
+#[test]
+fn parse_pomodoro_command_defaults_duration_and_label() {
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro"),
+        pomodoro_start(POMODORO_DEFAULT_MINUTES, POMODORO_DEFAULT_LABEL)
+    );
+    assert_eq!(
+        parse_pomodoro_command("  /pomodoro   "),
+        pomodoro_start(POMODORO_DEFAULT_MINUTES, POMODORO_DEFAULT_LABEL),
+        "surrounding whitespace is not a label"
+    );
+}
+
+#[test]
+fn parse_pomodoro_command_reads_leading_minutes_then_label() {
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 50"),
+        pomodoro_start(50, POMODORO_DEFAULT_LABEL)
+    );
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 50 deep   work"),
+        pomodoro_start(50, "deep work"),
+        "label whitespace collapses"
+    );
+    // No leading integer means the whole rest is the label, so a plain
+    // `/pomodoro <thing>` still starts the default block.
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro deep work"),
+        pomodoro_start(POMODORO_DEFAULT_MINUTES, "deep work")
+    );
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 5k run"),
+        pomodoro_start(POMODORO_DEFAULT_MINUTES, "5k run"),
+        "a digit-prefixed word is not a duration"
+    );
+}
+
+#[test]
+fn parse_pomodoro_command_sanitizes_and_caps_the_label() {
+    let long = "x".repeat(POMODORO_LABEL_MAX_COLS + 10);
+    assert_eq!(
+        parse_pomodoro_command(&format!("/pomodoro {long}")),
+        pomodoro_start(
+            POMODORO_DEFAULT_MINUTES,
+            &"x".repeat(POMODORO_LABEL_MAX_COLS)
+        )
+    );
+    // The cap is display cells, so a double-width label stops at half the
+    // char count rather than twice the border budget.
+    assert_eq!(
+        parse_pomodoro_command(&format!("/pomodoro {}", "深".repeat(20))),
+        pomodoro_start(
+            POMODORO_DEFAULT_MINUTES,
+            &"深".repeat(POMODORO_LABEL_MAX_COLS / 2)
+        )
+    );
+    // The label reaches a desktop notification and the top border, so control
+    // characters never survive parsing.
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro focus\u{1b}]777;notify"),
+        pomodoro_start(POMODORO_DEFAULT_MINUTES, "focus]777;notify")
+    );
+}
+
+#[test]
+fn parse_pomodoro_command_stops_a_running_timer() {
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro stop"),
+        Some(PomodoroParse::Request(PomodoroRequest::Stop))
+    );
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro STOP"),
+        Some(PomodoroParse::Request(PomodoroRequest::Stop))
+    );
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro stop now"),
+        Some(PomodoroParse::Invalid),
+        "stop takes no arguments"
+    );
+}
+
+#[test]
+fn parse_pomodoro_command_rejects_out_of_range_durations() {
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 0"),
+        Some(PomodoroParse::Invalid),
+        "zero"
+    );
+    assert_eq!(
+        parse_pomodoro_command(&format!("/pomodoro {}", POMODORO_MAX_MINUTES + 1)),
+        Some(PomodoroParse::Invalid),
+        "over the cap"
+    );
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 99999999999999999999"),
+        Some(PomodoroParse::Invalid),
+        "digit run too long for u32"
+    );
+}
+
+#[test]
+fn parse_pomodoro_command_ignores_unrelated_input() {
+    assert_eq!(parse_pomodoro_command("/pomodoros"), None);
+    assert_eq!(parse_pomodoro_command("hello /pomodoro"), None);
+    assert_eq!(parse_pomodoro_command("/poll"), None);
+}
