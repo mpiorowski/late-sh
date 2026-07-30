@@ -20,7 +20,7 @@ fn item_ids_are_unique() {
 
 #[test]
 fn materials_form_a_clean_sellable_catalog() {
-    assert_eq!(materials().len(), 25, "five skills x five tiers");
+    assert_eq!(materials().len(), 30, "five skills x six tiers");
     for m in materials() {
         assert!(
             m.id >= MATERIAL_BASE && m.id < MATERIAL_BASE + 100,
@@ -61,8 +61,8 @@ fn every_equippable_item_carries_real_stats() {
 fn crafted_goods_form_a_clean_catalog() {
     assert_eq!(
         crafted().len(),
-        52,
-        "ten crafted kinds x five tiers, plus two masterwork sinks"
+        62,
+        "ten crafted kinds x six tiers, plus two masterwork sinks"
     );
     for c in crafted() {
         assert!(

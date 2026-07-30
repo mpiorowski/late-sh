@@ -198,7 +198,8 @@ impl TamingSkill {
 
 /// Skill level cap - the same 50 the class levels use, so "level 1 to 50" reads
 /// consistently across the game.
-pub const SKILL_MAX_LEVEL: i32 = 50;
+// Wildbound: the trades climb with the classes - the cap doubles to 100.
+pub const SKILL_MAX_LEVEL: i32 = 100;
 
 /// Total xp required to *reach* a given skill level. Level 1 is free; each tier
 /// costs more than the last, and a cubic term that only bites past level 10

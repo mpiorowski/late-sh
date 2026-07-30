@@ -60,16 +60,16 @@ pub struct Recipe {
 }
 
 /// Skill-level gate per tier (matches the gathering node gates).
-const LEVEL_REQ: [i32; 5] = [1, 8, 16, 26, 38];
+const LEVEL_REQ: [i32; 6] = [1, 8, 16, 26, 38, 55];
 /// Xp for refining a raw material into an intermediate (the cheaper step).
-const REFINE_XP: [i32; 5] = [8, 20, 45, 100, 200];
+const REFINE_XP: [i32; 6] = [8, 20, 45, 100, 200, 380];
 /// Xp for crafting a finished good (matches the gather xp curve).
-const CRAFT_XP: [i32; 5] = [12, 30, 70, 150, 320];
+const CRAFT_XP: [i32; 6] = [12, 30, 70, 150, 320, 600];
 
 fn build_recipes() -> Vec<Recipe> {
     use CraftSkill::{Alchemy, Cooking, Leatherworking, Smithing, Woodworking};
     let mut r = Vec::new();
-    for t in 0..5u32 {
+    for t in 0..6u32 {
         let ti = t as usize;
         let (gate, refine, craft) = (LEVEL_REQ[ti], REFINE_XP[ti], CRAFT_XP[ti]);
 

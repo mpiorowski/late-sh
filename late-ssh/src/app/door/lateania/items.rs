@@ -1005,7 +1005,7 @@ pub const ITEMS: &[Item] = &[
 /// Base id for the raw-material catalog.
 pub const MATERIAL_BASE: u32 = 4000;
 /// Tiers per gathering skill (levels of material, low to high).
-pub const MATERIAL_TIERS: u32 = 5;
+pub const MATERIAL_TIERS: u32 = 6;
 
 /// The item id of the raw material a skill drops at a given tier (0-based). The
 /// `skill_index` is `skills::GatherSkill::index`.
@@ -1014,9 +1014,16 @@ pub const fn material_id(skill_index: u32, tier: u32) -> u32 {
 }
 
 /// Names per skill (rows follow `GatherSkill::index`) and tier (columns low->high).
-const MATERIAL_NAMES: [[&str; 5]; 5] = [
+const MATERIAL_NAMES: [[&str; 6]; 5] = [
     // Woodcutting
-    ["Birch Log", "Oak Log", "Ash Log", "Yew Log", "Ironbark Log"],
+    [
+        "Birch Log",
+        "Oak Log",
+        "Ash Log",
+        "Yew Log",
+        "Ironbark Log",
+        "Worldtree Log",
+    ],
     // Mining
     [
         "Copper Ore",
@@ -1024,6 +1031,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Iron Ore",
         "Silver Ore",
         "Mithril Ore",
+        "Starmetal Ore",
     ],
     // Fishing
     [
@@ -1032,6 +1040,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Grey Pike",
         "Deep Sturgeon",
         "Moonscale Fish",
+        "Abyss Eel",
     ],
     // Foraging
     [
@@ -1040,6 +1049,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Bloodthistle",
         "Frostbloom",
         "Sunmoss",
+        "Dreamlotus",
     ],
     // Skinning
     [
@@ -1048,6 +1058,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Boar Hide",
         "Bear Pelt",
         "Direhide",
+        "Wyrmhide",
     ],
 ];
 
@@ -1061,7 +1072,7 @@ const MATERIAL_FLAVOR: [&str; 5] = [
 ];
 
 fn build_materials() -> Vec<Item> {
-    let mut out = Vec::with_capacity(25);
+    let mut out = Vec::with_capacity(30);
     for (s, names) in MATERIAL_NAMES.iter().enumerate() {
         for (t, name) in names.iter().enumerate() {
             let tier = t as i64;
@@ -1071,7 +1082,8 @@ fn build_materials() -> Vec<Item> {
             let rarity = match t {
                 0 | 1 => Rarity::Common,
                 2 | 3 => Rarity::Uncommon,
-                _ => Rarity::Rare,
+                4 => Rarity::Rare,
+                _ => Rarity::Epic,
             };
             out.push(Item {
                 id: material_id(s as u32, t as u32),
@@ -1146,125 +1158,137 @@ pub const fn masterwork_id(n: u32) -> u32 {
 /// The tier of a poison item id, if `id` is one (used to route it to the
 /// weapon-coating action instead of the normal consumable path).
 pub fn poison_tier(id: u32) -> Option<u32> {
-    (0..5).find(|&t| poison_id(t) == id)
+    (0..6).find(|&t| poison_id(t) == id)
 }
 
 /// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
 /// regen buff on top of its heal).
 pub fn food_tier(id: u32) -> Option<u32> {
-    (0..5).find(|&t| food_id(t) == id)
+    (0..6).find(|&t| food_id(t) == id)
 }
 
-const INGOT_NAMES: [&str; 5] = [
+const INGOT_NAMES: [&str; 6] = [
     "Copper Ingot",
     "Tin Ingot",
     "Iron Ingot",
     "Silver Ingot",
     "Mithril Ingot",
+    "Starmetal Ingot",
 ];
-const PLANK_NAMES: [&str; 5] = [
+const PLANK_NAMES: [&str; 6] = [
     "Birch Plank",
     "Oak Plank",
     "Ash Plank",
     "Yew Plank",
     "Ironbark Plank",
+    "Worldtree Plank",
 ];
-const LEATHER_NAMES: [&str; 5] = [
+const LEATHER_NAMES: [&str; 6] = [
     "Rough Leather",
     "Thick Leather",
     "Boar Leather",
     "Bear Leather",
     "Dire Leather",
+    "Wyrmleather",
 ];
-const SMITH_WEAPON_NAMES: [&str; 5] = [
+const SMITH_WEAPON_NAMES: [&str; 6] = [
     "Copper Sword",
     "Tin Sabre",
     "Iron Sword",
     "Silver Sword",
     "Mithril Sword",
+    "Starmetal Greatblade",
 ];
-const SMITH_ARMOR_NAMES: [&str; 5] = [
+const SMITH_ARMOR_NAMES: [&str; 6] = [
     "Copper Cuirass",
     "Tin Cuirass",
     "Iron Cuirass",
     "Silver Cuirass",
     "Mithril Cuirass",
+    "Starmetal Aegis",
 ];
-const WOOD_WEAPON_NAMES: [&str; 5] = [
+const WOOD_WEAPON_NAMES: [&str; 6] = [
     "Birch Shortbow",
     "Oak Longbow",
     "Ash Recurve",
     "Yew Warbow",
     "Ironbark Greatbow",
+    "Worldtree Skybow",
 ];
-const LEATHER_ARMOR_NAMES: [&str; 5] = [
+const LEATHER_ARMOR_NAMES: [&str; 6] = [
     "Rough Jerkin",
     "Thick Jerkin",
     "Boarhide Vest",
     "Bearhide Coat",
     "Direhide Cuirass",
+    "Wyrmhide Mantle",
 ];
-const POTION_NAMES: [&str; 5] = [
+const POTION_NAMES: [&str; 6] = [
     "Minor Healing Draught",
     "Lesser Healing Draught",
     "Greater Healing Draught",
     "Superior Healing Draught",
     "Master Healing Draught",
+    "Phoenix Elixir",
 ];
-const POISON_NAMES: [&str; 5] = [
+const POISON_NAMES: [&str; 6] = [
     "Weak Toxin",
     "Numbing Poison",
     "Virulent Bile",
     "Deadly Venom",
     "Wyrm Venom",
+    "Voidvenom",
 ];
-const FOOD_NAMES: [&str; 5] = [
+const FOOD_NAMES: [&str; 6] = [
     "Grilled Bream",
     "Pan-Seared Trout",
     "Smoked Pike",
     "Sturgeon Steak",
     "Moonscale Feast",
+    "Feast of the Wilds",
 ];
 
-const INTER_RARITY: [Rarity; 5] = [
+const INTER_RARITY: [Rarity; 6] = [
     Rarity::Common,
-    Rarity::Common,
-    Rarity::Uncommon,
-    Rarity::Uncommon,
-    Rarity::Rare,
-];
-const FINAL_RARITY: [Rarity; 5] = [
     Rarity::Common,
     Rarity::Uncommon,
     Rarity::Uncommon,
     Rarity::Rare,
     Rarity::Epic,
 ];
+const FINAL_RARITY: [Rarity; 6] = [
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+    Rarity::Epic,
+    Rarity::Legendary,
+];
 
 fn build_crafted() -> Vec<Item> {
     let mut out = Vec::new();
     // Per-tier stat/price tables (index 0..5, low to high).
-    const INGOT_PRICE: [i64; 5] = [24, 54, 96, 150, 220];
-    const PLANK_PRICE: [i64; 5] = [20, 46, 84, 130, 190];
-    const LEATHER_PRICE: [i64; 5] = [22, 50, 90, 140, 205];
-    const WEAPON_ATK: [i32; 5] = [6, 11, 16, 21, 26];
-    const WEAPON_PRICE: [i64; 5] = [60, 140, 260, 440, 700];
-    const BOW_ATK: [i32; 5] = [5, 10, 15, 20, 25];
-    const BOW_PRICE: [i64; 5] = [55, 130, 250, 430, 690];
-    const PLATE_HP: [i32; 5] = [8, 16, 26, 40, 60];
-    const PLATE_ARM: [i32; 5] = [1, 2, 3, 4, 6];
-    const PLATE_PRICE: [i64; 5] = [70, 150, 280, 460, 720];
-    const JERKIN_HP: [i32; 5] = [6, 12, 20, 30, 44];
-    const JERKIN_ARM: [i32; 5] = [1, 1, 2, 3, 4];
-    const JERKIN_PRICE: [i64; 5] = [50, 120, 230, 400, 640];
-    const POTION_HEAL: [i32; 5] = [25, 45, 75, 120, 180];
-    const POTION_PRICE: [i64; 5] = [20, 45, 90, 160, 260];
-    const POISON_PRICE: [i64; 5] = [15, 40, 80, 140, 220];
-    const FOOD_HEAL: [i32; 5] = [20, 35, 55, 85, 130];
-    const FOOD_REST: [i32; 5] = [10, 20, 35, 55, 85];
-    const FOOD_PRICE: [i64; 5] = [15, 35, 70, 120, 190];
+    const INGOT_PRICE: [i64; 6] = [24, 54, 96, 150, 220, 330];
+    const PLANK_PRICE: [i64; 6] = [20, 46, 84, 130, 190, 290];
+    const LEATHER_PRICE: [i64; 6] = [22, 50, 90, 140, 205, 310];
+    const WEAPON_ATK: [i32; 6] = [6, 11, 16, 21, 26, 34];
+    const WEAPON_PRICE: [i64; 6] = [60, 140, 260, 440, 700, 1100];
+    const BOW_ATK: [i32; 6] = [5, 10, 15, 20, 25, 33];
+    const BOW_PRICE: [i64; 6] = [55, 130, 250, 430, 690, 1080];
+    const PLATE_HP: [i32; 6] = [8, 16, 26, 40, 60, 88];
+    const PLATE_ARM: [i32; 6] = [1, 2, 3, 4, 6, 8];
+    const PLATE_PRICE: [i64; 6] = [70, 150, 280, 460, 720, 1150];
+    const JERKIN_HP: [i32; 6] = [6, 12, 20, 30, 44, 66];
+    const JERKIN_ARM: [i32; 6] = [1, 1, 2, 3, 4, 6];
+    const JERKIN_PRICE: [i64; 6] = [50, 120, 230, 400, 640, 1020];
+    const POTION_HEAL: [i32; 6] = [25, 45, 75, 120, 180, 270];
+    const POTION_PRICE: [i64; 6] = [20, 45, 90, 160, 260, 400];
+    const POISON_PRICE: [i64; 6] = [15, 40, 80, 140, 220, 350];
+    const FOOD_HEAL: [i32; 6] = [20, 35, 55, 85, 130, 195];
+    const FOOD_REST: [i32; 6] = [10, 20, 35, 55, 85, 130];
+    const FOOD_PRICE: [i64; 6] = [15, 35, 70, 120, 190, 300];
 
-    for t in 0..5usize {
+    for t in 0..6usize {
         let tu = t as u32;
         // Intermediates (sellable valuables and recipe inputs).
         out.push(valuable(

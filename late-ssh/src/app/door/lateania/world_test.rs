@@ -422,9 +422,11 @@ fn the_sunderlakes_are_reachable_peaceful_and_full_of_fish() {
     );
     // The heart of the region: forty fish, caught at Fishing nodes across the
     // lakes, every node yielding a real fish gated by the Fishing skill.
+    // (The Wildbound tier-6 fishing springs also sit in the lakes but yield
+    // the tiered Abyss Eel material, not a catalog fish - exclude them here.)
     let fish_nodes: Vec<&ResourceNode> = NODES
         .iter()
-        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home))
+        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home) && nn.tier < 5)
         .collect();
     assert_eq!(
         fish_nodes.len(),
