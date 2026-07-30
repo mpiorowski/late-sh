@@ -4,7 +4,7 @@
 //! for that than the browser was, so nothing here decorates.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -428,8 +428,18 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
 
 /// The two-column landing card for the Games hub.
 pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
-    let mut lines = vec![
-        landing::heading(data::TITLE),
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area)[1];
+
+    let mut lines = vec![Line::raw("")];
+    lines.extend(title_art());
+    lines.extend([
         Line::from(""),
         Line::from(Span::styled(
             "the fire is dead. the room is freezing.",
@@ -473,7 +483,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             10,
         ),
         Line::from(""),
-    ];
+    ]);
 
     if delete_confirm {
         lines.push(landing::action(
@@ -506,5 +516,35 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         Style::default().fg(theme::TEXT_FAINT()),
     )));
 
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The block-letter title, stacked over two rows like Green Dragon's so an
+/// eleven-character name still fits the hub card. Amber because the whole game
+/// is lit by the one fire.
+fn title_art() -> Vec<Line<'static>> {
+    [
+        "██████╗  █████╗ ██████╗ ██╗  ██╗",
+        "██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝",
+        "██║  ██║███████║██████╔╝█████╔╝ ",
+        "██║  ██║██╔══██║██╔══██╗██╔═██╗ ",
+        "██████╔╝██║  ██║██║  ██║██║  ██╗",
+        "╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+        "██████╗  ██████╗  ██████╗ ███╗   ███╗",
+        "██╔══██╗██╔═══██╗██╔═══██╗████╗ ████║",
+        "██████╔╝██║   ██║██║   ██║██╔████╔██║",
+        "██╔══██╗██║   ██║██║   ██║██║╚██╔╝██║",
+        "██║  ██║╚██████╔╝╚██████╔╝██║ ╚═╝ ██║",
+        "╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝",
+    ]
+    .into_iter()
+    .map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ))
+    })
+    .collect()
 }
