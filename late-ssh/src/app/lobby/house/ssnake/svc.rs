@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use late_core::models::chips::ChipMove;
 use late_core::models::reward::SSNAKE_WIN_REWARD_KEY;
 use rand::Rng;
 use tokio::sync::{Mutex, broadcast, watch};
@@ -27,7 +28,6 @@ const LIFE_POINT_ODDS: u32 = 35;
 /// Original `MaxSnakePoints`; caps body length plus pending growth.
 const MAX_SNAKE_LEN: i32 = 500;
 const SSNAKE_PLAYED_MIN_TICKS: u32 = 40;
-const SSNAKE_WIN_LEDGER_REASON: &str = "ssnake_win";
 pub const SSNAKE_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 pub const SSNAKE_WIN_CHIPS: i64 = 300;
 
@@ -288,7 +288,7 @@ impl SsnakeService {
                     .credit_cooldown_reward_template(
                         win.user_id,
                         SSNAKE_WIN_REWARD_KEY,
-                        SSNAKE_WIN_LEDGER_REASON,
+                        ChipMove::SsnakeWin,
                     )
                     .await
                 {

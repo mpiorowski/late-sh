@@ -15,17 +15,19 @@ pub enum HubGame {
     Usurper,
     GreenDragon,
     Dopewars,
+    Darkroom,
 }
 
 impl HubGame {
     /// Selector order, left to right.
-    pub const ALL: [HubGame; 8] = [
+    pub const ALL: [HubGame; 9] = [
         HubGame::Lateania,
         HubGame::Nethack,
         HubGame::Dcss,
         HubGame::Brogue,
         HubGame::Usurper,
         HubGame::GreenDragon,
+        HubGame::Darkroom,
         HubGame::Rebels,
         HubGame::Dopewars,
     ];
@@ -40,6 +42,7 @@ impl HubGame {
             HubGame::Usurper => "Usurper",
             HubGame::GreenDragon => "Green Dragon",
             HubGame::Dopewars => "dopewars",
+            HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
     }
 }

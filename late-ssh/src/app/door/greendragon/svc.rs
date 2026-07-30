@@ -15,6 +15,7 @@ use chrono::Utc;
 use late_core::{
     db::Db,
     models::{
+        chips::ChipMove,
         greendragon_bounty::GreenDragonBounty,
         greendragon_character::GreenDragonCharacter,
         greendragon_clan::{ClanNameClash, GreenDragonClan},
@@ -103,9 +104,6 @@ const NEWS_PAGE_LIMIT: i64 = 200;
 /// (upstream `LOGINTIMEOUT`, 900 seconds), ANDed with the blob's presence
 /// flag exactly as upstream pairs `laston` with `loggedin`.
 pub const ONLINE_WINDOW_SECS: i64 = 900;
-
-/// Chip-ledger reason for the once-per-account dragon-kill payout.
-const GREENDRAGON_DRAGON_LEDGER_REASON: &str = "greendragon_dragon_slain";
 
 /// One character as the warrior roster / Hall of Fame reads it: the ranked
 /// stats decoded out of the saved blob, plus the presence signals. The
@@ -462,9 +460,24 @@ async fn commit_delete(db: Db, gate: Arc<TokioMutex<u64>>, seq: u64, user_id: Uu
     }
 }
 
-/// UTC day-number, used to drive once-per-day forest-turn/heal regeneration.
+/// One game day lasts 12 real hours: two game days per UTC day, rolling at
+/// 00:00 and 12:00 UTC. A deliberate halving of upstream's `daysperday` 4
+/// (`lib/datetime.php`) for late.sh's slower pace — see PARITY.md's
+/// user-feedback sweep.
+const GAME_DAY_SECS: i64 = 43_200;
+/// 2026-07-29 00:00:00 UTC — the moment the 12-hour clock took over. Day
+/// numbers stay continuous across the switch: this anchor equals calendar
+/// day 20 663, the value the old once-per-UTC-day clock produced that
+/// morning, so stored `last_day`s, commentary watermarks, and news rows all
+/// keep their meaning (old rows now age two game days per real day, which
+/// only shortens their 180-game-day retention to 90 real days).
+const GAME_EPOCH: i64 = 1_785_283_200;
+const GAME_EPOCH_DAY: i64 = GAME_EPOCH / 86_400;
+
+/// Game-day number, used to drive the once-per-game-day forest-turn/heal
+/// regeneration and every other day-stamped row (news, commentary).
 pub(crate) fn today() -> i64 {
-    Utc::now().timestamp().div_euclid(86_400)
+    GAME_EPOCH_DAY + (Utc::now().timestamp() - GAME_EPOCH).div_euclid(GAME_DAY_SECS)
 }
 
 /// The engage transaction (see [`GreenDragonService::pvp_engage`]): lock the
@@ -1327,7 +1340,7 @@ impl GreenDragonService {
                 .credit_lifetime_reward_template(
                     user_id,
                     GREENDRAGON_DRAGON_REWARD_KEY,
-                    GREENDRAGON_DRAGON_LEDGER_REASON,
+                    ChipMove::GreendragonDragonSlain,
                 )
                 .await
             {

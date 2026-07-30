@@ -751,7 +751,7 @@ pub const ABILITIES: &[Ability] = &[
     },
     Ability {
         id: 504,
-        name: "Mend Companion",
+        name: "Field Dressing",
         desc: "Tend your own hurts with the field-craft of a thousand camps.",
         class: Class::Ranger,
         level_req: 16,

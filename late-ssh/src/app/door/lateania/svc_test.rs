@@ -2009,8 +2009,8 @@ fn final_bosses_map_to_lifetime_achievements() {
     let archdemon_payout = archdemon.payout.expect("archdemon pays chips");
     assert_eq!(archdemon_payout.reward_key, LATEANIA_ARCHDEMON_REWARD_KEY);
     assert_eq!(
-        archdemon_payout.ledger_reason,
-        LATEANIA_ARCHDEMON_LEDGER_REASON
+        archdemon_payout.chip_move,
+        ChipMove::LateaniaArchdemonDefeat
     );
     assert_eq!(archdemon.award_category, LATEANIA_ARCHDEMON_AWARD_CATEGORY);
 
@@ -2018,10 +2018,7 @@ fn final_bosses_map_to_lifetime_achievements() {
         .expect("last Frontier boss should grant an achievement");
     let king_payout = frontier_king.payout.expect("frontier king pays chips");
     assert_eq!(king_payout.reward_key, LATEANIA_FRONTIER_KING_REWARD_KEY);
-    assert_eq!(
-        king_payout.ledger_reason,
-        LATEANIA_FRONTIER_KING_LEDGER_REASON
-    );
+    assert_eq!(king_payout.chip_move, ChipMove::LateaniaFrontierKingDefeat);
     assert_eq!(
         frontier_king.award_category,
         LATEANIA_FRONTIER_KING_AWARD_CATEGORY

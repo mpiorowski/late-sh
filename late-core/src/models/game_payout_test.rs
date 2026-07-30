@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::{
+    models::chips::ChipMove,
     models::game_payout::{GamePayout, GamePayoutPeriodGrant},
     test_utils::{create_test_user, test_db},
 };
@@ -25,7 +26,7 @@ async fn daily_grant_credits_once_per_utc_day() {
         "daily",
         today,
         300,
-        "sudoku_daily",
+        ChipMove::DailyPuzzleWin,
     )
     .await
     .expect("first daily payout");
@@ -44,7 +45,7 @@ async fn daily_grant_credits_once_per_utc_day() {
         "daily",
         today,
         300,
-        "sudoku_daily",
+        ChipMove::DailyPuzzleWin,
     )
     .await
     .expect("repeat daily payout");
@@ -59,7 +60,7 @@ async fn daily_grant_credits_once_per_utc_day() {
         "daily",
         tomorrow,
         300,
-        "sudoku_daily",
+        ChipMove::DailyPuzzleWin,
     )
     .await
     .expect("next-day payout");
@@ -80,7 +81,7 @@ async fn period_grant_is_scoped_by_period_key() {
         period_kind: "lifetime",
         period_key,
         amount: 1000,
-        ledger_reason: "lateania_boss",
+        chip_move: ChipMove::LateaniaArchdemonDefeat,
     };
 
     let first = GamePayout::grant_period(&client, grant("malgareth"))
@@ -132,7 +133,7 @@ async fn cooldown_grant_records_claim_and_suppresses_repeat() {
         "win",
         Duration::from_secs(60 * 60),
         500,
-        "chess_win",
+        ChipMove::DailyChessWin,
     )
     .await
     .expect("first cooldown payout succeeds");
@@ -147,7 +148,7 @@ async fn cooldown_grant_records_claim_and_suppresses_repeat() {
         "win",
         Duration::from_secs(60 * 60),
         500,
-        "chess_win",
+        ChipMove::DailyChessWin,
     )
     .await
     .expect("second cooldown payout succeeds");
@@ -175,7 +176,7 @@ async fn cooldown_grant_records_claim_and_suppresses_repeat() {
             "SELECT count(*)::int AS rows, COALESCE(sum(delta), 0)::bigint AS delta
              FROM chip_ledger
              WHERE user_id = $1
-               AND reason = 'chess_win'",
+               AND reason = 'daily_chess_win'",
             &[&user.id],
         )
         .await

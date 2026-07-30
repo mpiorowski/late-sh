@@ -146,6 +146,11 @@ fn handle_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
                 let row = ((y - grid.y) / (grid.height / side).max(1)) as usize;
                 row * crate::app::lobby::daily::reversi::SIZE + col
             }
+            // Briscola: the three fixed slots of your own hand.
+            Some(DailyGame::Briscola) => {
+                let slots = crate::app::lobby::daily::briscola::HAND as u16;
+                ((x - grid.x) / (grid.width / slots).max(1)) as usize
+            }
             // Backgammon: the 2x14 visual slot grid (points, bar, off tray).
             Some(DailyGame::Backgammon) => {
                 let cols = crate::app::lobby::daily::backgammon::SLOT_COLS as u16;

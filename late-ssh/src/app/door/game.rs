@@ -11,6 +11,7 @@ use crate::app::{
 pub enum DoorGameId {
     Lateania,
     GreenDragon,
+    Darkroom,
 }
 
 impl DoorGameId {
@@ -18,6 +19,7 @@ impl DoorGameId {
         match self {
             Self::Lateania => "lateania",
             Self::GreenDragon => "greendragon",
+            Self::Darkroom => "darkroom",
         }
     }
 }

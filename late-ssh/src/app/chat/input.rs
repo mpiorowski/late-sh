@@ -246,21 +246,6 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_ultimate_modal() {
         crate::app::ultimates::open_ultimate_modal(app);
     }
-    if let Some(request) = app.chat.take_requested_daily_challenge() {
-        use crate::app::chat::state::DailyChallengeRequest;
-        match request {
-            DailyChallengeRequest::Modal => crate::app::input::open_daily_modal_globally(app),
-            // Success is surfaced from the resulting DailyEvent::ChallengePosted
-            // (and failures from DailyEvent::Error), so a rejected challenge
-            // (self, unknown user, over the entry cap) never flashes success.
-            DailyChallengeRequest::Open(game) => {
-                app.daily.post_open_challenge(game);
-            }
-            DailyChallengeRequest::Directed(username, game) => {
-                app.daily.post_directed_challenge(&username, game);
-            }
-        }
-    }
     if let Some(request) = app.chat.take_requested_pair() {
         use crate::app::chat::state::PairRequest;
         match request {

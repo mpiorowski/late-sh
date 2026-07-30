@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use late_core::models::chips::ChipMove;
 use late_core::models::reward::tron_win_reward_key;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -30,7 +31,6 @@ const MAX_BOOST_TICKS: u8 = 10;
 const MAX_PHASE_CHARGES: u8 = 2;
 const MAX_GAP_MOVES: u8 = 6;
 const PICKUP_GAP_MOVES: u8 = 3;
-const TRON_WIN_LEDGER_REASON: &str = "tron_win";
 pub const TRON_WIN_PAYOUT_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 pub const TRON_WIN_CHIPS: i64 = 100;
 const TRON_PLAYED_MIN_TICKS: u32 = 30;
@@ -288,11 +288,7 @@ impl TronService {
                     return;
                 };
                 match chip_svc
-                    .credit_cooldown_reward_template(
-                        win.user_id,
-                        reward_key,
-                        TRON_WIN_LEDGER_REASON,
-                    )
+                    .credit_cooldown_reward_template(win.user_id, reward_key, ChipMove::TronWin)
                     .await
                 {
                     Ok(payout) => {

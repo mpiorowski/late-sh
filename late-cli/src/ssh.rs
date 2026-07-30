@@ -4,10 +4,9 @@ use russh::{
     keys::{self, PrivateKeyWithHashAlg, known_hosts},
 };
 use serde::Deserialize;
-use std::ffi::OsString;
 use std::{
-    env, fs, io,
-    io::{IsTerminal, Read, Write},
+    env, io,
+    io::{IsTerminal, Read},
     path::Path,
     sync::{
         Arc,
@@ -39,6 +38,9 @@ use std::{os::fd::AsRawFd, process::Stdio};
 
 #[cfg(unix)]
 use std::{
+    ffi::OsString,
+    fs,
+    io::Write,
     os::unix::fs::DirBuilderExt,
     path::PathBuf,
     process::Command as StdCommand,
@@ -48,7 +50,9 @@ use std::{
 #[cfg(unix)]
 use tokio::process::{Child, Command};
 
+#[cfg(unix)]
 pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
+#[cfg(unix)]
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const GENERIC_SSH_AUTH_HINT_MARKER: &str = "late.sh requires SSH public-key auth.";
@@ -96,7 +100,12 @@ const TIOCSCTTY_IOCTL_REQUEST: libc::c_ulong = libc::TIOCSCTTY;
 
 #[derive(Debug)]
 pub(super) enum SshExit {
+    // Clean and ProcessStatus describe a local ssh child process, which only
+    // the subprocess and OpenSSH modes spawn. Both are Unix-only, so on other
+    // platforms a session can only ever end through the native russh variants.
+    #[cfg(unix)]
     Clean,
+    #[cfg(unix)]
     ProcessStatus {
         status: std::process::ExitStatus,
         stdout_closed_cleanly: bool,
@@ -113,11 +122,14 @@ pub(super) enum SshExit {
 impl SshExit {
     pub(super) fn ensure_success(self) -> Result<()> {
         match self {
+            #[cfg(unix)]
             Self::Clean => Ok(()),
+            #[cfg(unix)]
             Self::ProcessStatus {
                 status,
                 stdout_closed_cleanly,
             } if status.success() || status.code() == Some(255) && stdout_closed_cleanly => Ok(()),
+            #[cfg(unix)]
             Self::ProcessStatus { status, .. } => anyhow::bail!("ssh exited with status {status}"),
             Self::RemoteStatus { code: None } | Self::RemoteStatus { code: Some(0) } => Ok(()),
             Self::RemoteStatus { code: Some(code) } => {
@@ -315,7 +327,7 @@ impl OpenSshSession {
         ""
     }
 
-    pub(super) async fn spawn_shell(self, _config: &Config) -> Result<OpenSshProcess> {
+    pub(super) fn spawn_shell(self, _config: &Config) -> Result<OpenSshProcess> {
         anyhow::bail!("openssh ssh mode is only available on Unix; use --ssh-mode native")
     }
 }
@@ -325,12 +337,16 @@ pub(super) struct OpenSshProcess {
     pub(super) completion_task: JoinHandle<Result<SshExit>>,
 }
 
+// The whole CommandSpec/openssh_*_command_spec family builds argv for a local
+// `ssh` child process, which only the Unix subprocess and OpenSSH modes use.
+#[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandSpec {
     program: OsString,
     args: Vec<OsString>,
 }
 
+#[cfg(unix)]
 impl CommandSpec {
     fn from_ssh_bin(ssh_bin: &[String]) -> Result<Self> {
         let (program, args) = ssh_bin
@@ -350,14 +366,12 @@ impl CommandSpec {
         self.args.push(value.as_os_str().to_os_string());
     }
 
-    #[cfg(unix)]
     fn tokio_command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
         command
     }
 
-    #[cfg(unix)]
     fn std_command(&self) -> StdCommand {
         let mut command = StdCommand::new(&self.program);
         command.args(&self.args);
@@ -421,6 +435,7 @@ async fn wait_for_control_socket(path: &Path) -> Result<()> {
     )
 }
 
+#[cfg(unix)]
 fn append_openssh_destination_args(spec: &mut CommandSpec, config: &Config) {
     if let Some(port) = config.ssh_port {
         spec.arg("-p");
@@ -433,6 +448,7 @@ fn append_openssh_destination_args(spec: &mut CommandSpec, config: &Config) {
     spec.arg(config.ssh_target.as_str());
 }
 
+#[cfg(unix)]
 fn openssh_master_command_spec(
     config: &Config,
     identity_file: Option<&Path>,
@@ -456,6 +472,7 @@ fn openssh_master_command_spec(
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_token_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -469,6 +486,7 @@ fn openssh_token_command_spec(config: &Config, control_path: &Path) -> Result<Co
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_shell_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -482,6 +500,7 @@ fn openssh_shell_command_spec(config: &Config, control_path: &Path) -> Result<Co
     Ok(spec)
 }
 
+#[cfg(unix)]
 fn openssh_cleanup_command_spec(config: &Config, control_path: &Path) -> Result<CommandSpec> {
     let mut spec = CommandSpec::from_ssh_bin(&config.ssh_bin)?;
     spec.arg("-S");
@@ -559,7 +578,7 @@ fn apply_resize(handle: &ResizeHandle) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-async fn apply_resize(handle: &ResizeHandle) -> Result<()> {
+fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
         ResizeHandle::Native(tx) => {
             let (cols, rows) = terminal_size_or_default();
@@ -660,7 +679,7 @@ fn spawn_subprocess_ssh(
 }
 
 #[cfg(not(unix))]
-async fn spawn_subprocess_ssh(
+fn spawn_subprocess_ssh(
     _config: &Config,
     _identity_file: &Path,
     _token_tx: oneshot::Sender<String>,
@@ -916,6 +935,7 @@ async fn wait_for_subprocess_exit(
     }
 }
 
+#[cfg(unix)]
 fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> Result<()> {
     let mut pending = Vec::new();
     let mut buf = [0u8; 4096];
@@ -1282,12 +1302,17 @@ fn local_username() -> String {
         .unwrap_or_else(|_| "late".to_string())
 }
 
+// The token banner is only parsed out of a local ssh child's pty stream, which
+// is the Unix-only subprocess path; native russh reads the token off the
+// channel directly.
+#[cfg(unix)]
 enum BannerState {
     NeedMore,
     Token { token: String, consumed: usize },
     Passthrough { consumed: usize },
 }
 
+#[cfg(unix)]
 fn parse_cli_banner(buf: &[u8]) -> BannerState {
     let Some(newline_idx) = buf.iter().position(|b| *b == b'\n') else {
         return BannerState::NeedMore;
