@@ -330,19 +330,24 @@ impl World {
     /// an unvisited room one step from a drawn room becomes a faint frontier
     /// marker so the player can see where there is still to explore. Up/down
     /// exits can't be placed on a flat plane, so they're reported as flags.
-    pub fn minimap(
+    /// Lay visited rooms onto an integer grid by walking exits out from the
+    /// current room. BFS, so the shortest path to each room wins any clash
+    /// that the world's non-Euclidean geometry might otherwise create.
+    /// Exposed for the walkability-invariant test.
+    pub(crate) fn minimap_coords(
         &self,
         current: RoomId,
-        previous: Option<RoomId>,
         visited: &HashSet<RoomId>,
         hr: i32,
         vr: i32,
-    ) -> MiniMap {
-        // 1. Lay visited rooms onto an integer grid by walking exits out from the
-        //    current room. BFS, so the shortest path to each room wins any clash
-        //    that the world's non-Euclidean geometry might otherwise create.
+    ) -> HashMap<RoomId, (i32, i32)> {
         let mut coords: HashMap<RoomId, (i32, i32)> = HashMap::new();
+        // One room per cell: when the world's folds walk two rooms onto the
+        // same square, the first keeps it and the loser stays undrawn (its
+        // exits then read as frontier hints, never as another room's lines).
+        let mut taken: HashSet<(i32, i32)> = HashSet::new();
         coords.insert(current, (0, 0));
+        taken.insert((0, 0));
         let mut queue = VecDeque::from([current]);
         while let Some(rid) = queue.pop_front() {
             let (x, y) = coords[&rid];
@@ -355,13 +360,29 @@ impl World {
                 if nx.abs() > hr || ny.abs() > vr {
                     continue;
                 }
-                if !visited.contains(&dest) || coords.contains_key(&dest) {
+                if !visited.contains(&dest)
+                    || coords.contains_key(&dest)
+                    || taken.contains(&(nx, ny))
+                {
                     continue;
                 }
                 coords.insert(dest, (nx, ny));
+                taken.insert((nx, ny));
                 queue.push_back(dest);
             }
         }
+        coords
+    }
+
+    pub fn minimap(
+        &self,
+        current: RoomId,
+        previous: Option<RoomId>,
+        visited: &HashSet<RoomId>,
+        hr: i32,
+        vr: i32,
+    ) -> MiniMap {
+        let coords = self.minimap_coords(current, visited, hr, vr);
 
         // 2. Paint rooms, corridors, and frontier markers. The char grid
         //    interleaves room cells (even indices) with connector cells (odd),
@@ -394,10 +415,27 @@ impl World {
                     continue;
                 }
                 let (nr, nc) = to_cell(nx, ny);
-                draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
-                // A corridor leaving the visited set points at somewhere new.
-                if !coords.contains_key(&dest) && grid[nr][nc] == MapCell::Empty {
-                    grid[nr][nc] = MapCell::Frontier;
+                // The iron rule of the map: a drawn line means you can walk it.
+                match coords.get(&dest) {
+                    // The exit's destination really is the neighbouring cell:
+                    // a truthful corridor.
+                    Some(&(px, py)) if (px, py) == (nx, ny) => {
+                        draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
+                    }
+                    // The destination is visited but the world's non-Euclidean
+                    // folds laid it elsewhere. Drawing a line here would join
+                    // two rooms that are NOT linked (the "phantom corridor"
+                    // that walks you into "You can't go north") - draw nothing.
+                    Some(_) => {}
+                    // A corridor leaving the visited set points at somewhere
+                    // new - but only onto an empty cell, so it never appears
+                    // to join an unrelated room that happens to sit there.
+                    None => {
+                        if grid[nr][nc] == MapCell::Empty {
+                            draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
+                            grid[nr][nc] = MapCell::Frontier;
+                        }
+                    }
                 }
             }
         }

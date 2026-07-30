@@ -1455,3 +1455,83 @@ fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
         "toughest Sunderlakes mob ({lakes_max} hp) should be weaker than the softest Kaelmyr mob ({kaelmyr_min} hp)"
     );
 }
+
+// The iron rule of the minimap: a drawn line means you can walk it. The old
+// renderer drew a connector for every exit BY DIRECTION, so when the world's
+// non-Euclidean folds laid the destination elsewhere, a phantom corridor
+// appeared joining two rooms with no exit between them ("You can't go north"
+// under a drawn |, as reported at the Cartographers' Loft on the Saltwind
+// Wharves). Sweep every room in the world as the map centre and verify every
+// connector joins rooms that really share an exit on that axis.
+#[test]
+fn every_minimap_line_is_walkable() {
+    use crate::app::door::lateania::world::MapCell;
+    let world = seed_world();
+    let visited: HashSet<RoomId> = world.rooms.keys().copied().collect();
+    let (hr, vr) = (3i32, 2i32);
+    let mut phantoms = 0usize;
+    let mut checked = 0usize;
+    for &current in world.rooms.keys() {
+        let coords = world.minimap_coords(current, &visited, hr, vr);
+        let map = world.minimap(current, None, &visited, hr, vr);
+        // Invert: grid cell -> room id.
+        let mut at: std::collections::HashMap<(usize, usize), RoomId> =
+            std::collections::HashMap::new();
+        for (&rid, &(x, y)) in &coords {
+            at.insert((((y + vr) * 2) as usize, ((x + hr) * 2) as usize), rid);
+        }
+        for (r, row) in map.grid.iter().enumerate() {
+            for (c, &cell) in row.iter().enumerate() {
+                let horizontal = match cell {
+                    MapCell::ConnH | MapCell::TrailH => true,
+                    MapCell::ConnV | MapCell::TrailV => false,
+                    _ => continue,
+                };
+                checked += 1;
+                let ((c1, c2), (d1, d2)) = if horizontal {
+                    (((r, c - 1), (r, c + 1)), (Dir::East, Dir::West))
+                } else {
+                    (((r - 1, c), (r + 1, c)), (Dir::South, Dir::North))
+                };
+                let linked = |from: RoomId, to: RoomId| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.values().any(|&d| d == to))
+                };
+                // `d1` walks from c1 toward c2; `d2` walks back.
+                let has_exit = |from: RoomId, dir: Dir| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.contains_key(&dir))
+                };
+                match (at.get(&c1).copied(), at.get(&c2).copied()) {
+                    // Both ends are drawn rooms: they must truly be linked.
+                    (Some(a), Some(b)) => {
+                        if !linked(a, b) && !linked(b, a) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A frontier corridor: truthful only if the drawn room
+                    // really has an exit running that way.
+                    (Some(a), None) => {
+                        if map.grid[c2.0][c2.1] != MapCell::Frontier || !has_exit(a, d1) {
+                            phantoms += 1;
+                        }
+                    }
+                    (None, Some(b)) => {
+                        if map.grid[c1.0][c1.1] != MapCell::Frontier || !has_exit(b, d2) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A line joining nothing to nothing.
+                    (None, None) => phantoms += 1,
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "the sweep drew no connectors at all");
+    assert_eq!(
+        phantoms, 0,
+        "{phantoms} phantom corridors drawn (of {checked} connectors): a map line must always be walkable"
+    );
+}
