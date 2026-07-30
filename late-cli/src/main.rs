@@ -293,7 +293,10 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let sample_rate = audio.sample_rate;
     let mut webview = WebviewPlaybackController::new(api_base_url.clone(), token.clone());
     let mut voice = voice::VoiceRuntimeState::default();
-    let mut desktop_media = mpris::DesktopMedia::new();
+    let mut desktop_media = mpris::DesktopMedia::new(mpris::AudioControls {
+        muted: Arc::clone(&muted),
+        volume_percent: Arc::clone(&volume_percent),
+    });
 
     let playback = PlaybackState {
         played_samples: &played_samples,

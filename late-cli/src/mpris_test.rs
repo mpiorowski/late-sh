@@ -85,15 +85,70 @@ fn metadata_includes_track_details() {
 #[test]
 fn projection_entry_points_stay_synchronous() {
     let mut media = DesktopMedia::for_test();
-    media.select_source(
-        MediaSource::Radio,
-        Some("chillsynth".to_string()),
-        None,
-        false,
-        70,
+    media.select_source(MediaSource::Radio, Some("chillsynth".to_string()), None);
+    media.update_youtube(None);
+    media.update_icecast(HashMap::new());
+    media.update_radio(HashMap::new());
+    media.republish_audio_state();
+}
+
+#[cfg(target_os = "linux")]
+fn test_controls(muted: bool, volume_percent: u8) -> AudioControls {
+    AudioControls {
+        muted: Arc::new(AtomicBool::new(muted)),
+        volume_percent: Arc::new(AtomicU8::new(volume_percent)),
+    }
+}
+
+/// Desktop transport commands land on the same mute flag the TUI's `m` key
+/// and the pair socket drive, so a widget's play button and the terminal
+/// never disagree about whether sound is coming out.
+#[cfg(target_os = "linux")]
+#[test]
+fn transport_commands_drive_the_shared_mute_flag() {
+    let controls = test_controls(false, 70);
+
+    controls.apply_transport(TransportCommand::Pause);
+    assert!(controls.muted.load(Ordering::Relaxed), "pause mutes");
+
+    controls.apply_transport(TransportCommand::Play);
+    assert!(!controls.muted.load(Ordering::Relaxed), "play unmutes");
+
+    // PlayPause is the one that media keys send, so it has to read the
+    // current flag rather than assume a direction.
+    controls.apply_transport(TransportCommand::PlayPause);
+    assert!(controls.muted.load(Ordering::Relaxed), "play_pause mutes");
+    controls.apply_transport(TransportCommand::PlayPause);
+    assert!(
+        !controls.muted.load(Ordering::Relaxed),
+        "play_pause unmutes again"
     );
-    media.update_youtube(None, false, 70);
-    media.update_icecast(HashMap::new(), false, 70);
-    media.update_radio(HashMap::new(), true, 0);
-    media.update_audio_state(false, 30);
+
+    // Stop has no separate meaning for a live stream: it is a mute.
+    controls.apply_transport(TransportCommand::Stop);
+    assert!(controls.muted.load(Ordering::Relaxed), "stop mutes");
+
+    // Volume is untouched throughout, so unmuting restores the same level.
+    assert_eq!(controls.volume_percent.load(Ordering::Relaxed), 70);
+}
+
+/// Some widgets only expose a slider, so raising it off zero is their only
+/// way back from a muted state.
+#[cfg(target_os = "linux")]
+#[test]
+fn raising_volume_off_zero_also_unmutes() {
+    let controls = test_controls(true, 0);
+
+    controls.set_volume_percent(0);
+    assert!(
+        controls.muted.load(Ordering::Relaxed),
+        "a zero write is not an unmute"
+    );
+
+    controls.set_volume_percent(45);
+    assert_eq!(controls.volume_percent.load(Ordering::Relaxed), 45);
+    assert!(
+        !controls.muted.load(Ordering::Relaxed),
+        "raising the slider unmutes"
+    );
 }

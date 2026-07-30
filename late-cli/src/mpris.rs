@@ -1,8 +1,63 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[cfg(target_os = "linux")]
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+
+/// The mute and volume the CLI is actually playing at. MPRIS both reports
+/// these and writes them: a desktop widget's play/pause button and the
+/// keyboard's media keys drive the same atomics the pair WebSocket does, and
+/// the 1s client-state heartbeat carries the result back to the server.
+#[derive(Clone)]
+pub(super) struct AudioControls {
+    pub(super) muted: Arc<AtomicBool>,
+    pub(super) volume_percent: Arc<AtomicU8>,
+}
+
+/// The MPRIS transport commands a desktop client can send us. Playback itself
+/// is the server's, and pause/resume of a live stream is not a thing, so mute
+/// is the one control the CLI owns locally and every command maps onto it.
+///
+/// Gated with the rest of the write path: only a real MPRIS server issues
+/// these, so off-Linux they are dead code and `-D warnings` fails the build.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportCommand {
+    Play,
+    Pause,
+    PlayPause,
+    Stop,
+}
+
+#[cfg(target_os = "linux")]
+impl TransportCommand {
+    fn mutes(self, currently_muted: bool) -> bool {
+        match self {
+            Self::Play => false,
+            Self::Pause | Self::Stop => true,
+            Self::PlayPause => !currently_muted,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl AudioControls {
+    pub(super) fn apply_transport(&self, command: TransportCommand) {
+        let muted = command.mutes(self.muted.load(Ordering::Relaxed));
+        self.muted.store(muted, Ordering::Relaxed);
+    }
+
+    /// A widget dragging the slider off zero means "and unmute", which is the
+    /// only way back from `Pause` for clients that only expose a slider.
+    pub(super) fn set_volume_percent(&self, percent: u8) {
+        self.volume_percent.store(percent, Ordering::Relaxed);
+        if percent > 0 {
+            self.muted.store(false, Ordering::Relaxed);
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TrackMetadata {
@@ -72,20 +127,18 @@ pub(super) struct RadioTrack {
     pub(super) title: String,
 }
 
-/// One published state of the desktop player. The publisher only ever cares
-/// about the latest one, which is what makes a `watch` the right channel: a
-/// burst of queue updates collapses to the track that survived it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MediaUpdate {
-    track: Option<TrackMetadata>,
-    muted: bool,
-    volume_percent: u8,
-}
-
 pub(super) struct DesktopMedia {
-    /// Dropping this ends the publisher task: its `changed()` returns `Err`
-    /// once the last sender is gone.
-    updates: watch::Sender<MediaUpdate>,
+    /// Only the projected track travels: mute and volume are read live from
+    /// [`AudioControls`] at publish time, so there is one source of truth no
+    /// matter which side changed them. Dropping this ends the publisher task,
+    /// whose `changed()` returns `Err` once the last sender is gone.
+    track: watch::Sender<Option<TrackMetadata>>,
+    /// Bumped by the MPRIS interface whenever a desktop client writes mute or
+    /// volume. The publisher watches it to republish, and the pair WebSocket
+    /// loop watches it to push a fresh `client_state`: a locally originated
+    /// mute reaches the server no other way, so without this the TUI keeps
+    /// showing sound that is no longer playing.
+    control_writes: watch::Sender<u64>,
     source: Option<MediaSource>,
     station: Option<String>,
     stream_url: Option<String>,
@@ -100,23 +153,44 @@ impl DesktopMedia {
     /// mute/volume and voice control, so it must never block on the session
     /// bus: an unreachable or wedged bus would stall audio control with
     /// nothing in the logs pointing at MPRIS.
-    pub(super) fn new() -> Self {
-        let (updates, mut rx) = watch::channel(MediaUpdate {
-            track: None,
-            muted: false,
-            volume_percent: 0,
-        });
+    ///
+    /// The task republishes on two edges: a new track from the pair socket,
+    /// and `control_writes`, which the MPRIS interface bumps after a desktop
+    /// client writes mute or volume. Both re-read the controls, so a
+    /// play/pause from a widget and one from the TUI converge on the same
+    /// published state.
+    pub(super) fn new(controls: AudioControls) -> Self {
+        let (track, mut track_rx) = watch::channel(None);
+        let (control_writes, mut writes_rx) = watch::channel(0_u64);
+        let task_controls = controls.clone();
+        let interface_writes = control_writes.clone();
         tokio::spawn(async move {
-            let publisher = MprisPublisher::new().await;
-            while rx.changed().await.is_ok() {
-                let update = rx.borrow_and_update().clone();
+            let publisher = MprisPublisher::new(controls, interface_writes).await;
+            loop {
+                // The track sender lives in `DesktopMedia`, so its `Err` is
+                // what ends this task. `writes_rx` never closes: the interface
+                // holding its sender is owned by this same task.
+                tokio::select! {
+                    changed = track_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    _ = writes_rx.changed() => {}
+                }
+                let track = track_rx.borrow().clone();
                 publisher
-                    .update(update.track.as_ref(), update.muted, update.volume_percent)
+                    .update(
+                        track.as_ref(),
+                        task_controls.muted.load(Ordering::Relaxed),
+                        task_controls.volume_percent.load(Ordering::Relaxed),
+                    )
                     .await;
             }
         });
         Self {
-            updates,
+            track,
+            control_writes,
             source: None,
             station: None,
             stream_url: None,
@@ -130,13 +204,11 @@ impl DesktopMedia {
     /// cover metadata projection, which is pure.
     #[cfg(test)]
     fn for_test() -> Self {
-        let (updates, _) = watch::channel(MediaUpdate {
-            track: None,
-            muted: false,
-            volume_percent: 0,
-        });
+        let (track, _) = watch::channel(None);
+        let (control_writes, _) = watch::channel(0_u64);
         Self {
-            updates,
+            track,
+            control_writes,
             source: None,
             station: None,
             stream_url: None,
@@ -151,66 +223,54 @@ impl DesktopMedia {
         source: MediaSource,
         station: Option<String>,
         stream_url: Option<String>,
-        muted: bool,
-        volume_percent: u8,
     ) {
         self.source = Some(source);
         self.station = station;
         self.stream_url = stream_url;
-        self.publish(muted, volume_percent);
+        self.publish();
     }
 
-    pub(super) fn update_youtube(
-        &mut self,
-        current: Option<YoutubeTrack>,
-        muted: bool,
-        volume_percent: u8,
-    ) {
+    pub(super) fn update_youtube(&mut self, current: Option<YoutubeTrack>) {
         self.youtube_current = current;
         if self.source == Some(MediaSource::Youtube) {
-            self.publish(muted, volume_percent);
+            self.publish();
         }
     }
 
-    pub(super) fn update_icecast(
-        &mut self,
-        mounts: HashMap<String, IcecastTrack>,
-        muted: bool,
-        volume_percent: u8,
-    ) {
+    pub(super) fn update_icecast(&mut self, mounts: HashMap<String, IcecastTrack>) {
         self.icecast_tracks = mounts;
         if self.source == Some(MediaSource::Icecast) {
-            self.publish(muted, volume_percent);
+            self.publish();
         }
     }
 
-    pub(super) fn update_radio(
-        &mut self,
-        stations: HashMap<String, RadioTrack>,
-        muted: bool,
-        volume_percent: u8,
-    ) {
+    pub(super) fn update_radio(&mut self, stations: HashMap<String, RadioTrack>) {
         self.radio_tracks = stations;
         if self.source == Some(MediaSource::Radio) {
-            self.publish(muted, volume_percent);
+            self.publish();
         }
     }
 
-    pub(super) fn update_audio_state(&self, muted: bool, volume_percent: u8) {
-        self.publish(muted, volume_percent);
+    /// Mute and volume are read from [`AudioControls`] by the publisher, so a
+    /// change to either only needs to nudge the task. The track is unchanged,
+    /// which a `watch` would swallow, hence the explicit send.
+    pub(super) fn republish_audio_state(&self) {
+        self.publish();
+    }
+
+    /// Fires when a desktop client writes mute or volume. The pair WebSocket
+    /// loop sends `client_state` on each tick so the server and TUI follow a
+    /// change that started at the widget rather than at the terminal.
+    pub(super) fn subscribe_control_writes(&self) -> watch::Receiver<u64> {
+        self.control_writes.subscribe()
     }
 
     /// A closed receiver means the publisher task has ended (no session bus,
     /// or the runtime is shutting down). There is nothing to publish to and
     /// nothing the pair loop can do about it, so the send result is dropped
     /// deliberately rather than logged on every track change.
-    fn publish(&self, muted: bool, volume_percent: u8) {
-        let update = MediaUpdate {
-            track: self.current_track(),
-            muted,
-            volume_percent,
-        };
-        drop(self.updates.send(update));
+    fn publish(&self) {
+        drop(self.track.send(self.current_track()));
     }
 
     fn current_track(&self) -> Option<TrackMetadata> {
@@ -315,7 +375,7 @@ fn nonblank(value: Option<&str>) -> Option<&str> {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::TrackMetadata;
+    use super::{AudioControls, TrackMetadata, TransportCommand};
     use mpris_server::{
         LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
         RootInterface, Server, Time, TrackId, Volume,
@@ -329,9 +389,11 @@ mod platform {
             atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering},
         },
     };
+    use tokio::sync::watch;
 
     const STATUS_STOPPED: u8 = 0;
     const STATUS_PLAYING: u8 = 1;
+    const STATUS_PAUSED: u8 = 2;
 
     pub(super) struct Publisher {
         server: Server<MprisInterface>,
@@ -342,10 +404,32 @@ mod platform {
         status: AtomicU8,
         volume_bits: AtomicU64,
         position_micros: AtomicI64,
+        controls: AudioControls,
+        control_writes: watch::Sender<u64>,
+    }
+
+    impl MprisInterface {
+        /// Desktop clients write mute and volume straight into the atomics the
+        /// audio thread reads, then wake the publisher so the new state is
+        /// announced without waiting for the next track change.
+        fn transport(&self, command: TransportCommand) {
+            self.controls.apply_transport(command);
+            self.announce();
+        }
+
+        /// Wakes both watchers of the control epoch: the publisher, so the
+        /// desktop sees the new state, and the pair socket, so the server does.
+        fn announce(&self) {
+            self.control_writes
+                .send_modify(|writes| *writes = writes.wrapping_add(1));
+        }
     }
 
     impl Publisher {
-        pub(super) async fn new() -> ZbusResult<Self> {
+        pub(super) async fn new(
+            controls: AudioControls,
+            control_writes: watch::Sender<u64>,
+        ) -> ZbusResult<Self> {
             let suffix = format!("late.instance{}", std::process::id());
             let server = Server::new(
                 &suffix,
@@ -354,6 +438,8 @@ mod platform {
                     status: AtomicU8::new(STATUS_STOPPED),
                     volume_bits: AtomicU64::new(1.0_f64.to_bits()),
                     position_micros: AtomicI64::new(0),
+                    controls,
+                    control_writes,
                 },
             )
             .await?;
@@ -367,16 +453,15 @@ mod platform {
             volume_percent: u8,
         ) -> ZbusResult<()> {
             let metadata = track.map_or_else(Metadata::new, metadata_for_track);
-            let status = if track.is_some() {
-                PlaybackStatus::Playing
-            } else {
-                PlaybackStatus::Stopped
+            // Muted is reported as Paused rather than a zeroed volume: it is
+            // what a desktop widget draws a play button for, and it round
+            // trips through `pause`/`play` back to the same mute flag.
+            let status = match (track.is_some(), muted) {
+                (false, _) => PlaybackStatus::Stopped,
+                (true, true) => PlaybackStatus::Paused,
+                (true, false) => PlaybackStatus::Playing,
             };
-            let volume = if muted {
-                0.0
-            } else {
-                f64::from(volume_percent) / 100.0
-            };
+            let volume = f64::from(volume_percent) / 100.0;
             let position_micros = track
                 .map(TrackMetadata::position_ms)
                 .unwrap_or_default()
@@ -392,10 +477,10 @@ mod platform {
                 *current = metadata.clone();
             }
             self.server.imp().status.store(
-                if status == PlaybackStatus::Playing {
-                    STATUS_PLAYING
-                } else {
-                    STATUS_STOPPED
+                match status {
+                    PlaybackStatus::Playing => STATUS_PLAYING,
+                    PlaybackStatus::Paused => STATUS_PAUSED,
+                    PlaybackStatus::Stopped => STATUS_STOPPED,
                 },
                 Ordering::Relaxed,
             );
@@ -505,18 +590,22 @@ mod platform {
         }
 
         async fn pause(&self) -> fdo::Result<()> {
+            self.transport(TransportCommand::Pause);
             Ok(())
         }
 
         async fn play_pause(&self) -> fdo::Result<()> {
+            self.transport(TransportCommand::PlayPause);
             Ok(())
         }
 
         async fn stop(&self) -> fdo::Result<()> {
+            self.transport(TransportCommand::Stop);
             Ok(())
         }
 
         async fn play(&self) -> fdo::Result<()> {
+            self.transport(TransportCommand::Play);
             Ok(())
         }
 
@@ -576,7 +665,15 @@ mod platform {
             Ok(f64::from_bits(self.volume_bits.load(Ordering::Relaxed)))
         }
 
-        async fn set_volume(&self, _volume: Volume) -> ZbusResult<()> {
+        async fn set_volume(&self, volume: Volume) -> ZbusResult<()> {
+            // Advertising CanControl means clients may write this, so honour
+            // it rather than accepting the call and dropping it. Raising the
+            // slider off zero is also how a widget expects to unmute.
+            // Clamped before scaling, so this lands in 0..=100 and the cast
+            // cannot truncate or lose a sign.
+            let percent = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
+            self.controls.set_volume_percent(percent);
+            self.announce();
             Ok(())
         }
 
@@ -603,11 +700,11 @@ mod platform {
         }
 
         async fn can_play(&self) -> fdo::Result<bool> {
-            Ok(false)
+            Ok(true)
         }
 
         async fn can_pause(&self) -> fdo::Result<bool> {
-            Ok(false)
+            Ok(true)
         }
 
         async fn can_seek(&self) -> fdo::Result<bool> {
@@ -615,18 +712,19 @@ mod platform {
         }
 
         async fn can_control(&self) -> fdo::Result<bool> {
-            Ok(false)
+            Ok(true)
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 mod platform {
-    use super::TrackMetadata;
+    use super::{AudioControls, TrackMetadata};
     use std::{
         convert::Infallible,
         future::{Ready, ready},
     };
+    use tokio::sync::watch;
 
     pub(super) struct Publisher;
 
@@ -635,7 +733,10 @@ mod platform {
     /// return a ready future rather than being `async fn` so no suppression
     /// is needed for a future that completes immediately.
     impl Publisher {
-        pub(super) fn new() -> Ready<Result<Self, Infallible>> {
+        pub(super) fn new(
+            _controls: AudioControls,
+            _control_writes: watch::Sender<u64>,
+        ) -> Ready<Result<Self, Infallible>> {
             ready(Ok(Self))
         }
 
@@ -655,8 +756,8 @@ pub(super) struct MprisPublisher {
 }
 
 impl MprisPublisher {
-    pub(super) async fn new() -> Self {
-        match platform::Publisher::new().await {
+    pub(super) async fn new(controls: AudioControls, control_writes: watch::Sender<u64>) -> Self {
+        match platform::Publisher::new(controls, control_writes).await {
             Ok(publisher) => {
                 #[cfg(target_os = "linux")]
                 tracing::info!("desktop MPRIS publisher ready");

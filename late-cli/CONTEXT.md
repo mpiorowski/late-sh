@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-07-29 (Linux MPRIS publication: the CLI consumes queue, Icecast, and radio metadata snapshots from pair-WS and publishes the user's selected source as a read-only desktop media player; missing session D-Bus fails open)
+- Last updated: 2026-07-30 (Linux MPRIS publication: the CLI consumes queue, Icecast, and radio metadata snapshots from pair-WS and publishes the user's selected source as a desktop media player whose transport commands map onto the local mute flag; missing session D-Bus fails open)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -85,7 +85,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
-- `src/mpris.rs` - Linux read-only MPRIS service and track metadata projection; other platforms compile a no-op publisher
+- `src/mpris.rs` - Linux MPRIS service, track metadata projection, and the transport-to-mute mapping; other platforms compile a no-op publisher
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
@@ -356,7 +356,10 @@ Platform notes:
 - Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
 - Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if pairing repeatedly fails, the CLI releases startup mute after the 10 failed pair attempts. Volume uses squared scaling.
-- On Linux, the pair client consumes `queue_update`, `now_playing_update`, and `radio_meta_update` snapshots and publishes the currently selected source through `org.mpris.MediaPlayer2`. YouTube includes title/channel/duration, watch URL, thumbnail, and wall-clock-derived initial position; Icecast and radio select the metadata entry matching `set_playback_source.station`. Missing metadata falls back to the source/station label. MPRIS is intentionally read-only (`CanControl=false`) because source and playback controls remain owned by the paired TUI.
+- On Linux, the pair client consumes `queue_update`, `now_playing_update`, and `radio_meta_update` snapshots and publishes the currently selected source through `org.mpris.MediaPlayer2`. YouTube includes title/channel/duration, watch URL, thumbnail, and wall-clock-derived initial position; Icecast and radio select the metadata entry matching `set_playback_source.station`. Missing metadata falls back to the source/station label.
+- MPRIS is controllable, but only over mute. `Play`/`Pause`/`PlayPause`/`Stop` all resolve to the CLI's local `muted` atomic through `TransportCommand`, and `SetVolume` writes `volume_percent` (raising it off zero also unmutes). `CanPlay`/`CanPause`/`CanControl` are therefore true, `CanSeek`/`CanGoNext`/`CanGoPrevious` false. Muted publishes as `Paused` rather than a zeroed volume, which is what a desktop widget draws a play button for. Reporting the read-only truth (`CanControl=false`) is spec-correct but makes the player invisible to **playerctl**, which skips any player whose `can-play` is false, and with it waybar/polybar, since those link `libplayerctl`.
+- Desktop writes are announced on a `control_writes` watch epoch: the publisher republishes, and the pair WS loop pushes a fresh `client_state` so the server and TUI follow a mute that started at the widget. Without that the server never hears about it, because client-to-server pair traffic carries no control events, only status.
+- **Known gap:** this reaches only the audio the CLI decodes itself (Icecast and radio). YouTube plays in the separate `late-webview` helper, which holds its own pair WS and obeys `ToggleMute` from the *server*, so an MPRIS pause leaves it playing. Closing that needs a new client-to-server control event in `late-ssh/src/api.rs` plus fan-out to paired clients.
 - MPRIS startup and update errors fail open. Headless Linux, WSL, containers, and other environments without a usable session D-Bus continue SSH/audio normally without desktop publication.
 - The playback queue caps at roughly two seconds of output samples.
 - Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
