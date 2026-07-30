@@ -92,63 +92,35 @@ fn projection_entry_points_stay_synchronous() {
     media.republish_audio_state();
 }
 
-#[cfg(target_os = "linux")]
-fn test_controls(muted: bool, volume_percent: u8) -> AudioControls {
-    AudioControls {
-        muted: Arc::new(AtomicBool::new(muted)),
-        volume_percent: Arc::new(AtomicU8::new(volume_percent)),
-    }
-}
-
-/// Desktop transport commands land on the same mute flag the TUI's `m` key
-/// and the pair socket drive, so a widget's play button and the terminal
-/// never disagree about whether sound is coming out.
+/// Every transport command resolves to the absolute mute state sent to the
+/// server, read against the current flag: pause and stop mean muted, play
+/// means unmuted, and PlayPause, which is what media keys send, has to read
+/// the flag rather than assume a direction.
 #[cfg(target_os = "linux")]
 #[test]
-fn transport_commands_drive_the_shared_mute_flag() {
-    let controls = test_controls(false, 70);
-
-    controls.apply_transport(TransportCommand::Pause);
-    assert!(controls.muted.load(Ordering::Relaxed), "pause mutes");
-
-    controls.apply_transport(TransportCommand::Play);
-    assert!(!controls.muted.load(Ordering::Relaxed), "play unmutes");
-
-    // PlayPause is the one that media keys send, so it has to read the
-    // current flag rather than assume a direction.
-    controls.apply_transport(TransportCommand::PlayPause);
-    assert!(controls.muted.load(Ordering::Relaxed), "play_pause mutes");
-    controls.apply_transport(TransportCommand::PlayPause);
-    assert!(
-        !controls.muted.load(Ordering::Relaxed),
-        "play_pause unmutes again"
-    );
-
+fn transport_commands_resolve_to_absolute_mute_targets() {
+    assert!(TransportCommand::Pause.mutes(false), "pause mutes");
+    assert!(TransportCommand::Pause.mutes(true), "pause keeps muted");
     // Stop has no separate meaning for a live stream: it is a mute.
-    controls.apply_transport(TransportCommand::Stop);
-    assert!(controls.muted.load(Ordering::Relaxed), "stop mutes");
-
-    // Volume is untouched throughout, so unmuting restores the same level.
-    assert_eq!(controls.volume_percent.load(Ordering::Relaxed), 70);
+    assert!(TransportCommand::Stop.mutes(false), "stop mutes");
+    assert!(!TransportCommand::Play.mutes(true), "play unmutes");
+    assert!(!TransportCommand::Play.mutes(false), "play keeps unmuted");
+    assert!(TransportCommand::PlayPause.mutes(false), "play_pause mutes");
+    assert!(
+        !TransportCommand::PlayPause.mutes(true),
+        "play_pause unmutes"
+    );
 }
 
-/// Some widgets only expose a slider, so raising it off zero is their only
-/// way back from a muted state.
+/// The MPRIS volume double is clamped before scaling to a wire percent, so
+/// out-of-range writes from a misbehaving client cannot truncate or wrap.
 #[cfg(target_os = "linux")]
 #[test]
-fn raising_volume_off_zero_also_unmutes() {
-    let controls = test_controls(true, 0);
-
-    controls.set_volume_percent(0);
-    assert!(
-        controls.muted.load(Ordering::Relaxed),
-        "a zero write is not an unmute"
-    );
-
-    controls.set_volume_percent(45);
-    assert_eq!(controls.volume_percent.load(Ordering::Relaxed), 45);
-    assert!(
-        !controls.muted.load(Ordering::Relaxed),
-        "raising the slider unmutes"
-    );
+fn mpris_volume_scales_and_clamps_to_percent() {
+    assert_eq!(platform::volume_percent_from_mpris(0.0), 0);
+    assert_eq!(platform::volume_percent_from_mpris(0.454), 45);
+    assert_eq!(platform::volume_percent_from_mpris(1.0), 100);
+    assert_eq!(platform::volume_percent_from_mpris(1.7), 100);
+    assert_eq!(platform::volume_percent_from_mpris(-0.3), 0);
+    assert_eq!(platform::volume_percent_from_mpris(f64::NAN), 0);
 }

@@ -26,7 +26,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     clipboard,
-    mpris::{DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
     voice::VoiceRuntimeState,
 };
 
@@ -54,6 +54,16 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    /// Absolute mute/volume fan-out. The server relays a paired client's own
+    /// `set_muted`/`set_volume` event (this CLI's MPRIS surface) to everyone
+    /// on the token, so the command that started at a desktop widget comes
+    /// back here as the state to apply.
+    SetMuted {
+        muted: bool,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
     RequestClipboardImage {
         /// Echoed back in the clipboard payload so the server can match the
         /// response to this exact request. None from older servers.
@@ -633,6 +643,7 @@ pub(super) async fn run_pair_ws(
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
     desktop_media: &mut DesktopMedia,
+    desktop_commands: &mut tokio::sync::mpsc::Receiver<DesktopCommand>,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -644,7 +655,6 @@ pub(super) async fn run_pair_ws(
     let mut heartbeat = interval(Duration::from_secs(1));
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     let mut voice_speaking_poll = interval(Duration::from_millis(250));
-    let mut desktop_control_writes = desktop_media.subscribe_control_writes();
     send_client_state(&mut ws, client, playback).await?;
     if voice.joined {
         send_voice_state(&mut ws, voice).await?;
@@ -668,12 +678,13 @@ pub(super) async fn run_pair_ws(
                     playback.volume_percent.load(Ordering::Relaxed),
                 );
             }
-            // A desktop media client (play/pause from a widget, a media key)
-            // writes mute or volume locally. The server only ever learns those
-            // from `client_state`, so without this the TUI would keep showing
-            // the pre-mute state.
-            Ok(()) = desktop_control_writes.changed() => {
-                send_client_state(&mut ws, client, playback).await?;
+            // A desktop media client (widget play/pause, a media key, the
+            // volume slider) issued a control. It is not applied locally: the
+            // server fans the resulting set_muted/set_volume back to every
+            // paired client, this CLI and the webview helper alike, which is
+            // what lets a widget press mute YouTube too.
+            Some(command) = desktop_commands.recv() => {
+                send_desktop_command(&mut ws, command).await?;
             }
             _ = voice_state_heartbeat.tick(), if voice.joined => {
                 send_voice_state(&mut ws, voice).await?;
@@ -753,7 +764,9 @@ async fn handle_pair_control(
     match control {
         audio_control @ (PairControlMessage::ToggleMute
         | PairControlMessage::VolumeUp
-        | PairControlMessage::VolumeDown) => {
+        | PairControlMessage::VolumeDown
+        | PairControlMessage::SetMuted { .. }
+        | PairControlMessage::SetVolume { .. }) => {
             apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
             desktop_media.republish_audio_state();
             Ok(true)
@@ -895,6 +908,42 @@ async fn handle_pair_control(
     }
 }
 
+/// Forward a desktop media command (MPRIS play/pause, media keys, the volume
+/// slider) to the server as its pair-WS event. The server fans the result
+/// back to every paired client; nothing is applied locally here.
+#[cfg(target_os = "linux")]
+async fn send_desktop_command(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    command: DesktopCommand,
+) -> Result<()> {
+    let payload = match command {
+        DesktopCommand::SetMuted { muted } => json!({
+            "event": "set_muted",
+            "muted": muted,
+        }),
+        DesktopCommand::SetVolume { volume_percent } => json!({
+            "event": "set_volume",
+            "volume_percent": volume_percent,
+        }),
+    };
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
+}
+
+/// Off-Linux `DesktopCommand` is uninhabited, so this can never be reached;
+/// the empty match proves it to the compiler and keeps the pair loop cfg-free.
+#[cfg(not(target_os = "linux"))]
+async fn send_desktop_command(
+    _ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    command: DesktopCommand,
+) -> Result<()> {
+    match command {}
+}
+
 fn set_stream_url(stream_url: &Mutex<String>, stream_generation: &AtomicU64, url: &str) -> bool {
     let mut current = stream_url
         .lock()
@@ -942,6 +991,22 @@ fn apply_audio_pair_control(
         PairControlMessage::VolumeDown => {
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
+        }
+        PairControlMessage::SetMuted { muted: new_muted } => {
+            muted.store(new_muted, Ordering::Relaxed);
+            info!(muted = new_muted, "applied paired mute set");
+        }
+        PairControlMessage::SetVolume {
+            volume_percent: new_volume,
+        } => {
+            volume_percent.store(new_volume, Ordering::Relaxed);
+            // A slider dragged off zero is a widget's only way back from
+            // pause, so a non-zero volume also unmutes; the webview helper
+            // applies the same rule to its own fan-out copy.
+            if new_volume > 0 {
+                muted.store(false, Ordering::Relaxed);
+            }
+            info!(volume_percent = new_volume, "applied paired volume set");
         }
         PairControlMessage::SetPlaybackSource { .. }
         | PairControlMessage::QueueUpdate { .. }

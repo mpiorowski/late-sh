@@ -37,6 +37,84 @@ fn apply_pair_control_adjusts_volume() {
 }
 
 #[test]
+fn apply_pair_control_sets_absolute_mute() {
+    let muted = AtomicBool::new(false);
+    let volume_percent = AtomicU8::new(50);
+
+    apply_audio_pair_control(
+        PairControlMessage::SetMuted { muted: true },
+        &muted,
+        &volume_percent,
+    );
+    assert!(muted.load(Ordering::Relaxed));
+
+    // Absolute, not a toggle: applying the same state again keeps it.
+    apply_audio_pair_control(
+        PairControlMessage::SetMuted { muted: true },
+        &muted,
+        &volume_percent,
+    );
+    assert!(muted.load(Ordering::Relaxed));
+
+    apply_audio_pair_control(
+        PairControlMessage::SetMuted { muted: false },
+        &muted,
+        &volume_percent,
+    );
+    assert!(!muted.load(Ordering::Relaxed));
+    assert_eq!(
+        volume_percent.load(Ordering::Relaxed),
+        50,
+        "mute leaves volume untouched"
+    );
+}
+
+#[test]
+fn apply_pair_control_set_volume_off_zero_unmutes() {
+    let muted = AtomicBool::new(true);
+    let volume_percent = AtomicU8::new(30);
+
+    apply_audio_pair_control(
+        PairControlMessage::SetVolume { volume_percent: 0 },
+        &muted,
+        &volume_percent,
+    );
+    assert_eq!(volume_percent.load(Ordering::Relaxed), 0);
+    assert!(
+        muted.load(Ordering::Relaxed),
+        "a zero write is not an unmute"
+    );
+
+    apply_audio_pair_control(
+        PairControlMessage::SetVolume { volume_percent: 45 },
+        &muted,
+        &volume_percent,
+    );
+    assert_eq!(volume_percent.load(Ordering::Relaxed), 45);
+    assert!(!muted.load(Ordering::Relaxed), "raising the slider unmutes");
+}
+
+/// Wire contract with the server's fan-out: the CLI parses the same event
+/// names its own `set_muted`/`set_volume` requests carry upstream.
+#[test]
+fn set_controls_deserialize_from_wire_names() {
+    let muted = serde_json::from_str::<PairControlMessage>(r#"{"event":"set_muted","muted":true}"#)
+        .unwrap();
+    assert!(matches!(
+        muted,
+        PairControlMessage::SetMuted { muted: true }
+    ));
+
+    let volume =
+        serde_json::from_str::<PairControlMessage>(r#"{"event":"set_volume","volume_percent":45}"#)
+            .unwrap();
+    assert!(matches!(
+        volume,
+        PairControlMessage::SetVolume { volume_percent: 45 }
+    ));
+}
+
+#[test]
 fn queue_update_deserializes_track_details() {
     let message = serde_json::from_str::<PairControlMessage>(
         r#"{

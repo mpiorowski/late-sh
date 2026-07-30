@@ -1482,7 +1482,7 @@ Now playing on your desktop (Linux)
   GNOME's top bar, KDE's tray, lock screens, and panel applets pick it up on their own. There is nothing to switch on: it appears once `late` is running and paired.
   Every source reports title and artist. YouTube tracks add duration, the video thumbnail, and a watch link; Icecast adds track length.
   Play/pause from the widget, or your keyboard's media keys, mutes and unmutes the paired client, the same as pressing m here. The volume slider works too.
-  That covers Icecast and radio, which the CLI plays itself. YouTube runs in a separate webview and only this terminal can mute it, so use m for that.
+  The controls travel through the server to every paired player, so they cover all sources, YouTube included, and this terminal always agrees with the widget.
   Machines with no session bus (headless boxes, containers, some WSL setups) simply get nothing. Audio and everything else carry on as normal.
 
 Global keys (work anywhere)

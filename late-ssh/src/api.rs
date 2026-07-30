@@ -66,6 +66,15 @@ enum WsPayload {
         muted: bool,
         volume_percent: u8,
     },
+    /// Audio control initiated on a paired client (the CLI's desktop MPRIS
+    /// surface: a widget's play/pause, media keys, a volume slider). The
+    /// server fans it back out to every paired client on the token, exactly
+    /// like a TUI keypress, so the CLI, the webview helper, and the sidebar
+    /// all converge on the same state.
+    #[serde(rename = "set_muted")]
+    SetMuted { muted: bool },
+    #[serde(rename = "set_volume")]
+    SetVolume { volume_percent: u8 },
     #[serde(rename = "clipboard_image")]
     ClipboardImage {
         data_base64: String,
@@ -659,6 +668,22 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                         applied_initial_mute = true;
                                     }
                                 }
+                                continue;
+                            }
+                            WsPayload::SetMuted { muted } => {
+                                state.paired_client_registry.send_control(
+                                    &token,
+                                    crate::paired_clients::PairControlMessage::SetMuted { muted },
+                                );
+                                continue;
+                            }
+                            WsPayload::SetVolume { volume_percent } => {
+                                state.paired_client_registry.send_control(
+                                    &token,
+                                    crate::paired_clients::PairControlMessage::SetVolume {
+                                        volume_percent: volume_percent.min(100),
+                                    },
+                                );
                                 continue;
                             }
                             WsPayload::ClipboardImage {

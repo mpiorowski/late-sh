@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[cfg(target_os = "linux")]
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
-/// The mute and volume the CLI is actually playing at. MPRIS both reports
-/// these and writes them: a desktop widget's play/pause button and the
-/// keyboard's media keys drive the same atomics the pair WebSocket does, and
-/// the 1s client-state heartbeat carries the result back to the server.
+/// Read handles onto the mute and volume the CLI is actually playing at.
+/// MPRIS reports these but never writes them: a desktop client's control
+/// travels as a [`DesktopCommand`] up the pair WebSocket, and the atomics only
+/// change when the server's fan-out comes back on the socket path.
 #[derive(Clone)]
 pub(super) struct AudioControls {
     pub(super) muted: Arc<AtomicBool>,
@@ -18,9 +18,10 @@ pub(super) struct AudioControls {
 
 /// The MPRIS transport commands a desktop client can send us. Playback itself
 /// is the server's, and pause/resume of a live stream is not a thing, so mute
-/// is the one control the CLI owns locally and every command maps onto it.
+/// is the one thing a command can mean and every one resolves to a target
+/// mute state.
 ///
-/// Gated with the rest of the write path: only a real MPRIS server issues
+/// Gated with the rest of the command path: only a real MPRIS server issues
 /// these, so off-Linux they are dead code and `-D warnings` fails the build.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,22 +43,25 @@ impl TransportCommand {
     }
 }
 
+/// One audio control issued by a desktop media client (a widget's play/pause,
+/// media keys, a volume slider). Not applied locally: the pair WebSocket loop
+/// sends it to the server, which fans the resulting `set_muted`/`set_volume`
+/// out to every paired client, this CLI and the webview helper alike. That
+/// round trip is what makes a widget press reach YouTube, which plays in the
+/// helper process, exactly like a TUI `m` keypress does.
 #[cfg(target_os = "linux")]
-impl AudioControls {
-    pub(super) fn apply_transport(&self, command: TransportCommand) {
-        let muted = command.mutes(self.muted.load(Ordering::Relaxed));
-        self.muted.store(muted, Ordering::Relaxed);
-    }
-
-    /// A widget dragging the slider off zero means "and unmute", which is the
-    /// only way back from `Pause` for clients that only expose a slider.
-    pub(super) fn set_volume_percent(&self, percent: u8) {
-        self.volume_percent.store(percent, Ordering::Relaxed);
-        if percent > 0 {
-            self.muted.store(false, Ordering::Relaxed);
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DesktopCommand {
+    SetMuted { muted: bool },
+    SetVolume { volume_percent: u8 },
 }
+
+/// Only a real MPRIS server produces desktop commands and off-Linux there is
+/// none, so the twin is uninhabited: the channel and the pair loop's send path
+/// compile unchanged, while "a command arrived" stays unrepresentable.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DesktopCommand {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TrackMetadata {
@@ -127,18 +131,18 @@ pub(super) struct RadioTrack {
     pub(super) title: String,
 }
 
+/// Capacity of the desktop command queue between the MPRIS interface and the
+/// pair WebSocket loop. Commands are single key presses; a loop that stops
+/// draining for longer than a handful of them is reconnecting, and commands
+/// dropped then are presses the user will simply repeat.
+const DESKTOP_COMMAND_QUEUE_CAP: usize = 8;
+
 pub(super) struct DesktopMedia {
     /// Only the projected track travels: mute and volume are read live from
     /// [`AudioControls`] at publish time, so there is one source of truth no
     /// matter which side changed them. Dropping this ends the publisher task,
     /// whose `changed()` returns `Err` once the last sender is gone.
     track: watch::Sender<Option<TrackMetadata>>,
-    /// Bumped by the MPRIS interface whenever a desktop client writes mute or
-    /// volume. The publisher watches it to republish, and the pair WebSocket
-    /// loop watches it to push a fresh `client_state`: a locally originated
-    /// mute reaches the server no other way, so without this the TUI keeps
-    /// showing sound that is no longer playing.
-    control_writes: watch::Sender<u64>,
     source: Option<MediaSource>,
     station: Option<String>,
     stream_url: Option<String>,
@@ -154,31 +158,23 @@ impl DesktopMedia {
     /// bus: an unreachable or wedged bus would stall audio control with
     /// nothing in the logs pointing at MPRIS.
     ///
-    /// The task republishes on two edges: a new track from the pair socket,
-    /// and `control_writes`, which the MPRIS interface bumps after a desktop
-    /// client writes mute or volume. Both re-read the controls, so a
-    /// play/pause from a widget and one from the TUI converge on the same
-    /// published state.
-    pub(super) fn new(controls: AudioControls) -> Self {
+    /// Also returns the receiving end of the desktop command queue. The pair
+    /// WebSocket loop drains it and forwards each command to the server; the
+    /// state the MPRIS interface reports only changes when the server's
+    /// fan-out lands back on the socket and [`Self::republish_audio_state`]
+    /// nudges the task, so a play/pause from a widget and one from the TUI
+    /// converge through the same path.
+    pub(super) fn new(controls: AudioControls) -> (Self, mpsc::Receiver<DesktopCommand>) {
         let (track, mut track_rx) = watch::channel(None);
-        let (control_writes, mut writes_rx) = watch::channel(0_u64);
+        let (commands, commands_rx) = mpsc::channel(DESKTOP_COMMAND_QUEUE_CAP);
         let task_controls = controls.clone();
-        let interface_writes = control_writes.clone();
         tokio::spawn(async move {
-            let publisher = MprisPublisher::new(controls, interface_writes).await;
-            loop {
-                // The track sender lives in `DesktopMedia`, so its `Err` is
-                // what ends this task. `writes_rx` never closes: the interface
-                // holding its sender is owned by this same task.
-                tokio::select! {
-                    changed = track_rx.changed() => {
-                        if changed.is_err() {
-                            break;
-                        }
-                    }
-                    _ = writes_rx.changed() => {}
-                }
-                let track = track_rx.borrow().clone();
+            let publisher = MprisPublisher::new(controls, commands).await;
+            // The track sender lives in `DesktopMedia`, so its `Err` is what
+            // ends this task. A `watch` send notifies even when the value is
+            // unchanged, which is what lets `republish_audio_state` reuse it.
+            while track_rx.changed().await.is_ok() {
+                let track = track_rx.borrow_and_update().clone();
                 publisher
                     .update(
                         track.as_ref(),
@@ -188,16 +184,16 @@ impl DesktopMedia {
                     .await;
             }
         });
-        Self {
+        let media = Self {
             track,
-            control_writes,
             source: None,
             station: None,
             stream_url: None,
             youtube_current: None,
             icecast_tracks: HashMap::new(),
             radio_tracks: HashMap::new(),
-        }
+        };
+        (media, commands_rx)
     }
 
     /// No publisher task, so sends land in a channel nobody reads. Tests here
@@ -205,10 +201,8 @@ impl DesktopMedia {
     #[cfg(test)]
     fn for_test() -> Self {
         let (track, _) = watch::channel(None);
-        let (control_writes, _) = watch::channel(0_u64);
         Self {
             track,
-            control_writes,
             source: None,
             station: None,
             stream_url: None,
@@ -252,17 +246,10 @@ impl DesktopMedia {
     }
 
     /// Mute and volume are read from [`AudioControls`] by the publisher, so a
-    /// change to either only needs to nudge the task. The track is unchanged,
-    /// which a `watch` would swallow, hence the explicit send.
+    /// change to either only needs to nudge the task; a `watch` send notifies
+    /// its receiver even when the track it carries is unchanged.
     pub(super) fn republish_audio_state(&self) {
         self.publish();
-    }
-
-    /// Fires when a desktop client writes mute or volume. The pair WebSocket
-    /// loop sends `client_state` on each tick so the server and TUI follow a
-    /// change that started at the widget rather than at the terminal.
-    pub(super) fn subscribe_control_writes(&self) -> watch::Receiver<u64> {
-        self.control_writes.subscribe()
     }
 
     /// A closed receiver means the publisher task has ended (no session bus,
@@ -375,7 +362,7 @@ fn nonblank(value: Option<&str>) -> Option<&str> {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{AudioControls, TrackMetadata, TransportCommand};
+    use super::{AudioControls, DesktopCommand, TrackMetadata, TransportCommand};
     use mpris_server::{
         LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
         RootInterface, Server, Time, TrackId, Volume,
@@ -389,7 +376,7 @@ mod platform {
             atomic::{AtomicI64, AtomicU8, AtomicU64, Ordering},
         },
     };
-    use tokio::sync::watch;
+    use tokio::sync::mpsc;
 
     const STATUS_STOPPED: u8 = 0;
     const STATUS_PLAYING: u8 = 1;
@@ -405,30 +392,34 @@ mod platform {
         volume_bits: AtomicU64,
         position_micros: AtomicI64,
         controls: AudioControls,
-        control_writes: watch::Sender<u64>,
+        commands: mpsc::Sender<DesktopCommand>,
     }
 
     impl MprisInterface {
-        /// Desktop clients write mute and volume straight into the atomics the
-        /// audio thread reads, then wake the publisher so the new state is
-        /// announced without waiting for the next track change.
+        /// Every transport command resolves to the absolute mute state it
+        /// targets, read against the flag the CLI is actually playing with.
+        /// Absolute rather than a toggle so all paired clients converge even
+        /// if one had drifted.
         fn transport(&self, command: TransportCommand) {
-            self.controls.apply_transport(command);
-            self.announce();
+            let muted = command.mutes(self.controls.muted.load(Ordering::Relaxed));
+            self.send_command(DesktopCommand::SetMuted { muted });
         }
 
-        /// Wakes both watchers of the control epoch: the publisher, so the
-        /// desktop sees the new state, and the pair socket, so the server does.
-        fn announce(&self) {
-            self.control_writes
-                .send_modify(|writes| *writes = writes.wrapping_add(1));
+        /// `try_send` because a D-Bus handler must never wait on the pair
+        /// loop: a full queue means the loop is wedged or reconnecting, and
+        /// a dropped press is one the user will repeat, unlike a stalled
+        /// session bus.
+        fn send_command(&self, command: DesktopCommand) {
+            if let Err(err) = self.commands.try_send(command) {
+                tracing::warn!(?command, error = %err, "dropping desktop media command");
+            }
         }
     }
 
     impl Publisher {
         pub(super) async fn new(
             controls: AudioControls,
-            control_writes: watch::Sender<u64>,
+            commands: mpsc::Sender<DesktopCommand>,
         ) -> ZbusResult<Self> {
             let suffix = format!("late.instance{}", std::process::id());
             let server = Server::new(
@@ -439,7 +430,7 @@ mod platform {
                     volume_bits: AtomicU64::new(1.0_f64.to_bits()),
                     position_micros: AtomicI64::new(0),
                     controls,
-                    control_writes,
+                    commands,
                 },
             )
             .await?;
@@ -501,6 +492,13 @@ mod platform {
                 ])
                 .await
         }
+    }
+
+    /// MPRIS volume is a double in 0.0..=1.0; the wire carries a percent.
+    /// Clamped before scaling, so this lands in 0..=100 and the cast cannot
+    /// truncate or lose a sign (a NaN write saturates to 0).
+    pub(super) fn volume_percent_from_mpris(volume: Volume) -> u8 {
+        (volume.clamp(0.0, 1.0) * 100.0).round() as u8
     }
 
     pub(super) fn metadata_for_track(track: &TrackMetadata) -> Metadata {
@@ -668,12 +666,11 @@ mod platform {
         async fn set_volume(&self, volume: Volume) -> ZbusResult<()> {
             // Advertising CanControl means clients may write this, so honour
             // it rather than accepting the call and dropping it. Raising the
-            // slider off zero is also how a widget expects to unmute.
-            // Clamped before scaling, so this lands in 0..=100 and the cast
-            // cannot truncate or lose a sign.
-            let percent = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
-            self.controls.set_volume_percent(percent);
-            self.announce();
+            // slider off zero is also how a widget expects to unmute; every
+            // client applies that on the `set_volume` fan-out.
+            self.send_command(DesktopCommand::SetVolume {
+                volume_percent: volume_percent_from_mpris(volume),
+            });
             Ok(())
         }
 
@@ -719,23 +716,24 @@ mod platform {
 
 #[cfg(not(target_os = "linux"))]
 mod platform {
-    use super::{AudioControls, TrackMetadata};
+    use super::{AudioControls, DesktopCommand, TrackMetadata};
     use std::{
         convert::Infallible,
         future::{Ready, ready},
     };
-    use tokio::sync::watch;
+    use tokio::sync::mpsc;
 
     pub(super) struct Publisher;
 
     /// These mirror the Linux publisher's awaited signatures so the shared
     /// wrapper needs no `cfg`, but there is nothing to await off-Linux. They
     /// return a ready future rather than being `async fn` so no suppression
-    /// is needed for a future that completes immediately.
+    /// is needed for a future that completes immediately. Dropping the
+    /// command sender here is what closes the pair loop's receiver.
     impl Publisher {
         pub(super) fn new(
             _controls: AudioControls,
-            _control_writes: watch::Sender<u64>,
+            _commands: mpsc::Sender<DesktopCommand>,
         ) -> Ready<Result<Self, Infallible>> {
             ready(Ok(Self))
         }
@@ -756,8 +754,11 @@ pub(super) struct MprisPublisher {
 }
 
 impl MprisPublisher {
-    pub(super) async fn new(controls: AudioControls, control_writes: watch::Sender<u64>) -> Self {
-        match platform::Publisher::new(controls, control_writes).await {
+    pub(super) async fn new(
+        controls: AudioControls,
+        commands: mpsc::Sender<DesktopCommand>,
+    ) -> Self {
+        match platform::Publisher::new(controls, commands).await {
             Ok(publisher) => {
                 #[cfg(target_os = "linux")]
                 tracing::info!("desktop MPRIS publisher ready");
@@ -787,11 +788,6 @@ impl MprisPublisher {
         if let Err(err) = publisher.update(track, muted, volume_percent).await {
             tracing::warn!(error = %err, "failed to update desktop MPRIS state");
         }
-    }
-
-    #[cfg(test)]
-    pub(super) const fn disabled() -> Self {
-        Self { publisher: None }
     }
 }
 
