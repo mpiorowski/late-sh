@@ -801,7 +801,7 @@ An always-running game where every connected SSH session is automatically a part
 - Daily/weekly rituals (lo-fi standup, shipped rollup, weekend recap)
 - Ambient presence (quiet hours, listening since, typing indicator)
 - ~~Micro-collab tools (shared scratchpad, pairing ping)~~ ✓ mutual `/pair @user` shared coding scratchpad shipped (`late-ssh/src/app/scratchpad/CONTEXT.md`); snippet paste is still open.
-- Cozy utilities (~~pomodoro~~ ✓ `/pomodoro [minutes] [label]` shipped: session-local countdown in the status HUD, banner + desktop notification on completion; focus playlists, now-playing shoutouts still open)
+- Cozy utilities (~~pomodoro~~ ✓ `/pomodoro [minutes] [label]` shipped: session-local countdown in the status HUD, banner + desktop notification on completion, peers see a minutes-only presence badge on chat author lines; focus playlists, now-playing shoutouts still open)
 - Community texture (rotating shoutout board, wall of thanks)
 - Events (coffee breaks, AMAs, mini coding jams)
 - Personalization (accent color, favorite vibe, custom tagline)

@@ -35,6 +35,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
+        common::pomodoro::{PomodoroDirectory, PomodoroTimer},
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
@@ -294,6 +295,9 @@ pub struct SessionConfig {
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
     pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
+    /// Running `/pomodoro` countdowns, shared process-wide (snapshot-swap; see
+    /// `common/pomodoro.rs`).
+    pub pomodoro_directory: Option<PomodoroDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
@@ -322,35 +326,6 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-/// A running `/pomodoro` countdown. Deliberately not a Work/Break state
-/// machine: `label` is whatever the user typed, and nothing auto-advances to
-/// a next phase. Single-user and entirely in-memory -- no DB, no migration,
-/// no registry, unlike `/pair` which needed one only because two people had
-/// to agree on anything.
-#[derive(Clone, Debug)]
-pub(crate) struct PomodoroTimer {
-    pub(crate) label: String,
-    pub(crate) ends_at: DateTime<Utc>,
-}
-
-impl PomodoroTimer {
-    /// Whole seconds left, rounded up so a freshly started 25 minute timer
-    /// reads `25:00` instead of `24:59`, and floored at zero for the frame
-    /// between expiry and the 1Hz edge in `tick.rs` that clears the timer.
-    pub(crate) fn remaining_secs(&self, now: DateTime<Utc>) -> u64 {
-        let millis = (self.ends_at - now).num_milliseconds().max(0) as u64;
-        millis.div_ceil(1_000)
-    }
-
-    /// The status HUD badge: `MM:SS label`. Minutes are not wrapped into
-    /// hours because the command caps a timer well under the point where
-    /// three-digit minutes would be confusing.
-    pub(crate) fn badge(&self, now: DateTime<Utc>) -> String {
-        let remaining = self.remaining_secs(now);
-        format!("{:02}:{:02} {}", remaining / 60, remaining % 60, self.label)
-    }
 }
 
 /// Main application state
@@ -441,6 +416,10 @@ pub struct App {
     /// about once a second (which also steps shimmer); renderers read this
     /// owned map, never the directory mutex.
     pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Per-peer `/pomodoro` badges, rebuilt from the pomodoro directory on the
+    /// same ~1s cadence; chat author labels read this owned map, never the
+    /// directory mutex.
+    pub(crate) peer_pomodoros: HashMap<Uuid, String>,
     /// Human headcount and connected-friend names, recomputed on the same
     /// ~1s cadence; renderers read these owned values instead of locking the
     /// shared `active_users` map every frame.
@@ -458,6 +437,7 @@ pub struct App {
     /// every real change).
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
+    pub(super) pomodoro_directory: Option<PomodoroDirectory>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -751,6 +731,16 @@ pub(super) fn listen_url(web_url: &str) -> String {
 impl App {
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Publish this session's countdown to the process-shared directory so
+    /// peers' chat author labels can paint it. Every place that changes
+    /// `pomodoro` calls this right after, which is also how a stop and an
+    /// expiry retire the peer badge.
+    pub(crate) fn publish_pomodoro(&self) {
+        if let Some(directory) = &self.pomodoro_directory {
+            crate::app::common::pomodoro::set_user(directory, self.user_id, self.pomodoro.as_ref());
+        }
     }
 
     pub(crate) fn use_bonsai_v2(&self) -> bool {
@@ -1212,6 +1202,7 @@ impl App {
             clubhouse_bot_id: None,
             drunk_levels: HashMap::new(),
             name_styles: HashMap::new(),
+            peer_pomodoros: HashMap::new(),
             online_count: active_users
                 .as_ref()
                 .map(crate::state::online_human_count)
@@ -1221,6 +1212,7 @@ impl App {
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
+            pomodoro_directory: config.pomodoro_directory,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,

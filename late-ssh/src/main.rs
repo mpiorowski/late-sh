@@ -367,6 +367,7 @@ async fn main() -> anyhow::Result<()> {
         afk_users,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
+        pomodoro_directory: late_ssh::app::common::pomodoro::new_directory(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

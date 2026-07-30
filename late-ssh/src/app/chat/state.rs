@@ -2174,11 +2174,11 @@ impl ChatState {
         if let Some(parsed) = parse_pomodoro_command(&body) {
             self.clear_composer_after_submit();
             match parsed {
-                Some(request) => {
+                PomodoroParse::Request(request) => {
                     self.requested_pomodoro = Some(request);
                     return None;
                 }
-                None => {
+                PomodoroParse::Invalid => {
                     return Some(Banner::error(
                         "Usage: /pomodoro [minutes] [label...] or /pomodoro stop",
                     ));
@@ -5265,13 +5265,23 @@ pub(crate) enum PomodoroRequest {
     Stop,
 }
 
-/// `Some(Some(request))` on a usable `/pomodoro` line, `Some(None)` on a
-/// malformed one (usage banner), `None` when it isn't `/pomodoro` at all.
+/// Outcome of parsing a `/pomodoro` line. Same shape as [`PetnameParse`]: a
+/// named variant per outcome instead of a nested `Option`, so a call site
+/// cannot read "malformed" as "absent".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PomodoroParse {
+    Request(PomodoroRequest),
+    /// `/pomodoro` with an out-of-range duration or a `stop` carrying
+    /// arguments.
+    Invalid,
+}
+
+/// `None` when the line isn't `/pomodoro` at all.
 ///
 /// A leading integer is the duration and everything after it is the label, so
 /// `/pomodoro 50 deep work` and the label-only `/pomodoro deep work` (default
 /// duration) both work. Only an out-of-range duration is an error.
-fn parse_pomodoro_command(input: &str) -> Option<Option<PomodoroRequest>> {
+fn parse_pomodoro_command(input: &str) -> Option<PomodoroParse> {
     let rest = input.trim().strip_prefix("/pomodoro")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
@@ -5283,7 +5293,10 @@ fn parse_pomodoro_command(input: &str) -> Option<Option<PomodoroRequest>> {
         .is_some_and(|word| word.eq_ignore_ascii_case("stop"))
     {
         words.next();
-        return Some((words.next().is_none()).then_some(PomodoroRequest::Stop));
+        return Some(match words.next() {
+            None => PomodoroParse::Request(PomodoroRequest::Stop),
+            Some(_) => PomodoroParse::Invalid,
+        });
     }
     let mut minutes = POMODORO_DEFAULT_MINUTES;
     if words
@@ -5295,7 +5308,7 @@ fn parse_pomodoro_command(input: &str) -> Option<Option<PomodoroRequest>> {
         // banner rather than a silent clamp.
         match digits.parse::<u32>() {
             Ok(parsed) if (1..=POMODORO_MAX_MINUTES).contains(&parsed) => minutes = parsed,
-            _ => return Some(None),
+            _ => return Some(PomodoroParse::Invalid),
         }
     }
     // Rejoining with single spaces drops any tabs/newlines; then strip control
@@ -5319,7 +5332,10 @@ fn parse_pomodoro_command(input: &str) -> Option<Option<PomodoroRequest>> {
     } else {
         label.to_string()
     };
-    Some(Some(PomodoroRequest::Start { minutes, label }))
+    Some(PomodoroParse::Request(PomodoroRequest::Start {
+        minutes,
+        label,
+    }))
 }
 
 /// A `/challenge` request drained by `handle_post_submit_requests` (the

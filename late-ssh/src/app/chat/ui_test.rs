@@ -105,6 +105,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
+    let peer_pomodoros = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let ctx = ChatRowsContext {
@@ -123,6 +124,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         unread_marker: None,
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
+        peer_pomodoros: &peer_pomodoros,
     };
 
     theme::set_current_by_id("late");
@@ -150,6 +152,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
+    let peer_pomodoros = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -174,6 +177,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         unread_marker: None,
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
+        peer_pomodoros: &peer_pomodoros,
     };
 
     let base_key = chat_rows_cache_key(&ctx(base_versions), 80);
@@ -350,6 +354,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
+    let peer_pomodoros = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -367,6 +372,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         unread_marker: None,
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
+        peer_pomodoros: &peer_pomodoros,
     };
 
     let width = 60;
@@ -423,6 +429,7 @@ fn background_wash_fills_the_whole_row_width() {
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
+    let peer_pomodoros = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -440,6 +447,7 @@ fn background_wash_fills_the_whole_row_width() {
         unread_marker: None,
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
+        peer_pomodoros: &peer_pomodoros,
     };
 
     let width = 60;
@@ -512,6 +520,7 @@ fn chat_view<'a>(
     static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, NameStyle>> = OnceLock::new();
+    static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
 
     ChatRenderInput {
@@ -586,6 +595,7 @@ fn chat_view<'a>(
         profile_award_badges,
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_styles: NAME_STYLES.get_or_init(HashMap::new),
+        peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
         news_composer,
         news_composing: false,
         news_processing: false,
@@ -1543,7 +1553,7 @@ fn room_list_hit_test_maps_public_room_row_to_room_slot() {
 #[test]
 fn header_segments_bare_username_only() {
     let (prefix, segs) =
-        build_author_prefix_and_segments(false, "alice", &[], None, None, None, None);
+        build_author_prefix_and_segments(false, "alice", &[], None, None, None, &[]);
     assert_eq!(prefix, "alice");
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -1567,7 +1577,7 @@ fn build_author_prefix_matches_legacy_formatter_across_combinations() {
                 format!("{author}{suffix}")
             };
             let (built, _) =
-                build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None, None);
+                build_author_prefix_and_segments(is_friend, author, sp, cb, bg, None, &[]);
             assert_eq!(
                 built, legacy,
                 "case {is_friend} {author:?} {sp:?} {cb:?} {bg:?}"
@@ -1593,7 +1603,7 @@ fn header_segments_full_label_orders_special_bonsai_store() {
         Some("🐱"),
         Some("bonsai"),
         None,
-        None,
+        &[],
     );
     // Sanity: the legacy formatter produces the same suffix shape.
     let legacy = format!(
@@ -1646,7 +1656,7 @@ fn header_segments_skip_empty_badges() {
         Some(""),
         Some(""),
         None,
-        None,
+        &[],
     );
     // 1 author + 1 special "mod" = 2 segments. No store, no bonsai.
     assert_eq!(segs.len(), 2);
@@ -1657,7 +1667,7 @@ fn header_segments_skip_empty_badges() {
 #[test]
 fn header_segments_bonsai_then_store_without_specials() {
     let (_prefix, segs) =
-        build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None, None);
+        build_author_prefix_and_segments(false, "bob", &[], Some("🐱"), Some("🌱"), None, &[]);
     // author (Profile), bonsai (Profile), store (StoreBadge).
     assert_eq!(segs.len(), 3);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
@@ -1677,7 +1687,7 @@ fn header_segments_put_monthly_awards_after_author() {
         Some("shop"),
         Some("bonsai"),
         Some("AW1 CHIP2 SN3"),
-        None,
+        &[],
     );
 
     assert_eq!(prefix, "alice [AW1 CHIP2 SN3] mod bonsai shop");
@@ -1709,7 +1719,7 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         &chat_badges,
         None,
         None,
-        None,
+        &[],
     );
     assert_eq!(prefix, "bob 🐱 US");
     assert_eq!(author_range, (0, 3));
@@ -1732,7 +1742,7 @@ fn header_prefix_orders_all_badge_classes() {
         &chat_badges,
         Some("bonsai"),
         Some("AW1 CHIP2"),
-        Some("brb"),
+        &["brb"],
     );
 
     assert_eq!(

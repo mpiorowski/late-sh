@@ -2170,8 +2170,8 @@ fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/challenge @alice"), None);
 }
 
-fn pomodoro_start(minutes: u32, label: &str) -> Option<Option<PomodoroRequest>> {
-    Some(Some(PomodoroRequest::Start {
+fn pomodoro_start(minutes: u32, label: &str) -> Option<PomodoroParse> {
+    Some(PomodoroParse::Request(PomodoroRequest::Start {
         minutes,
         label: label.to_string(),
     }))
@@ -2245,30 +2245,34 @@ fn parse_pomodoro_command_sanitizes_and_caps_the_label() {
 fn parse_pomodoro_command_stops_a_running_timer() {
     assert_eq!(
         parse_pomodoro_command("/pomodoro stop"),
-        Some(Some(PomodoroRequest::Stop))
+        Some(PomodoroParse::Request(PomodoroRequest::Stop))
     );
     assert_eq!(
         parse_pomodoro_command("/pomodoro STOP"),
-        Some(Some(PomodoroRequest::Stop))
+        Some(PomodoroParse::Request(PomodoroRequest::Stop))
     );
     assert_eq!(
         parse_pomodoro_command("/pomodoro stop now"),
-        Some(None),
+        Some(PomodoroParse::Invalid),
         "stop takes no arguments"
     );
 }
 
 #[test]
 fn parse_pomodoro_command_rejects_out_of_range_durations() {
-    assert_eq!(parse_pomodoro_command("/pomodoro 0"), Some(None), "zero");
+    assert_eq!(
+        parse_pomodoro_command("/pomodoro 0"),
+        Some(PomodoroParse::Invalid),
+        "zero"
+    );
     assert_eq!(
         parse_pomodoro_command(&format!("/pomodoro {}", POMODORO_MAX_MINUTES + 1)),
-        Some(None),
+        Some(PomodoroParse::Invalid),
         "over the cap"
     );
     assert_eq!(
         parse_pomodoro_command("/pomodoro 99999999999999999999"),
-        Some(None),
+        Some(PomodoroParse::Invalid),
         "digit run too long for u32"
     );
 }

@@ -475,6 +475,15 @@ impl Drop for ClientHandler {
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
+                    // Last connection gone: retire any running countdown so a
+                    // peer doesn't keep painting a badge for someone who left.
+                    // The timer is session-local, so there is nothing to
+                    // resume when they come back.
+                    crate::app::common::pomodoro::set_user(
+                        &self.state.pomodoro_directory,
+                        user_id,
+                        None,
+                    );
                 } else {
                     active.connection_count -= 1;
                     user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
@@ -1009,6 +1018,7 @@ impl russh::server::Handler for ClientHandler {
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
+            pomodoro_directory: Some(self.state.pomodoro_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_announcements,
             user_id,

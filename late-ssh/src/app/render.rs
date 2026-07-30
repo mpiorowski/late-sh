@@ -554,6 +554,7 @@ impl App {
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
+            peer_pomodoros: &self.peer_pomodoros,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             inline_images: &self.chat.inline_image_cache,
@@ -696,6 +697,7 @@ impl App {
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
+            peer_pomodoros: &self.peer_pomodoros,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -776,6 +778,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
+                    peer_pomodoros: &self.peer_pomodoros,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -835,6 +838,7 @@ impl App {
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
+                    peer_pomodoros: &self.peer_pomodoros,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1215,23 +1219,19 @@ impl App {
         }
 
         let title = app_frame_title(screen, &ctx);
-        // What the right-aligned HUD can use before it starts painting over the
-        // left title (both live on the top border row, corners excluded).
-        let hud_spare_cols = area
-            .width
-            .saturating_sub(2)
-            .saturating_sub(line_width(&title) as u16);
+        let title_width = line_width(&title) as u16;
         let mut block = Block::default()
             .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-        match status_hud_title(
-            Some(ctx.chip_balance),
-            ctx.mentions_unread_count,
-            ctx.voice_badge.as_deref(),
-            ctx.pomodoro_badge.as_deref(),
-            hud_spare_cols,
-        ) {
+        match status_hud_title(StatusHudInputs {
+            balance: Some(ctx.chip_balance),
+            unread: ctx.mentions_unread_count,
+            voice_badge: ctx.voice_badge.as_deref(),
+            pomodoro_badge: ctx.pomodoro_badge.as_deref(),
+            border_width: area.width,
+            title_width,
+        }) {
             Some(hud) => {
                 // The right-aligned title's last cell sits just inside the
                 // top-right corner, and the mentions segment leads the line.
@@ -2176,16 +2176,37 @@ struct StatusHud {
     mentions_width: u16,
 }
 
-fn status_hud_title(
+/// Everything the status HUD needs, named: `voice_badge` and `pomodoro_badge`
+/// are both `Option<&str>`, so positional arguments would let a call site swap
+/// them without a compile error. `border_width` and `title_width` come in raw
+/// rather than pre-subtracted so the fitting math below is covered by the
+/// tests instead of living uncovered at the one call site.
+struct StatusHudInputs<'a> {
     balance: Option<i64>,
     unread: i64,
-    voice_badge: Option<&str>,
-    pomodoro_badge: Option<&str>,
-    spare_cols: u16,
-) -> Option<StatusHud> {
+    voice_badge: Option<&'a str>,
+    pomodoro_badge: Option<&'a str>,
+    /// Full width of the bordered frame, corners included.
+    border_width: u16,
+    /// Width of the left-aligned frame title sharing the top border row.
+    title_width: u16,
+}
+
+fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
+    let StatusHudInputs {
+        balance,
+        unread,
+        voice_badge,
+        pomodoro_badge,
+        border_width,
+        title_width,
+    } = inputs;
     if balance.is_none() && unread <= 0 && voice_badge.is_none() && pomodoro_badge.is_none() {
         return None;
     }
+    // What the right-aligned HUD can use before it starts painting over the
+    // left title (both live on the top border row, corners excluded).
+    let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
     let mut spans = Vec::new();
     if unread > 0 {
         let noun = if unread == 1 { "mention" } else { "mentions" };
