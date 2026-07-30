@@ -666,29 +666,29 @@ impl BonsaiV2State {
         let protected = self
             .decay_protection
             .is_some_and(|protection| protection.covers_day(day));
-        if protected {
-            // A live Bonsai Decay Shield holds the day neutral: no stress
-            // rise, no vigor loss, and no death check, regardless of
-            // watering.
-            self.grow_once(GrowthCause::Daily);
-            return;
-        }
         let dry = self
             .last_watered
             .is_none_or(|last| (day - last).num_days() >= 1);
-        if dry {
-            self.water_stress = (self.water_stress + 11).clamp(0, 120);
-            self.vigor = (self.vigor - 7).max(0);
-        } else {
-            self.water_stress = (self.water_stress - 4).max(0);
-            self.vigor = (self.vigor + 2).min(100);
+        // A live Bonsai Decay Shield holds a dry day neutral: no stress rise,
+        // no vigor loss, no death check. It never cancels the recovery a
+        // watered day earns, so owning a shield can only ever help.
+        match (dry, protected) {
+            (true, false) => {
+                self.water_stress = (self.water_stress + 11).clamp(0, 120);
+                self.vigor = (self.vigor - 7).max(0);
+            }
+            (true, true) => {}
+            (false, _) => {
+                self.water_stress = (self.water_stress - 4).max(0);
+                self.vigor = (self.vigor + 2).min(100);
+            }
         }
-        self.grow_once(if dry {
+        self.grow_once(if dry && !protected {
             GrowthCause::DryDay
         } else {
             GrowthCause::Daily
         });
-        if self.water_stress >= 100 && self.vigor == 0 {
+        if !protected && self.water_stress >= 100 && self.vigor == 0 {
             self.is_alive = false;
             self.kill_weak_tips();
         }

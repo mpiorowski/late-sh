@@ -444,3 +444,39 @@ fn simulate_day_protection_does_not_extend_past_its_window() {
     assert_eq!(state.water_stress, 61);
     assert_eq!(state.vigor, 43);
 }
+
+#[test]
+fn simulate_day_still_recovers_on_a_watered_day_under_protection() {
+    let today = BonsaiService::today();
+    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    state.water_stress = 50;
+    state.vigor = 50;
+    state.last_watered = Some(today);
+    state.decay_protection = Some(BonsaiDecayProtection {
+        starts_at: Utc::now() - chrono::Duration::days(1),
+        ends_at: Utc::now() + chrono::Duration::days(13),
+    });
+
+    state.simulate_day(today);
+
+    // The shield neutralizes dry days; it must never cancel the recovery a
+    // watered day earns, or buying it would leave a tended tree worse off.
+    assert_eq!(state.water_stress, 46);
+    assert_eq!(state.vigor, 52);
+}
+
+#[test]
+fn simulate_day_protection_keeps_an_already_spent_tree_alive() {
+    let mut state = state_for_graph(seeded_graph(42, 0), None);
+    state.water_stress = 100;
+    state.vigor = 0;
+    state.last_watered = None;
+    state.decay_protection = Some(BonsaiDecayProtection {
+        starts_at: Utc::now() - chrono::Duration::days(1),
+        ends_at: Utc::now() + chrono::Duration::days(13),
+    });
+
+    state.simulate_day(BonsaiService::today());
+
+    assert!(state.is_alive);
+}
