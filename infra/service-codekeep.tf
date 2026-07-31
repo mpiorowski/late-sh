@@ -1,5 +1,11 @@
-# Dedicated CodeKeep SSH/PTTY host. The upstream Bun/Ink process never runs in
+# Dedicated CodeKeep SSH/PTY host. The upstream Bun/Ink process never runs in
 # service-ssh; this pod owns its runtime, per-account saves, and resource limits.
+#
+# replicas MUST stay 1: one RWO volume holds every account's save (see
+# codekeep.tf), and the host's one-live-child-per-account lease is process-local,
+# so a second replica would let two children race the same game.json.
+# The host pod is always deployed (like service-ssh/nethack/dcss); the door's
+# enable flag only gates the CLIENT (service-ssh's LATE_CODEKEEP_ENABLED).
 resource "kubernetes_deployment_v1" "late_codekeep" {
   metadata {
     name = "late-codekeep"
@@ -63,12 +69,12 @@ resource "kubernetes_deployment_v1" "late_codekeep" {
 
           resources {
             limits = {
-              cpu    = "1000m"
-              memory = "1Gi"
+              cpu    = local.door_cpu_limit
+              memory = local.door_memory_limit
             }
             requests = {
-              cpu    = "100m"
-              memory = "128Mi"
+              cpu    = local.door_cpu_request
+              memory = local.door_memory_request
             }
           }
 

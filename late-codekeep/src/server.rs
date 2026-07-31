@@ -157,10 +157,13 @@ impl Handler for ClientHandler {
                 .lock()
                 .expect("active accounts mutex");
             if !active.insert(account.clone()) {
-                session.data(
-                    channel,
-                    b"CodeKeep is already running for this account.\r\n".to_vec(),
-                )?;
+                // The previous session still owns this account, usually because
+                // its child is inside the SIGHUP-save grace. Close without
+                // writing to the channel: late-ssh leaves the CodeKeep screen on
+                // the same tick it sees the close, so anything sent here is
+                // parsed into a vt100 screen the client never paints. The log is
+                // the only place this is observable.
+                tracing::info!(account, "rejected: session already active for this account");
                 session.eof(channel)?;
                 session.close(channel)?;
                 return Ok(());

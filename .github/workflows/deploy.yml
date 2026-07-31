@@ -54,24 +54,27 @@ jobs:
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
-  build_codekeep:
-    name: build_late_codekeep_image
+  get_codekeep_image:
+    name: get_current_codekeep_image_tag
     if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack') && !endsWith(inputs.release_tag, '-dopewars') && !endsWith(inputs.release_tag, '-dcss') && !endsWith(inputs.release_tag, '-usurper') && !endsWith(inputs.release_tag, '-brogue') && !endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack') && !endsWith(github.ref, '-dopewars') && !endsWith(github.ref, '-dcss') && !endsWith(github.ref, '-usurper') && !endsWith(github.ref, '-brogue') && !endsWith(github.ref, '-codekeep')) }}
-    needs: ci
-    uses: ./.github/workflows/build.yml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      registry: ghcr.io
-      image_name: late-codekeep
-      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
-      context: .
-      dockerfile: ./Dockerfile
-      docker_target: runtime-codekeep
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
-      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      codekeep_image_tag: ${{ steps.codekeep_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_codekeep_image_tag
+        id: codekeep_image
+        run: |
+          tag=$(kubectl get deployment late-codekeep -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
   get_web_image:
     name: get_current_web_image_tag
@@ -208,7 +211,7 @@ jobs:
   terraform:
     name: terraform_apply
     if: ${{ (github.event_name == 'workflow_dispatch' && !endsWith(inputs.release_tag, '-infra') && !endsWith(inputs.release_tag, '-cli') && !endsWith(inputs.release_tag, '-web') && !endsWith(inputs.release_tag, '-nethack') && !endsWith(inputs.release_tag, '-dopewars') && !endsWith(inputs.release_tag, '-dcss') && !endsWith(inputs.release_tag, '-usurper') && !endsWith(inputs.release_tag, '-brogue') && !endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && !endsWith(github.ref, '-infra') && !endsWith(github.ref, '-cli') && !endsWith(github.ref, '-web') && !endsWith(github.ref, '-nethack') && !endsWith(github.ref, '-dopewars') && !endsWith(github.ref, '-dcss') && !endsWith(github.ref, '-usurper') && !endsWith(github.ref, '-brogue') && !endsWith(github.ref, '-codekeep')) }}
-    needs: [build_ssh, build_codekeep, get_web_image, get_nethack_image, get_dopewars_image, get_dcss_image, get_usurper_image, get_brogue_image]
+    needs: [build_ssh, get_web_image, get_nethack_image, get_dopewars_image, get_codekeep_image, get_dcss_image, get_usurper_image, get_brogue_image]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -218,7 +221,7 @@ jobs:
       web_image_tag: ${{ needs.get_web_image.outputs.web_image_tag }}
       nethack_image_tag: ${{ needs.get_nethack_image.outputs.nethack_image_tag }}
       dopewars_image_tag: ${{ needs.get_dopewars_image.outputs.dopewars_image_tag }}
-      codekeep_image_tag: ${{ needs.build_codekeep.outputs.image_tag }}
+      codekeep_image_tag: ${{ needs.get_codekeep_image.outputs.codekeep_image_tag }}
       dcss_image_tag: ${{ needs.get_dcss_image.outputs.dcss_image_tag }}
       usurper_image_tag: ${{ needs.get_usurper_image.outputs.usurper_image_tag }}
       brogue_image_tag: ${{ needs.get_brogue_image.outputs.brogue_image_tag }}
@@ -240,8 +243,5 @@ jobs:
         with:
           kubeconfig: ${{ secrets.KUBE_CONFIG }}
 
-      - name: wait_for_ssh_rollout
+      - name: wait_for_rollout
         run: kubectl rollout status deployment service-ssh -n default --timeout=180s
-
-      - name: wait_for_codekeep_rollout
-        run: kubectl rollout status deployment late-codekeep -n default --timeout=180s
