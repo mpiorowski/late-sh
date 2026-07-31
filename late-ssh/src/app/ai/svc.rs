@@ -3,11 +3,16 @@ use late_core::telemetry::TracedExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+/// The model backing @bot's grounded chat/news replies. Gemini 3.6 Flash beats
+/// 3.1 Pro on coding/agentic benchmarks while costing less and running faster;
+/// Pro only keeps an edge on the hardest reasoning benchmarks, which this bot
+/// doesn't need.
+pub const AI_MODEL: &str = "gemini-3.6-flash";
+
 #[derive(Debug, Clone)]
 pub struct AiService {
     client: Client,
     api_key: Option<String>,
-    model: String,
     enabled: bool,
 }
 
@@ -76,11 +81,10 @@ struct GeminiResponsePart {
 }
 
 impl AiService {
-    pub fn new(enabled: bool, api_key: Option<String>, model: String) -> Self {
+    pub fn new(enabled: bool, api_key: Option<String>) -> Self {
         Self {
             client: Client::new(),
             api_key,
-            model,
             enabled,
         }
     }
@@ -90,7 +94,7 @@ impl AiService {
     }
 
     pub fn model(&self) -> &str {
-        &self.model
+        AI_MODEL
     }
 
     pub async fn generate_reply(
@@ -134,7 +138,7 @@ impl AiService {
         let api_key = self.api_key.as_ref().context("missing api key")?;
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, api_key
+            AI_MODEL, api_key
         );
 
         let req = GeminiRequest {
@@ -196,7 +200,7 @@ impl AiService {
         let api_key = self.api_key.as_ref().context("missing api key")?;
         let url = format!(
             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, api_key
+            AI_MODEL, api_key
         );
 
         let req = GeminiRequest {
@@ -249,9 +253,9 @@ impl AiService {
     /// generous so a thinking model's reasoning tokens don't crowd out the
     /// (small) JSON payload.
     ///
-    /// `model` is explicit rather than defaulting to `self.model`: callers on
+    /// `model` is explicit rather than defaulting to `AI_MODEL`: callers on
     /// this path (e.g. the bartender's order flow) may need a different model
-    /// tier than the configured chat/news model.
+    /// tier than @bot's chat/news model.
     pub async fn generate_json(
         &self,
         model: &str,

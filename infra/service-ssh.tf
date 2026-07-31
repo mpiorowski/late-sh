@@ -478,11 +478,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               }
             }
           }
-          env {
-            name  = "LATE_AI_MODEL"
-            value = var.AI_MODEL
-          }
-
           # --- YouTube Data API ---
           env {
             name = "LATE_YOUTUBE_API_KEY"

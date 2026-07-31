@@ -1,8 +1,8 @@
 use super::{
-    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, HelpHintStyle, app_frame_bottom_titles,
-    app_frame_help_hint_title, app_frame_sponsor_title, dashboard_home_selected, line_width,
-    resolve_right_sidebar_enabled, resolve_room_list_enabled, room_list_sidebar_enabled,
-    sidebar_enabled, sponsor_line, status_hud_title,
+    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, HelpHintStyle, StatusHud,
+    StatusHudInputs, app_frame_bottom_titles, app_frame_help_hint_title, app_frame_sponsor_title,
+    dashboard_home_selected, line_width, resolve_right_sidebar_enabled, resolve_room_list_enabled,
+    room_list_sidebar_enabled, sidebar_enabled, sponsor_line, status_hud_title,
 };
 use crate::app::common::primitives::Screen;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -11,6 +11,29 @@ use uuid::Uuid;
 /// A terminal wide enough that `Auto` keeps every rail, so the `On`/`Off` cases
 /// below are unaffected by width.
 const WIDE_TERMINAL: u16 = 200;
+
+/// Enough border room that `status_hud_title` never degrades a segment, so
+/// the cases below test content rather than fitting.
+const WIDE_HUD_BORDER: u16 = 200;
+
+/// A HUD with no left title competing for the border row, sized so nothing
+/// degrades. Cases that exercise fitting pass `border_width`/`title_width`
+/// themselves.
+fn hud(
+    balance: Option<i64>,
+    unread: i64,
+    voice_badge: Option<&str>,
+    pomodoro_badge: Option<&str>,
+) -> Option<StatusHud> {
+    status_hud_title(StatusHudInputs {
+        balance,
+        unread,
+        voice_badge,
+        pomodoro_badge,
+        border_width: WIDE_HUD_BORDER,
+        title_width: 0,
+    })
+}
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
     line.iter().map(|s| s.content.as_ref()).collect()
@@ -159,52 +182,72 @@ fn dashboard_home_selected_rejects_synthetic_and_non_lounge_rooms() {
 
 #[test]
 fn status_hud_title_hidden_when_empty() {
-    assert!(status_hud_title(None, 0, None).is_none());
-    assert!(status_hud_title(None, -3, None).is_none());
+    assert!(hud(None, 0, None, None).is_none());
+    assert!(hud(None, -3, None, None).is_none());
 }
 
 #[test]
 fn status_hud_title_renders_right_aligned_pluralized_text() {
     use ratatui::layout::Alignment;
 
-    let one = status_hud_title(None, 1, None).expect("one mention should render");
+    let one = hud(None, 1, None, None).expect("one mention should render");
     assert_eq!(one.line.alignment, Some(Alignment::Right));
-    let text: String = one.line.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, " 1 unread mention ");
+    assert_eq!(line_text(&one.line), " 1 unread mention ");
     assert_eq!(one.mentions_width, " 1 unread mention ".len() as u16);
 
-    let many = status_hud_title(None, 14, None).expect("many mentions should render");
-    let text: String = many.line.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, " 14 unread mentions ");
+    let many = hud(None, 14, None, None).expect("many mentions should render");
+    assert_eq!(line_text(&many.line), " 14 unread mentions ");
 }
 
 #[test]
 fn status_hud_title_combines_voice_and_mentions() {
-    let hud =
-        status_hud_title(None, 2, Some(" mic #lounge [muted] ")).expect("status should render");
-    let text: String = hud.line.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, " 2 unread mentions | mic #lounge [muted] ");
+    let combined = hud(None, 2, Some(" mic #lounge [muted] "), None).expect("status should render");
+    assert_eq!(
+        line_text(&combined.line),
+        " 2 unread mentions | mic #lounge [muted] "
+    );
     // Only the mentions segment is clickable, so its width stops at the text.
-    assert_eq!(hud.mentions_width, " 2 unread mentions ".len() as u16);
+    assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
 }
 
 #[test]
 fn status_hud_title_renders_balance_right_of_mentions() {
     use ratatui::layout::Alignment;
 
-    let only = status_hud_title(Some(1_500), 0, None).expect("balance should render alone");
+    let only = hud(Some(1_500), 0, None, None).expect("balance should render alone");
     assert_eq!(only.line.alignment, Some(Alignment::Right));
-    let text: String = only.line.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, " 1500 chips ");
+    assert_eq!(line_text(&only.line), " 1500 chips ");
     assert_eq!(only.mentions_width, 0);
 
-    let combined = status_hud_title(Some(1_500), 2, Some(" mic #lounge [muted] "))
+    let combined = hud(Some(1_500), 2, Some(" mic #lounge [muted] "), None)
         .expect("balance + voice + mentions should render");
-    let text: String = combined.line.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(
-        text,
+        line_text(&combined.line),
         " 2 unread mentions | mic #lounge [muted] | 1500 chips "
     );
+}
+
+/// The pomodoro badge shows the HUD on its own, and slots between mentions and
+/// voice so the mentions hit-test rect keeps leading the line.
+#[test]
+fn status_hud_title_renders_pomodoro_between_mentions_and_voice() {
+    let only = hud(None, 0, None, Some("24:59 deep work"))
+        .expect("a running pomodoro alone should render the HUD");
+    assert_eq!(line_text(&only.line), " 24:59 deep work ");
+    assert_eq!(only.mentions_width, 0);
+
+    let combined = hud(
+        Some(1_500),
+        2,
+        Some(" mic #lounge [muted] "),
+        Some("05:00 Pomodoro"),
+    )
+    .expect("every segment should render");
+    assert_eq!(
+        line_text(&combined.line),
+        " 2 unread mentions | 05:00 Pomodoro | mic #lounge [muted] | 1500 chips "
+    );
+    assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
 }
 
 #[test]
@@ -264,4 +307,92 @@ fn help_hint_title_compacts_separators_then_ctrl_notation() {
     let (help, sponsor) = app_frame_bottom_titles((line_width(&caret) + 2) as u16);
     assert_eq!(line_text(&help), line_text(&caret));
     assert!(sponsor.is_none());
+}
+
+/// The HUD is painted over the left title, so a badge that does not fit the
+/// spare border room must shed its label and then itself, rather than eating
+/// the page tabs. Only the countdown degrades: the three older segments keep
+/// their long-standing behavior.
+#[test]
+fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
+    let full = " 2 unread mentions | 05:00 Pomodoro | mic #lounge [muted] | 1500 chips ";
+    let without_label = " 2 unread mentions | 05:00 | mic #lounge [muted] | 1500 chips ";
+    let without_badge = " 2 unread mentions | mic #lounge [muted] | 1500 chips ";
+    // A left title the HUD must not paint over, so the spare-room subtraction
+    // is exercised rather than bypassed by a zero-width title.
+    const TABS: u16 = 20;
+    // Terminal width that leaves the HUD exactly `spare` cells: the two border
+    // corners and the left title come off the top row first.
+    let at_spare = |spare: u16| {
+        status_hud_title(StatusHudInputs {
+            balance: Some(1_500),
+            unread: 2,
+            voice_badge: Some(" mic #lounge [muted] "),
+            pomodoro_badge: Some("05:00 Pomodoro"),
+            border_width: spare + 2 + TABS,
+            title_width: TABS,
+        })
+    };
+    let text_at = |spare: u16| at_spare(spare).map(|hud| line_text(&hud.line));
+
+    assert_eq!(text_at(full.len() as u16).as_deref(), Some(full));
+    assert_eq!(
+        text_at(full.len() as u16 - 1).as_deref(),
+        Some(without_label),
+        "one cell short of the label drops the label, not the countdown"
+    );
+    assert_eq!(
+        text_at(without_label.len() as u16 - 1).as_deref(),
+        Some(without_badge),
+        "too tight for even MM:SS drops the badge"
+    );
+    // Whatever is shown, the mentions hit-test rect still leads the line.
+    for spare in [full.len() as u16, without_label.len() as u16 - 1] {
+        let hud = at_spare(spare).expect("hud should render");
+        assert_eq!(hud.mentions_width, " 2 unread mentions ".len() as u16);
+        assert!(line_text(&hud.line).starts_with(" 2 unread mentions "));
+    }
+}
+
+/// A left title wider than the whole border row must not underflow the spare
+/// calculation into a huge budget: the badge is dropped, not force-fitted.
+#[test]
+fn status_hud_title_drops_pomodoro_when_the_title_outgrows_the_border() {
+    let squeezed = status_hud_title(StatusHudInputs {
+        balance: Some(1_500),
+        unread: 0,
+        voice_badge: None,
+        pomodoro_badge: Some("05:00 Pomodoro"),
+        border_width: 10,
+        title_width: 40,
+    })
+    .expect("chips keep the hud alive");
+    assert_eq!(line_text(&squeezed.line), " 1500 chips ");
+}
+
+/// A pomodoro with nothing else in the HUD still needs its dividers right: no
+/// leading `|` when it is the first segment, and one before the next segment.
+#[test]
+fn status_hud_title_places_pomodoro_dividers_without_mentions() {
+    let alone = hud(None, 0, None, Some("05:00 focus")).expect("pomodoro alone should render");
+    assert_eq!(line_text(&alone.line), " 05:00 focus ");
+
+    let with_voice = hud(None, 0, Some(" mic #lounge [muted] "), Some("05:00 focus"))
+        .expect("pomodoro + voice should render");
+    assert_eq!(
+        line_text(&with_voice.line),
+        " 05:00 focus | mic #lounge [muted] "
+    );
+
+    // Dropping the badge entirely must not leave a stray divider behind.
+    let dropped = status_hud_title(StatusHudInputs {
+        balance: None,
+        unread: 0,
+        voice_badge: Some(" mic #lounge [muted] "),
+        pomodoro_badge: Some("05:00 focus"),
+        border_width: 7,
+        title_width: 0,
+    })
+    .expect("voice should still render");
+    assert_eq!(line_text(&dropped.line), " mic #lounge [muted] ");
 }

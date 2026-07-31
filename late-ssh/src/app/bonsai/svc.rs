@@ -4,6 +4,7 @@ use late_core::db::Db;
 use late_core::models::{
     bonsai::{BonsaiV2Tree, BonsaiV2TreeParams},
     bonsai::{DailyCare, Grave, Tree},
+    bonsai_decay_protection::BonsaiDecayProtection,
     chips::{ChipMove, UserChips},
 };
 use rand_core::{OsRng, RngCore};
@@ -29,24 +30,35 @@ impl BonsaiService {
     pub async fn ensure_tree(&self, user_id: Uuid) -> Result<Tree> {
         self.ensure_tree_with_care(user_id)
             .await
-            .map(|(tree, _care)| tree)
+            .map(|(tree, _care, _protection)| tree)
     }
 
     /// Load or create a bonsai tree and today's UTC care row. Handles death
-    /// checks and one-shot missed-care penalties for previous care rows.
-    pub async fn ensure_tree_with_care(&self, user_id: Uuid) -> Result<(Tree, DailyCare)> {
+    /// checks and one-shot missed-care penalties for previous care rows,
+    /// discounted by any live Bonsai Decay Shield window (also returned, so
+    /// the caller can thread the same window into the in-session death
+    /// check and into Dynamic Bonsai's own decay simulation).
+    pub async fn ensure_tree_with_care(
+        &self,
+        user_id: Uuid,
+    ) -> Result<(Tree, DailyCare, Option<BonsaiDecayProtection>)> {
         let client = self.db.get().await?;
         let today = chrono::Utc::now().date_naive();
+        let protection = BonsaiDecayProtection::for_user(&client, user_id).await?;
 
         let mut tree = if let Some(mut tree) = Tree::find_by_user_id(&client, user_id).await? {
-            // Check if tree should die (7+ days without watering)
+            // Check if tree should die (7+ days without watering, minus any
+            // days a live decay shield covered)
             // If never watered, use created date as the reference point
             if tree.is_alive {
                 let reference_date = tree
                     .last_watered
                     .unwrap_or_else(|| tree.created.date_naive());
                 let days_since = (today - reference_date).num_days();
-                if days_since >= 7 {
+                let protected_days = protection
+                    .map(|protection| protection.protected_days_between(reference_date, today))
+                    .unwrap_or(0);
+                if (days_since - protected_days) >= 7 {
                     let survived = (today - tree.created.date_naive()).num_days().max(0) as i32;
                     Tree::kill(&client, user_id).await?;
                     Grave::record(&client, user_id, survived).await?;
@@ -82,7 +94,7 @@ impl BonsaiService {
             ) as i32,
         )
         .await?;
-        Ok((tree, care))
+        Ok((tree, care, protection))
     }
 
     pub async fn ensure_v2_tree(
@@ -289,6 +301,9 @@ impl BonsaiService {
     ) -> Result<()> {
         for care in DailyCare::unapplied_before(client, user_id, today).await? {
             let missed_water = !care.watered && !care.water_penalty_applied;
+            // The Bonsai Decay Shield covers decay only: it keeps a dry spell
+            // from killing the tree, but pruning discipline is still on the
+            // player, so it deliberately has no say here.
             let missed_prune = (care.cut_branch_ids.len() as i32) < care.branch_goal
                 && !care.prune_penalty_applied;
 

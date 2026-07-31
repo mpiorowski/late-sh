@@ -475,6 +475,15 @@ impl Drop for ClientHandler {
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
+                    // Last connection gone: retire any running countdown so a
+                    // peer doesn't keep painting a badge for someone who left.
+                    // The timer is session-local, so there is nothing to
+                    // resume when they come back.
+                    crate::app::common::pomodoro::set_user(
+                        &self.state.pomodoro_directory,
+                        user_id,
+                        None,
+                    );
                 } else {
                     active.connection_count -= 1;
                     user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
@@ -782,16 +791,16 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
-        let (initial_bonsai_tree, initial_bonsai_care) = match self
+        let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) = match self
             .state
             .bonsai_service
             .ensure_tree_with_care(user_id)
             .await
         {
-            Ok((tree, care)) => (Some(tree), Some(care)),
+            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
+                (None, None, None)
             }
         };
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
@@ -943,6 +952,7 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_tree,
             initial_bonsai_care,
             initial_bonsai_v2_tree,
+            initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
             quest_service: self.state.quest_service.clone(),
@@ -1009,6 +1019,7 @@ impl russh::server::Handler for ClientHandler {
             afk_users: self.state.afk_users.clone(),
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
+            pomodoro_directory: Some(self.state.pomodoro_directory.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_announcements,
             user_id,

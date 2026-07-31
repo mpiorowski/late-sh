@@ -35,6 +35,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
+        common::pomodoro::{PomodoroDirectory, PomodoroTimer},
         common::primitives::{Banner, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
@@ -208,6 +209,8 @@ pub struct SessionConfig {
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
+    pub initial_bonsai_decay_protection:
+        Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
@@ -294,6 +297,9 @@ pub struct SessionConfig {
     /// Live 24h username effects, shared process-wide (snapshot-swap; see
     /// `common/username_effect.rs`).
     pub flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
+    /// Running `/pomodoro` countdowns, shared process-wide (snapshot-swap; see
+    /// `common/pomodoro.rs`).
+    pub pomodoro_directory: Option<PomodoroDirectory>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
@@ -415,6 +421,10 @@ pub struct App {
     /// about once a second (which also steps shimmer); renderers read this
     /// owned map, never the directory mutex.
     pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Per-peer `/pomodoro` badges, rebuilt from the pomodoro directory on the
+    /// same ~1s cadence; chat author labels read this owned map, never the
+    /// directory mutex.
+    pub(crate) peer_pomodoros: HashMap<Uuid, String>,
     /// Human headcount and connected-friend names, recomputed on the same
     /// ~1s cadence; renderers read these owned values instead of locking the
     /// shared `active_users` map every frame.
@@ -432,6 +442,7 @@ pub struct App {
     /// every real change).
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
+    pub(super) pomodoro_directory: Option<PomodoroDirectory>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -694,10 +705,13 @@ pub struct App {
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
-    /// Desktop-notification domain: producers (chat, daily) push through
-    /// cloned `notifier` handles; render drains `notify_outbox` into OSC
-    /// bytes.
+    /// Desktop-notification domain: producers (chat, daily, this session's
+    /// own tick-driven events like Pomodoro completion) push through cloned
+    /// `notifier` handles; render drains `notify_outbox` into OSC bytes.
+    pub(crate) notifier: crate::app::notify::Notifier,
     pub(crate) notify_outbox: crate::app::notify::Outbox,
+    /// The running `/pomodoro` countdown, if any. `None` when idle.
+    pub(crate) pomodoro: Option<PomodoroTimer>,
 
     /// Last background color sent to the terminal via OSC 11 (if any).
     pub(crate) last_terminal_bg: Option<ratatui::style::Color>,
@@ -734,6 +748,16 @@ pub(super) fn listen_url(web_url: &str) -> String {
 impl App {
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Publish this session's countdown to the process-shared directory so
+    /// peers' chat author labels can paint it. Every place that changes
+    /// `pomodoro` calls this right after, which is also how a stop and an
+    /// expiry retire the peer badge.
+    pub(crate) fn publish_pomodoro(&self) {
+        if let Some(directory) = &self.pomodoro_directory {
+            crate::app::common::pomodoro::set_user(directory, self.user_id, self.pomodoro.as_ref());
+        }
     }
 
     pub(crate) fn use_bonsai_v2(&self) -> bool {
@@ -1008,11 +1032,13 @@ impl App {
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
         let username = config.username.clone();
 
+        let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
         let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
             crate::app::bonsai::state::BonsaiState::new(
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
+                initial_bonsai_decay_protection,
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -1029,6 +1055,7 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
+                initial_bonsai_decay_protection,
             )
         };
         let bonsai_care_state = config
@@ -1054,6 +1081,7 @@ impl App {
                     config.user_id,
                     config.bonsai_service.clone(),
                     tree,
+                    initial_bonsai_decay_protection,
                 )
             })
             .unwrap_or_else(|| {
@@ -1195,6 +1223,7 @@ impl App {
             clubhouse_bot_id: None,
             drunk_levels: HashMap::new(),
             name_styles: HashMap::new(),
+            peer_pomodoros: HashMap::new(),
             online_count: active_users
                 .as_ref()
                 .map(crate::state::online_human_count)
@@ -1204,6 +1233,7 @@ impl App {
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
+            pomodoro_directory: config.pomodoro_directory,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -1386,7 +1416,9 @@ impl App {
             terminal_images_disabled,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
+            notifier,
             notify_outbox,
+            pomodoro: None,
             is_draining: config.is_draining,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),

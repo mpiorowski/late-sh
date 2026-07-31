@@ -165,6 +165,23 @@ fn ws_payload_openssh_client_state_parses() {
     }
 }
 
+/// Wire contract with the CLI's desktop media commands (MPRIS play/pause and
+/// volume): the event names must match what `late-cli`'s pair loop sends.
+#[test]
+fn ws_payload_set_muted_and_set_volume_parse() {
+    let muted =
+        serde_json::from_str::<WsPayload>(r#"{"event": "set_muted", "muted": true}"#).unwrap();
+    assert!(matches!(muted, WsPayload::SetMuted { muted: true }));
+
+    let volume =
+        serde_json::from_str::<WsPayload>(r#"{"event": "set_volume", "volume_percent": 45}"#)
+            .unwrap();
+    assert!(matches!(
+        volume,
+        WsPayload::SetVolume { volume_percent: 45 }
+    ));
+}
+
 #[test]
 fn ws_payload_unknown_event_fails() {
     let json = r#"{"event": "unknown"}"#;

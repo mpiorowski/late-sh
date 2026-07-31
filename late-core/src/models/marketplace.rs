@@ -13,6 +13,16 @@ use super::{
 pub const PET_COMPANION_SKU: &str = "pet_companion";
 pub const DYNAMIC_BONSAI_SKU: &str = "dynamic_bonsai";
 pub const BONSAI_VARIANT_SLOT: &str = "bonsai_variant";
+pub const BONSAI_CONSUMABLE_ITEM_KIND: &str = "bonsai_consumable";
+pub const BONSAI_DECAY_SHIELD_SKU: &str = "bonsai_decay_shield_two_weeks";
+/// `shop_consumable_effects.effect_kind` for the user-scoped Bonsai Decay
+/// Shield: while a live row of this kind covers a calendar day, that day
+/// counts as cared-for against both bonsai decay clocks (classic dry-day
+/// death, Dynamic vigor/water-stress decay), regardless of watering.
+pub const BONSAI_DECAY_PROTECTION_KIND: &str = "bonsai_decay_protection";
+/// Default protection window when an item payload omits `duration_secs`: 14
+/// days.
+pub const BONSAI_DECAY_PROTECTION_DURATION_SECS: i64 = 1_209_600;
 pub const AQUARIUM_SKU: &str = "aquarium";
 pub const AQUARIUM_FISH_ITEM_KIND: &str = "aquarium_fish";
 pub const AQUARIUM_MAX_FISH: i32 = 20;
@@ -286,6 +296,9 @@ pub struct PurchaseWithEffectResult {
     /// The user-scoped username-effect row activated by this purchase, when
     /// the bought item is a `username_effect`.
     pub username_effect: Option<ShopConsumableEffect>,
+    /// The user-scoped Bonsai Decay Shield row activated (or extended) by
+    /// this purchase, when the bought item is a `bonsai_consumable`.
+    pub bonsai_decay_protection: Option<ShopConsumableEffect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +389,7 @@ async fn purchase_item_by_sku_inner(
             purchase: None,
             refresh_all_active_users: false,
             username_effect: None,
+            bonsai_decay_protection: None,
         });
     };
     let item = MarketplaceItem::from(item_row);
@@ -416,6 +430,7 @@ async fn purchase_item_by_sku_inner(
                 }),
                 refresh_all_active_users: false,
                 username_effect: None,
+                bonsai_decay_protection: None,
             });
         }
     }
@@ -435,6 +450,7 @@ async fn purchase_item_by_sku_inner(
                 }),
                 refresh_all_active_users: false,
                 username_effect: None,
+                bonsai_decay_protection: None,
             });
         }
 
@@ -450,6 +466,7 @@ async fn purchase_item_by_sku_inner(
                 }),
                 refresh_all_active_users: false,
                 username_effect: None,
+                bonsai_decay_protection: None,
             });
         }
 
@@ -465,6 +482,7 @@ async fn purchase_item_by_sku_inner(
                 }),
                 refresh_all_active_users: false,
                 username_effect: None,
+                bonsai_decay_protection: None,
             });
         }
 
@@ -493,6 +511,8 @@ async fn purchase_item_by_sku_inner(
             activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
         let activated_username_effect =
             activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
+        let activated_bonsai_decay_protection =
+            activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
         let payload = user_id.to_string();
         tx.execute(
             "SELECT pg_notify($1, $2)",
@@ -517,6 +537,7 @@ async fn purchase_item_by_sku_inner(
             }),
             refresh_all_active_users,
             username_effect: activated_username_effect,
+            bonsai_decay_protection: activated_bonsai_decay_protection,
         });
     }
 
@@ -532,6 +553,7 @@ async fn purchase_item_by_sku_inner(
             }),
             refresh_all_active_users: false,
             username_effect: None,
+            bonsai_decay_protection: None,
         });
     }
 
@@ -547,6 +569,7 @@ async fn purchase_item_by_sku_inner(
             }),
             refresh_all_active_users: false,
             username_effect: None,
+            bonsai_decay_protection: None,
         });
     }
 
@@ -591,6 +614,8 @@ async fn purchase_item_by_sku_inner(
         activate_chat_consumable_in_tx(&tx, user_id, &item, chat_effect_room_id).await?;
     let activated_username_effect =
         activate_username_effect_in_tx(&tx, user_id, &item, username_effect).await?;
+    let activated_bonsai_decay_protection =
+        activate_bonsai_decay_protection_in_tx(&tx, user_id, &item).await?;
     let payload = user_id.to_string();
     tx.execute(
         "SELECT pg_notify($1, $2)",
@@ -616,6 +641,7 @@ async fn purchase_item_by_sku_inner(
         }),
         refresh_all_active_users,
         username_effect: activated_username_effect,
+        bonsai_decay_protection: activated_bonsai_decay_protection,
     })
 }
 
@@ -1135,6 +1161,7 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
             | CHAT_CONSUMABLE_ITEM_KIND
             | COMPANION_CONSUMABLE_ITEM_KIND
             | USERNAME_EFFECT_ITEM_KIND
+            | BONSAI_CONSUMABLE_ITEM_KIND
     )
 }
 
@@ -1230,6 +1257,36 @@ async fn activate_username_effect_in_tx(
         &item.sku,
         duration_secs,
         choice.to_payload(),
+    )
+    .await?;
+    Ok(Some(effect))
+}
+
+/// Activates the Bonsai Decay Shield bought in this transaction. Unlike the
+/// username effect above, a live protection window is extended by the
+/// item's duration rather than reset (`extend_user_effect_in_tx`), so
+/// stacking never discards time the player already paid for.
+async fn activate_bonsai_decay_protection_in_tx(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    item: &MarketplaceItem,
+) -> Result<Option<ShopConsumableEffect>> {
+    if item.item_kind != BONSAI_CONSUMABLE_ITEM_KIND {
+        return Ok(None);
+    }
+    let duration_secs = item
+        .payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(BONSAI_DECAY_PROTECTION_DURATION_SECS);
+
+    let effect = ShopConsumableEffect::extend_user_effect_in_tx(
+        tx,
+        user_id,
+        BONSAI_DECAY_PROTECTION_KIND,
+        &item.sku,
+        duration_secs,
+        item.payload.clone(),
     )
     .await?;
     Ok(Some(effect))

@@ -154,7 +154,7 @@ impl ChipService {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some((sender, recipient)) =
-            UserChips::transfer_gift(&*tx, sender_id, recipient_id, amount).await?
+            UserChips::transfer_gift(&tx, sender_id, recipient_id, amount).await?
         else {
             anyhow::bail!("insufficient chips");
         };

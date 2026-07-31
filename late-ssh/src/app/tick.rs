@@ -101,6 +101,24 @@ impl App {
         {
             changed = true;
         }
+        // A countdown reaching zero is not urgent to the millisecond, so this
+        // rides the existing 1Hz edge rather than checking every tick. A
+        // running timer dirties every one of those edges because the HUD badge
+        // counts down in seconds; an idle session (no timer) still settles.
+        if one_hz && let Some(pomodoro) = &self.pomodoro {
+            let finished = chrono::Utc::now() >= pomodoro.ends_at;
+            let label = pomodoro.label.clone();
+            if finished {
+                self.pomodoro = None;
+                self.publish_pomodoro();
+                self.banner = Some(crate::app::common::primitives::Banner::success(&format!(
+                    "{label} done!"
+                )));
+                self.notifier
+                    .push(crate::app::notify::Notification::pomodoro_done(&label));
+            }
+            changed = true;
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -822,6 +840,20 @@ impl App {
                     self.chat_ctx_epoch += 1;
                 }
             }
+            // Peer countdowns resolve on the same edge, and only the minute
+            // rollovers survive the comparison: a badge that reads the same
+            // must not bump the epoch, or every second would invalidate every
+            // cached chat row for the whole room.
+            if let Some(directory) = &self.pomodoro_directory {
+                let peer_pomodoros = crate::app::common::pomodoro::resolve_all(
+                    &crate::app::common::pomodoro::snapshot(directory),
+                    chrono::Utc::now(),
+                );
+                if self.peer_pomodoros != peer_pomodoros {
+                    self.peer_pomodoros = peer_pomodoros;
+                    self.chat_ctx_epoch += 1;
+                }
+            }
             // Presence reads on the same cadence: renders consume these owned
             // values instead of locking `active_users` twice per frame.
             if let Some(active_users) = &self.active_users {
@@ -926,6 +958,13 @@ impl App {
             if !self.shop_state.dynamic_bonsai_enabled() {
                 self.show_bonsai_v2_modal = false;
             }
+            // A Bonsai Decay Shield purchase takes effect immediately for the
+            // live in-session death check (`BonsaiState::tick`); Dynamic
+            // Bonsai has no in-session decay simulation to refresh, so this
+            // only matters there from the next login onward.
+            self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
+            self.bonsai_v2_state.decay_protection =
+                self.shop_state.active_bonsai_decay_protection();
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()

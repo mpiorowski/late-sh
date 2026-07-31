@@ -44,6 +44,7 @@ cargo build --release --bin late
 3. Runs a real-time FFT audio analyzer
 4. Sends visualizer data back to the TUI over WebSocket
 5. Syncs mute/volume controls between terminal and audio
+6. Publishes the active track to Linux desktop media integrations through MPRIS
 
 ## Usage
 
@@ -98,6 +99,12 @@ server-side, not in the CLI config file.
 - Linux, macOS, or Windows x64 (WSL works too)
 - Working audio output device
 - Rust toolchain (if building from source)
+
+On Linux desktops, `late` publishes the selected YouTube, Icecast, or radio
+track over MPRIS, including title, artist, duration, and source details when the
+server provides them. This is read-only: playback remains controlled from the
+paired late.sh TUI. If no desktop D-Bus session is available (for example, in a
+headless shell), the CLI continues normally without MPRIS.
 
 `--ssh-mode openssh` uses a system OpenSSH client with an internal ControlMaster
 connection. It is the recommended mode for YubiKey/FIDO security-key identities

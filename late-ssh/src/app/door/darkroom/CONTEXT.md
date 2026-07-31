@@ -35,8 +35,8 @@ arrangement is:
 
 | Files | License | Why |
 |---|---|---|
-| `data.rs`, `model.rs`, `sim.rs` | **MPL-2.0** (header + Exhibit B on each) | Carry upstream balance tables, timing constants, rules and notification prose. Text is copied verbatim, which the MPL permits precisely because these files stay MPL. |
-| `pace.rs`, `persist.rs`, `svc.rs`, `state.rs`, `ui.rs`, `screen.rs` | FSL-1.1-MIT (repo default) | Our own work: the pacing design, persistence, the TUI. |
+| `data.rs`, `model.rs`, `sim.rs`, `event.rs`, `world.rs`, `world_data.rs`, `space.rs`, `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL-2.0** (header + Exhibit B on each) | Carry upstream balance tables, timing constants, rules, scene graphs and prose. Text is copied verbatim, which the MPL permits precisely because these files stay MPL. |
+| `pace.rs`, `persist.rs`, `svc.rs`, `state.rs`, `ui.rs`, `ui_event.rs`, `ui_world.rs`, `screen.rs` | FSL-1.1-MIT (repo default) | Our own work: the pacing design, persistence, the TUI. |
 
 MPL §3.3 is what lets the larger work ship under our terms. **If you move
 upstream-derived logic into one of the FSL files, you have broken this**; move
@@ -123,7 +123,12 @@ between sessions contribute nothing without any bookkeeping.
 | `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
 | `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
 | `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order. No shared world, no tick loop, no published snapshot. |
-| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside), the cursor over `Row`s, the capped notification log. `tick()` drains the load channel and settles; every action settles first, so the world is current when the player acts on it. |
+| `event.rs` | **MPL.** The scene machine and the fight. Upstream's per-scene closures become a closed `Effect` enum and its `isAvailable` predicates a closed `Condition` enum; its `setInterval` fight timers become second countdowns stepped from `State::tick`. `Ctx` writes, `Look` reads (the renderer never clones a save to list rows). |
+| `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL.** The three event pools, transcribed scene for scene. |
+| `world_data.rs`, `world.rs` | **MPL.** The wasteland: tiles, landmarks, weapons, weights and capacities; then generation, walking, supplies, danger, fights, clearing dungeons, going home and dying. Pure rules, tagged outcomes, no I/O. |
+| `space.rs` | **MPL.** The sixty-second ascent as a per-tick state machine, plus the ship's costs and the ending. |
+| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Ship), the cursor over `Row`s, the capped notification log, the live event modal and the live flight. `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
+| `ui_event.rs`, `ui_world.rs` | The event modal and fight panel; the masked map and the ascent. |
 | `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance) and the Games-hub landing card (which credits upstream). |
 | `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, and `leave` (settle, save, return to the Games hub). |
 
@@ -146,35 +151,46 @@ Esc, tick drain, and the hub launch/landing/reset.
 from `App::started_at` and hands it to `State::new`, because that is what
 bounds how much elapsed time may be credited.
 
-## Scope: what v1 is, and what is still missing
+## Scope: the whole classic game
 
-**v1 is the room and the village**, the half of upstream that works as a slow
-multi-day game. In: the fire and its levels, room temperature, the full builder
-arc, the forest unlock, gathering (with the cart), traps and their drop table,
-huts and population, the worker/income economy, and the buildings through the
-smokehouse.
+**In:** the fire and the builder arc, the forest, traps, huts and population,
+the worker/income economy, the trading post's buy menu, the workshop crafting
+tier, the random event pool (village events, the thief, the delayed
+Mysterious Wanderer payoffs), the compass and the path, the wasteland with its
+generated map, supplies, danger and encounters, every classic setpiece, the
+mines feeding the village their ore, the ship, the ascent, and the ending.
 
-**Not yet:** the wasteland (`world.js`), the path/outfitting screen
-(`path.js`), combat and events (`events.js`), the workshop crafting tier, the
-trading post's buy menu, the ship and the endgame (`ship.js`, `space.js`).
-The workshop tier is gated on the wasteland supplying its materials, so it
-follows the wasteland rather than preceding it.
+**Deliberately cut** (see `PLAN_V2.md` for the reasoning): the Executioner
+battleship, the fabricator and everything it makes, prestige, scoring, the
+`cache` landmark, and upstream's marketing event. `laser rifle` and
+`energy cell` stay, because the classic setpieces drop them.
 
-The cut is not arbitrary. Everything above the line is a clock you can leave
-running; everything below it is an expedition you either survive or do not, and
-that wants a live session. **Whether the wasteland belongs on the incremental
-shelf at all is an open design question**, not merely unbuilt work.
+**The three clocks.** Village time is credited, capped and slowed (`pace`).
+Wall-clock cooldowns (stoke, gather, traps, embark, liftoff, delayed rewards)
+are neither. Live play (world moves, fights, the ascent) runs on the raw delta
+between ticks: expeditions cost no daily allowance and are never slowed,
+because a trip is paid for in supplies per move, not in time.
 
-**Nothing decays except the fire.** Stores, buildings, population and unlocked
-trades only ever go up: no starvation, no raids, nothing built can be lost.
+**Expeditions park.** The in-flight trip lives in `Game::expedition` and is
+saved on every move, so a dropped SSH connection or an Esc leaves the wanderer
+standing where they were rather than losing the trip. A fight in progress
+parks with it (`Expedition::combat`) and resumes on return, whichever way the
+session ended: leaving the door must never be a way to flee one. Upstream
+loses everything when the tab closes; that is a deliberate softening, and it
+costs nothing because supplies burn per move. Death still discards the trip
+and the pack.
+
+**In the village, almost nothing decays.** Stores, buildings, population and
+unlocked trades mostly only go up. The exceptions all arrive with the
+wasteland: the event pool can burn a hut, take villagers, wreck traps, and the
+thieves skim stores once the village is rich enough to rob.
 Absence costs progress, never possessions. That bites early (the builder arc
 stalls whenever the room is below Warm, so a dead fire freezes her; and she
 refuses to build at all while the room is Cold or worse), and mostly stops
 biting once she is Helping, because she stokes the fire herself and out-earns
-what she burns. Past that point the daily cap is the only brake, and the cold
-gate on building is the one residual reason a cold room still costs anything.
-If v1 turns out to need a reason to check in, the fire is the only lever that
-exists; play a week before adding one.
+what she burns. Past that point the brakes are the daily cap and the supply
+lines an expedition needs; the village events only ever fire while somebody is
+in the door, so an absent player is never robbed of anything but time.
 
 **Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /
 `audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets), roughly
@@ -206,3 +222,16 @@ exists; play a week before adding one.
   dispatched by `flush_pending_escape` in `app/input.rs`, which has one explicit
   arm per screen. Wiring `handle_key` alone leaves Esc dead: the door needs its
   own arm there (next to Green Dragon's) to be leavable at all.
+- **`Game::outfit` is a plan, not a claim.** The store room can shrink after
+  packing (the charcutier eats meat, the thieves skim fur), so `world::embark`
+  clamps every line to what the shelf still holds, and `can_embark` gates on
+  the packed-and-still-held cured meat, exactly like upstream's live
+  outfitting screen. Skip the clamp and a stale loadout conjures supplies.
+- **Never clear `Expedition::combat` on the way out of the door.** `park()`
+  snapshots the fight before dropping the modal; clearing it instead would
+  turn Esc into a free flee button, while a dropped connection still resumed
+  the fight. The two exits must stay equivalent.
+- **The thief skim is not a starved trade.** Every other income source skips
+  its whole payout when an input runs short; the skim drains to zero and books
+  only what was actually there into `Game::stolen` (upstream `addStolen`),
+  because that is the pile "hang him" gives back.

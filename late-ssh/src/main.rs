@@ -174,11 +174,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         activity_tx.subscribe(),
     );
-    let ai_service = AiService::new(
-        config.ai.enabled,
-        config.ai.api_key.clone(),
-        config.ai.model.clone(),
-    );
+    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
@@ -367,6 +363,7 @@ async fn main() -> anyhow::Result<()> {
         afk_users,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
+        pomodoro_directory: late_ssh::app::common::pomodoro::new_directory(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

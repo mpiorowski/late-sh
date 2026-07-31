@@ -200,7 +200,6 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 |----------|-------------|
 | `AI_ENABLED` | Enable AI features (ghost chat, URL extraction) |
 | `AI_API_KEY` | Gemini API key |
-| `AI_MODEL` | Gemini model name |
 
 ### Voice / LiveKit
 

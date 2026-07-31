@@ -227,3 +227,58 @@ fn initial_audio_settings_fall_back_to_defaults_on_missing_or_invalid_values() {
     assert!(settings.muted);
     assert_eq!(settings.volume_percent, defaults.volume_percent);
 }
+
+/// Only the muted-to-unmuted edge resumes playback: the webview stops
+/// downloading while muted, so that transition must re-load the track, while
+/// re-asserting an existing state must not.
+#[test]
+fn set_muted_reports_only_the_unmute_edge_as_resume() {
+    let mut settings = AudioSettings {
+        muted: false,
+        volume_percent: 40,
+    };
+
+    assert!(!settings.set_muted(true), "muting is not a resume");
+    assert!(settings.muted);
+    assert!(!settings.set_muted(true), "re-muting is not a resume");
+    assert!(settings.set_muted(false), "unmuting resumes");
+    assert!(!settings.muted);
+    assert!(!settings.set_muted(false), "re-unmuting is not a resume");
+}
+
+/// A slider dragged off zero is a widget's only way back from pause, so a
+/// non-zero absolute volume also unmutes and resumes; a zero write only sets
+/// the level.
+#[test]
+fn set_volume_off_zero_unmutes_and_resumes() {
+    let mut settings = AudioSettings {
+        muted: true,
+        volume_percent: 30,
+    };
+
+    assert!(!settings.set_volume(0), "a zero write is not an unmute");
+    assert_eq!(settings.volume_percent, 0);
+    assert!(settings.muted);
+
+    assert!(settings.set_volume(45), "raising the slider resumes");
+    assert_eq!(settings.volume_percent, 45);
+    assert!(!settings.muted);
+
+    assert!(!settings.set_volume(50), "already unmuted is not a resume");
+}
+
+/// Wire contract with the server's `PairControlMessage` fan-out.
+#[test]
+fn set_events_parse_from_wire_names() {
+    let muted =
+        serde_json::from_str::<ServerMessage>(r#"{"event":"set_muted","muted":true}"#).unwrap();
+    assert!(matches!(muted, ServerMessage::SetMuted { muted: true }));
+
+    let volume =
+        serde_json::from_str::<ServerMessage>(r#"{"event":"set_volume","volume_percent":45}"#)
+            .unwrap();
+    assert!(matches!(
+        volume,
+        ServerMessage::SetVolume { volume_percent: 45 }
+    ));
+}

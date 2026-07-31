@@ -62,7 +62,6 @@ jobs:
       TF_VAR_WS_PAIR_RATE_LIMIT_WINDOW_SECS: ${{ vars.WS_PAIR_RATE_LIMIT_WINDOW_SECS }}
       TF_VAR_DB_POOL_SIZE: ${{ vars.DB_POOL_SIZE }}
       TF_VAR_AI_ENABLED: ${{ vars.AI_ENABLED }}
-      TF_VAR_AI_MODEL: ${{ vars.AI_MODEL }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
       TF_VAR_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
       TF_VAR_REBELS_ENABLED: ${{ vars.REBELS_ENABLED }}
