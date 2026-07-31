@@ -937,6 +937,72 @@ fn recall_returns_to_the_town_square() {
 }
 
 #[test]
+fn waypoint_can_be_set_and_warped_to_from_anywhere() {
+    // Community-reported pain point: the far run between Embergate and the
+    // Frontier's deep levels for healing/resurrecting a downed pet. A player
+    // should be able to mark a spot and warp back to it later, from anywhere.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let deep = super::super::world::frontier_entrance_room() + 400;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = deep;
+        p.gold = 1_000;
+    }
+    s.set_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].waypoint,
+        Some(deep),
+        "the waypoint marks the room it was set in"
+    );
+
+    // Now walk away (back to the square) and warp back.
+    let home = s.world.start_room;
+    s.players.get_mut(&uid(1)).unwrap().room = home;
+    let gold_before = s.players[&uid(1)].gold;
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        deep,
+        "warping returns to the marked waypoint, not just the town square"
+    );
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        gold_before - WAYPOINT_WARP_COST,
+        "warping to a waypoint costs gold, unlike the free word of recall"
+    );
+}
+
+#[test]
+fn warp_to_waypoint_refuses_without_one_set_or_without_enough_gold() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        s.world.start_room,
+        "no waypoint set: nothing happens"
+    );
+
+    let deep = super::super::world::frontier_entrance_room() + 400;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = deep;
+        p.gold = 0;
+    }
+    s.set_waypoint(uid(1));
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        s.world.start_room,
+        "not enough gold: the warp is refused"
+    );
+}
+
+#[test]
 fn first_dungeon_descent_requires_elder_treant_title() {
     let mut s = world();
     s.join(uid(1));
@@ -1427,6 +1493,32 @@ fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
     assert_eq!(pet.hp, pet.max_hp(), "and heals it to full");
     assert!(pet.loyalty_xp > 0, "and raises its loyalty");
     assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
+}
+
+#[test]
+fn feeding_works_anywhere_not_just_at_a_stable() {
+    // Reported pain point: a pet going down mid-fight deep in the Frontier
+    // used to be stuck downed until a long walk back to a capital's Stable.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+    let mut pet = super::super::pets::Pet::new(species, 0);
+    pet.downed = true;
+    pet.hp = 0;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.pet = Some(pet);
+        p.gold = 500;
+        p.room = super::super::world::frontier_entrance_room() + 400; // deep in the Frontier
+    }
+    s.feed_pet(uid(1));
+    let pet = s.players[&uid(1)].pet.unwrap();
+    assert!(
+        !pet.downed,
+        "feeding revives a downed companion far from any stable"
+    );
+    assert_eq!(pet.hp, pet.max_hp());
 }
 
 // The forest gate (entrance) room of Broceliande zone 0, where the easiest

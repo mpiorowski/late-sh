@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 15;
+const SCHEMA_VERSION: u32 = 16;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -28,6 +28,7 @@ pub struct SavedCharacterInit {
     pub banked_gold: i64,
     pub hp: i32,
     pub room: RoomId,
+    pub waypoint: Option<RoomId>,
     pub visited: Vec<RoomId>,
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
@@ -72,6 +73,10 @@ pub struct SavedCharacter {
     /// Room the character logged out in; reloaded here if it still exists.
     #[serde(default = "start_room")]
     pub room: RoomId,
+    /// A personal waypoint the player has marked (see `svc::set_waypoint`);
+    /// None for pre-waypoint saves or characters who have never set one.
+    #[serde(default)]
+    pub waypoint: Option<RoomId>,
     /// Rooms the character has visited, for the overhead map. Empty for pre-v3
     /// saves, which simply start the map from wherever they reload.
     #[serde(default)]
@@ -207,6 +212,7 @@ impl SavedCharacter {
             banked_gold: init.banked_gold,
             hp: init.hp,
             room: init.room,
+            waypoint: init.waypoint,
             visited: init.visited,
             inventory: init.inventory,
             equipped: init.equipped,

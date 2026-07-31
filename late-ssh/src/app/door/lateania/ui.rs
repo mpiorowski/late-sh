@@ -1606,6 +1606,13 @@ fn room_panel(
             Span::styled(riding.clone(), Style::default().fg(theme::AMBER_GLOW())),
         ]));
     }
+    // A personal waypoint, if one is set: a reminder it's there to warp to.
+    if view.waypoint_set {
+        lines.push(Line::from(Span::styled(
+            "  \u{2691} waypoint set (/ to warp)".to_string(),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
     // Your companion, if any: glyph, name, level, and health.
     if let Some(pet) = &view.pet {
         let name_color = if pet.downed {
@@ -3419,6 +3426,10 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("j k", "quests titles"));
     lines.push(hint("r f", "recall follow"));
     lines.push(hint(";", "nearest haven"));
+    lines.push(hint(": /", "set waypoint / warp"));
+    if view.pet.is_some() {
+        lines.push(hint("~", "feed companion"));
+    }
     lines.push(hint("'", "say (local chat)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));

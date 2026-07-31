@@ -167,6 +167,10 @@ const PET_FEED_COST: i64 = 20;
 const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
+/// Gold to warp to a marked personal waypoint. Word of recall (to Embergate)
+/// stays free; a warp to your own chosen spot costs something, so a portable
+/// teleporter stays a real convenience rather than trivialising distance.
+const WAYPOINT_WARP_COST: i64 = 250;
 /// Monk "Iron Body": percent reduction to incoming physical blows.
 const IRON_BODY_PCT: i32 = 15;
 /// Beastlord "Pack Bond": percent bonus to a companion's attack (and, via the
@@ -710,6 +714,8 @@ pub struct PlayerView {
     /// What you're riding right now (Wildbound mounts), with its stride,
     /// e.g. "Moonlit Unicorn (stride 4)". None on foot.
     pub riding: Option<String>,
+    /// Whether a personal waypoint is set (see `set_waypoint`/`warp_to_waypoint`).
+    pub waypoint_set: bool,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -816,6 +822,7 @@ impl PlayerView {
             nearby_players: Vec::new(),
             rpg_mode: true,
             riding: None,
+            waypoint_set: false,
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -1387,7 +1394,7 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.buy_pet(user_id, &species_key));
     }
 
-    /// Feed and tend the player's companion at the room's Stable.
+    /// Feed and tend the player's companion, wherever they stand.
     pub fn feed_pet_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
     }
@@ -1423,6 +1430,14 @@ impl LateaniaService {
 
     pub fn recall_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.recall(user_id));
+    }
+
+    pub fn set_waypoint_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.set_waypoint(user_id));
+    }
+
+    pub fn warp_to_waypoint_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.warp_to_waypoint(user_id));
     }
 
     pub fn retreat_task(&self, user_id: Uuid) {
@@ -1742,6 +1757,11 @@ struct PlayerState {
     room: RoomId,
     /// Previous room entered from, for the highlighted minimap trail.
     previous_room: Option<RoomId>,
+    /// A personal waypoint the player has marked (see `set_waypoint`), warped
+    /// to with `warp_to_waypoint` - the far run back from the Frontier's deep
+    /// levels to Embergate (and back again) for healing/resurrecting is a real
+    /// pain point without one. Persists across sessions.
+    waypoint: Option<RoomId>,
     /// Every room this character has stood in, for the overhead map. Shared
     /// with the published views (`Arc::make_mut` on entry), so a snapshot costs
     /// a refcount instead of a deep copy per player.
@@ -2469,6 +2489,7 @@ impl WorldState {
             banked_gold: 0,
             room: start,
             previous_room: None,
+            waypoint: None,
             visited: Arc::new(HashSet::from([start])),
             target: None,
             following: None,
@@ -2675,6 +2696,8 @@ impl WorldState {
             p.base_attack = stats.attack;
             p.room = room;
             p.previous_room = None;
+            // A stale waypoint (a room that no longer exists) is simply dropped.
+            p.waypoint = saved.waypoint.filter(|&r| self.world.room(r).is_some());
             p.visited = Arc::new(saved.visited.iter().copied().collect());
             Arc::make_mut(&mut p.visited).insert(room);
             p.inventory = saved
@@ -2785,6 +2808,7 @@ impl WorldState {
             banked_gold: p.banked_gold,
             hp: p.hp.max(1),
             room: p.room,
+            waypoint: p.waypoint,
             visited: {
                 let mut rooms: Vec<RoomId> = p.visited.iter().copied().collect();
                 rooms.sort_unstable();
@@ -3432,6 +3456,101 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             "You speak the word of recall. The world folds soft as cloth, and the lanternlight of Embergate's Town Square rises around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.dirty = true;
+    }
+
+    /// Mark the current room as a personal waypoint, warped back to with
+    /// `warp_to_waypoint` - a portable answer to the far run between
+    /// Embergate and the Frontier's deep levels for healing and resurrecting.
+    /// Free to set; out of combat only, like recall.
+    fn set_waypoint(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't fix a waypoint in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let room = player.room;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.waypoint = Some(room);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You fix a waypoint here. You'll find your way back to this spot.".to_string(),
+        );
+        self.dirty = true;
+    }
+
+    /// Warp to the marked personal waypoint, from anywhere. Costs
+    /// `WAYPOINT_WARP_COST` gold and works only out of combat - recall (to
+    /// Embergate) stays free, so a warp to your own chosen spot costs
+    /// something instead of trivialising distance entirely.
+    fn warp_to_waypoint(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't warp in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let Some(dest) = player.waypoint else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no waypoint set - fix one first.".to_string(),
+            );
+            return;
+        };
+        if player.room == dest {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You're already standing at your waypoint.".to_string(),
+            );
+            return;
+        }
+        if player.gold < WAYPOINT_WARP_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Warping to your waypoint costs {WAYPOINT_WARP_COST} gold."),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= WAYPOINT_WARP_COST;
+            p.previous_room = Some(p.room);
+            p.room = dest;
+            Arc::make_mut(&mut p.visited).insert(dest);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You warp to your waypoint. The world folds soft as cloth, and it rises around you."
                 .to_string(),
         );
         self.describe_room(user_id);
@@ -6532,20 +6651,15 @@ impl WorldState {
         self.dirty = true;
     }
 
-    /// Feed the player's companion at a Stable: revive, heal to full, and add
-    /// loyalty (which raises its level). Costs `PET_FEED_COST` gold.
+    /// Feed the player's companion: revive, heal to full, and add loyalty
+    /// (which raises its level). Costs `PET_FEED_COST` gold. Works anywhere -
+    /// a pet that goes down mid-fight deep in the Frontier used to be stuck
+    /// downed until a long walk back to a capital's Stable; a carried ration
+    /// is just as good as a stable-hand's care.
     fn feed_pet(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
         };
-        if !self.room_has_stable(p.room) {
-            self.log_to(
-                user_id,
-                LogKind::System,
-                "Find a stable to feed and tend your companion.".to_string(),
-            );
-            return;
-        }
         if p.pet.is_none() {
             self.log_to(
                 user_id,
@@ -7582,6 +7696,7 @@ impl WorldState {
                     } else {
                         None
                     },
+                    waypoint_set: player.waypoint.is_some(),
                     occupants,
                     following: player.following,
                     wildlife,

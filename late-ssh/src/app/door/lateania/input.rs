@@ -9,6 +9,12 @@
 //     healing potion without leaving the view; z flee.
 //   - Mounts: G mounts/dismounts a rideable companion (one step then strides
 //     several rooms; the best beasts skip 5). Combat puts you back on foot.
+//   - Companion care: ~ feeds and tends your companion from anywhere, no
+//     stable needed - reviving one that went down mid-fight.
+//   - Travel: r speaks the word of recall (free, warps to Embergate);
+//     : fixes a personal waypoint here; / warps to it from anywhere (a gold
+//     cost) - the far run back from the Frontier's deep levels doesn't have
+//     to be walked every time.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
@@ -274,6 +280,12 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.quaff();
             InputAction::Handled
         }
+        b'~' => {
+            // Feed and tend your companion, wherever you stand - no more
+            // walking a downed pet all the way back to a capital's Stable.
+            state.feed_pet();
+            InputAction::Handled
+        }
         b'i' | b'I' => {
             // The waystone menu opens when standing on a portal. (Moved off `y`,
             // which the gather action uses.)
@@ -319,6 +331,19 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'r' | b'R' => {
             // Word of recall: warp back to the Town Square (out of combat only).
             state.recall();
+            InputAction::Handled
+        }
+        b':' => {
+            // Fix a personal waypoint here - the far run between Embergate and
+            // the Frontier's deep levels for healing/resurrecting shouldn't be
+            // a full re-walk every time.
+            state.set_waypoint();
+            InputAction::Handled
+        }
+        b'/' => {
+            // Warp to the marked waypoint, from anywhere (a gold cost, unlike
+            // the free word of recall).
+            state.warp_to_waypoint();
             InputAction::Handled
         }
         b'f' | b'F' => {

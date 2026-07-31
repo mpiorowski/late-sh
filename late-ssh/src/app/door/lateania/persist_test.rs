@@ -17,6 +17,7 @@ fn round_trips_through_json() {
         banked_gold: 1400,
         hp: 42,
         room: 18,
+        waypoint: Some(2400),
         visited: vec![1, 5, 18],
         inventory: vec![1300, 1301],
         equipped: vec![("weapon".to_string(), 1004)],
@@ -47,6 +48,7 @@ fn round_trips_through_json() {
     assert_eq!(back.level, 7);
     assert_eq!(back.gold, 560);
     assert_eq!(back.banked_gold, 1400);
+    assert_eq!(back.waypoint, Some(2400));
     assert_eq!(back.visited, vec![1, 5, 18]);
     assert_eq!(back.inventory, vec![1300, 1301]);
     assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);

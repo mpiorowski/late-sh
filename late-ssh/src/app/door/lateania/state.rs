@@ -536,6 +536,20 @@ impl State {
         }
     }
 
+    /// Fix a personal waypoint at the current room.
+    pub fn set_waypoint(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.set_waypoint_task(self.user_id);
+        }
+    }
+
+    /// Warp to the marked personal waypoint, from anywhere.
+    pub fn warp_to_waypoint(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.warp_to_waypoint_task(self.user_id);
+        }
+    }
+
     /// Retreat to the nearest safe haven (out of combat only).
     pub fn retreat(&mut self) {
         if self.ensure_player_present() {
