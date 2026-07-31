@@ -277,10 +277,19 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         draw_game(frame, game_area, state, usernames);
     }
     if let (Some(text), Some(prompt)) = (chat, prompt) {
+        // Reflect the channel a `/z` or `/w` marker will send to before it's
+        // sent, so the scope is never a surprise.
+        let label = if text.starts_with("/zone ") || text.starts_with("/z ") {
+            "Say to zone: "
+        } else if text.starts_with("/world ") || text.starts_with("/w ") {
+            "Say to Lateania: "
+        } else {
+            "Say: "
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    "Say: ",
+                    label,
                     Style::default()
                         .fg(theme::AMBER_GLOW())
                         .add_modifier(Modifier::BOLD),
@@ -3439,7 +3448,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     if view.pet.is_some() {
         lines.push(hint("~", "feed companion"));
     }
-    lines.push(hint("'", "say (local chat)"));
+    lines.push(hint("'", "say (/z zone, /w world)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }

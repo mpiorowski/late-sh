@@ -478,8 +478,11 @@ impl State {
     // ---- Local chat (say) ----------------------------------------------
     //
     // Composing a line captures keystrokes until Enter (send) or Esc (cancel).
-    // Sending routes through the service's world-local `say`, so Lateania chat
-    // stays inside Lateania and never reaches late.sh's global feed.
+    // Sending routes through the service's `say`, which is scope-aware: a
+    // leading `/z`/`/zone` reaches everyone in the same named zone, `/w`/
+    // `/world` reaches every adventurer in Lateania, and no marker means the
+    // room, same as it always has. Whichever scope, this is still world-local
+    // chat - it never reaches late.sh's own global feed.
 
     /// True while the player is typing a chat line (input capture is active).
     pub fn chat_active(&self) -> bool {

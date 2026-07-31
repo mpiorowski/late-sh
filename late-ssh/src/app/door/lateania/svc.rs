@@ -299,6 +299,16 @@ pub enum LogKind {
     Loot,
 }
 
+/// Who hears a spoken line: the room (the default, unchanged), everyone in
+/// the same named zone, or every adventurer currently in Lateania. Chosen per
+/// message with a leading `/z`/`/zone` or `/w`/`/world` marker; see `say`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatScope {
+    Room,
+    Zone,
+    World,
+}
+
 #[derive(Clone, Debug)]
 pub struct MobView {
     /// Spawn id, so a click on this foe's row can target this exact foe.
@@ -5298,28 +5308,75 @@ impl WorldState {
         }
     }
 
+    /// Speak a line, scoped by an optional leading channel marker: `/z ` or
+    /// `/zone ` for everyone in the same named zone, `/w ` or `/world ` for
+    /// every adventurer currently in Lateania. No marker means the room, same
+    /// as it always has. Whichever scope, this is still world-local chat - it
+    /// never reaches late.sh's own global feed.
     fn say(&mut self, user_id: Uuid, message: &str) {
         let trimmed = message.trim();
         if trimmed.is_empty() {
             return;
         }
-        let room_id = match self.players.get(&user_id) {
-            Some(player) => player.room,
-            None => return,
+        // A marker only counts if it's the whole word ("/zone"/"/z" followed
+        // by whitespace or nothing) - "/zebra" or "/zealous" fall through as
+        // plain room speech instead of being mistaken for a scope marker.
+        let after_marker = |rest: &str| rest.is_empty() || rest.starts_with(char::is_whitespace);
+        let (scope, body) = if let Some(rest) = trimmed
+            .strip_prefix("/zone")
+            .or_else(|| trimmed.strip_prefix("/z"))
+            .filter(|rest| after_marker(rest))
+        {
+            (ChatScope::Zone, rest.trim())
+        } else if let Some(rest) = trimmed
+            .strip_prefix("/world")
+            .or_else(|| trimmed.strip_prefix("/w"))
+            .filter(|rest| after_marker(rest))
+        {
+            (ChatScope::World, rest.trim())
+        } else {
+            (ChatScope::Room, trimmed)
         };
-        let occupants: Vec<Uuid> = self
-            .players
-            .iter()
-            .filter(|(_, p)| p.room == room_id)
-            .map(|(id, _)| *id)
-            .collect();
-        for occupant in occupants {
-            let prefix = if occupant == user_id {
-                "You say".to_string()
+        if body.is_empty() {
+            return;
+        }
+        let Some(room_id) = self.players.get(&user_id).map(|p| p.room) else {
+            return;
+        };
+        let recipients: Vec<Uuid> = match scope {
+            ChatScope::Room => self
+                .players
+                .iter()
+                .filter(|(_, p)| p.room == room_id)
+                .map(|(id, _)| *id)
+                .collect(),
+            ChatScope::Zone => {
+                let Some(zone) = self.world.room(room_id).map(|r| r.zone) else {
+                    return;
+                };
+                self.players
+                    .iter()
+                    .filter(|(_, p)| self.world.room(p.room).is_some_and(|r| r.zone == zone))
+                    .map(|(id, _)| *id)
+                    .collect()
+            }
+            ChatScope::World => self.players.keys().copied().collect(),
+        };
+        let (self_verb, other_verb) = match scope {
+            ChatScope::Room => ("You say", "Someone says"),
+            ChatScope::Zone => ("You say to the zone", "Someone says to the zone"),
+            ChatScope::World => (
+                "You say to all of Lateania",
+                "Someone says to all of Lateania",
+            ),
+        };
+        for recipient in recipients {
+            let prefix = if recipient == user_id {
+                self_verb
             } else {
-                "Someone says".to_string()
+                other_verb
             };
-            self.log_to(occupant, LogKind::Say, format!("{prefix}: {trimmed}"));
+            self.log_to(recipient, LogKind::Say, format!("{prefix}: {body}"));
         }
     }
 

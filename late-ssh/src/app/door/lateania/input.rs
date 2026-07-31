@@ -36,6 +36,10 @@
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
+//   - Chat: ' opens the say line, sent to the room by default. Lead the
+//     message with "/z " (or "/zone ") for everyone in the same named zone,
+//     or "/w " (or "/world ") for every adventurer in Lateania right now.
+//     Always world-local - none of it reaches late.sh's own chat.
 //   - Esc leaves the world for the Games hub.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
@@ -385,8 +389,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'\'' => {
-            // Open the local chat line (say to the room). World-local; does not
-            // leak into late.sh.
+            // Open the chat line: says to the room by default; lead with
+            // "/z " (zone) or "/w " (world) to reach further. World-local
+            // either way; never leaks into late.sh.
             state.open_chat();
             InputAction::Handled
         }

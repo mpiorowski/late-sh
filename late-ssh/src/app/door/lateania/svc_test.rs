@@ -2757,3 +2757,154 @@ fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
         "missing a day should reset the streak, not continue it"
     );
 }
+
+#[test]
+fn say_defaults_to_the_room_and_ignores_other_rooms() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3));
+    s.choose_class(uid(3), Class::Ranger);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(2)).unwrap().room = 1; // same room
+    s.players.get_mut(&uid(3)).unwrap().room = 3; // different room, same zone (Embergate)
+
+    s.say(uid(1), "hello there");
+
+    let log1 = &s.players[&uid(1)].log;
+    assert!(log1.iter().any(|l| l.text == "You say: hello there"));
+    let log2 = &s.players[&uid(2)].log;
+    assert!(log2.iter().any(|l| l.text == "Someone says: hello there"));
+    let log3 = &s.players[&uid(3)].log;
+    assert!(
+        !log3.iter().any(|l| l.text.contains("hello there")),
+        "a bare say should not reach a different room, even in the same zone"
+    );
+}
+
+#[test]
+fn zone_say_reaches_the_whole_zone_but_not_other_zones() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3));
+    s.choose_class(uid(3), Class::Ranger);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 3; // Embergate, a different room
+    s.players.get_mut(&uid(3)).unwrap().room = 620; // Tasmania - a different zone entirely
+
+    s.say(uid(1), "/zone anyone nearby?");
+
+    let log1 = &s.players[&uid(1)].log;
+    assert!(
+        log1.iter()
+            .any(|l| l.text == "You say to the zone: anyone nearby?")
+    );
+    let log2 = &s.players[&uid(2)].log;
+    assert!(
+        log2.iter()
+            .any(|l| l.text == "Someone says to the zone: anyone nearby?"),
+        "a different room in the same zone should hear it"
+    );
+    let log3 = &s.players[&uid(3)].log;
+    assert!(
+        !log3.iter().any(|l| l.text.contains("anyone nearby")),
+        "a different zone should never hear it"
+    );
+
+    // The short "/z" form works the same way.
+    s.players.get_mut(&uid(1)).unwrap().log.clear();
+    s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.say(uid(1), "/z short form works too");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("short form works too"))
+    );
+}
+
+#[test]
+fn world_say_reaches_every_adventurer_in_lateania() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // Tasmania - a different zone
+
+    s.say(uid(1), "/world hail, all of Lateania");
+
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say to all of Lateania: hail, all of Lateania")
+    );
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text == "Someone says to all of Lateania: hail, all of Lateania"),
+        "world scope should reach every player, any zone"
+    );
+
+    // The short "/w" form works the same way.
+    s.players.get_mut(&uid(1)).unwrap().log.clear();
+    s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.say(uid(1), "/w short form too");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("short form too"))
+    );
+}
+
+#[test]
+fn a_scope_marker_with_no_message_says_nothing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let before = s.players[&uid(1)].log.len();
+    s.say(uid(1), "/zone ");
+    s.say(uid(1), "/world    ");
+    assert_eq!(
+        s.players[&uid(1)].log.len(),
+        before,
+        "an empty message after the scope marker should say nothing"
+    );
+}
+
+#[test]
+fn a_word_that_merely_starts_with_z_or_w_is_not_mistaken_for_a_scope_marker() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // a different zone
+
+    s.say(uid(1), "/zealous about this fight");
+
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say: /zealous about this fight"),
+        "\"/zealous\" is a word, not the /z marker, and should say to the room verbatim"
+    );
+    assert!(
+        !s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("zealous")),
+        "a merely-similar word should never widen the scope past the room"
+    );
+}
