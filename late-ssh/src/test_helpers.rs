@@ -144,7 +144,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ai: AiConfig {
             enabled: false,
             api_key: None,
-            model: "gemini-3.1-pro-preview".to_string(),
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
@@ -194,7 +193,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     )
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
-    let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
+    let ai_service = AiService::new(false, None);
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -247,6 +246,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         afk_users,
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
+        pomodoro_directory: crate::app::common::pomodoro::new_directory(),
         config,
         db: db.clone(),
         audio_service: crate::app::audio::svc::AudioService::new(
@@ -410,7 +410,7 @@ fn make_app_with_chat_service_and_permissions(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -478,6 +478,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
+        initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -544,6 +545,7 @@ fn make_app_with_chat_service_and_permissions(
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
+        pomodoro_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,
@@ -600,7 +602,7 @@ pub fn make_app_with_paired_client(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -668,6 +670,7 @@ pub fn make_app_with_paired_client(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
+        initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -734,6 +737,7 @@ pub fn make_app_with_paired_client(
         afk_users: crate::state::new_afk_users(),
         username_directory: None,
         flair_directory: None,
+        pomodoro_directory: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
+
+use super::chips::ChipMove;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -77,6 +79,7 @@ pub async fn list_profile_awards_for_user(
 
 pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u64> {
     let rank_limit = i64::from(PROFILE_AWARD_RANK_LIMIT);
+    let excluded_reasons = ChipMove::excluded_earning_reasons();
     let inserted = client
         .execute(
             "INSERT INTO profile_awards (user_id, category, period_month, rank, score_value)
@@ -89,7 +92,7 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
              chip_totals AS (
                 SELECT user_id, SUM(delta)::bigint AS value
                 FROM chip_ledger, bounds
-                WHERE reason NOT IN ('floor_restore', 'shop_purchase')
+                WHERE reason <> ALL($2)
                   AND created_at >= bounds.period_start
                   AND created_at < bounds.period_end
                 GROUP BY user_id
@@ -187,7 +190,7 @@ pub async fn snapshot_previous_month_profile_awards(client: &Client) -> Result<u
              WHERE ranked.rank <= $1
              ON CONFLICT (user_id, category, period_month)
              DO NOTHING",
-            &[&rank_limit],
+            &[&rank_limit, &excluded_reasons],
         )
         .await?;
 

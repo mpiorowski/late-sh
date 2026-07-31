@@ -1,5 +1,6 @@
 use late_core::models::marketplace::{
-    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU,
+    AQUARIUM_FOOD_SKU, AQUARIUM_MAX_FISH, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
+    PET_FOOD_SKU,
 };
 use ratatui::{
     Frame,
@@ -351,6 +352,29 @@ fn draw_item_detail(
                 Span::styled("current room", Style::default().fg(theme::TEXT_DIM())),
             ]));
         }
+        if item.is_bonsai_decay_shield() {
+            if let Some(protection) = state.active_bonsai_decay_protection() {
+                lines.push(Line::from(vec![
+                    Span::raw("  shield "),
+                    Span::styled(
+                        format!(
+                            "protected, {}",
+                            remaining_label(protection.ends_at, chrono::Utc::now())
+                        ),
+                        Style::default()
+                            .fg(theme::SUCCESS())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+            lines.push(Line::from(vec![
+                Span::raw("  lasts  "),
+                Span::styled(
+                    "14 days, stacks with any remaining shield time",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        }
     }
     if item.is_dynamic_bonsai() && item.owned {
         lines.push(Line::from(vec![
@@ -651,7 +675,13 @@ fn remaining_label(
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let minutes = (ends_at - now).num_minutes().max(1);
-    if minutes >= 60 {
+    // Strictly greater than a day, not >=: a 24h-exact remaining duration
+    // (every username effect's max) must still read "24h left" rather than
+    // flip to "1d left" for the single minute before it drops into the hour
+    // tier, otherwise "24h left" is never shown at all post-purchase.
+    if minutes > 60 * 24 {
+        format!("{}d left", minutes / (60 * 24))
+    } else if minutes >= 60 {
         format!("{}h left", minutes / 60)
     } else {
         format!("{minutes}m left")
@@ -786,20 +816,23 @@ fn item_row(
     let active_chat_consumable = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
         && !chat_room_bump_item(item)
         && chat_consumable_active(item, state);
-    let status_style =
-        if active_chat_consumable || item.equipped || username_effect_active(item, state) {
-            Style::default()
-                .fg(theme::SUCCESS())
-                .add_modifier(Modifier::BOLD)
-        } else if item.is_consumable() || item.is_username_effect() {
-            Style::default().fg(theme::AMBER())
-        } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
-            Style::default().fg(theme::SUCCESS())
-        } else if item.is_aquarium_fish() {
-            Style::default().fg(theme::AMBER())
-        } else {
-            Style::default().fg(theme::TEXT_FAINT())
-        };
+    let status_style = if active_chat_consumable
+        || item.equipped
+        || username_effect_active(item, state)
+        || bonsai_decay_shield_active(item, state)
+    {
+        Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD)
+    } else if item.is_consumable() || item.is_username_effect() {
+        Style::default().fg(theme::AMBER())
+    } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
+        Style::default().fg(theme::SUCCESS())
+    } else if item.is_aquarium_fish() {
+        Style::default().fg(theme::AMBER())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
     let display_name = if category == ShopCategory::Flags && item.is_flag_badge() {
         flag_display_name(item)
     } else if item.is_chat_badge() {
@@ -819,6 +852,7 @@ fn item_row(
                 format!(" {}/{}", item.active_quantity, item.quantity)
             } else if item.is_consumable()
                 && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
+                && item.item_kind != BONSAI_CONSUMABLE_ITEM_KIND
                 && item.quantity > 0
             {
                 format!(" x{}", item.quantity)
@@ -872,9 +906,20 @@ fn consumable_row_status(item: &ShopCatalogItem, state: &ShopState) -> &'static 
         "confirm"
     } else if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND {
         "activate"
+    } else if bonsai_decay_shield_active(item, state) {
+        "active"
     } else {
         "buy"
     }
+}
+
+/// True when the Bonsai Decay Shield is currently protecting the user's
+/// bonsai. Purchases of the shield never decrement a per-purchase stock the
+/// way Pet/Aquarium Food does: every purchase collapses into one running
+/// protection window, so this is the only way the shop list row can show
+/// whether the shield is actually doing anything right now.
+fn bonsai_decay_shield_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    item.is_bonsai_decay_shield() && state.active_bonsai_decay_protection().is_some()
 }
 
 fn chat_room_bump_item(item: &ShopCatalogItem) -> bool {

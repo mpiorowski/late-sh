@@ -13,7 +13,9 @@ use crate::app::{
 };
 
 use super::data;
+use super::model::View;
 use super::state::{Acted, State};
+use super::world::Direction;
 
 pub const GAME: DarkroomDoorGame = DarkroomDoorGame;
 
@@ -31,7 +33,7 @@ impl DoorGame for DarkroomDoorGame {
     }
 
     fn description(&self) -> &'static str {
-        "The fire is dead and the room is freezing. Light it, see what the light brings in, and build a village around it. Your save grows while you are connected."
+        "The fire is dead and the room is freezing. Light it, see what the light brings in, and build a village around it. Then walk out into the wasteland, and find a way off this rock. Your save grows while you are connected."
     }
 
     fn draw(
@@ -88,8 +90,57 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
     // released (leaving the game re-borrows `app` mutably).
     let acted = {
         let state = app.darkroom_state.as_mut().unwrap();
+        // Esc means different things per view: it aborts a flight, parks a
+        // trip, and otherwise leaves the door. The modal keeps the keys while
+        // it is up, so Esc there does nothing (its own rows are the way out).
+        if byte == 0x1B {
+            if state.flight.is_some() {
+                state.abort_flight();
+                return true;
+            }
+            if state.event.is_some() {
+                return true;
+            }
+            if state.view == View::World {
+                state.park();
+                leave(app);
+                return true;
+            }
+            leave(app);
+            return true;
+        }
+        // Walking the wasteland: wasd doubles for the arrows, and nothing
+        // else on this screen wants those keys.
+        if state.view == View::World && state.event.is_none() {
+            let walked = match byte {
+                b'w' | b'W' => Some(Direction::North),
+                b's' | b'S' => Some(Direction::South),
+                b'a' | b'A' => Some(Direction::West),
+                b'd' | b'D' => Some(Direction::East),
+                _ => None,
+            };
+            if let Some(direction) = walked {
+                state.walk(direction);
+                return true;
+            }
+        }
+        if state.flight.is_some() {
+            let steered = match byte {
+                b'w' | b'W' => Some((0.0, -1.0)),
+                b's' | b'S' => Some((0.0, 1.0)),
+                b'a' | b'A' => Some((-1.0, 0.0)),
+                b'd' | b'D' => Some((1.0, 0.0)),
+                _ => None,
+            };
+            if let Some((dx, dy)) = steered {
+                state.steer(dx, dy);
+            }
+            // Mid-flight the ship rows are still underneath; nothing but
+            // steering (and the Esc abort above) may reach them, or Enter
+            // could restart the ascent.
+            return true;
+        }
         match byte {
-            0x1B => Acted::Leave,
             b'k' | b'K' | b'w' | b'W' => {
                 state.move_cursor(-1);
                 Acted::Stay
@@ -135,6 +186,27 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
     let Some(state) = app.darkroom_state.as_mut() else {
         return false;
     };
+    if state.flight.is_some() {
+        match key {
+            b'A' => state.steer(0.0, -1.0),
+            b'B' => state.steer(0.0, 1.0),
+            b'C' => state.steer(1.0, 0.0),
+            b'D' => state.steer(-1.0, 0.0),
+            _ => {}
+        }
+        return true;
+    }
+    // Out in the wasteland an arrow is a step, and a step is the whole game.
+    if state.view == View::World && state.event.is_none() {
+        match key {
+            b'A' => state.walk(Direction::North),
+            b'B' => state.walk(Direction::South),
+            b'C' => state.walk(Direction::East),
+            b'D' => state.walk(Direction::West),
+            _ => {}
+        }
+        return true;
+    }
     match key {
         b'A' => state.move_cursor(-1),
         b'B' => state.move_cursor(1),

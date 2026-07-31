@@ -9,6 +9,7 @@ fn make_state() -> ShopState {
         active_room_effects: HashMap::new(),
         aquarium_hungry: false,
         active_username_effect: None,
+        active_bonsai_decay_protection: None,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -123,6 +124,7 @@ fn make_state_with_glow_item() -> ShopState {
         active_room_effects: HashMap::new(),
         aquarium_hungry: false,
         active_username_effect: None,
+        active_bonsai_decay_protection: None,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -177,6 +179,7 @@ fn visible_items_lead_with_username_effects() {
         active_room_effects: HashMap::new(),
         aquarium_hungry: false,
         active_username_effect: None,
+        active_bonsai_decay_protection: None,
     };
     let state = ShopState::for_test_snapshot(snapshot);
     let skus: Vec<&str> = state

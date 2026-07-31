@@ -23,11 +23,11 @@ Out of scope (deliberate v1 boundaries, see root roadmap's "Micro-collab tools" 
 - Operational-transform/CRDT merge. Every publish overwrites the whole buffer; concurrent edits from both sides can clobber each other. Acceptable for a two-person scratchpad, not for a real collaborative editor.
 - More than two participants.
 - Mouse click targets (keyboard-only editing via `ratatui-textarea`).
-- An open/anyone-can-claim lobby (unlike `/challenge`): `/pair` only supports the directed `@user` form.
+- An open/anyone-can-claim lobby (unlike the Lobby's daily challenge flow): `/pair` only supports the directed `@user` form.
 - Per-theme syntax color matching. Highlighting uses one fixed bundled `syntect` theme (`base16-ocean.dark`) regardless of which of this app's 20+ user-selectable `theme::` themes the viewer has picked. A real per-theme mapping was considered and explicitly declined in favor of highlighting accuracy; see section 5 below.
 - Undo inside the editor. The buffer is replaced wholesale whenever the other side publishes, so the undo stack holds remote edits and one undo would rewind work that was never yours.
 
-The `/pair @user` command itself is parsed and dispatched from `chat/state.rs`/`chat/input.rs` (composer has no handle on `active_users` or the registry), same shape as directed `/challenge @user`.
+The `/pair @user` command itself is parsed and dispatched from `chat/state.rs`/`chat/input.rs` (composer has no handle on `active_users` or the registry).
 
 ---
 
@@ -77,7 +77,7 @@ The cooldown rate limits the **ping only**. A suppressed ask still records the i
 
 `ScratchpadBuffer` holds `content: String`, `revision: u64`, both participants' `(Uuid, String)`, a presence-only cursor per side, a `joined` flag per side, and `left: Option<Uuid>`. `leave(user_id)` marks `left` on first departure (partner's next sync sees it) and normally removes both registry entries only once both sides have left. The exception is a partner that never joined: their session died between `/pair` and the mirror command, so nobody will ever read `left`, and keeping the entry would mark them paired forever.
 
-There is no live cross-session push in this codebase (`/challenge` is DB-row-based, not a push). Notices, completed pairings, and partner edits are all picked up by polling once per tick (`tick.rs`), same cadence as the `session_rx` drain. Worst case latency is the idle tick floor (~500ms). `pair::poll` answers the notice and the pairing under one lock, and a session already inside a scratchpad skips the registry entirely.
+There is no live cross-session push in this codebase (the daily challenge flow is DB-row-based, not a push). Notices, completed pairings, and partner edits are all picked up by polling once per tick (`tick.rs`), same cadence as the `session_rx` drain. Worst case latency is the idle tick floor (~500ms). `pair::poll` answers the notice and the pairing under one lock, and a session already inside a scratchpad skips the registry entirely.
 
 ## 4. Per-Session State and Editing
 

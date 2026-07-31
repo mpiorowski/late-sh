@@ -52,3 +52,6 @@ image.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 livekit.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = { version = "0.10.0", features = ["tokio"] }

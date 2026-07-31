@@ -22,6 +22,7 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
+        chips::ChipMove,
         mud_character::MudCharacter,
         mud_world_state::MudWorldState,
         profile_award::{
@@ -200,8 +201,6 @@ const AUTOSAVE_SECS: u64 = 60;
 /// How often the shared world runtime snapshot is persisted.
 const WORLD_AUTOSAVE_SECS: u64 = 15;
 const LATEANIA_WORLD_KEY: &str = "lateania";
-const LATEANIA_ARCHDEMON_LEDGER_REASON: &str = "lateania_archdemon_defeat";
-const LATEANIA_FRONTIER_KING_LEDGER_REASON: &str = "lateania_frontier_king_defeat";
 
 #[derive(Clone, Copy)]
 struct BossAchievement {
@@ -215,7 +214,7 @@ struct BossAchievement {
 #[derive(Clone, Copy)]
 struct BossPayout {
     reward_key: &'static str,
-    ledger_reason: &'static str,
+    chip_move: ChipMove,
 }
 
 const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
@@ -223,7 +222,7 @@ const ARCHDEMON_ACHIEVEMENT: BossAchievement = BossAchievement {
     award_category: LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     payout: Some(BossPayout {
         reward_key: LATEANIA_ARCHDEMON_REWARD_KEY,
-        ledger_reason: LATEANIA_ARCHDEMON_LEDGER_REASON,
+        chip_move: ChipMove::LateaniaArchdemonDefeat,
     }),
 };
 
@@ -232,7 +231,7 @@ const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
     award_category: LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
     payout: Some(BossPayout {
         reward_key: LATEANIA_FRONTIER_KING_REWARD_KEY,
-        ledger_reason: LATEANIA_FRONTIER_KING_LEDGER_REASON,
+        chip_move: ChipMove::LateaniaFrontierKingDefeat,
     }),
 };
 
@@ -1585,11 +1584,7 @@ impl LateaniaService {
             let mut grant_badge = true;
             if let Some(pay) = achievement.payout {
                 let payout = chip_svc
-                    .credit_lifetime_reward_template(
-                        outcome.user_id,
-                        pay.reward_key,
-                        pay.ledger_reason,
-                    )
+                    .credit_lifetime_reward_template(outcome.user_id, pay.reward_key, pay.chip_move)
                     .await;
                 match &payout {
                     Ok(grant) if !grant.credited => {

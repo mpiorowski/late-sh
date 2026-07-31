@@ -4,7 +4,7 @@
 //! for that than the browser was, so nothing here decorates.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -12,10 +12,20 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::app::common::theme;
 use crate::app::door::landing;
 
-use super::data::{self, Building, Resource};
+use super::data::{self, Building, Resource, ResourceKind};
 use super::model::{Game, View};
 use super::pace;
 use super::state::{Row, State};
+
+/// Label column width for the stores/pack sidebar rows: the longest label
+/// ("trading post", "sulphur mine") plus a two-space gutter, so a count never
+/// butts up against the name it belongs to.
+pub const SIDEBAR_LABEL_PAD: usize = 14;
+
+/// Total width of the stores/pack sidebar column: the two-space indent, the
+/// label column, and room for the widest value a long run reaches
+/// ("10000 +100/5s"). Too narrow and the income suffix clips off the edge.
+pub const SIDEBAR_WIDTH: u16 = 30;
 
 /// The live game page.
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
@@ -28,6 +38,12 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
         frame.render_widget(loading, area);
         return;
     };
+
+    // The ascent takes the whole panel: no stores, no log, just the sky.
+    if let Some(flight) = state.flight.as_ref() {
+        super::ui_world::draw_space(frame, area, flight);
+        return;
+    }
 
     let block = Block::default()
         .title(format!(" {} ", title_for(state, game)))
@@ -53,22 +69,71 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 
     frame.render_widget(Paragraph::new(status_line(state, game)), rows[0]);
 
-    let columns = Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(rows[2]);
-    frame.render_widget(Paragraph::new(action_lines(state)), columns[0]);
-    frame.render_widget(Paragraph::new(stores_lines(game)), columns[1]);
+    // The wasteland is a map, not a column of buttons.
+    if state.view == View::World {
+        let columns = Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(rows[2]);
+        super::ui_world::draw_world(frame, columns[0], state);
+        frame.render_widget(Paragraph::new(pack_lines(state, game)), columns[1]);
+    } else {
+        let columns = Layout::horizontal([Constraint::Fill(1), Constraint::Length(SIDEBAR_WIDTH)])
+            .split(rows[2]);
+        let (actions, cursor_line) = action_lines(state);
+        let scroll = action_scroll(cursor_line, actions.len(), columns[0].height as usize);
+        frame.render_widget(Paragraph::new(actions).scroll((scroll, 0)), columns[0]);
+        frame.render_widget(Paragraph::new(stores_lines(state, game)), columns[1]);
+    }
 
     frame.render_widget(
         Paragraph::new(log_lines(state, rows[4].height as usize)),
         rows[4],
     );
     frame.render_widget(Paragraph::new(footer(state, game)), rows[5]);
+
+    // The modal, over everything.
+    super::ui_event::draw(frame, inner, state);
 }
 
 fn title_for(state: &State, game: &Game) -> String {
     match state.view {
         View::Room => game.room_title().to_string(),
         View::Outside => game.outside_title().to_string(),
+        View::Path => "A Dusty Path".to_string(),
+        View::World => "A Barren World".to_string(),
+        View::Ship => "An Old Starship".to_string(),
     }
+}
+
+/// What is in the pack right now, shown beside the map.
+fn pack_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
+    let Some(trip) = game.expedition.as_ref() else {
+        return Vec::new();
+    };
+    let _ = state;
+    let mut lines = vec![Line::from(Span::styled(
+        "pack",
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    for (item, count) in &trip.outfit {
+        if *count <= 0 {
+            continue;
+        }
+        lines.push(landing::stat(
+            item.label(),
+            &count.to_string(),
+            SIDEBAR_LABEL_PAD,
+        ));
+    }
+    let free = game.capacity() - trip.load();
+    lines.push(Line::from(""));
+    lines.push(landing::stat(
+        "free",
+        &format!("{:.0}/{:.0}", free.max(0.0), game.capacity()),
+        SIDEBAR_LABEL_PAD,
+    ));
+    lines
 }
 
 /// The one line that says what the world is doing right now.
@@ -85,46 +150,88 @@ fn status_line(state: &State, game: &Game) -> Line<'static> {
             game.max_population(),
             game.gatherers()
         ),
+        View::Path => format!(
+            "armour: {}. water: {}. {} to carry.",
+            game.armour_label(),
+            game.max_water(),
+            game.capacity() as i64
+        ),
+        View::World => String::new(),
+        View::Ship => match game.ship.as_ref() {
+            Some(ship) => format!("hull: {}. engine: {}.", ship.hull, ship.thrusters),
+            None => String::new(),
+        },
     };
     Line::from(Span::styled(text, Style::default().fg(theme::TEXT())))
 }
 
 /// The action column: what the player can do, with the cursor and any
-/// cooldown or cost.
-fn action_lines(state: &State) -> Vec<Line<'static>> {
+/// cooldown or cost, split under upstream's build/craft/buy legends. Returns
+/// the lines and which of them the cursor is on, for the scroll offset.
+fn action_lines(state: &State) -> (Vec<Line<'static>>, usize) {
     let selected = state.selected();
-    state
-        .rows()
-        .into_iter()
-        .map(|row| {
-            let is_selected = row == selected;
-            let marker = if is_selected { "> " } else { "  " };
-            let label_style = if is_selected {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let mut spans = vec![
-                Span::styled(marker, Style::default().fg(theme::AMBER())),
-                Span::styled(state.row_label(row), label_style),
-            ];
-            let cooldown = state.row_cooldown(row);
-            if cooldown > 0 {
-                spans.push(Span::styled(
-                    format!("  {cooldown}s"),
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ));
-            } else if let Some(cost) = cost_hint(state, row) {
-                spans.push(Span::styled(
-                    format!("  {cost}"),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ));
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut cursor_line = 0;
+    let mut section = None;
+    for row in state.rows() {
+        let row_section = state.row_section(row);
+        if row_section.is_some() && row_section != section {
+            section = row_section;
+            if let Some(open) = section {
+                lines.push(Line::from(Span::styled(
+                    open.legend().to_string(),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                )));
             }
-            Line::from(spans)
-        })
-        .collect()
+        }
+
+        let is_selected = row == selected;
+        if is_selected {
+            cursor_line = lines.len();
+        }
+        let marker = if is_selected { "> " } else { "  " };
+        // A row at its ceiling stays in the list (upstream keeps the button,
+        // greyed) but reads as spent.
+        let dim = state.row_at_maximum(row);
+        let label_style = match (is_selected, dim) {
+            (true, _) => Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+            (false, true) => Style::default().fg(theme::TEXT_FAINT()),
+            (false, false) => Style::default().fg(theme::TEXT()),
+        };
+        let mut spans = vec![
+            Span::styled(marker, Style::default().fg(theme::AMBER())),
+            Span::styled(state.row_label(row), label_style),
+        ];
+        let cooldown = state.row_cooldown(row);
+        if cooldown > 0 {
+            spans.push(Span::styled(
+                format!("  {cooldown}s"),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        } else if let Some(cost) = cost_hint(state, row) {
+            spans.push(Span::styled(
+                format!("  {cost}"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+    (lines, cursor_line)
+}
+
+/// Keep the cursor on screen once the action column outgrows its box. The
+/// offset is derived from the cursor every frame rather than remembered, so
+/// there is no scroll state to fall out of step with the row list.
+fn action_scroll(cursor_line: usize, total: usize, height: usize) -> u16 {
+    if total <= height || height == 0 {
+        return 0;
+    }
+    let centered = cursor_line.saturating_sub(height / 2);
+    centered.min(total - height) as u16
 }
 
 fn cost_hint(state: &State, row: Row) -> Option<String> {
@@ -144,24 +251,67 @@ fn cost_hint(state: &State, row: Row) -> Option<String> {
 /// which is how the game reveals itself. Each row carries its net income per
 /// tick, the terminal stand-in for upstream's hover tooltip, so wood quietly
 /// climbing (the builder, the gatherers) is visible and attributable.
-fn stores_lines(game: &Game) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(Span::styled(
-        "stores",
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ))];
+fn stores_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if !game.perks.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "perks",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for perk in &game.perks {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", perk.label()),
+                Style::default().fg(theme::TEXT_DIM()),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+    let _ = state;
     let income = game.income_per_tick();
     let tick = pace::slowed(data::INCOME_DELAY);
-    for resource in Resource::ALL {
-        if !game.has_seen(resource) {
+    // Upstream lists weapons in their own box and hides the expedition gear on
+    // the room screen entirely (it belongs to the path). The gear block is
+    // ours: until the path exists there is nowhere else a crafted waterskin
+    // could show up.
+    for (heading, bucket) in [
+        (
+            "stores",
+            [
+                ResourceKind::Basic,
+                ResourceKind::Good,
+                ResourceKind::Tool,
+                ResourceKind::Special,
+            ]
+            .as_slice(),
+        ),
+        ("weapons", [ResourceKind::Weapon].as_slice()),
+        ("gear", [ResourceKind::Upgrade].as_slice()),
+    ] {
+        let held: Vec<Resource> = Resource::ALL
+            .into_iter()
+            .filter(|resource| game.has_seen(*resource) && bucket.contains(&resource.kind()))
+            .collect();
+        if held.is_empty() {
             continue;
         }
-        let value = match income.get(&resource) {
-            Some(rate) => format!("{} {}/{}s", game.store(resource), fmt_income(*rate), tick),
-            None => game.store(resource).to_string(),
-        };
-        lines.push(landing::stat(resource.label(), &value, 12));
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(
+            heading,
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )));
+        for resource in held {
+            let value = match income.get(&resource) {
+                Some(rate) => format!("{} {}/{}s", game.store(resource), fmt_income(*rate), tick),
+                None => game.store(resource).to_string(),
+            };
+            lines.push(landing::stat(resource.label(), &value, SIDEBAR_LABEL_PAD));
+        }
     }
     let standing: Vec<&Building> = Building::ALL
         .iter()
@@ -180,17 +330,21 @@ fn stores_lines(game: &Game) -> Vec<Line<'static>> {
             if *building == Building::Trap {
                 let (bare, baited) = game.trap_rows();
                 if bare > 0 {
-                    lines.push(landing::stat("trap", &bare.to_string(), 12));
+                    lines.push(landing::stat("trap", &bare.to_string(), SIDEBAR_LABEL_PAD));
                 }
                 if baited > 0 {
-                    lines.push(landing::stat("baited trap", &baited.to_string(), 12));
+                    lines.push(landing::stat(
+                        "baited trap",
+                        &baited.to_string(),
+                        SIDEBAR_LABEL_PAD,
+                    ));
                 }
                 continue;
             }
             lines.push(landing::stat(
                 building.label(),
                 &game.building_count(*building).to_string(),
-                12,
+                SIDEBAR_LABEL_PAD,
             ));
         }
     }
@@ -229,10 +383,13 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
         Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" do   ", Style::default().fg(theme::TEXT_DIM())),
     ];
-    if matches!(state.view, View::Outside) {
+    if matches!(state.view, View::Outside | View::Path) {
         spans.push(Span::styled("+/-", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
-            " worker   ",
+            match state.view {
+                View::Path => " pack   ",
+                _ => " worker   ",
+            },
             Style::default().fg(theme::TEXT_DIM()),
         ));
         spans.push(Span::styled("</>", Style::default().fg(theme::AMBER_DIM())));
@@ -241,17 +398,29 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
-    if game.forest_unlocked {
+    if state.view == View::World {
+        spans.push(Span::styled(
+            "arrows",
+            Style::default().fg(theme::AMBER_DIM()),
+        ));
+        spans.push(Span::styled(
+            " walk   ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    if game.forest_unlocked && state.view != View::World {
         spans.push(Span::styled("Tab", Style::default().fg(theme::AMBER_DIM())));
-        let other = match state.view {
-            View::Room => " outside   ",
-            View::Outside => " the room   ",
-        };
-        spans.push(Span::styled(other, Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled(
+            " switch   ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
     spans.push(Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())));
     spans.push(Span::styled(
-        " leave",
+        match state.view {
+            View::World => " park the trip",
+            _ => " leave",
+        },
         Style::default().fg(theme::TEXT_DIM()),
     ));
 
@@ -277,8 +446,18 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
 
 /// The two-column landing card for the Games hub.
 pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
-    let mut lines = vec![
-        landing::heading(data::TITLE),
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area)[1];
+
+    let mut lines = vec![Line::raw("")];
+    lines.extend(title_art());
+    lines.extend([
         Line::from(""),
         Line::from(Span::styled(
             "the fire is dead. the room is freezing.",
@@ -290,7 +469,11 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(Span::styled(
-            "village around it, one hut at a time.",
+            "village around it, walk out into the wasteland, and find",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "a way off this rock.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(""),
@@ -318,7 +501,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             10,
         ),
         Line::from(""),
-    ];
+    ]);
 
     if delete_confirm {
         lines.push(landing::action(
@@ -351,5 +534,35 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         Style::default().fg(theme::TEXT_FAINT()),
     )));
 
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The block-letter title, stacked over two rows like Green Dragon's so an
+/// eleven-character name still fits the hub card. Amber because the whole game
+/// is lit by the one fire.
+fn title_art() -> Vec<Line<'static>> {
+    [
+        "██████╗  █████╗ ██████╗ ██╗  ██╗",
+        "██╔══██╗██╔══██╗██╔══██╗██║ ██╔╝",
+        "██║  ██║███████║██████╔╝█████╔╝ ",
+        "██║  ██║██╔══██║██╔══██╗██╔═██╗ ",
+        "██████╔╝██║  ██║██║  ██║██║  ██╗",
+        "╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝",
+        "██████╗  ██████╗  ██████╗ ███╗   ███╗",
+        "██╔══██╗██╔═══██╗██╔═══██╗████╗ ████║",
+        "██████╔╝██║   ██║██║   ██║██╔████╔██║",
+        "██╔══██╗██║   ██║██║   ██║██║╚██╔╝██║",
+        "██║  ██║╚██████╔╝╚██████╔╝██║ ╚═╝ ██║",
+        "╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝",
+    ]
+    .into_iter()
+    .map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ))
+    })
+    .collect()
 }

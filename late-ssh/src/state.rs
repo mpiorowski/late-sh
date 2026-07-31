@@ -158,6 +158,10 @@ pub struct State {
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
+    /// Running `/pomodoro` countdowns (snapshot-swap; written by the sessions
+    /// that own them, resolved per session in the tick loop). In-memory only:
+    /// a countdown dies with its session, so there is nothing to persist.
+    pub pomodoro_directory: crate::app::common::pomodoro::PomodoroDirectory,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:

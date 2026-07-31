@@ -16,6 +16,7 @@ use super::{
     },
 };
 use late_core::models::{
+    bonsai_decay_protection::BonsaiDecayProtection,
     marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
@@ -212,6 +213,10 @@ impl ShopState {
 
     pub(crate) fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
         self.snapshot.active_username_effect
+    }
+
+    pub(crate) fn active_bonsai_decay_protection(&self) -> Option<BonsaiDecayProtection> {
+        self.snapshot.active_bonsai_decay_protection
     }
 
     pub(crate) fn pet_food_quantity(&self) -> i32 {

@@ -135,11 +135,10 @@ const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
 const BARTENDER_USERNAME: &str = "bartender";
 const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(15);
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
-/// Hardcoded rather than sourced from `AiConfig::model`: the bartender's order
-/// decision is a small ungrounded/schema-enforced JSON call, so it runs on
-/// flash instead of the pro model configured for @bot/news. Revisit once this
-/// needs to be configurable per-bot.
-const BARTENDER_MODEL: &str = "gemini-3.6-flash";
+/// Hardcoded per-call rather than sourced from `AiService::model()`: kept as
+/// its own const so the bartender's order decision can move to a different
+/// model tier independently of @bot's. Currently the same model as @bot/news.
+const BARTENDER_MODEL: &str = crate::app::ai::svc::AI_MODEL;
 /// Cap on the grounded JSON order call; on timeout the mention is dropped
 /// (never charged) and the cooldown lets the patron re-ask.
 const BARTENDER_ORDER_TIMEOUT: Duration = Duration::from_secs(60);

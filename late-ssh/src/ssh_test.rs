@@ -7,7 +7,6 @@ use russh::{
     keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg},
 };
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, timeout};
@@ -265,19 +264,27 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
         .await
         .expect("request shell");
     expect_shell_data(&mut shell_channel).await;
-    drain_shell_data(&mut shell_channel).await;
 
     token_channel.close().await.expect("close token channel");
     shell_channel
-        .data(&b" "[..])
+        .data(&b"\x1b"[..])
+        .await
+        .expect("dismiss splash after token close");
+    expect_shell_data_contains(&mut shell_channel, b"welcome to the late lounge").await;
+
+    shell_channel
+        .data(&b"2"[..])
         .await
         .expect("send shell input after token close");
-    expect_shell_data(&mut shell_channel).await;
-    // The clubhouse animates, so the frame above arrives ~66ms after the
-    // close and proves little on its own. Watch the channel for the full
-    // drain budget: a Close propagating from the token-channel teardown
-    // panics inside the helper.
-    drain_shell_data(&mut shell_channel).await;
+    expect_shell_data_contains(&mut shell_channel, b"The Arcade").await;
+
+    // A second post-close interaction proves the first frame was not merely
+    // the render loop's final draw while shutting down.
+    shell_channel
+        .data(&b"5"[..])
+        .await
+        .expect("send second shell input after token close");
+    expect_shell_data_contains(&mut shell_channel, b"Directory").await;
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")
@@ -298,20 +305,31 @@ async fn expect_shell_data(channel: &mut russh::Channel<client::Msg>) {
     }
 }
 
-/// Swallow the intro frame burst so a later `expect_shell_data` asserts on
-/// fresh output. Returns on a 100ms quiet gap, or after an overall budget:
-/// the shell lands on the Clubhouse, which animates forever (fire, candles,
-/// jukebox, avatars), so idle frames never stop and the quiet gap may never
-/// come. The budget keeps the drain from looping indefinitely.
-async fn drain_shell_data(channel: &mut russh::Channel<client::Msg>) {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        match timeout(Duration::from_millis(100), channel.wait()).await {
-            Ok(Some(ChannelMsg::Data { .. })) => {}
-            Ok(Some(ChannelMsg::Close)) => panic!("interactive shell closed unexpectedly"),
-            Ok(Some(_)) => {}
-            Ok(None) => panic!("interactive shell channel ended unexpectedly"),
-            Err(_) => return,
+async fn expect_shell_data_contains(channel: &mut russh::Channel<client::Msg>, needle: &[u8]) {
+    let mut received = Vec::new();
+    let found = timeout(Duration::from_secs(15), async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    received.extend_from_slice(data.as_ref());
+                    if received
+                        .windows(needle.len())
+                        .any(|window| window == needle)
+                    {
+                        return;
+                    }
+                }
+                Some(ChannelMsg::Close) => panic!("interactive shell closed unexpectedly"),
+                Some(_) => {}
+                None => panic!("interactive shell channel ended unexpectedly"),
+            }
         }
-    }
+    })
+    .await;
+    assert!(
+        found.is_ok(),
+        "timed out waiting for interactive shell data containing {:?}; received={:?}",
+        String::from_utf8_lossy(needle),
+        String::from_utf8_lossy(&received)
+    );
 }

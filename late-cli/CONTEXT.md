@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-07-15 (webview helper resiliency: helper pair-WS reconnects with backoff instead of exiting on drops; parent respawns a dead helper from the 1s pair-WS heartbeat watchdog instead of waiting for the next `set_playback_source`; parent hands its current mute/volume to the helper at spawn via `LATE_WEBVIEW_INITIAL_MUTED`/`LATE_WEBVIEW_INITIAL_VOLUME` so respawns keep the session's mute)
+- Last updated: 2026-07-31 (Linux MPRIS publication: the CLI publishes the selected source as a desktop media player; widget transport/volume commands go up the pair WS as `set_muted`/`set_volume` and the server fans them to every paired client, YouTube's webview helper included; missing session D-Bus fails open)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -36,6 +36,7 @@ Primary responsibilities:
 - MP3 stream decoding via `symphonia`
 - FFT visualizer frames sent to the SSH TUI over WebSocket
 - Paired mute/volume controls received from the TUI
+- Linux MPRIS publication for the selected YouTube, Icecast, or radio track
 - LiveKit voice capture/playout for native desktop CLI users, controlled over the pair WebSocket
 - Cross-platform installer targets for Linux, macOS, Windows, and Android/Termux
 
@@ -61,7 +62,8 @@ flowchart LR
     DEC --> OUT["cpal output"]
     OUT --> ANA["playback analyzer"]
     ANA -->|"viz frames"| API
-    API -->|"toggle_mute / volume_up / volume_down"| CLI
+    API -->|"toggle_mute / volume_up / volume_down / set_muted / set_volume"| CLI
+    CLI -->|"set_muted / set_volume (MPRIS)"| API
     SSH -->|"session token"| CLI
 ```
 
@@ -84,6 +86,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
+- `src/mpris.rs` - Linux MPRIS service, track metadata projection, and the desktop command queue (transport/volume mapped to server-routed `set_muted`/`set_volume`); other platforms compile a no-op publisher
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding
@@ -249,6 +252,13 @@ Client to server:
 }
 ```
 
+Client to server, from the Linux desktop MPRIS surface (widget play/pause, media keys, volume slider). The server fans the matching `set_muted`/`set_volume` control back to every paired client on the token:
+
+```json
+{ "event": "set_muted", "muted": true }
+{ "event": "set_volume", "volume_percent": 45 }
+```
+
 Server to client:
 
 ```json
@@ -261,6 +271,11 @@ Server to client:
 
 ```json
 { "event": "volume_down" }
+```
+
+```json
+{ "event": "set_muted", "muted": true }
+{ "event": "set_volume", "volume_percent": 45 }
 ```
 
 ```json
@@ -354,6 +369,10 @@ Platform notes:
 - Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
 - Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if pairing repeatedly fails, the CLI releases startup mute after the 10 failed pair attempts. Volume uses squared scaling.
+- On Linux, the pair client consumes `queue_update`, `now_playing_update`, and `radio_meta_update` snapshots and publishes the currently selected source through `org.mpris.MediaPlayer2`. YouTube includes title/channel/duration, watch URL, thumbnail, and wall-clock-derived initial position; Icecast and radio select the metadata entry matching `set_playback_source.station`. Missing metadata falls back to the source/station label.
+- MPRIS is controllable, but only over mute and volume. `Play`/`Pause`/`PlayPause`/`Stop` resolve through `TransportCommand` to an absolute mute target, and `SetVolume` maps the slider to a percent (raising it off zero also unmutes). `CanPlay`/`CanPause`/`CanControl` are therefore true, `CanSeek`/`CanGoNext`/`CanGoPrevious` false. Muted publishes as `Paused` rather than a zeroed volume, which is what a desktop widget draws a play button for. Reporting the read-only truth (`CanControl=false`) is spec-correct but makes the player invisible to **playerctl**, which skips any player whose `can-play` is false, and with it waybar/polybar, since those link `libplayerctl`.
+- Desktop writes are not applied locally. The MPRIS interface queues a `DesktopCommand`, the pair WS loop sends it as a `set_muted`/`set_volume` event, and the server fans the result back to every paired client (`PairControlMessage::SetMuted`/`SetVolume`), exactly like a TUI `m` keypress. That round trip is what lets a widget pause reach YouTube, which plays in the separate `late-webview` helper on its own pair WS, and it keeps CLI, helper, and sidebar convergent. It also means controls need a live pair socket, and the widget updates when the fan-out lands rather than instantly.
+- MPRIS startup and update errors fail open. Headless Linux, WSL, containers, and other environments without a usable session D-Bus continue SSH/audio normally without desktop publication.
 - The playback queue caps at roughly two seconds of output samples.
 - Analyzer cadence is about 15 Hz with a 1024-sample FFT and 8 log-spaced bands.
 
