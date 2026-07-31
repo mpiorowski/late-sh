@@ -1636,3 +1636,127 @@ fn regional_notables_carry_their_own_wildbound_finds() {
         }
     }
 }
+
+// ---- Genesys: a living, breathing world - villagers ----------------------
+
+#[test]
+fn genesys_adds_at_least_a_hundred_villagers() {
+    assert!(
+        VILLAGERS.len() >= 100,
+        "expected at least 100 villagers, got {}",
+        VILLAGERS.len()
+    );
+}
+
+#[test]
+fn every_public_safe_room_has_a_villager() {
+    // Private home interiors (each tier's own hearth/back/upper rooms) are
+    // excluded on purpose - a villager standing inside your own house would
+    // be strange. Every genuinely public safe space gets one.
+    const HOME_INTERIORS: &[RoomId] = &[
+        9010, 9020, 9021, 9030, 9031, 9032, 9040, 9041, 9042, 9043, 9050, 9051, 9052, 9053, 9054,
+    ];
+    let world = seed_world();
+    let missing: Vec<RoomId> = world
+        .rooms
+        .values()
+        .filter(|r| r.safe && !HOME_INTERIORS.contains(&r.id))
+        .filter(|r| !VILLAGERS.iter().any(|v| v.room == r.id))
+        .map(|r| r.id)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these public safe rooms have no villager: {missing:?}"
+    );
+}
+
+#[test]
+fn every_villager_has_real_content_and_a_real_home() {
+    let world = seed_world();
+    let mut seen_rooms = std::collections::HashSet::new();
+    for v in VILLAGERS {
+        assert_eq!(v.kind, FeatureKind::Villager);
+        assert!(!v.name.is_empty());
+        assert!(
+            v.desc.len() >= 20,
+            "{} has a suspiciously short line: {:?}",
+            v.name,
+            v.desc
+        );
+        assert!(
+            world.rooms.contains_key(&v.room),
+            "villager {} references missing room {}",
+            v.name,
+            v.room
+        );
+        // Multiple villagers may share a room only if genuinely distinct people
+        // (never the exact same name twice in the same room).
+        assert!(
+            seen_rooms.insert((v.room, v.name)),
+            "duplicate villager {} in room {}",
+            v.name,
+            v.room
+        );
+    }
+}
+
+// ---- Genesys: birds, mythical creatures, and adoptable strays -------------
+
+#[test]
+fn genesys_adds_real_birds_and_adoptable_creatures() {
+    let birds_with_perch = WILDLIFE.iter().filter(|c| c.perch_note.is_some()).count();
+    let mythical = WILDLIFE.iter().filter(|c| c.mythical).count();
+    let adoptable = WILDLIFE.iter().filter(|c| c.adoptable).count();
+    assert!(
+        birds_with_perch >= 15,
+        "expected at least 15 birds with a perched alternative, got {birds_with_perch}"
+    );
+    assert!(
+        mythical >= 10,
+        "expected at least 10 mythical creatures, got {mythical}"
+    );
+    assert!(
+        adoptable >= 15,
+        "expected at least 15 adoptable strays, got {adoptable}"
+    );
+    // Every adoptable stray must have a real home and a real name; every
+    // perch note must actually differ from the flying note (no copy-paste).
+    let world = seed_world();
+    for c in WILDLIFE {
+        assert!(
+            world.rooms.contains_key(&c.home),
+            "{} has no real home",
+            c.name
+        );
+        if let Some(perch) = c.perch_note {
+            assert_ne!(
+                perch, c.note,
+                "{} - perch note should differ from the flying note",
+                c.name
+            );
+        }
+    }
+}
+
+#[test]
+fn display_note_toggles_between_flying_and_perched() {
+    let bird = WILDLIFE
+        .iter()
+        .find(|c| c.perch_note.is_some())
+        .expect("at least one bird has a perch alternative");
+    let flying = (0..30u64).find(|&t| bird.display_note(t) == bird.note);
+    let perched = (0..30u64).find(|&t| bird.display_note(t) == bird.perch_note.unwrap());
+    assert!(flying.is_some(), "should read as flying at some moment");
+    assert!(perched.is_some(), "should read as perched at some moment");
+}
+
+#[test]
+fn non_flying_critters_never_show_a_perch_note() {
+    for c in WILDLIFE {
+        if c.perch_note.is_none() {
+            for t in 0..10u64 {
+                assert_eq!(c.display_note(t), c.note);
+            }
+        }
+    }
+}

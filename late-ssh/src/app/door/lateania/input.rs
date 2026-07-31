@@ -10,7 +10,13 @@
 //   - Mounts: G mounts/dismounts a rideable companion (one step then strides
 //     several rooms; the best beasts skip 5). Combat puts you back on foot.
 //   - Companion care: ~ feeds and tends your companion from anywhere, no
-//     stable needed - reviving one that went down mid-fight.
+//     stable needed - reviving one that went down mid-fight. If a wild
+//     adoptable creature shares the room and your own pet doesn't need
+//     tending, ~ feeds it instead (Genesys) - five days running wins it
+//     over as a stray, kept on top of any pet you already have.
+//   - Villagers (Genesys): press o to talk to one and hear their line back
+//     (sometimes plain colour, sometimes a real clue). Always announced up
+//     front in the room description, never hidden behind a menu.
 //   - Travel: r speaks the word of recall (free, warps to Embergate);
 //     : fixes a personal waypoint here; / warps to it from anywhere (a gold
 //     cost) - the far run back from the Frontier's deep levels doesn't have

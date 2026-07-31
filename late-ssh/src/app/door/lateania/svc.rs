@@ -162,6 +162,9 @@ const CORPSE_LINGER_SECS: u64 = 90;
 const RESURRECT_HP_PCT: i32 = 40;
 /// Gold to feed (heal, revive, and raise the loyalty of) a companion.
 const PET_FEED_COST: i64 = 20;
+/// Consecutive days a wild adoptable critter must be fed to win it over as a
+/// stray companion (Genesys). Free (no gold cost) - the price is patience.
+const STRAY_ADOPTION_DAYS: u32 = 5;
 /// Fraction of a blow that splashes onto a fighting companion when its owner is
 /// struck (the pet wades in and shares the punishment).
 const PET_WOUND_PCT: i32 = 30;
@@ -329,6 +332,10 @@ pub struct WildlifeView {
     pub kind: String,
     /// Perk label for boons (e.g. "emboldened"); empty otherwise.
     pub perk: String,
+    /// Out of legend rather than the mundane world (Genesys).
+    pub mythical: bool,
+    /// Can be won over as a stray companion by feeding it daily (Genesys).
+    pub adoptable: bool,
 }
 
 /// One harvestable resource node in the room, for the Resources list.
@@ -731,6 +738,9 @@ pub struct PlayerView {
     pub shop: Option<ShopView>,
     /// The player's live combat companion, if any.
     pub pet: Option<PetView>,
+    /// A won-over stray companion's name, if any (Genesys) - lives alongside
+    /// `pet` rather than replacing it.
+    pub stray: Option<String>,
     /// The companion vendor, present when standing at a capital Stable.
     pub stable: Option<StableView>,
     /// The Animal Taming panel, present when a tameable wild beast roams here.
@@ -833,6 +843,7 @@ impl PlayerView {
             inventory: Vec::new(),
             shop: None,
             pet: None,
+            stray: None,
             stable: None,
             taming: None,
             housing: None,
@@ -1808,6 +1819,13 @@ struct PlayerState {
     /// The combat companion bought from a Stable; travels with and fights for
     /// the player. At most one at a time.
     pet: Option<Pet>,
+    /// A stray companion won over by feeding it daily (Genesys) - lives on top
+    /// of the pet above rather than replacing it; a WILDLIFE index.
+    stray: Option<usize>,
+    /// In-progress courting of a wild adoptable critter: (WILDLIFE index,
+    /// consecutive days fed, the last day fed as a Unix day number). Reset if
+    /// a day is missed; promoted to `stray` once it reaches the streak needed.
+    stray_bond: Option<(usize, u32, u64)>,
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     appearance: [u8; appearance::N_FIELDS],
     /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
@@ -2514,6 +2532,8 @@ impl WorldState {
             quest_cooldowns: Vec::new(),
             archetype: None,
             pet: None,
+            stray: None,
+            stray_bond: None,
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
@@ -2758,6 +2778,16 @@ impl WorldState {
                 .as_deref()
                 .and_then(pet_species_by_key)
                 .map(|species| Pet::new(species, saved.pet_loyalty));
+            // Restore the stray companion and any in-progress courting (Genesys).
+            // A stale index (the world's critter roster shrank) is simply dropped.
+            p.stray = saved
+                .stray
+                .map(|i| i as usize)
+                .filter(|&i| i < super::world::WILDLIFE.len());
+            p.stray_bond = saved
+                .stray_bond
+                .map(|(i, streak, day)| (i as usize, streak, day))
+                .filter(|&(i, ..)| i < super::world::WILDLIFE.len());
             // Restore the appearance/bio choices (clamped to valid options).
             for i in 0..appearance::N_FIELDS {
                 let v = saved.appearance.get(i).copied().unwrap_or(0);
@@ -2827,6 +2857,8 @@ impl WorldState {
             archetype: p.archetype.map(|a| a.key.to_string()),
             pet: p.pet.map(|pet| pet.species.key.to_string()),
             pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
+            stray: p.stray.map(|i| i as u32),
+            stray_bond: p.stray_bond.map(|(i, streak, day)| (i as u32, streak, day)),
             owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
             house_furniture: self
                 .owned_plot(user_id)
@@ -4169,8 +4201,28 @@ impl WorldState {
         // Note lookable things without revealing them - you must look (o) to see
         // their description.
         let features = features_at(room_id);
-        if !features.is_empty() {
-            let names: Vec<&str> = features.iter().map(|f| f.name).collect();
+        let villagers: Vec<_> = features
+            .iter()
+            .filter(|f| f.kind == FeatureKind::Villager)
+            .collect();
+        let other: Vec<_> = features
+            .iter()
+            .filter(|f| f.kind != FeatureKind::Villager)
+            .collect();
+        // A villager is always announced up front, never hidden behind a menu -
+        // that's the whole point of standing there.
+        for v in &villagers {
+            self.log_to(
+                user_id,
+                LogKind::Room,
+                format!(
+                    "{} stands here, waiting for a question. Press o to ask.",
+                    v.name
+                ),
+            );
+        }
+        if !other.is_empty() {
+            let names: Vec<&str> = other.iter().map(|f| f.name).collect();
             self.log_to(
                 user_id,
                 LogKind::Room,
@@ -4194,6 +4246,20 @@ impl WorldState {
         let Some(feat) = features.get(idx) else {
             return;
         };
+        if feat.kind == FeatureKind::Villager {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!("You ask {} for a moment.", feat.name),
+            );
+            self.log_to(
+                user_id,
+                LogKind::Room,
+                format!("{} says: \"{}\"", feat.name, feat.desc),
+            );
+            self.dirty = true;
+            return;
+        }
         self.log_to(
             user_id,
             LogKind::Normal,
@@ -6651,12 +6717,101 @@ impl WorldState {
         self.dirty = true;
     }
 
-    /// Feed the player's companion: revive, heal to full, and add loyalty
-    /// (which raises its level). Costs `PET_FEED_COST` gold. Works anywhere -
-    /// a pet that goes down mid-fight deep in the Frontier used to be stuck
-    /// downed until a long walk back to a capital's Stable; a carried ration
-    /// is just as good as a stable-hand's care.
+    /// Feed the player's companion, or a wild adoptable critter sharing the
+    /// room if one is here and no stray has been won over yet (Genesys) -
+    /// one key, whichever feeding actually matters right now. An owned pet
+    /// that's hurt or downed always comes first: courting a stray is a
+    /// patient side project, never a reason to leave a real emergency
+    /// unfed.
     fn feed_pet(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let room = p.room;
+        let pet_needs_care = p
+            .pet
+            .as_ref()
+            .is_some_and(|pet| pet.downed || pet.hp < pet.max_hp());
+        if !pet_needs_care && p.stray.is_none() && critters_at(room).iter().any(|c| c.adoptable) {
+            self.feed_wild_critter(user_id, room);
+            return;
+        }
+        self.feed_owned_pet(user_id);
+    }
+
+    /// Court a wild adoptable critter (Genesys): feed it once a day, several
+    /// days running, and it takes to you as a stray companion - on top of
+    /// whatever pet you already keep. Miss a day and it grows wary again.
+    fn feed_wild_critter(&mut self, user_id: Uuid, room: RoomId) {
+        let Some(critter) = critters_at(room).into_iter().find(|c| c.adoptable) else {
+            return;
+        };
+        let Some(idx) = critter_index(critter) else {
+            return;
+        };
+        let name = critter.name;
+        let today = now_unix_secs() / 86_400;
+        let bond = self.players.get(&user_id).and_then(|p| p.stray_bond);
+        let same_critter = matches!(bond, Some((bi, ..)) if bi == idx);
+        let already_today = matches!(bond, Some((bi, _, ld)) if bi == idx && ld == today);
+
+        if already_today {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("You've already fed {name} today. Come back tomorrow."),
+            );
+            return;
+        }
+
+        let (new_bond, message, adopted) = match bond {
+            Some((_, streak, last_day)) if same_critter && last_day + 1 == today => {
+                let new_streak = streak + 1;
+                if new_streak >= STRAY_ADOPTION_DAYS {
+                    (
+                        None,
+                        format!(
+                            "{name} nuzzles up against you and follows without hesitation - after {STRAY_ADOPTION_DAYS} days of care, you've won it over. A new stray companion, alongside anything else you keep."
+                        ),
+                        true,
+                    )
+                } else {
+                    (
+                        Some((idx, new_streak, today)),
+                        format!(
+                            "You feed {name} again. It trusts you a little more. ({new_streak}/{STRAY_ADOPTION_DAYS} days)"
+                        ),
+                        false,
+                    )
+                }
+            }
+            Some(_) if same_critter => (
+                Some((idx, 1, today)),
+                format!(
+                    "{name} has grown wary again - you'll need to start over. (1/{STRAY_ADOPTION_DAYS} days)"
+                ),
+                false,
+            ),
+            _ => (
+                Some((idx, 1, today)),
+                format!(
+                    "You offer {name} something to eat. It watches you carefully, but doesn't run. (1/{STRAY_ADOPTION_DAYS} days)"
+                ),
+                false,
+            ),
+        };
+
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.stray_bond = new_bond;
+            if adopted {
+                p.stray = Some(idx);
+            }
+        }
+        self.log_to(user_id, LogKind::Loot, message);
+        self.dirty = true;
+    }
+
+    fn feed_owned_pet(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
         };
@@ -7220,6 +7375,9 @@ impl WorldState {
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
             let now = Instant::now();
+            // Birds with a perch alternative toggle every few real minutes, so
+            // the same creature reads as aloft one visit and grounded the next.
+            let moment_bucket = now_unix_secs() / 300;
             let wildlife: Vec<WildlifeView> = critters_at(player.room)
                 .into_iter()
                 .filter(|c| match c.kind {
@@ -7233,7 +7391,7 @@ impl WorldState {
                 })
                 .map(|c| WildlifeView {
                     name: c.name.to_string(),
-                    note: c.note.to_string(),
+                    note: c.display_note(moment_bucket).to_string(),
                     kind: match c.kind {
                         CritterKind::Game => "huntable".to_string(),
                         CritterKind::Boon(_) => "boon".to_string(),
@@ -7243,6 +7401,8 @@ impl WorldState {
                         CritterKind::Boon(p) => p.label().to_string(),
                         _ => String::new(),
                     },
+                    mythical: c.mythical,
+                    adoptable: c.adoptable,
                 })
                 .collect();
             // Harvestable nodes in the room, each flagged with whether the player
@@ -7475,6 +7635,10 @@ impl WorldState {
                     .map(|s| (s.name.to_string(), s.level))
                     .collect(),
             });
+            let stray = player
+                .stray
+                .and_then(|idx| super::world::WILDLIFE.get(idx))
+                .map(|c| c.name.to_string());
             let stable = self.room_has_stable(player.room).then(|| StableView {
                 feed_cost: PET_FEED_COST,
                 entries: super::pets::PET_SPECIES
@@ -7707,6 +7871,7 @@ impl WorldState {
                     inventory,
                     shop,
                     pet,
+                    stray,
                     stable,
                     taming,
                     housing,

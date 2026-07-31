@@ -2327,6 +2327,36 @@ fn a_capital_fountain_restores_vitals_and_revives() {
 }
 
 #[test]
+fn talking_to_a_villager_speaks_their_line_and_the_room_announces_them() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate's Town Square
+    let idx = super::super::world::features_at(1)
+        .iter()
+        .position(|f| f.kind == FeatureKind::Villager)
+        .expect("the town square has a villager");
+    let name = super::super::world::features_at(1)[idx].name;
+
+    s.interact(uid(1), idx);
+    let log = &s.players[&uid(1)].log;
+    assert!(
+        log.iter()
+            .any(|l| l.text.contains(name) && l.text.contains("says:")),
+        "talking to a villager should speak their line"
+    );
+
+    // The room description announces them up front, not hidden in a menu.
+    s.describe_room(uid(1));
+    let log = &s.players[&uid(1)].log;
+    assert!(
+        log.iter()
+            .any(|l| l.text.contains(name) && l.text.contains("waiting for a question")),
+        "a villager should always be announced, waiting for a question"
+    );
+}
+
+#[test]
 fn ability_scores_change_derived_stats() {
     let mut s = world();
     s.join(uid(1));
@@ -2654,5 +2684,76 @@ fn you_cannot_ride_the_unrideable_and_combat_grounds_you() {
     assert!(
         !s.players[&uid(1)].mounted,
         "combat slides you out of the saddle"
+    );
+}
+
+#[test]
+fn feeding_a_stray_daily_wins_it_over_as_a_companion() {
+    // Genesys: five consecutive days of feeding a wild adoptable critter wins
+    // it over as a stray, alongside any pet already kept - never replacing it.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1; // Embergate's Town Square, home to "a scruffy stray dog"
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        p.pet = Some(super::super::pets::Pet::new(species, 0)); // a healthy owned pet
+        p.gold = 1_000;
+    }
+
+    s.feed_pet(uid(1));
+    assert!(
+        s.players[&uid(1)].stray_bond.is_some(),
+        "the first feeding starts a bond"
+    );
+    assert!(
+        s.players[&uid(1)].stray.is_none(),
+        "not won over on day one"
+    );
+
+    // Roll four more days by rewinding "last fed" a day at a time.
+    for _ in 0..4 {
+        let (idx, streak, day) = s.players[&uid(1)].stray_bond.unwrap();
+        s.players.get_mut(&uid(1)).unwrap().stray_bond = Some((idx, streak, day - 1));
+        s.feed_pet(uid(1));
+    }
+
+    assert!(
+        s.players[&uid(1)].stray.is_some(),
+        "five consecutive days should win the stray over"
+    );
+    assert!(
+        s.players[&uid(1)].stray_bond.is_none(),
+        "the bond clears once adopted"
+    );
+    assert!(
+        s.players[&uid(1)].pet.is_some(),
+        "the stray joins on top of the pet the player already had, not instead of it"
+    );
+}
+
+#[test]
+fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+
+    s.feed_pet(uid(1));
+    let (idx, streak, day) = s.players[&uid(1)].stray_bond.unwrap();
+    assert_eq!(streak, 1);
+
+    // Same-day re-feed: no change.
+    s.feed_pet(uid(1));
+    assert_eq!(s.players[&uid(1)].stray_bond, Some((idx, 1, day)));
+
+    // Skip two days instead of one: the streak resets to 1, not 2.
+    s.players.get_mut(&uid(1)).unwrap().stray_bond = Some((idx, streak, day - 2));
+    s.feed_pet(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].stray_bond.map(|(_, s, _)| s),
+        Some(1),
+        "missing a day should reset the streak, not continue it"
     );
 }

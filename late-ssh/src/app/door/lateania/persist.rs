@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 16;
+const SCHEMA_VERSION: u32 = 17;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -43,6 +43,11 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    /// A won-over stray companion (Genesys): the WILDLIFE index.
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    pub stray_bond: Option<(u32, u32, u64)>,
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
@@ -122,6 +127,14 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// A won-over stray companion (Genesys), by WILDLIFE index; None for
+    /// pre-Genesys saves or characters who haven't won one over yet.
+    #[serde(default)]
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    #[serde(default)]
+    pub stray_bond: Option<(u32, u32, u64)>,
     /// The housing plot (tier index) this character holds the deed to, if any.
     #[serde(default)]
     pub owned_plot: Option<u32>,
@@ -227,6 +240,8 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            stray: init.stray,
+            stray_bond: init.stray_bond,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,

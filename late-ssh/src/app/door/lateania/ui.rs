@@ -1753,18 +1753,27 @@ fn room_panel(
     if !view.wildlife.is_empty() {
         lines.push(section("Wildlife"));
         for w in &view.wildlife {
-            let (marker, color) = match w.kind.as_str() {
-                "boon" => ("✦ ", theme::BADGE_GOLD()),
-                "huntable" => ("» ", theme::AMBER()),
-                _ => ("~ ", theme::TEXT_DIM()),
+            // Mythical creatures (Genesys) always stand out, whatever else
+            // they are - a boon or a huntable can still be a wonder to look at.
+            let (marker, color) = if w.mythical {
+                ("✵ ", theme::BOT())
+            } else {
+                match w.kind.as_str() {
+                    "boon" => ("✦ ", theme::BADGE_GOLD()),
+                    "huntable" => ("» ", theme::AMBER()),
+                    _ => ("~ ", theme::TEXT_DIM()),
+                }
             };
-            let detail = if !w.perk.is_empty() {
+            let mut detail = if !w.perk.is_empty() {
                 format!(", a boon ({})", w.perk)
             } else if w.kind == "huntable" {
                 ", game (attack to hunt)".to_string()
             } else {
                 String::new()
             };
+            if w.adoptable {
+                detail.push_str(", feed it daily (~) and it may take to you as a stray");
+            }
             lines.extend(side_text_wrap(
                 &format!("{marker}{}{detail}", w.name),
                 color,
@@ -3975,6 +3984,9 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
         "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
+        // Villagers (Genesys) get their own colour so they stand out at a
+        // glance from every other lookable thing in the room.
+        "villager" => theme::BOT(),
         _ if is_craft_station(kind) => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
@@ -3992,7 +4004,10 @@ fn is_craft_station(kind: &str) -> bool {
 /// Whether a feature kind is something you actively use/trade at (vs. just look
 /// at). Drives a brighter, bolder treatment so actionable things pop.
 fn is_actionable_feature(kind: &str) -> bool {
-    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk") || is_craft_station(kind)
+    matches!(
+        kind,
+        "fountain" | "bank" | "board" | "stable" | "clerk" | "villager"
+    ) || is_craft_station(kind)
 }
 
 #[cfg(test)]
