@@ -26,6 +26,8 @@ services:
         condition: service_started
       service-dopewars:
         condition: service_started
+      service-codekeep:
+        condition: service_started
       service-dcss:
         condition: service_started
       service-usurper:
@@ -94,6 +96,22 @@ services:
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
       - cargo-target:/app/target
+
+  service-codekeep:
+    build:
+      context: .
+      target: dev-codekeep
+    container_name: ${INSTANCE}-codekeep
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+      - codekeep-data:/var/lib/late-codekeep
 
   service-dcss:
     build:
@@ -197,3 +215,4 @@ volumes:
   cargo-git:
   cargo-target:
   cargo-target-amd64:
+  codekeep-data:

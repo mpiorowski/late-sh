@@ -10,6 +10,21 @@ locals {
   # (service-ssh's LATE_DOPEWARS_ENABLED); the late-dopewars host pod is always
   # deployed. Host/port/PVC locals live in dopewars.tf.
   dopewars_enabled = trimspace(var.DOPEWARS_ENABLED) != "" ? trimspace(var.DOPEWARS_ENABLED) : "1"
+  codekeep_enabled = trimspace(var.CODEKEEP_ENABLED) != "" ? trimspace(var.CODEKEEP_ENABLED) : "1"
+
+  # One resource spec for every door-game host pod (nethack, dcss, brogue,
+  # dopewars, usurper, codekeep). They all have the same shape: an idle SSH
+  # listener that forks one short-lived child per player.
+  #
+  # Requests are what actually reserve node capacity, and measured idle draw is
+  # 1-2m CPU / 1-11Mi per host, so they stay small. Limits only cap bursts and
+  # cost nothing until used, so they stay roomy enough for the heaviest door:
+  # codekeep runs a Bun process per player (tens of MiB each) where the rest run
+  # C binaries. Raise the limits here, never per door.
+  door_cpu_request    = "50m"
+  door_memory_request = "64Mi"
+  door_cpu_limit      = "1000m"
+  door_memory_limit   = "1Gi"
 
   voice_enabled = trimspace(var.VOICE_ENABLED) != "" ? trimspace(var.VOICE_ENABLED) : "1"
   voice_room    = trimspace(var.VOICE_ROOM) != "" ? trimspace(var.VOICE_ROOM) : "late-voice"

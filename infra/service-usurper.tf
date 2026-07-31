@@ -91,12 +91,12 @@ resource "kubernetes_deployment_v1" "late_usurper" {
 
           resources {
             limits = {
-              cpu    = "1000m"
-              memory = "512Mi"
+              cpu    = local.door_cpu_limit
+              memory = local.door_memory_limit
             }
             requests = {
-              cpu    = "100m"
-              memory = "128Mi"
+              cpu    = local.door_cpu_request
+              memory = local.door_memory_request
             }
           }
 

@@ -258,6 +258,30 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # CodeKeep runs in the isolated late-codekeep host. The shared secret
+          # authorizes late-ssh; the SSH username is the stable account save key.
+          env {
+            name  = "LATE_CODEKEEP_ENABLED"
+            value = local.codekeep_enabled
+          }
+          env {
+            name  = "LATE_CODEKEEP_HOST"
+            value = local.codekeep_service_host
+          }
+          env {
+            name  = "LATE_CODEKEEP_PORT"
+            value = local.codekeep_port
+          }
+          env {
+            name = "LATE_CODEKEEP_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.codekeep_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # DCSS is served by the late-dcss host pod (service-dcss.tf);
           # late-ssh connects to it over SSH. HOST/PORT target that Service and
           # SECRET (shared with the host) authorizes the connection.

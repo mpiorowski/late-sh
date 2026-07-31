@@ -106,12 +106,12 @@ resource "kubernetes_deployment_v1" "late_nethack" {
 
           resources {
             limits = {
-              cpu    = "2000m"
-              memory = "1Gi"
+              cpu    = local.door_cpu_limit
+              memory = local.door_memory_limit
             }
             requests = {
-              cpu    = "250m"
-              memory = "256Mi"
+              cpu    = local.door_cpu_request
+              memory = local.door_memory_request
             }
           }
 

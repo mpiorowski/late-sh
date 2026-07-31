@@ -23,7 +23,9 @@ fn selection_clamps_at_both_ends() {
     s.select_next();
     assert_eq!(s.selected_game(), HubGame::Dopewars);
     s.select_next();
-    assert_eq!(s.selected_game(), HubGame::Dopewars);
+    assert_eq!(s.selected_game(), HubGame::Codekeep);
+    s.select_next();
+    assert_eq!(s.selected_game(), HubGame::Codekeep);
 }
 
 #[test]
@@ -48,7 +50,8 @@ fn all_games_are_listed_in_order() {
             "Green Dragon",
             "A Dark Room",
             "Rebels",
-            "dopewars"
+            "dopewars",
+            "CodeKeep"
         ],
     );
 }

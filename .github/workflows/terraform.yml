@@ -15,6 +15,9 @@ on:
       dopewars_image_tag:
         required: true
         type: string
+      codekeep_image_tag:
+        required: true
+        type: string
       dcss_image_tag:
         required: true
         type: string
@@ -46,6 +49,7 @@ jobs:
       TF_VAR_WEB_IMAGE_TAG: ${{ inputs.web_image_tag }}
       TF_VAR_NETHACK_IMAGE_TAG: ${{ inputs.nethack_image_tag }}
       TF_VAR_DOPEWARS_IMAGE_TAG: ${{ inputs.dopewars_image_tag }}
+      TF_VAR_CODEKEEP_IMAGE_TAG: ${{ inputs.codekeep_image_tag }}
       TF_VAR_DCSS_IMAGE_TAG: ${{ inputs.dcss_image_tag }}
       TF_VAR_USURPER_IMAGE_TAG: ${{ inputs.usurper_image_tag }}
       TF_VAR_BROGUE_IMAGE_TAG: ${{ inputs.brogue_image_tag }}
@@ -69,6 +73,7 @@ jobs:
       TF_VAR_REBELS_PORT: ${{ vars.REBELS_PORT }}
       TF_VAR_NETHACK_ENABLED: ${{ vars.NETHACK_ENABLED }}
       TF_VAR_DOPEWARS_ENABLED: ${{ vars.DOPEWARS_ENABLED }}
+      TF_VAR_CODEKEEP_ENABLED: ${{ vars.CODEKEEP_ENABLED }}
       TF_VAR_DCSS_ENABLED: ${{ vars.DCSS_ENABLED }}
       TF_VAR_USURPER_ENABLED: ${{ vars.USURPER_ENABLED }}
       TF_VAR_BROGUE_ENABLED: ${{ vars.BROGUE_ENABLED }}

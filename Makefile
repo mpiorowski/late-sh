@@ -77,6 +77,11 @@ LATE_DOPEWARS_HOST ?= service-dopewars                      # late-dopewars host
 LATE_DOPEWARS_PORT ?= 2324                                  # late-dopewars SSH port
 LATE_DOPEWARS_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-dopewars
 LATE_DOPEWARS_SCORE_FILE ?= /tmp/late-dopewars.sco          # Shared high-score file on the dopewars host (a PVC path in prod)
+LATE_CODEKEEP_ENABLED ?= 1                                  # Enable CodeKeep: The Pale (1=on, 0=off)
+LATE_CODEKEEP_HOST ?= service-codekeep                      # late-codekeep host (compose service name; 127.0.0.1 for a bare run)
+LATE_CODEKEEP_PORT ?= 2328                                  # late-codekeep SSH port
+LATE_CODEKEEP_SECRET ?= $(shell openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n') # Shared secret authorizing late-ssh -> late-codekeep
+LATE_CODEKEEP_DATA_DIR ?= /var/lib/late-codekeep             # Per-account CodeKeep HOME roots
 LATE_DCSS_ENABLED ?= 1                                      # Enable the DCSS door game (1=on, 0=off)
 LATE_DCSS_HOST ?= service-dcss                              # late-dcss host (compose service name; 127.0.0.1 for a bare run)
 LATE_DCSS_PORT ?= 2325                                      # late-dcss SSH port
@@ -178,6 +183,11 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_DOPEWARS_PORT=$(LATE_DOPEWARS_PORT)" >> .env
 	@echo "LATE_DOPEWARS_SECRET=$(LATE_DOPEWARS_SECRET)" >> .env
 	@echo "LATE_DOPEWARS_SCORE_FILE=$(LATE_DOPEWARS_SCORE_FILE)" >> .env
+	@echo "LATE_CODEKEEP_ENABLED=$(LATE_CODEKEEP_ENABLED)" >> .env
+	@echo "LATE_CODEKEEP_HOST=$(LATE_CODEKEEP_HOST)" >> .env
+	@echo "LATE_CODEKEEP_PORT=$(LATE_CODEKEEP_PORT)" >> .env
+	@echo "LATE_CODEKEEP_SECRET=$(LATE_CODEKEEP_SECRET)" >> .env
+	@echo "LATE_CODEKEEP_DATA_DIR=$(LATE_CODEKEEP_DATA_DIR)" >> .env
 	@echo "LATE_DCSS_ENABLED=$(LATE_DCSS_ENABLED)" >> .env
 	@echo "LATE_DCSS_HOST=$(LATE_DCSS_HOST)" >> .env
 	@echo "LATE_DCSS_PORT=$(LATE_DCSS_PORT)" >> .env

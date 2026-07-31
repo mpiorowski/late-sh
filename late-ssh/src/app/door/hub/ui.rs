@@ -19,6 +19,7 @@ pub struct HubView {
     pub brogue_enabled: bool,
     pub usurper_enabled: bool,
     pub dopewars_enabled: bool,
+    pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
 }
@@ -90,16 +91,25 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
         HubGame::Darkroom => {
             crate::app::door::darkroom::screen::draw_landing(frame, layout[3], view.delete_confirm);
         }
+        HubGame::Codekeep => {
+            crate::app::door::codekeep::render::draw_landing(
+                frame,
+                layout[3],
+                view.codekeep_enabled,
+            );
+        }
     }
 
     draw_footer(frame, layout[4]);
 }
 
 fn draw_selector_row(frame: &mut Frame, area: Rect, selected: usize) {
-    let mut spans = vec![Span::raw("  ")];
+    // One-cell lead/gaps keep all ten cards visible at CodeKeep's 108-column
+    // minimum viewport (two-cell gaps would clip the final card).
+    let mut spans = vec![Span::raw(" ")];
     for (i, game) in HubGame::ALL.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw("  "));
+            spans.push(Span::raw(" "));
         }
         let style = if i == selected {
             Style::default()
@@ -132,16 +142,16 @@ fn full_rule(width: u16) -> Paragraph<'static> {
 }
 
 /// Which selector chip (if any) sits at terminal cell `(x, y)`. Mirrors the
-/// layout in `draw_selector_row` (2-space lead, then `" {label} "` chips with a
-/// 2-space gap), used for click-to-select.
+/// layout in `draw_selector_row` (1-space lead, then `" {label} "` chips with a
+/// 1-space gap), used for click-to-select.
 pub fn selector_hit_test(area: Rect, x: u16, y: u16) -> Option<usize> {
     if y != area.y {
         return None;
     }
-    let mut col = area.x + 2;
+    let mut col = area.x + 1;
     for (i, game) in HubGame::ALL.iter().enumerate() {
         if i > 0 {
-            col += 2;
+            col += 1;
         }
         let width = game.label().len() as u16 + 2; // surrounding spaces
         if x >= col && x < col + width {

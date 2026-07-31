@@ -97,6 +97,11 @@ pub struct Config {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// CodeKeep: The Pale door game (host `late-codekeep`).
+    pub codekeep_enabled: bool,
+    pub codekeep_host: String,
+    pub codekeep_port: u16,
+    pub codekeep_secret: String,
 }
 
 fn required(key: &str) -> anyhow::Result<String> {
@@ -259,6 +264,13 @@ impl Config {
             has_secret = !self.dopewars_secret.is_empty(),
             "dopewars: dopewars door-game host (late-dopewars) target and status"
         );
+        tracing::info!(
+            enabled = self.codekeep_enabled,
+            host = %self.codekeep_host,
+            port = self.codekeep_port,
+            has_secret = !self.codekeep_secret.is_empty(),
+            "codekeep: CodeKeep door-game host (late-codekeep) target and status"
+        );
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
@@ -336,6 +348,14 @@ impl Config {
                 .context("LATE_DOPEWARS_SECRET must be set when LATE_DOPEWARS_ENABLED is true")?
         } else {
             optional("LATE_DOPEWARS_SECRET").unwrap_or_default()
+        };
+
+        let codekeep_enabled = optional_bool("LATE_CODEKEEP_ENABLED", false)?;
+        let codekeep_secret = if codekeep_enabled {
+            optional("LATE_CODEKEEP_SECRET")
+                .context("LATE_CODEKEEP_SECRET must be set when LATE_CODEKEEP_ENABLED is true")?
+        } else {
+            optional("LATE_CODEKEEP_SECRET").unwrap_or_default()
         };
 
         Ok(Self {
@@ -445,6 +465,11 @@ impl Config {
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
             dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
             dopewars_secret,
+            codekeep_enabled,
+            codekeep_host: optional("LATE_CODEKEEP_HOST")
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
+            codekeep_port: optional_parse("LATE_CODEKEEP_PORT", 2328)?,
+            codekeep_secret,
         })
     }
 }

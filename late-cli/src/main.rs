@@ -26,7 +26,8 @@ use identity::ensure_client_identity_at;
 use raw_mode::{RawModeGuard, enable_ansi_output_if_tty};
 use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
 use ws::{
-    PairClientInfo, PlaybackState, WebviewPlaybackController, client_platform_label, run_pair_ws,
+    PairClientInfo, PairRuntime, PlaybackState, WebviewPlaybackController, client_platform_label,
+    run_pair_ws,
 };
 
 #[tokio::main]
@@ -319,10 +320,12 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             &token,
             &client,
             &playback,
-            &mut webview,
-            &mut voice,
-            &mut desktop_media,
-            &mut desktop_commands,
+            PairRuntime {
+                webview: &mut webview,
+                voice: &mut voice,
+                desktop_media: &mut desktop_media,
+                desktop_commands: &mut desktop_commands,
+            },
         )
         .await
         {
