@@ -82,7 +82,6 @@ fn paired_client_snapshot_tracks_latest_state() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: true,
             volume_percent: 35,
-            ..Default::default()
         },
     );
 
@@ -114,7 +113,6 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             capabilities: vec!["voice".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -137,7 +135,6 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -174,7 +171,6 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: true,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), None);
@@ -193,7 +189,6 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: true,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), Some(true));
@@ -208,7 +203,6 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), Some(false));
@@ -237,7 +231,6 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -260,7 +253,6 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -294,7 +286,6 @@ fn paired_client_request_clipboard_image_false_when_only_webview() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -326,7 +317,6 @@ fn paired_client_clipboard_request_consumed_once() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -386,7 +376,6 @@ fn state_update_never_sends_pair_control_message() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert!(cli_rx.try_recv().is_err());
@@ -411,7 +400,6 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
@@ -433,7 +421,6 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 

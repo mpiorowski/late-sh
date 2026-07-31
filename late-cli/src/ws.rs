@@ -635,15 +635,21 @@ impl Drop for WebviewPlaybackController {
     }
 }
 
+/// Mutable client-side runtime driven by the pair websocket loop: the webview
+/// helper, voice state, and the desktop media surface with its command feed.
+pub(super) struct PairRuntime<'a> {
+    pub(super) webview: &'a mut WebviewPlaybackController,
+    pub(super) voice: &'a mut VoiceRuntimeState,
+    pub(super) desktop_media: &'a mut DesktopMedia,
+    pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
+}
+
 pub(super) async fn run_pair_ws(
     api_base_url: &str,
     token: &str,
     client: &PairClientInfo,
     playback: &PlaybackState<'_>,
-    webview: &mut WebviewPlaybackController,
-    voice: &mut VoiceRuntimeState,
-    desktop_media: &mut DesktopMedia,
-    desktop_commands: &mut tokio::sync::mpsc::Receiver<DesktopCommand>,
+    runtime: PairRuntime<'_>,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -656,24 +662,24 @@ pub(super) async fn run_pair_ws(
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     let mut voice_speaking_poll = interval(Duration::from_millis(250));
     send_client_state(&mut ws, client, playback).await?;
-    if voice.joined {
-        send_voice_state(&mut ws, voice).await?;
+    if runtime.voice.joined {
+        send_voice_state(&mut ws, runtime.voice).await?;
     }
 
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                if voice.joined && voice.media_disconnected() {
+                if runtime.voice.joined && runtime.voice.media_disconnected() {
                     warn!("voice media disconnected; leaving voice state");
-                    voice.leave().await;
-                    send_voice_state(&mut ws, voice).await?;
+                    runtime.voice.leave().await;
+                    send_voice_state(&mut ws, runtime.voice).await?;
                 }
                 let payload = json!({
                     "event": "heartbeat",
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
-                webview.maintain_helper(
+                runtime.webview.maintain_helper(
                     playback.muted.load(Ordering::Relaxed),
                     playback.volume_percent.load(Ordering::Relaxed),
                 );
@@ -683,15 +689,15 @@ pub(super) async fn run_pair_ws(
             // server fans the resulting set_muted/set_volume back to every
             // paired client, this CLI and the webview helper alike, which is
             // what lets a widget press mute YouTube too.
-            Some(command) = desktop_commands.recv() => {
+            Some(command) = runtime.desktop_commands.recv() => {
                 send_desktop_command(&mut ws, command).await?;
             }
-            _ = voice_state_heartbeat.tick(), if voice.joined => {
-                send_voice_state(&mut ws, voice).await?;
+            _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
+                send_voice_state(&mut ws, runtime.voice).await?;
             }
-            _ = voice_speaking_poll.tick(), if voice.joined => {
-                if voice.sync_speaking_from_media() {
-                    send_voice_state(&mut ws, voice).await?;
+            _ = voice_speaking_poll.tick(), if runtime.voice.joined => {
+                if runtime.voice.sync_speaking_from_media() {
+                    send_voice_state(&mut ws, runtime.voice).await?;
                 }
             }
             maybe_msg = ws.next() => {
@@ -705,9 +711,9 @@ pub(super) async fn run_pair_ws(
                                 &text,
                                 &mut ws,
                                 playback,
-                                webview,
-                                voice,
-                                desktop_media,
+                                runtime.webview,
+                                runtime.voice,
+                                runtime.desktop_media,
                             )
                             .await?;
                         if should_send_state {
