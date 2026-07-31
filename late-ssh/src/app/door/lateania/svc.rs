@@ -152,8 +152,6 @@ impl Weather {
         }
     }
 }
-/// A player who sends no command for this long is dropped from the world.
-const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 /// How long a fallen player's spirit lingers by their corpse, waiting for a
 /// resurrection, before it is drawn back to the temple automatically. The
 /// player may also release early. (Was an 8s rest before the dead state.)
@@ -1004,7 +1002,6 @@ impl LateaniaService {
                 state.clear_frontier_descent_pending(user_id);
             }
             f(&mut state);
-            state.touch(user_id);
             svc.publish(&state);
         });
     }
@@ -1076,7 +1073,6 @@ impl LateaniaService {
                 // absorbs quick leave/rejoin ping-pong.
                 svc.activity.game_started_task(user_id, ActivityGame::Mud);
             }
-            state.touch(user_id);
             svc.publish(&state);
         });
     }
@@ -1598,14 +1594,6 @@ impl LateaniaService {
         });
     }
 
-    pub fn touch_activity_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            let mut state = svc.state.lock().await;
-            state.touch(user_id);
-        });
-    }
-
     fn start_tick_loop(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -1614,18 +1602,11 @@ impl LateaniaService {
                 ticker.tick().await;
                 let mut state = svc.state.lock().await;
                 let tick = state.tick();
-                let idle_saves = tick.idle_saves;
                 if state.dirty {
                     svc.publish(&state);
                     state.dirty = false;
                 }
                 drop(state);
-                for (user_id, saved) in idle_saves {
-                    svc.clear_sessions(user_id);
-                    if let Some(save) = svc.prepare_persist(user_id, saved) {
-                        svc.persist(save).await;
-                    }
-                }
                 for outcome in tick.kills {
                     svc.publish_kill_outcome(outcome);
                 }
@@ -1742,7 +1723,6 @@ struct KillOutcome {
 #[derive(Default)]
 struct TickOutput {
     kills: Vec<KillOutcome>,
-    idle_saves: Vec<(Uuid, SavedCharacter)>,
 }
 
 struct PendingSave {
@@ -1861,7 +1841,6 @@ struct PlayerState {
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
-    last_activity: Instant,
     /// While dead, this is the deadline at which the corpse is auto-released to
     /// the temple if no one resurrects the player and they don't release first.
     respawn_at: Option<Instant>,
@@ -2555,7 +2534,6 @@ impl WorldState {
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
-            last_activity: Instant::now(),
             respawn_at: None,
             dead: false,
             log: Vec::new(),
@@ -3055,12 +3033,6 @@ impl WorldState {
 
         self.dirty = true;
         self.world_dirty = false;
-    }
-
-    fn touch(&mut self, user_id: Uuid) {
-        if let Some(player) = self.players.get_mut(&user_id) {
-            player.last_activity = Instant::now();
-        }
     }
 
     fn is_classed(&self, user_id: Uuid) -> bool {
@@ -6078,30 +6050,17 @@ impl WorldState {
             self.resolve_mob_behavior(user_id, mob_id);
         }
 
-        // Drop idle players.
-        let idle: Vec<Uuid> = self
-            .players
-            .iter()
-            .filter(|(_, p)| {
-                p.last_activity.elapsed() >= Duration::from_secs(PLAYER_IDLE_TIMEOUT_SECS)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let mut idle_saves = Vec::new();
-        for user_id in idle {
-            if let Some(saved) = self.export_saved(user_id) {
-                idle_saves.push((user_id, saved));
-            }
-            self.players.remove(&user_id);
-            self.dirty = true;
-        }
-
+        // No idle timeout: a player stays put in Lateania for as long as their
+        // session is actually open, however long they go without touching a
+        // key. Real disconnects/leaving the door are already handled by
+        // `leave_task`, which is the genuine cleanup path - an inactivity
+        // clock on top of that only ever punished someone reading a long room
+        // description or stepping away for a call.
         if self.dirty {
             self.generation = self.generation.wrapping_add(1);
         }
         TickOutput {
             kills: std::mem::take(&mut self.pending_kills),
-            idle_saves,
         }
     }
 

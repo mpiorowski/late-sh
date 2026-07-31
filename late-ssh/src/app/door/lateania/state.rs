@@ -187,12 +187,6 @@ impl State {
         changed
     }
 
-    pub fn touch_activity(&mut self) {
-        if self.ensure_player_present() {
-            self.svc.touch_activity_task(self.user_id);
-        }
-    }
-
     pub fn ensure_player_present(&mut self) -> bool {
         if !self.joined {
             return false;

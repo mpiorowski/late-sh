@@ -2908,3 +2908,19 @@ fn a_word_that_merely_starts_with_z_or_w_is_not_mistaken_for_a_scope_marker() {
         "a merely-similar word should never widen the scope past the room"
     );
 }
+
+#[test]
+fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
+    // There used to be a 10-minute inactivity kick. It's gone: only an
+    // explicit leave (closing the session) removes a player now.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    for _ in 0..50 {
+        s.tick();
+    }
+    assert!(
+        s.players.contains_key(&uid(1)),
+        "no amount of ticking without action should ever drop a present player"
+    );
+}
