@@ -1687,15 +1687,9 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Codekeep {
-        // Running bytes are intercepted before parsed input. This fallback only
-        // covers a launcher state reached after a failed/closed connection.
-        if let ParsedInput::Byte(b'\r' | b'\n') = event {
-            app.enter_codekeep();
-            if let Some(state) = app.codekeep_state.as_mut() {
-                state.connect();
-            }
-            return true;
-        }
+        // Running bytes are intercepted before parsed input, and a non-running
+        // CodeKeep screen returns to the Games hub on the same tick (no exit
+        // grace), so there is no reachable launcher state to handle here.
         return false;
     }
 
@@ -4139,8 +4133,8 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // raw in App::handle_input before reaching this path.
         }
         Screen::Codekeep => {
-            // Launcher Enter is handled in handle_dedicated_screen_input;
-            // Running-mode bytes are forwarded raw in App::handle_input.
+            // Running-mode bytes are forwarded raw in App::handle_input; a
+            // non-running screen bounces back to Games on the same tick.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

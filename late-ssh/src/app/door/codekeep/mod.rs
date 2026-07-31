@@ -1,4 +1,4 @@
-// CodeKeep: The Pale — a terminal-native deck-building roguelike served by
+// CodeKeep: The Pale, a terminal-native deck-building roguelike served by
 // late.sh's dedicated `late-codekeep` SSH host. This module is the client: it
 // streams the remote PTY through a vt100 parser and embeds it in the Games hub.
 //
