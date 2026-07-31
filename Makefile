@@ -15,6 +15,7 @@ LATE_FORCE_ADMIN ?= 1
 LATE_SSH_PORT ?= 2222                                       # SSH server listen port
 LATE_API_PORT ?= 4001                                       # HTTP API listen port
 LATE_SSH_OPEN ?= 1                                          # Allow connections without auth (1=open, 0=require key)
+LATE_SSH_LATEANIA_ONLY ?= 0                                  # Skip the lobby: every session lands straight in Lateania (see LATEANIA_STANDALONE.md)
 LATE_SSH_KEY_PATH ?= /app/server_key                        # Path to Ed25519 host key inside container
 LATE_MAX_CONNS_GLOBAL ?= 10000                              # Max total concurrent SSH connections
 LATE_MAX_CONNS_PER_IP ?= 3                                  # Max concurrent SSH connections from a single IP
@@ -131,6 +132,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_SSH_PORT=$(LATE_SSH_PORT)" >> .env
 	@echo "LATE_API_PORT=$(LATE_API_PORT)" >> .env
 	@echo "LATE_SSH_OPEN=$(LATE_SSH_OPEN)" >> .env
+	@echo "LATE_SSH_LATEANIA_ONLY=$(LATE_SSH_LATEANIA_ONLY)" >> .env
 	@echo "LATE_SSH_KEY_PATH=$(LATE_SSH_KEY_PATH)" >> .env
 	@echo "LATE_MAX_CONNS_GLOBAL=$(LATE_MAX_CONNS_GLOBAL)" >> .env
 	@echo "LATE_MAX_CONNS_PER_IP=$(LATE_MAX_CONNS_PER_IP)" >> .env
@@ -233,6 +235,26 @@ INSTANCE2_OVERRIDES = \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
   LATE_LIVEKIT_RTC_UDP_PORT=7885
 
+# Recipe for a standalone, Lateania-only deployment: every session skips the
+# lobby and lands straight in the door. See LATEANIA_STANDALONE.md. Run:
+#   make start-lateania            # bring up the stack (foreground)
+#   make .env-lateania              # just (re)generate .env without starting
+# Everything else (host/port/DB vars, force_admin) still comes from the
+# regular defaults above or your own overrides on the command line, e.g.:
+#   make start-lateania LATE_FORCE_ADMIN=0 LATE_DB_PASSWORD=<something-real>
+LATEANIA_OVERRIDES = \
+  LATE_SSH_LATEANIA_ONLY=1 \
+  LATE_REBELS_ENABLED=0 \
+  LATE_NETHACK_ENABLED=0 \
+  LATE_DCSS_ENABLED=0 \
+  LATE_BROGUE_ENABLED=0 \
+  LATE_USURPER_ENABLED=0 \
+  LATE_DOPEWARS_ENABLED=0 \
+  LATE_CODEKEEP_ENABLED=0 \
+  LATE_IRC_ENABLED=0 \
+  LATE_VOICE_ENABLED=0 \
+  LATE_AI_ENABLED=0
+
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 # Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
@@ -253,6 +275,14 @@ CHECK_DB_START = $(CHECK_DB_RESET); $(CHECK_COMPOSE) up -d --wait postgres
 .PHONY: start-instance2
 start-instance2:
 	@$(MAKE) start $(INSTANCE2_OVERRIDES)
+
+.PHONY: .env-lateania
+.env-lateania:
+	@$(MAKE) .env $(LATEANIA_OVERRIDES)
+
+.PHONY: start-lateania
+start-lateania:
+	@$(MAKE) start $(LATEANIA_OVERRIDES)
 
 .PHONY: keys
 keys:
