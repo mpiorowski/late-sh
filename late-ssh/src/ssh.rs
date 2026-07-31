@@ -1050,14 +1050,6 @@ impl russh::server::Handler for ClientHandler {
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
-        // A Lateania-only deployment (LATE_SSH_LATEANIA_ONLY=1) drops every
-        // session straight into the door, skipping the lobby entirely - the
-        // same transition the hub's own launcher takes, just run once up
-        // front instead of waiting for a keypress.
-        if self.state.config.lateania_only {
-            app.set_screen(crate::app::common::primitives::Screen::Lateania);
-            app.enter_lateania();
-        }
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);

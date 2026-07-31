@@ -49,11 +49,6 @@ pub struct Config {
     pub web_url: String,
     pub open_access: bool,
     pub force_admin: bool,
-    /// Skip the lobby entirely: every session lands straight in Lateania.
-    /// Meant for a standalone, Lateania-only deployment of this same server
-    /// (its own host, its own database) rather than the full clubhouse.
-    /// Defaults off, so an ordinary late.sh deployment is unaffected.
-    pub lateania_only: bool,
     pub db: DbConfig,
     pub max_conns_global: usize,
     pub max_conns_per_ip: usize,
@@ -166,8 +161,7 @@ impl Config {
             api_port = self.api_port,
             open_access = self.open_access,
             force_admin = self.force_admin,
-            lateania_only = self.lateania_only,
-            "network: SSH listener port, internal API port, open-access auth mode, dev force-admin, lateania-only mode"
+            "network: SSH listener port, internal API port, open-access auth mode, dev force-admin"
         );
         tracing::info!(
             db_host = %self.db.host,
@@ -371,7 +365,6 @@ impl Config {
             web_url: required("LATE_WEB_URL")?,
             open_access: required_bool("LATE_SSH_OPEN")?,
             force_admin: required_bool("LATE_FORCE_ADMIN")?,
-            lateania_only: optional_bool("LATE_SSH_LATEANIA_ONLY", false)?,
             db,
             max_conns_global: required_parse("LATE_MAX_CONNS_GLOBAL")?,
             max_conns_per_ip: required_parse("LATE_MAX_CONNS_PER_IP")?,
