@@ -791,16 +791,16 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
-        let (initial_bonsai_tree, initial_bonsai_care) = match self
+        let (initial_bonsai_tree, initial_bonsai_care, initial_bonsai_decay_protection) = match self
             .state
             .bonsai_service
             .ensure_tree_with_care(user_id)
             .await
         {
-            Ok((tree, care)) => (Some(tree), Some(care)),
+            Ok((tree, care, protection)) => (Some(tree), Some(care), protection),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                (None, None)
+                (None, None, None)
             }
         };
         let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
@@ -952,6 +952,7 @@ impl russh::server::Handler for ClientHandler {
             initial_bonsai_tree,
             initial_bonsai_care,
             initial_bonsai_v2_tree,
+            initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
             initial_pet,
             quest_service: self.state.quest_service.clone(),
@@ -1000,6 +1001,10 @@ impl russh::server::Handler for ClientHandler {
             dopewars_host: self.state.config.dopewars_host.clone(),
             dopewars_port: self.state.config.dopewars_port,
             dopewars_secret: self.state.config.dopewars_secret.clone(),
+            codekeep_enabled: self.state.config.codekeep_enabled,
+            codekeep_host: self.state.config.codekeep_host.clone(),
+            codekeep_port: self.state.config.codekeep_port,
+            codekeep_secret: self.state.config.codekeep_secret.clone(),
             session_token,
             session_registry: Some(self.state.session_registry.clone()),
             paired_client_registry: Some(self.state.paired_client_registry.clone()),

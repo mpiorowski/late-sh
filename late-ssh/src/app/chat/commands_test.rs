@@ -134,7 +134,10 @@ fn room_owns_command_only_in_owning_room() {
 fn room_scoped_command_metadata_is_consistent() {
     let command = room_scoped_command_named("sheet").expect("sheet command");
     assert_eq!(command.name(), "sheet");
-    assert_eq!(command.description(), "view a character sheet (/sheet @user)");
+    assert_eq!(
+        command.description(),
+        "view a character sheet (/sheet @user)"
+    );
     assert_eq!(command.room_slug(), "dnd");
 }
 

@@ -16,7 +16,7 @@ use late_core::test_utils::create_test_user;
 use uuid::Uuid;
 
 fn make_article_service(db: late_core::db::Db) -> ArticleService {
-    let ai = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
+    let ai = AiService::new(false, None);
     let notif = NotificationService::new(db.clone());
     let chat = ChatService::new(db.clone(), notif);
     ArticleService::new(db, ai, chat)

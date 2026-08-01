@@ -1,4 +1,4 @@
-use crate::paired_clients::*;
+use super::*;
 use crate::app::audio::client_state::{ClientKind, ClientPlatform, ClientSshMode};
 
 fn expected_source(source: AudioSource) -> PairControlMessage {
@@ -14,12 +14,14 @@ fn expected_source(source: AudioSource) -> PairControlMessage {
 fn paired_client_send_control_delivers_message() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (tx, mut rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    registry.register(
-        "tok1".to_string(),
-        tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    registry
+        .register(
+            "tok1".to_string(),
+            tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
 
     assert!(registry.send_control("tok1", PairControlMessage::ToggleMute));
     assert_eq!(rx.try_recv().unwrap(), PairControlMessage::ToggleMute);
@@ -30,18 +32,22 @@ fn paired_client_unregister_if_match_removes_only_matching_entry() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (tx1, mut rx1) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
     let (tx2, mut rx2) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let first = registry.register(
-        "tok1".to_string(),
-        tx1,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
-    let second = registry.register(
-        "tok1".to_string(),
-        tx2,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let first = registry
+        .register(
+            "tok1".to_string(),
+            tx1,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
+    let second = registry
+        .register(
+            "tok1".to_string(),
+            tx2,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
 
     registry.unregister_if_match("tok1", first);
 
@@ -58,12 +64,14 @@ fn paired_client_unregister_if_match_removes_only_matching_entry() {
 fn paired_client_snapshot_tracks_latest_state() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (tx, _rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let registration_id = registry.register(
-        "tok1".to_string(),
-        tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let registration_id = registry
+        .register(
+            "tok1".to_string(),
+            tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         registration_id,
@@ -74,7 +82,6 @@ fn paired_client_snapshot_tracks_latest_state() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: true,
             volume_percent: 35,
-            ..Default::default()
         },
     );
 
@@ -93,7 +100,9 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
     let user_id = Uuid::now_v7();
 
     let (cli_tx, _cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::default()).expect("paired register");
+    let cli_id = registry
+        .register("tok1".to_string(), cli_tx, user_id, AudioSource::default())
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -104,17 +113,18 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             capabilities: vec!["voice".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
     let (webview_tx, _webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let webview_id = registry.register(
-        "tok1".to_string(),
-        webview_tx,
-        user_id,
-        AudioSource::Youtube,
-    ).expect("paired register");
+    let webview_id = registry
+        .register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Youtube,
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         webview_id,
@@ -125,7 +135,6 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -144,12 +153,14 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
     assert_eq!(registry.cli_muted("tok1"), None);
 
     let (webview_tx, _webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let webview_id = registry.register(
-        "tok1".to_string(),
-        webview_tx,
-        user_id,
-        AudioSource::Youtube,
-    ).expect("paired register");
+    let webview_id = registry
+        .register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Youtube,
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         webview_id,
@@ -160,13 +171,14 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: true,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), None);
 
     let (cli_tx, _cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube).expect("paired register");
+    let cli_id = registry
+        .register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube)
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -177,7 +189,6 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: true,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), Some(true));
@@ -192,7 +203,6 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert_eq!(registry.cli_muted("tok1"), Some(false));
@@ -203,12 +213,14 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
 
     let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register(
-        "tok1".to_string(),
-        cli_tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let cli_id = registry
+        .register(
+            "tok1".to_string(),
+            cli_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -219,17 +231,18 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
     let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let webview_entry_id = registry.register(
-        "tok1".to_string(),
-        webview_tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let webview_entry_id = registry
+        .register(
+            "tok1".to_string(),
+            webview_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         webview_entry_id,
@@ -240,7 +253,6 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -256,12 +268,14 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
 fn paired_client_request_clipboard_image_false_when_only_webview() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
     let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let webview_entry_id = registry.register(
-        "tok1".to_string(),
-        webview_tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let webview_entry_id = registry
+        .register(
+            "tok1".to_string(),
+            webview_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         webview_entry_id,
@@ -272,7 +286,6 @@ fn paired_client_request_clipboard_image_false_when_only_webview() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -286,12 +299,14 @@ fn paired_client_clipboard_request_consumed_once() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
 
     let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register(
-        "tok1".to_string(),
-        cli_tx,
-        Uuid::now_v7(),
-        AudioSource::default(),
-    ).expect("paired register");
+    let cli_id = registry
+        .register(
+            "tok1".to_string(),
+            cli_tx,
+            Uuid::now_v7(),
+            AudioSource::default(),
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -302,7 +317,6 @@ fn paired_client_clipboard_request_consumed_once() {
             capabilities: vec!["clipboard_image".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -349,7 +363,9 @@ fn state_update_never_sends_pair_control_message() {
     let user_id = Uuid::now_v7();
 
     let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube).expect("paired register");
+    let cli_id = registry
+        .register("tok1".to_string(), cli_tx, user_id, AudioSource::Youtube)
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -360,7 +376,6 @@ fn state_update_never_sends_pair_control_message() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     assert!(cli_rx.try_recv().is_err());
@@ -372,7 +387,9 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
     let user_id = Uuid::now_v7();
 
     let (cli_tx, mut cli_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let cli_id = registry.register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast).expect("paired register");
+    let cli_id = registry
+        .register("tok1".to_string(), cli_tx, user_id, AudioSource::Icecast)
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         cli_id,
@@ -383,16 +400,17 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             capabilities: vec!["youtube".to_string()],
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
     let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-    let webview_entry_id = registry.register(
-        "tok1".to_string(),
-        webview_tx,
-        user_id,
-        AudioSource::Icecast,
-    ).expect("paired register");
+    let webview_entry_id = registry
+        .register(
+            "tok1".to_string(),
+            webview_tx,
+            user_id,
+            AudioSource::Icecast,
+        )
+        .expect("paired register");
     registry.update_state_and_enforce_mute_policy(
         "tok1",
         webview_entry_id,
@@ -403,7 +421,6 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             capabilities: Vec::new(),
             muted: false,
             volume_percent: 30,
-            ..Default::default()
         },
     );
 
@@ -454,4 +471,19 @@ fn paired_client_register_rejects_past_per_token_cap() {
     registry
         .register("tok2".to_string(), tx, user_id, AudioSource::default())
         .expect("other tokens still register");
+}
+
+/// Wire contract with both paired clients: `late-cli` and `late-webview`
+/// deserialize these exact event names when the server fans a desktop media
+/// command back out.
+#[test]
+fn set_control_messages_serialize_to_wire_names() {
+    assert_eq!(
+        serde_json::to_string(&PairControlMessage::SetMuted { muted: true }).unwrap(),
+        r#"{"event":"set_muted","muted":true}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&PairControlMessage::SetVolume { volume_percent: 45 }).unwrap(),
+        r#"{"event":"set_volume","volume_percent":45}"#
+    );
 }

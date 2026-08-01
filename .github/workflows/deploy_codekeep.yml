@@ -1,0 +1,81 @@
+name: deploy_codekeep
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-codekeep"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-codekeep'))) && format('deploy-codekeep-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    name: ci
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-codekeep')) }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: late-codekeep
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  build_codekeep:
+    name: build_late_codekeep_image
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-codekeep')) }}
+    needs: ci
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: late-codekeep
+      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      context: .
+      dockerfile: ./Dockerfile
+      docker_target: runtime-codekeep
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  deploy:
+    name: deploy_codekeep_image
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-codekeep')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-codekeep')) }}
+    needs: build_codekeep
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      # Image-only deploy: touch nothing but this game's containers. Manifest
+      # changes (env, resources, PVCs) ship through deploy_infra instead.
+      - name: set_image
+        run: |
+          kubectl set image deployment/late-codekeep -n default \
+            codekeep-save-seed=${{ needs.build_codekeep.outputs.image_tag }} \
+            late-codekeep=${{ needs.build_codekeep.outputs.image_tag }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment late-codekeep -n default --timeout=180s

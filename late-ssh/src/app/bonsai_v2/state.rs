@@ -5,6 +5,7 @@ use std::{
 
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::models::bonsai::{BonsaiV2Tree, BonsaiV2TreeParams};
+use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -192,10 +193,23 @@ pub(crate) struct BonsaiV2State {
     pub mode: BonsaiV2Mode,
     pub message: Option<String>,
     state_revision: i64,
+
+    /// The user's live Bonsai Decay Shield window, if any, consulted by
+    /// `simulate_day` so a protected day adds no water stress and costs no
+    /// vigor. Loaded at construction time (login, or profile view for
+    /// `view_only`) and refreshed from the shop snapshot on tick; Dynamic
+    /// Bonsai has no in-session re-simulation, so a purchase mid-session
+    /// only takes visible effect from the next construction onward.
+    pub decay_protection: Option<BonsaiDecayProtection>,
 }
 
 impl BonsaiV2State {
-    pub(crate) fn new(user_id: Uuid, svc: BonsaiService, tree: BonsaiV2Tree) -> Self {
+    pub(crate) fn new(
+        user_id: Uuid,
+        svc: BonsaiService,
+        tree: BonsaiV2Tree,
+        decay_protection: Option<BonsaiDecayProtection>,
+    ) -> Self {
         let today = BonsaiService::today();
         let persisted_badge_glyph = tree.badge_glyph.clone();
         let (graph, normalized_ids) =
@@ -223,6 +237,7 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::from_str(&tree.mode),
             message: None,
             state_revision: tree.state_revision,
+            decay_protection,
         };
         state.ensure_selection();
         let elapsed_changed = state.apply_elapsed_days(today);
@@ -237,7 +252,12 @@ impl BonsaiV2State {
     /// view). Catches elapsed days up in memory so the silhouette is accurate,
     /// but never persists, so viewing never mutates the owner's tree. Always
     /// renders standard 2D.
-    pub(crate) fn view_only(user_id: Uuid, svc: BonsaiService, tree: BonsaiV2Tree) -> Self {
+    pub(crate) fn view_only(
+        user_id: Uuid,
+        svc: BonsaiService,
+        tree: BonsaiV2Tree,
+        decay_protection: Option<BonsaiDecayProtection>,
+    ) -> Self {
         let today = BonsaiService::today();
         let (graph, normalized_ids) =
             serde_json::from_value::<BonsaiGraph>(tree.branch_graph.clone())
@@ -264,6 +284,7 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::from_str(&tree.mode),
             message: None,
             state_revision: tree.state_revision,
+            decay_protection,
         };
         state.ensure_selection();
         // In-memory catch-up only; intentionally no `persist()` so a viewer
@@ -292,6 +313,7 @@ impl BonsaiV2State {
             mode: BonsaiV2Mode::Inspect,
             message: Some("Dynamic Bonsai is not persisted yet".to_string()),
             state_revision: 0,
+            decay_protection: None,
         }
     }
 
@@ -641,22 +663,32 @@ impl BonsaiV2State {
             return;
         }
         self.age_days += 1;
+        let protected = self
+            .decay_protection
+            .is_some_and(|protection| protection.covers_day(day));
         let dry = self
             .last_watered
             .is_none_or(|last| (day - last).num_days() >= 1);
-        if dry {
-            self.water_stress = (self.water_stress + 11).clamp(0, 120);
-            self.vigor = (self.vigor - 7).max(0);
-        } else {
-            self.water_stress = (self.water_stress - 4).max(0);
-            self.vigor = (self.vigor + 2).min(100);
+        // A live Bonsai Decay Shield holds a dry day neutral: no stress rise,
+        // no vigor loss, no death check. It never cancels the recovery a
+        // watered day earns, so owning a shield can only ever help.
+        match (dry, protected) {
+            (true, false) => {
+                self.water_stress = (self.water_stress + 11).clamp(0, 120);
+                self.vigor = (self.vigor - 7).max(0);
+            }
+            (true, true) => {}
+            (false, _) => {
+                self.water_stress = (self.water_stress - 4).max(0);
+                self.vigor = (self.vigor + 2).min(100);
+            }
         }
-        self.grow_once(if dry {
+        self.grow_once(if dry && !protected {
             GrowthCause::DryDay
         } else {
             GrowthCause::Daily
         });
-        if self.water_stress >= 100 && self.vigor == 0 {
+        if !protected && self.water_stress >= 100 && self.vigor == 0 {
             self.is_alive = false;
             self.kill_weak_tips();
         }

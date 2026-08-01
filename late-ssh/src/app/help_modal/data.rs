@@ -169,15 +169,15 @@ pub(crate) fn bot_app_context() -> String {
         - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus the occasional *hic*. Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and Leaderboards (6).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
         - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n\
         - Leaderboards page 6 holds every board: Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
-        // Bot context is per-app, not per-user — describe the default Enter/
-        // Alt+S binding rather than any one user's `keep_composer_focused`
-        // tweak state.
+        // Bot context is per-app, not per-user, so describe the default
+        // Enter/Alt+S binding rather than any one user's
+        // `keep_composer_focused` tweak state.
         for line in lines_for(topic, false, "") {
             let line = line.trim();
             if line.is_empty() || is_restricted_bot_context_line(line) {
@@ -192,18 +192,18 @@ pub(crate) fn bot_app_context() -> String {
 }
 
 /// Trimmed app context for @bartender: navigation only, not the full guide.
-/// He is house furniture, not the help desk — @bot owns explaining features
+/// He is house furniture, not the help desk. @bot owns explaining features
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 Leaderboards (every board, monthly and all-time).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
-    - For anything past basic directions — commands, game rules, settings, IRC, account stuff — don't guess: tell the patron to go ask @bot, that's what he's for.\n"
+    - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
         .to_string()
 }
 
@@ -255,6 +255,7 @@ fn pair_help_lines(listen_url: &str) -> Vec<String> {
         "  youtube     embedded webview hosts the shared queue locally".to_string(),
         "  clipboard   /paste-image reads your OS clipboard image into chat".to_string(),
         "  voice       talk in voice rooms with your mic (linux + windows; plain SSH only shows status)".to_string(),
+        "  desktop     now playing shows in your desktop media widget (linux)".to_string(),
         "  controls    m mute, +/- volume, v+x source, v+v Music Booth".to_string(),
         "".to_string(),
         "Listen without the CLI".to_string(),
@@ -413,7 +414,7 @@ fn chips_help_lines() -> Vec<String> {
         "    Green Dragon: slay the Green Dragon           10,000 chips".to_string(),
         "  Lateania's deeper crowns, Yssgar the Sundering Deep and Kaethyr Ascendant, pay no chips: the profile badge is the whole prize.".to_string(),
         "  Lateania gold is its own in-world currency and never converts to chips.".to_string(),
-        "  DCSS, Brogue, Usurper, dopewars, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
+        "  DCSS, Brogue, Usurper, dopewars, CodeKeep, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
         "".to_string(),
         "6. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
@@ -945,7 +946,7 @@ fn overview_lines() -> Vec<String> {
         "  0 Clubhouse       the Late Lounge: walk around, everyone is live",
         "  1 Home            chat, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, quests at the top",
-        "  3 Games           Lateania, Rebels, and NetHack in one hub",
+        "  3 Games           door games: Lateania, Rebels, NetHack, CodeKeep",
         "  4 Artboard        shared persistent ASCII canvas",
         "  5 Directory       Profiles, Projects, and Pinstar",
         "  6 Leaderboards    every board, monthly and all-time",
@@ -953,8 +954,8 @@ fn overview_lines() -> Vec<String> {
         "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
         "over your head and land in #lounge), w waves, x dances, Enter interacts.",
         "",
-        "The Games hub is a selector: arrow keys or h/l switch between the Lateania,",
-        "Rebels, and NetHack cards; Enter launches the selected game.",
+        "The Games hub is a selector: arrow keys or h/l switch between its game",
+        "cards; Enter launches the selected game. CodeKeep needs 108x24 inside the frame.",
         "",
         "Directory has its own guide tab; Artboard and active Pinstar diagrams keep page-local editing help.",
         "There is also a dedicated Architecture slide if you need system-level context.",
@@ -1052,7 +1053,7 @@ fn architecture_lines() -> Vec<String> {
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Games (Lateania/Rebels/NetHack hub), Artboard, Directory, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub, including NetHack and CodeKeep), Artboard, Directory, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
         "  House-table runtime state is process-local and can reset on SSH server restart",
@@ -1472,6 +1473,14 @@ Direct stream playback is Icecast only. Pair the CLI or browser for source switc
 No sound from the paired CLI on Linux?
   The CLI plays audio through ALSA. On a PipeWire system with no ALSA compatibility layer, it finds no output device.
   Install pipewire-alsa (Arch: pacman -S pipewire-alsa, Debian/Ubuntu: apt install pipewire-alsa) and reconnect.
+
+Now playing on your desktop (Linux)
+  The paired CLI publishes the current track over MPRIS, the D-Bus standard your desktop already uses for media players.
+  GNOME's top bar, KDE's tray, lock screens, and panel applets pick it up on their own. There is nothing to switch on: it appears once `late` is running and paired.
+  Every source reports title and artist. YouTube tracks add duration, the video thumbnail, and a watch link; Icecast adds track length.
+  Play/pause from the widget, or your keyboard's media keys, mutes and unmutes the paired client, the same as pressing m here. The volume slider works too.
+  The controls travel through the server to every paired player, so they cover all sources, YouTube included, and this terminal always agrees with the widget.
+  Machines with no session bus (headless boxes, containers, some WSL setups) simply get nothing. Audio and everything else carry on as normal.
 
 Global keys (work anywhere)
   ?                open this guide, including Pair and terminal-specific tabs

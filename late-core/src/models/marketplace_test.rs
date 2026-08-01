@@ -3,7 +3,8 @@ use crate::{
         bonsai::{BonsaiV2Tree, Tree},
         chips::{ChipMove, UserChips},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+            BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, BONSAI_VARIANT_SLOT,
             CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
             ConsumableUseStatus, DYNAMIC_BONSAI_SKU, FishActiveStatus, MarketplaceItem,
             PET_COMPANION_SKU, PurchaseStatus, THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND,
@@ -1210,4 +1211,237 @@ async fn username_effect_insufficient_funds_creates_no_effect_row() {
     assert!(second.username_effect.is_none());
     // The first effect stays live; the failed rebuy neither reset nor cleared it.
     assert_eq!(active_username_effect_rows(&client, user.id).await.len(), 1);
+}
+
+const BONSAI_DECAY_SHIELD_PRICE: i64 = 2_000;
+const BONSAI_DECAY_SHIELD_DURATION_SECS: i64 = 1_209_600; // 14 days
+
+async fn active_bonsai_decay_protection_rows(
+    client: &tokio_postgres::Client,
+    user_id: uuid::Uuid,
+) -> Vec<ShopConsumableEffect> {
+    ShopConsumableEffect::active_user_effects(client, BONSAI_DECAY_PROTECTION_KIND)
+        .await
+        .expect("active effects")
+        .into_iter()
+        .filter(|row| row.user_id == user_id)
+        .collect()
+}
+
+#[tokio::test]
+async fn seeded_catalog_contains_bonsai_decay_shield() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let shield = items
+        .iter()
+        .find(|item| item.sku == BONSAI_DECAY_SHIELD_SKU)
+        .expect("bonsai decay shield item");
+
+    assert_eq!(shield.item_kind, BONSAI_CONSUMABLE_ITEM_KIND);
+    assert_eq!(shield.name, "Bonsai Decay Shield");
+    assert_eq!(shield.price_chips, BONSAI_DECAY_SHIELD_PRICE);
+    assert_eq!(shield.payload["effect_kind"], BONSAI_DECAY_PROTECTION_KIND);
+    assert_eq!(
+        shield.payload["duration_secs"],
+        BONSAI_DECAY_SHIELD_DURATION_SECS
+    );
+    assert!(shield.active);
+}
+
+#[tokio::test]
+async fn bonsai_decay_shield_purchase_debits_and_activates_a_two_week_window() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-shield-buy").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let starting_balance = UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BONSAI_DECAY_SHIELD_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips")
+    .expect("credited")
+    .balance;
+
+    let before = chrono::Utc::now();
+    let result = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("purchase")
+        .expect("item available");
+    assert_eq!(result.status, PurchaseStatus::Purchased);
+    assert_eq!(result.balance, starting_balance - BONSAI_DECAY_SHIELD_PRICE);
+
+    let rows = active_bonsai_decay_protection_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source_sku, BONSAI_DECAY_SHIELD_SKU);
+    let expected_end = before + chrono::Duration::seconds(BONSAI_DECAY_SHIELD_DURATION_SECS);
+    assert!(rows[0].ends_at >= expected_end - chrono::Duration::seconds(60));
+    assert!(rows[0].ends_at <= expected_end + chrono::Duration::seconds(60));
+}
+
+#[tokio::test]
+async fn bonsai_decay_shield_is_repeatable_and_repeated_use_grows_quantity() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-shield-repeat").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BONSAI_DECAY_SHIELD_PRICE * 2,
+        None,
+    )
+    .await
+    .expect("fund chips");
+
+    let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("first buy")
+        .expect("item available");
+    assert_eq!(first.status, PurchaseStatus::Purchased);
+    assert_eq!(first.quantity, 1);
+
+    let second = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("second buy")
+        .expect("item available");
+    assert_eq!(second.status, PurchaseStatus::QuantityAdded);
+    assert_eq!(second.quantity, 2);
+}
+
+#[tokio::test]
+async fn bonsai_decay_shield_rebuy_extends_the_live_window_instead_of_resetting_it() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-shield-extend").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BONSAI_DECAY_SHIELD_PRICE * 2,
+        None,
+    )
+    .await
+    .expect("fund chips");
+
+    let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("first buy")
+        .expect("item available");
+    assert_eq!(first.status, PurchaseStatus::Purchased);
+    let first_rows = active_bonsai_decay_protection_rows(&client, user.id).await;
+    assert_eq!(first_rows.len(), 1);
+    let first_starts_at = first_rows[0].starts_at;
+    let first_ends_at = first_rows[0].ends_at;
+
+    let second = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("second buy")
+        .expect("item available");
+    assert_eq!(second.status, PurchaseStatus::QuantityAdded);
+    let second_rows = active_bonsai_decay_protection_rows(&client, user.id).await;
+
+    // Stacking never discards paid-for time: exactly one live row, whose
+    // expiry moved a full 14 days past the first purchase's expiry rather
+    // than resetting to 14 days from now.
+    assert_eq!(second_rows.len(), 1);
+    let expected_end = first_ends_at + chrono::Duration::seconds(BONSAI_DECAY_SHIELD_DURATION_SECS);
+    assert!(second_rows[0].ends_at >= expected_end - chrono::Duration::seconds(60));
+    assert!(second_rows[0].ends_at <= expected_end + chrono::Duration::seconds(60));
+    // The window's start carries forward from the first purchase rather
+    // than resetting to the rebuy time, so protection credit for the days
+    // already covered by the first purchase is never lost.
+    assert_eq!(second_rows[0].starts_at, first_starts_at);
+}
+
+#[tokio::test]
+async fn bonsai_decay_shield_rebuy_after_expiry_starts_a_fresh_window_from_now() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-shield-after-expiry").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BONSAI_DECAY_SHIELD_PRICE * 2,
+        None,
+    )
+    .await
+    .expect("fund chips");
+
+    let first = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("first buy")
+        .expect("item available");
+    assert_eq!(first.status, PurchaseStatus::Purchased);
+    client
+        .execute(
+            "UPDATE shop_consumable_effects
+             SET ends_at = current_timestamp - interval '1 minute'
+             WHERE user_id = $1 AND effect_kind = $2",
+            &[&user.id, &BONSAI_DECAY_PROTECTION_KIND],
+        )
+        .await
+        .expect("force expiry");
+
+    let before = chrono::Utc::now();
+    let second = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("second buy")
+        .expect("item available");
+    assert_eq!(second.status, PurchaseStatus::QuantityAdded);
+
+    let rows = active_bonsai_decay_protection_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    let expected_end = before + chrono::Duration::seconds(BONSAI_DECAY_SHIELD_DURATION_SECS);
+    assert!(rows[0].ends_at >= expected_end - chrono::Duration::seconds(60));
+    assert!(rows[0].ends_at <= expected_end + chrono::Duration::seconds(60));
+    // The row also does not carry forward the lapsed row's starts_at: the
+    // gap between the old expiry and this rebuy was genuinely unprotected,
+    // so it must not be credited.
+    assert!(rows[0].starts_at >= before - chrono::Duration::seconds(60));
+}
+
+#[tokio::test]
+async fn bonsai_decay_shield_expired_rows_are_excluded_from_active_queries() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bonsai-shield-expired").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        BONSAI_DECAY_SHIELD_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
+
+    let purchase = purchase_durable_item_by_sku(&mut client, user.id, BONSAI_DECAY_SHIELD_SKU)
+        .await
+        .expect("buy")
+        .expect("item available");
+    assert_eq!(purchase.status, PurchaseStatus::Purchased);
+    client
+        .execute(
+            "UPDATE shop_consumable_effects
+             SET ends_at = current_timestamp - interval '1 minute'
+             WHERE user_id = $1 AND effect_kind = $2",
+            &[&user.id, &BONSAI_DECAY_PROTECTION_KIND],
+        )
+        .await
+        .expect("force expiry");
+
+    assert_eq!(
+        active_bonsai_decay_protection_rows(&client, user.id)
+            .await
+            .len(),
+        0
+    );
 }

@@ -216,6 +216,7 @@ impl ProfileModalState {
                 user_id,
                 self.bonsai_service.clone(),
                 tree,
+                snapshot.bonsai_decay_protection,
             )),
             _ => None,
         };

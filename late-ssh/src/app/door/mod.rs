@@ -2,6 +2,7 @@
 // launches the individual door games (Lateania, Rebels, NetHack, Green Dragon).
 pub mod arcade;
 pub mod brogue;
+pub mod codekeep;
 pub mod darkroom;
 pub mod dcss;
 pub mod dopewars;

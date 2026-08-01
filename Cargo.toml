@@ -2,6 +2,7 @@
 members = [
     "late-brogue",
     "late-cli",
+    "late-codekeep",
     "late-core",
     "late-dcss",
     "late-dopewars",

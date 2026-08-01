@@ -209,6 +209,8 @@ pub struct SessionConfig {
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_care: Option<late_core::models::bonsai::DailyCare>,
     pub initial_bonsai_v2_tree: Option<late_core::models::bonsai::BonsaiV2Tree>,
+    pub initial_bonsai_decay_protection:
+        Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
     pub pet_service: crate::app::pet::svc::PetService,
     pub initial_pet: Option<late_core::models::pet::PetCompanion>,
     pub quest_service: crate::app::hub::dailies::svc::QuestService,
@@ -260,6 +262,11 @@ pub struct SessionConfig {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// CodeKeep door game: reached through the dedicated `late-codekeep` host.
+    pub codekeep_enabled: bool,
+    pub codekeep_host: String,
+    pub codekeep_port: u16,
+    pub codekeep_secret: String,
     pub session_token: String,
     pub session_registry: Option<SessionRegistry>,
     pub paired_client_registry: Option<PairedClientRegistry>,
@@ -374,7 +381,6 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
-    pub(crate) hub_state: hub::state::HubState,
     pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
@@ -532,7 +538,6 @@ pub struct App {
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
-    pub(crate) hub_admin_state: crate::app::hub::admin::state::AdminState,
     pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
 
@@ -605,6 +610,12 @@ pub struct App {
     pub(crate) dopewars_host: String,
     pub(crate) dopewars_port: u16,
     pub(crate) dopewars_secret: String,
+    pub(crate) codekeep_state: Option<crate::app::door::codekeep::state::State>,
+    pub(crate) codekeep_term: String,
+    pub(crate) codekeep_enabled: bool,
+    pub(crate) codekeep_host: String,
+    pub(crate) codekeep_port: u16,
+    pub(crate) codekeep_secret: String,
     /// Render-loop wakeup, set by the active transport. Threaded into the rebels
     /// proxy so new remote output repaints promptly. `None` in headless/test
     /// paths (no render loop).
@@ -1016,11 +1027,13 @@ impl App {
         let artboard_snapshot_service = config.artboard_snapshot_service.clone();
         let username = config.username.clone();
 
+        let initial_bonsai_decay_protection = config.initial_bonsai_decay_protection;
         let bonsai_state = if let Some(tree) = config.initial_bonsai_tree {
             crate::app::bonsai::state::BonsaiState::new(
                 config.user_id,
                 config.bonsai_service.clone(),
                 tree,
+                initial_bonsai_decay_protection,
             )
         } else {
             // Fallback: create a default dead-ish state (should not happen in practice)
@@ -1037,6 +1050,7 @@ impl App {
                     seed: config.user_id.as_u128() as i64,
                     is_alive: true,
                 },
+                initial_bonsai_decay_protection,
             )
         };
         let bonsai_care_state = config
@@ -1062,6 +1076,7 @@ impl App {
                     config.user_id,
                     config.bonsai_service.clone(),
                     tree,
+                    initial_bonsai_decay_protection,
                 )
             })
             .unwrap_or_else(|| {
@@ -1108,10 +1123,6 @@ impl App {
             config.user_id,
             config.shop_service.clone(),
             config.shop_snapshot_rx,
-        );
-        let hub_admin_state = crate::app::hub::admin::state::AdminState::new(
-            config.quest_service.clone(),
-            config.shop_service.clone(),
         );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
@@ -1176,7 +1187,6 @@ impl App {
             ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
-            hub_state: hub::state::HubState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
             mod_modal_state: mod_modal::state::ModModalState::new(),
@@ -1300,7 +1310,6 @@ impl App {
             pet_state,
             quest_state,
             shop_state,
-            hub_admin_state,
             ultimate_service: config.ultimate_service,
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
@@ -1353,6 +1362,12 @@ impl App {
             dopewars_host: config.dopewars_host,
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
+            codekeep_state: None,
+            codekeep_term: config.term.clone(),
+            codekeep_enabled: config.codekeep_enabled,
+            codekeep_host: config.codekeep_host,
+            codekeep_port: config.codekeep_port,
+            codekeep_secret: config.codekeep_secret,
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
@@ -1644,6 +1659,27 @@ impl App {
         self.dopewars_state = None;
     }
 
+    pub(crate) fn enter_codekeep(&mut self) {
+        if self.codekeep_state.is_some() {
+            return;
+        }
+        self.codekeep_state = Some(crate::app::door::codekeep::state::State::new(
+            self.user_id,
+            self.codekeep_host.clone(),
+            self.codekeep_port,
+            self.codekeep_secret.clone(),
+            self.codekeep_term.clone(),
+            self.codekeep_enabled,
+            self.repaint_signal.clone(),
+        ));
+    }
+
+    fn leave_codekeep(&mut self) {
+        // Dropping the proxy closes the host session; the host SIGHUP-saves the
+        // upstream game before releasing this account's single-session lease.
+        self.codekeep_state = None;
+    }
+
     pub(crate) fn activate_artboard_interaction(&mut self) -> bool {
         self.expire_artboard_ban_if_needed();
         if self.artboard_banned {
@@ -1811,7 +1847,6 @@ impl App {
             self.show_mod_modal = false;
             self.show_bonsai_v2_modal = false;
         }
-        self.hub_state.ensure_visible_tab(self.is_admin);
     }
 
     pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {
@@ -1851,6 +1886,9 @@ impl App {
             }
             if screen == Screen::Dopewars {
                 self.enter_dopewars();
+            }
+            if screen == Screen::Codekeep {
+                self.enter_codekeep();
             }
             if screen == Screen::Artboard {
                 self.enter_dartboard();
@@ -1898,6 +1936,11 @@ impl App {
 
         if self.screen == Screen::Dopewars {
             self.leave_dopewars();
+            self.force_full_repaint();
+        }
+
+        if self.screen == Screen::Codekeep {
+            self.leave_codekeep();
             self.force_full_repaint();
         }
 
@@ -1953,6 +1996,9 @@ impl App {
         }
         if self.screen == Screen::Dopewars {
             self.enter_dopewars();
+        }
+        if self.screen == Screen::Codekeep {
+            self.enter_codekeep();
         }
         if self.screen == Screen::Pinstar {
             self.enter_directory();
@@ -2161,6 +2207,15 @@ impl App {
             && let Some(state) = self.dopewars_state.as_ref()
             && state.in_exit_grace()
         {
+            return;
+        }
+        // CodeKeep is another network PTY door. Ink owns every key while the
+        // game is live; Ctrl-C triggers upstream's graceful save-and-exit.
+        if self.screen == crate::app::common::primitives::Screen::Codekeep
+            && let Some(state) = self.codekeep_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
             return;
         }
         crate::app::input::handle(self, data)

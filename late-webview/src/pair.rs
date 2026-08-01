@@ -47,6 +47,12 @@ enum ServerMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    SetMuted {
+        muted: bool,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
     LoadVideo {
         item_id: String,
         video_id: String,
@@ -109,6 +115,28 @@ impl AudioSettings {
             std::env::var("LATE_WEBVIEW_INITIAL_MUTED").ok().as_deref(),
             std::env::var("LATE_WEBVIEW_INITIAL_VOLUME").ok().as_deref(),
         )
+    }
+
+    /// Absolute mute write from the server's `set_muted` fan-out. Returns true
+    /// when this was an unmute, the edge that must re-load the current track
+    /// at the live server position.
+    fn set_muted(&mut self, muted: bool) -> bool {
+        let was_muted = self.muted;
+        self.muted = muted;
+        was_muted && !muted
+    }
+
+    /// Absolute volume write from the server's `set_volume` fan-out. A
+    /// non-zero volume also clears mute (a slider dragged off zero is the only
+    /// way back from pause on widgets without a play button), so this too can
+    /// be an unmute. Returns true on that edge.
+    fn set_volume(&mut self, volume_percent: u8) -> bool {
+        self.volume_percent = volume_percent;
+        if volume_percent > 0 {
+            self.set_muted(false)
+        } else {
+            false
+        }
     }
 }
 
@@ -550,6 +578,24 @@ fn handle_server_text(
             ServerTextResult {
                 send_client_state: true,
                 ..ServerTextResult::default()
+            }
+        }
+        ServerMessage::SetMuted { muted } => {
+            let resumed = audio_settings.set_muted(muted);
+            send_audio_settings(proxy, *audio_settings);
+            if resumed {
+                unmute_resume_result(proxy, current_item, current_snapshot.as_ref())
+            } else {
+                client_state_only()
+            }
+        }
+        ServerMessage::SetVolume { volume_percent } => {
+            let resumed = audio_settings.set_volume(volume_percent);
+            send_audio_settings(proxy, *audio_settings);
+            if resumed {
+                unmute_resume_result(proxy, current_item, current_snapshot.as_ref())
+            } else {
+                client_state_only()
             }
         }
         ServerMessage::LoadVideo {

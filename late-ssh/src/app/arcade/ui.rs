@@ -308,13 +308,11 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
     // Quests live at the top of the lobby, not in a modal: they are all
     // arcade quests, so they belong where the games are launched. Short
     // terminals drop the strip before the game list loses room.
-    let content_area = if area.height >= 18 {
+    let strip_height = crate::app::hub::dailies::ui::arcade_strip_height(view.quest_state);
+    let content_area = if area.height >= strip_height + 13 {
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(crate::app::hub::dailies::ui::ARCADE_STRIP_HEIGHT),
-                Constraint::Min(0),
-            ])
+            .constraints([Constraint::Length(strip_height), Constraint::Min(0)])
             .split(area);
         crate::app::hub::dailies::ui::draw_arcade_strip(frame, rows[0], view.quest_state);
         rows[1]

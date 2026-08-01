@@ -159,6 +159,89 @@ impl ShopConsumableEffect {
         Ok(Self::from(row))
     }
 
+    /// Activate-or-extend a user-scoped effect (`room_id IS NULL`). Unlike
+    /// `activate_user_effect_in_tx`, which always resets the clock to
+    /// `duration_secs` from now, this extends any live expiry of the same
+    /// kind by `duration_secs` instead of restarting it, so a stacking
+    /// consumable (the Bonsai Decay Shield) never discards time the player
+    /// already paid for. Every prior row is deactivated in the same
+    /// transaction, leaving exactly one active row per (user, effect_kind,
+    /// room_id IS NULL).
+    pub async fn extend_user_effect_in_tx(
+        tx: &tokio_postgres::Transaction<'_>,
+        user_id: Uuid,
+        effect_kind: &str,
+        source_sku: &str,
+        duration_secs: i64,
+        payload: Value,
+    ) -> Result<Self> {
+        let duration_secs = duration_secs.max(1);
+        let now = Utc::now();
+
+        // Nothing in the schema enforces one active user-scoped row per kind
+        // (migrations 071 and 112 index these columns, they do not constrain
+        // them), so read every row this deactivated rather than assuming a
+        // single one: two concurrent purchases racing here would otherwise
+        // wedge the item, failing every later rebuy on an unexpected row
+        // count.
+        let deactivated = tx
+            .query(
+                "UPDATE shop_consumable_effects
+                 SET active = false, updated = current_timestamp
+                 WHERE user_id = $1
+                   AND effect_kind = $2
+                   AND room_id IS NULL
+                   AND active = true
+                 RETURNING starts_at, ends_at",
+                &[&user_id, &effect_kind],
+            )
+            .await?;
+
+        // A row can sit in the table with `active = true` long after its
+        // `ends_at` has passed (expiry is enforced by the active-effect
+        // queries filtering on `ends_at`, not by a background job), so only
+        // treat a prior row as "still live" when its own expiry hasn't
+        // passed yet. When one is still live, the new row's `starts_at`
+        // carries forward the prior activation instead of resetting to now,
+        // so a mid-window rebuy doesn't erase the protection credit for days
+        // already covered by the row it replaces (see
+        // `BonsaiDecayProtection::protected_days_between`). When every prior
+        // row had already lapsed, this is a fresh window starting now: the
+        // gap during which the shield was not live must not count as
+        // protected.
+        let still_live = deactivated
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<_, DateTime<Utc>>("starts_at"),
+                    row.get::<_, DateTime<Utc>>("ends_at"),
+                )
+            })
+            .filter(|(_, ends_at)| *ends_at > now)
+            .max_by_key(|(_, ends_at)| *ends_at);
+        let starts_at = still_live.map(|(starts_at, _)| starts_at).unwrap_or(now);
+        let base = still_live.map(|(_, ends_at)| ends_at).unwrap_or(now);
+        let ends_at = base + Duration::seconds(duration_secs);
+
+        let row = tx
+            .query_one(
+                "INSERT INTO shop_consumable_effects
+                    (user_id, room_id, effect_kind, source_sku, payload, starts_at, ends_at)
+                 VALUES ($1, NULL, $2, $3, $4, $5, $6)
+                 RETURNING *",
+                &[
+                    &user_id,
+                    &effect_kind,
+                    &source_sku,
+                    &payload,
+                    &starts_at,
+                    &ends_at,
+                ],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     /// All live user-scoped effects of one kind, for seeding the in-process
     /// flair directory at startup.
     pub async fn active_user_effects(client: &Client, effect_kind: &str) -> Result<Vec<Self>> {

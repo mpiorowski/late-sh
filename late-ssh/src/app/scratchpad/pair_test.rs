@@ -121,7 +121,7 @@ async fn run_command(app: &mut crate::app::state::App, command: &str) {
 }
 
 #[tokio::test]
-async fn both_sides_running_pair_lands_them_in_the_shared_scratchpad() {
+async fn pairing_lifecycle_preserves_invite_input_sync_and_departure() {
     use crate::test_helpers::{render_plain, wait_for_render_contains};
 
     let test_db = crate::test_helpers::new_test_db().await;
@@ -138,32 +138,11 @@ async fn both_sides_running_pair_lands_them_in_the_shared_scratchpad() {
         "one ask is not a pairing; frame={frame:?}"
     );
 
-    run_command(&mut bob, "/pair @alice-pair").await;
-    let frame = render_plain(&mut bob);
-    assert!(
-        frame.contains("paired with @alice-pair"),
-        "the second ask completes the handshake; frame={frame:?}"
-    );
-
-    // Alice never accepted anything: her session picks the pairing up on its
-    // next tick, because she already asked for it.
-    wait_for_render_contains(&mut alice, "paired with @bob-pair").await;
-}
-
-#[tokio::test]
-async fn a_one_sided_ask_leaves_the_targets_session_alone() {
     // Regression test for the invite prompt this replaced: a `/pair` from
     // someone else must not change the target's screen or eat their keys.
-    use crate::test_helpers::render_plain;
-
-    let test_db = crate::test_helpers::new_test_db().await;
-    let [mut alice, mut bob] = two_sessions(&test_db, ["alice-solo", "bob-solo"]).await;
-
-    run_command(&mut alice, "/pair @bob-solo").await;
-
     let frame = render_plain(&mut bob);
     assert!(
-        frame.contains("alice-solo wants to pair"),
+        frame.contains("alice-pair wants to pair"),
         "the target is told, by banner only; frame={frame:?}"
     );
     assert!(
@@ -179,32 +158,28 @@ async fn a_one_sided_ask_leaves_the_targets_session_alone() {
         frame.contains("Compose (Enter send"),
         "input still reaches the screen underneath; frame={frame:?}"
     );
-}
 
-#[tokio::test]
-async fn typing_in_the_scratchpad_reaches_the_partner() {
-    use crate::test_helpers::wait_for_render_contains;
+    // Bob's composer is already open from the input-ownership assertion, so
+    // finish the reciprocal command in place instead of resetting the app.
+    bob.handle_input(b"/pair @alice-pair ");
+    assert!(
+        !bob.chat.is_autocomplete_active(),
+        "the trailing space should close pair-command autocomplete"
+    );
+    bob.handle_input(b"\r");
+    let frame = render_plain(&mut bob);
+    assert!(
+        frame.contains("paired with @alice-pair"),
+        "the second ask completes the handshake; frame={frame:?}"
+    );
 
-    let test_db = crate::test_helpers::new_test_db().await;
-    let [mut alice, mut bob] = two_sessions(&test_db, ["alice-type", "bob-type"]).await;
-    run_command(&mut alice, "/pair @bob-type").await;
-    run_command(&mut bob, "/pair @alice-type").await;
-    wait_for_render_contains(&mut alice, "paired with @bob-type").await;
+    // Alice never accepted anything: her session picks the pairing up on its
+    // next tick, because she already asked for it.
+    wait_for_render_contains(&mut alice, "paired with @bob-pair").await;
 
     alice.handle_input(b"fn main() {}");
 
     wait_for_render_contains(&mut bob, "fn main() {}").await;
-}
-
-#[tokio::test]
-async fn esc_leaves_the_pairing_and_tells_the_partner() {
-    use crate::test_helpers::{render_plain, wait_for_render_contains};
-
-    let test_db = crate::test_helpers::new_test_db().await;
-    let [mut alice, mut bob] = two_sessions(&test_db, ["alice-esc", "bob-esc"]).await;
-    run_command(&mut alice, "/pair @bob-esc").await;
-    run_command(&mut bob, "/pair @alice-esc").await;
-    wait_for_render_contains(&mut alice, "paired with @bob-esc").await;
 
     // A lone Esc is held by the parser until it can rule out a longer escape
     // sequence, so wait for Home rather than rendering one frame.
@@ -216,7 +191,7 @@ async fn esc_leaves_the_pairing_and_tells_the_partner() {
         !frame.contains("paired with"),
         "the leaver is back on Home; frame={frame:?}"
     );
-    wait_for_render_contains(&mut bob, "alice-esc left the pairing").await;
+    wait_for_render_contains(&mut bob, "alice-pair left the pairing").await;
 }
 
 #[tokio::test]

@@ -27,7 +27,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 - `dailies/`:
   - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots including daily streak state, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
   - `state.rs`: snapshot/event drains for the quest strip and completion banners.
-  - `ui.rs`: `draw_arcade_strip`, the compact heading + two dailies + weekly strip rendered at the top of The Arcade lobby (`ARCADE_STRIP_HEIGHT` rows; the lobby drops it below 18 rows of height).
+  - `ui.rs`: `draw_arcade_strip`, the quest strip at the top of The Arcade lobby: a heading with the 6-slot daily-streak meter (`▰▱`, day 6 caps the bonus) and next-bonus chips, then Daily and Weekly sections, each with a done count, the open-chip sum, and a reset note. Items show a status glyph, colored difficulty tag (easy/medium/hard), reward, and a progress bar for multi-step quests on terminals at least 70 cols wide. Height is dynamic via `arcade_strip_height`; the lobby drops the strip when fewer than 13 rows would remain below it.
 - `aquarium/`: animated ambient aquarium tray adapted from Reefs.
   - `state.rs`: embedded aquarium runtime state, per-frame movement, resize binding, and initial entity spawn.
   - `ui.rs`: top tray and aquarium renderer.

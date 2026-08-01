@@ -448,6 +448,9 @@ impl App {
         if let Some(state) = self.dopewars_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.codekeep_state.as_mut() {
+            state.tick();
+        }
         if let Some(state) = self.greendragon_state.as_mut() {
             // Same off-screen drain rule as Lateania above.
             let greendragon_changed = state.tick();
@@ -514,6 +517,11 @@ impl App {
                 .dopewars_state
                 .as_ref()
                 .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Codekeep
+            && self.codekeep_state.as_ref().is_none_or(|s| !s.is_running())
         {
             self.set_screen(Screen::Games);
         }
@@ -935,13 +943,6 @@ impl App {
             changed = true;
         }
 
-        let admin_tick = self.hub_admin_state.tick(self.is_admin);
-        changed |= admin_tick.changed;
-        if let Some(banner) = admin_tick.banner {
-            self.banner = Some(banner);
-            changed = true;
-        }
-
         // Active ultimates animate every tick; the expiry edge (active
         // before the retain, inactive after) still needs one frame to clear.
         let ultimate_was_active = self.ultimate_state.has_active_effect();
@@ -958,6 +959,13 @@ impl App {
             if !self.shop_state.dynamic_bonsai_enabled() {
                 self.show_bonsai_v2_modal = false;
             }
+            // A Bonsai Decay Shield purchase takes effect immediately for the
+            // live in-session death check (`BonsaiState::tick`); Dynamic
+            // Bonsai has no in-session decay simulation to refresh, so this
+            // only matters there from the next login onward.
+            self.bonsai_state.decay_protection = self.shop_state.active_bonsai_decay_protection();
+            self.bonsai_v2_state.decay_protection =
+                self.shop_state.active_bonsai_decay_protection();
         }
         if shop_tick.snapshot_changed
             && self.shop_state.is_loaded()

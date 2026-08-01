@@ -13,17 +13,17 @@ ARG DEBIAN_VERSION=bookworm
 # ==============================================================================
 # Stage 0: Door game binaries - prebuilt images from docker/doors/
 # ==============================================================================
-# Each door game (the real upstream binary, compiled from verified source) has
-# its own Dockerfile under docker/doors/ and its own workflow that builds and
-# pushes the image (.github/workflows/<door>.yml). Pinning them here by tag
-# means a door recipe rebuilds only when its own Dockerfile changes, never on
-# ordinary image builds. Bump a tag when that door's recipe or upstream
-# version changes.
+# Each door game's upstream runtime artifact is prepared by its own Dockerfile
+# under docker/doors/ and its own workflow that builds and pushes the image
+# (.github/workflows/<door>.yml). Pinning them here by tag means a door recipe
+# rebuilds only when its own Dockerfile changes, never on ordinary image
+# builds. Bump a tag when that door's recipe or upstream version changes.
 FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r1 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r1 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
 FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2 AS brogue-build
+FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
 
 # ==============================================================================
 # Stage 0: Base - Common system dependencies
@@ -105,6 +105,7 @@ COPY late-core/Cargo.toml late-core/Cargo.toml
 COPY late-ssh/Cargo.toml late-ssh/Cargo.toml
 COPY late-web/Cargo.toml late-web/Cargo.toml
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
+COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
 COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
 COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
 COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
@@ -117,11 +118,12 @@ COPY vendor vendor
 # built in these images (CLI-only YouTube helper), but it is a workspace member
 # and a late-cli path dependency, so its manifest and target stubs must exist
 # for `cargo metadata` to resolve the workspace.
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-webview/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
     echo "fn main() {}" > late-cli/src/main.rs && \
+    echo "fn main() {}" > late-codekeep/src/main.rs && \
     echo "fn main() {}" > late-nethack/src/main.rs && \
     echo "fn main() {}" > late-dcss/src/main.rs && \
     echo "fn main() {}" > late-brogue/src/main.rs && \
@@ -143,13 +145,14 @@ COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-codekeep -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper
 
 # Copy actual source code
 COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
+COPY late-codekeep late-codekeep
 COPY late-nethack late-nethack
 COPY late-dcss late-dcss
 COPY late-brogue late-brogue
@@ -170,9 +173,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web && \
-    cargo build --release -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper && \
+    cargo build --release -p late-codekeep -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
     cp /app/target/release/late-web /app/late-web-bin && \
+    cp /app/target/release/late-codekeep /app/late-codekeep-bin && \
     cp /app/target/release/late-nethack /app/late-nethack-bin && \
     cp /app/target/release/late-dcss /app/late-dcss-bin && \
     cp /app/target/release/late-brogue /app/late-brogue-bin && \
@@ -211,6 +215,15 @@ CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
 # so the default LATE_DOPEWARS_BIN (/usr/games/dopewars) resolves here.
 FROM dev-base AS dev-dopewars
 CMD ["cargo", "watch", "-w", "late-dopewars", "-x", "run -p late-dopewars"]
+
+# CodeKeep host: Bun + the lockfile-pinned npm package live only in this target.
+FROM dev-base AS dev-codekeep
+USER root
+COPY --from=codekeep-build /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
+COPY --from=codekeep-build /opt/codekeep /opt/codekeep
+RUN mkdir -p /var/lib/late-codekeep && chmod 0777 /var/lib/late-codekeep
+CMD ["cargo", "watch", "-w", "late-codekeep", "-x", "run -p late-codekeep"]
 
 # DCSS host: serves the game over SSH (see late-dcss). dev-base derives from
 # `base`, which already has the from-source crawl binary + data tree, so the
@@ -346,7 +359,25 @@ EXPOSE 2324
 CMD ["/app/late-dopewars"]
 
 # ==============================================================================
-# Stage 4f: Runtime DCSS - the late-dcss host (game served over SSH)
+# Stage 4f: Runtime CodeKeep - dedicated SSH/PTTY host
+# ==============================================================================
+FROM runtime-base AS runtime-codekeep
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=codekeep-build /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
+COPY --from=codekeep-build /opt/codekeep /opt/codekeep
+RUN mkdir -p /var/lib/late-codekeep && chown late:late /var/lib/late-codekeep
+COPY --from=builder /app/late-codekeep-bin /app/late-codekeep
+USER late
+
+EXPOSE 2328
+
+CMD ["/app/late-codekeep"]
+
+# ==============================================================================
+# Stage 4g: Runtime DCSS - the late-dcss host (game served over SSH)
 # ==============================================================================
 # Owns everything the game needs: the from-source console crawl binary + its
 # read-only data tree (/opt/dcss, DATADIR baked in at build time), the curses/

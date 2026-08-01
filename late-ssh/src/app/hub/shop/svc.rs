@@ -10,18 +10,19 @@ use late_core::{
     MutexRecover,
     db::{Db, DbConfig},
     models::{
+        bonsai_decay_protection::BonsaiDecayProtection,
         chat_room::ChatRoom,
         chips::{CHIP_USER_CHANGED_CHANNEL, UserChips, listen_for_chip_changes},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_VARIANT_SLOT,
-            CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus,
-            DYNAMIC_BONSAI_SKU, EquipStatus, FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU,
-            PurchaseStatus, SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL,
-            ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
-            adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
-            equip_owned_item_by_sku, list_marketplace_items_for_admin, listen_for_shop_changes,
-            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_username_effect,
-            unequip_slot, update_marketplace_item_for_admin,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+            BONSAI_DECAY_SHIELD_SKU, BONSAI_VARIANT_SLOT, CHAT_CONSUMABLE_ITEM_KIND,
+            COMPANION_CONSUMABLE_ITEM_KIND, ConsumableUseStatus, DYNAMIC_BONSAI_SKU, EquipStatus,
+            FishActiveStatus, MarketplaceItem, PET_COMPANION_SKU, PurchaseStatus,
+            SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND,
+            USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
+            aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
+            listen_for_shop_changes, purchase_item_by_sku_with_chat_effect,
+            purchase_item_by_sku_with_username_effect, unequip_slot,
         },
         shop_consumable_effect::ShopConsumableEffect,
         username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
@@ -46,6 +47,9 @@ pub struct ShopSnapshot {
     /// The user's live 24h username effect, if any (detail pane shows the
     /// style and remaining time).
     pub active_username_effect: Option<ActiveUsernameEffect>,
+    /// The user's live Bonsai Decay Shield window, if any (detail pane shows
+    /// the remaining time).
+    pub active_bonsai_decay_protection: Option<BonsaiDecayProtection>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +105,10 @@ impl ShopCatalogItem {
         self.sku == DYNAMIC_BONSAI_SKU
     }
 
+    pub fn is_bonsai_decay_shield(&self) -> bool {
+        self.sku == BONSAI_DECAY_SHIELD_SKU
+    }
+
     pub fn is_aquarium(&self) -> bool {
         self.sku == AQUARIUM_SKU
     }
@@ -116,7 +124,9 @@ impl ShopCatalogItem {
     pub fn is_consumable(&self) -> bool {
         matches!(
             self.item_kind.as_str(),
-            CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+            CHAT_CONSUMABLE_ITEM_KIND
+                | COMPANION_CONSUMABLE_ITEM_KIND
+                | BONSAI_CONSUMABLE_ITEM_KIND
         )
     }
 
@@ -371,28 +381,6 @@ impl ShopService {
         });
     }
 
-    pub async fn list_marketplace_items_for_admin(
-        &self,
-        is_admin: bool,
-    ) -> Result<Vec<late_core::models::marketplace::MarketplaceAdminRow>> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        list_marketplace_items_for_admin(&client).await
-    }
-
-    pub async fn update_marketplace_item_for_admin(
-        &self,
-        is_admin: bool,
-        update: late_core::models::marketplace::MarketplaceAdminUpdate,
-    ) -> Result<late_core::models::marketplace::MarketplaceAdminRow> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        let row = update_marketplace_item_for_admin(&client, update).await?;
-        drop(client);
-        self.refresh_catalog_for_active_users().await?;
-        Ok(row)
-    }
-
     pub fn use_aquarium_food_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -466,6 +454,17 @@ impl ShopService {
                     if result.item.item_kind == USERNAME_EFFECT_ITEM_KIND =>
                 {
                     format!("Activated {} (24h)", result.item.name)
+                }
+                PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
+                    if result.item.item_kind == BONSAI_CONSUMABLE_ITEM_KIND =>
+                {
+                    match &purchase.bonsai_decay_protection {
+                        Some(effect) => format!(
+                            "Bonsai protected until {} (UTC)",
+                            effect.ends_at.date_naive()
+                        ),
+                        None => format!("Bought {}", result.item.name),
+                    }
                 }
                 PurchaseStatus::Purchased if result.item.item_kind == AQUARIUM_FISH_ITEM_KIND => {
                     format!("Bought {} (owned {})", result.item.name, result.quantity)
@@ -651,6 +650,8 @@ impl ShopService {
                 ends_at: row.ends_at,
             })
         });
+        let active_bonsai_decay_protection =
+            BonsaiDecayProtection::for_user(&client, user_id).await?;
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -756,6 +757,7 @@ impl ShopService {
             active_room_effects,
             aquarium_hungry,
             active_username_effect,
+            active_bonsai_decay_protection,
         })
     }
 
@@ -851,6 +853,6 @@ impl ShopService {
 fn is_consumable_kind(item_kind: &str) -> bool {
     matches!(
         item_kind,
-        CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND
+        CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND | BONSAI_CONSUMABLE_ITEM_KIND
     )
 }

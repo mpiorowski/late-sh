@@ -144,7 +144,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ai: AiConfig {
             enabled: false,
             api_key: None,
-            model: "gemini-3.1-pro-preview".to_string(),
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
@@ -173,6 +172,10 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
     }
 }
 
@@ -190,7 +193,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     )
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
-    let ai_service = AiService::new(false, None, "gemini-3.1-pro-preview".to_string());
+    let ai_service = AiService::new(false, None);
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -407,7 +410,7 @@ fn make_app_with_chat_service_and_permissions(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -475,6 +478,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
+        initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -514,6 +518,10 @@ fn make_app_with_chat_service_and_permissions(
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
@@ -594,7 +602,7 @@ pub fn make_app_with_paired_client(
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
-            AiService::new(false, None, "gemini-3.1-pro-preview".to_string()),
+            AiService::new(false, None),
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -662,6 +670,7 @@ pub fn make_app_with_paired_client(
         initial_bonsai_tree: None,
         initial_bonsai_care: None,
         initial_bonsai_v2_tree: None,
+        initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone()),
         initial_pet: None,
         quest_service,
@@ -701,6 +710,10 @@ pub fn make_app_with_paired_client(
         dopewars_host: String::new(),
         dopewars_port: 2324,
         dopewars_secret: String::new(),
+        codekeep_enabled: false,
+        codekeep_host: String::new(),
+        codekeep_port: 2328,
+        codekeep_secret: String::new(),
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),

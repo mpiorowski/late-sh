@@ -67,6 +67,7 @@ pub enum Screen {
     Dcss,
     Brogue,
     Dopewars,
+    Codekeep,
     Usurper,
     GreenDragon,
     Darkroom,
@@ -107,6 +108,7 @@ impl Screen {
             | Screen::Dcss
             | Screen::Brogue
             | Screen::Dopewars
+            | Screen::Codekeep
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom => Screen::Games,
@@ -131,6 +133,7 @@ impl Screen {
             | Screen::Dcss
             | Screen::Brogue
             | Screen::Dopewars
+            | Screen::Codekeep
             | Screen::Usurper
             | Screen::GreenDragon
             | Screen::Darkroom => Screen::Games,
@@ -180,6 +183,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dcss => "DCSS",
         Screen::Brogue => "Brogue",
         Screen::Dopewars => "dopewars",
+        Screen::Codekeep => "CodeKeep",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,

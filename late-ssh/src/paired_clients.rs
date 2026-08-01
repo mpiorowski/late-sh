@@ -30,6 +30,16 @@ pub enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    /// Absolute mute/volume writes, relayed from a paired client's own
+    /// `set_muted`/`set_volume` pair-WS events (a desktop MPRIS widget, media
+    /// keys). Absolute rather than a toggle so every paired client converges
+    /// on the same state even if one of them had drifted.
+    SetMuted {
+        muted: bool,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
     /// Ask a capable CLI to read its clipboard image. `request_id` is echoed
     /// back in the `clipboard_image`/`clipboard_image_failed` payload so a
     /// late response to a timed-out request can't satisfy a newer one. Old
@@ -544,3 +554,7 @@ fn token_hint(token: &str) -> String {
     let prefix: String = token.chars().take(8).collect();
     format!("{prefix}..({})", token.len())
 }
+
+#[cfg(test)]
+#[path = "paired_clients_test.rs"]
+mod paired_clients_test;

@@ -1,7 +1,20 @@
 //! The quest surface. Quests are arcade-only by owner decision, so they
 //! render as a compact strip at the top of The Arcade lobby instead of a
 //! Hub tab: see the quest, launch the game, no modal in between.
+//!
+//! Layout (rows are dynamic, `arcade_strip_height` must match `strip_lines`):
+//!
+//! ```text
+//! ─── Quests ───  streak ▰▰▰▱▱▱ 3 days · next daily +300 bonus
+//!   Daily 0/2 · +525 chips to earn · resets 00:00 UTC
+//!     ○ Win easy Sudoku            easy     +150
+//!     ○ Score 10,000 in Snake      medium   +375  ▰▱▱▱▱▱▱▱ 4,000/10,000
+//!   Weekly 0/1 · +750 chips to earn · resets in 4d
+//!     ○ Win draw-3 Solitaire       hard     +750
+//! ```
 
+use chrono::{NaiveDate, Utc};
+use late_core::models::quest::{DailyQuestStreakSnapshot, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -17,32 +30,78 @@ use super::{
     svc::{QuestItem, QuestSnapshot},
 };
 
-/// Rows the strip needs: heading/summary, two dailies, one weekly, one
-/// blank separator before the lobby content.
-pub(crate) const ARCADE_STRIP_HEIGHT: u16 = 5;
+/// The streak meter has one slot per day until the bonus caps: day 1 starts
+/// the streak at bonus level 0, so the cap lands on day `MAX + 1`.
+const STREAK_BAR_SLOTS: i32 = MAX_DAILY_QUEST_STREAK_BONUS_LEVEL + 1;
+
+/// Item progress bars only fit comfortably on wider terminals; below this the
+/// bar is dropped and only the numeric progress remains.
+const ITEM_BAR_MIN_WIDTH: usize = 70;
+const ITEM_BAR_SLOTS: usize = 8;
+
+pub(crate) fn arcade_strip_height(state: &QuestState) -> u16 {
+    strip_height_for(state.snapshot(), state.is_loaded())
+}
+
+/// Content rows plus one blank separator before the lobby content.
+fn strip_height_for(snapshot: &QuestSnapshot, loaded: bool) -> u16 {
+    let mut rows: usize = 1;
+    if loaded {
+        if !snapshot.daily.is_empty() {
+            rows += 1 + snapshot.daily.len();
+        }
+        if !snapshot.weekly.is_empty() {
+            rows += 1 + snapshot.weekly.len();
+        }
+    }
+    (rows + 1) as u16
+}
 
 pub(crate) fn draw_arcade_strip(frame: &mut Frame, area: Rect, state: &QuestState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let snapshot = state.snapshot();
-    let mut lines = Vec::with_capacity(area.height as usize);
-    lines.push(heading_line(snapshot, state.is_loaded()));
-    for item in &snapshot.daily {
-        lines.push(item_line(item, None, area.width as usize));
-    }
-    for item in &snapshot.weekly {
-        lines.push(item_line(item, Some("weekly"), area.width as usize));
-    }
+    let today = Utc::now().date_naive();
+    let lines = strip_lines(
+        state.snapshot(),
+        state.is_loaded(),
+        today,
+        area.width as usize,
+    );
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn heading_line(snapshot: &QuestSnapshot, loaded: bool) -> Line<'static> {
+fn strip_lines(
+    snapshot: &QuestSnapshot,
+    loaded: bool,
+    today: NaiveDate,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![heading_line(&snapshot.daily_streak, loaded)];
+    if !loaded {
+        return lines;
+    }
+    if !snapshot.daily.is_empty() {
+        lines.push(section_line("Daily", &snapshot.daily, "resets 00:00 UTC"));
+        for item in &snapshot.daily {
+            lines.push(item_line(item, width));
+        }
+    }
+    if !snapshot.weekly.is_empty() {
+        let note = weekly_reset_note(&snapshot.weekly, today);
+        lines.push(section_line("Weekly", &snapshot.weekly, &note));
+        for item in &snapshot.weekly {
+            lines.push(item_line(item, width));
+        }
+    }
+    lines
+}
+
+fn heading_line(streak: &DailyQuestStreakSnapshot, loaded: bool) -> Line<'static> {
     let dim = Style::default().fg(theme::BORDER());
     let accent = Style::default()
         .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
-    let text = Style::default().fg(theme::TEXT_DIM());
 
     let mut spans = vec![
         Span::styled("─── ", dim),
@@ -50,68 +109,219 @@ fn heading_line(snapshot: &QuestSnapshot, loaded: bool) -> Line<'static> {
         Span::styled(" ───", dim),
     ];
     if !loaded {
-        spans.push(Span::styled("  loading", Style::default().fg(theme::TEXT_FAINT())));
+        spans.push(Span::styled(
+            "  loading",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
         return Line::from(spans);
     }
 
-    let daily_done = snapshot
-        .daily
-        .iter()
-        .filter(|item| item.completed())
-        .count();
-    let weekly_done = snapshot
-        .weekly
-        .iter()
-        .filter(|item| item.completed())
-        .count();
-    let streak = &snapshot.daily_streak;
-    let mut summary = format!(
-        "  daily {daily_done}/{} · weekly {weekly_done}/{}",
-        snapshot.daily.len(),
-        snapshot.weekly.len(),
-    );
-    summary.push_str(&format!(
-        " · streak {} day{}",
-        streak.consecutive_days,
-        if streak.consecutive_days == 1 { "" } else { "s" },
+    spans.push(Span::styled(
+        "  streak ",
+        Style::default().fg(theme::TEXT_DIM()),
     ));
-    if streak.next_bonus_chips > 0 {
-        summary.push_str(&format!(" · next +{} chips", streak.next_bonus_chips));
+    let filled = streak
+        .consecutive_days
+        .clamp(0, STREAK_BAR_SLOTS) as usize;
+    spans.extend(bar_spans(filled, STREAK_BAR_SLOTS as usize));
+    spans.push(Span::raw(" "));
+
+    if streak.consecutive_days == 0 {
+        spans.push(Span::styled(
+            "no streak · win any daily quest to start one",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+        return Line::from(spans);
     }
-    spans.push(Span::styled(summary, text));
+
+    let days = streak.consecutive_days;
+    spans.push(Span::styled(
+        format!("{days} day{}", if days == 1 { "" } else { "s" }),
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
+    spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
+    if filled as i32 >= STREAK_BAR_SLOTS {
+        spans.push(Span::styled(
+            format!("max bonus +{}/day", thousands(streak.current_bonus_chips)),
+            Style::default().fg(theme::AMBER()),
+        ));
+    } else {
+        spans.push(Span::styled(
+            format!("next daily +{} bonus", thousands(streak.next_bonus_chips)),
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
     Line::from(spans)
 }
 
-fn item_line(item: &QuestItem, tag: Option<&'static str>, width: usize) -> Line<'static> {
-    let done = item.completed();
-    let (status, status_style) = if done {
-        ("done", Style::default().fg(theme::SUCCESS()))
+fn section_line(label: &'static str, items: &[QuestItem], reset_note: &str) -> Line<'static> {
+    let done = items.iter().filter(|item| item.completed()).count();
+    let open_chips: i64 = items
+        .iter()
+        .filter(|item| !item.completed())
+        .map(|item| item.reward_chips)
+        .sum();
+
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {done}/{}", items.len()),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())),
+    ];
+    if open_chips > 0 {
+        spans.push(Span::styled(
+            format!("+{} chips to earn", thousands(open_chips)),
+            Style::default().fg(theme::AMBER()),
+        ));
     } else {
-        ("open", Style::default().fg(theme::AMBER_DIM()))
+        spans.push(Span::styled(
+            "all clear ✓",
+            Style::default().fg(theme::SUCCESS()),
+        ));
+    }
+    spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
+    spans.push(Span::styled(
+        reset_note.to_string(),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(spans)
+}
+
+fn weekly_reset_note(items: &[QuestItem], today: NaiveDate) -> String {
+    // `period_end` is the exclusive end of the assignment window, so the
+    // remaining days are a plain date difference.
+    let days_left = items
+        .iter()
+        .map(|item| (item.period_end - today).num_days())
+        .min()
+        .unwrap_or(0);
+    if days_left <= 0 {
+        "resets soon".to_string()
+    } else {
+        format!("resets in {days_left}d")
+    }
+}
+
+fn item_line(item: &QuestItem, width: usize) -> Line<'static> {
+    let done = item.completed();
+    let (mark, mark_style) = if done {
+        ("✓", Style::default().fg(theme::SUCCESS()))
+    } else {
+        ("○", Style::default().fg(theme::AMBER_DIM()))
     };
     let title_style = if done {
         Style::default().fg(theme::TEXT_DIM())
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
     };
+    let difficulty_style = if done {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        difficulty_color(&item.difficulty)
+    };
+    let reward_style = if done {
+        Style::default().fg(theme::TEXT_FAINT())
+    } else {
+        Style::default().fg(theme::AMBER())
+    };
 
-    let progress = format!("{}/{}", item.visible_progress(), item.target);
-    let mut meta = format!("  {progress}");
-    if item.reward_chips > 0 {
-        meta.push_str(&format!(" · +{} chips", item.reward_chips));
-    }
-    if let Some(tag) = tag {
-        meta.push_str(&format!(" · {tag}"));
-    }
+    // Columns: indent(4) mark(2) title gap(2) difficulty(7) gap(1) reward(6),
+    // then the optional progress tail for multi-step quests.
+    let show_bar = width >= ITEM_BAR_MIN_WIDTH;
+    let tail_budget = if item.target > 1 {
+        2 + if show_bar { ITEM_BAR_SLOTS + 1 } else { 0 }
+            + format!(
+                "{}/{}",
+                thousands(i64::from(item.visible_progress())),
+                thousands(i64::from(item.target)),
+            )
+            .chars()
+            .count()
+    } else {
+        0
+    };
+    let title_budget = width
+        .saturating_sub(4 + 2 + 2 + 7 + 1 + 6 + tail_budget)
+        .clamp(12, 30);
 
-    let title_budget = width.saturating_sub(8 + meta.chars().count());
-    Line::from(vec![
+    let mut spans = vec![
+        Span::raw("    "),
+        Span::styled(format!("{mark} "), mark_style),
+        Span::styled(
+            format!("{:<title_budget$}", truncate(&item.title, title_budget)),
+            title_style,
+        ),
         Span::raw("  "),
-        Span::styled(format!("{status:<4}"), status_style),
-        Span::raw("  "),
-        Span::styled(truncate(&item.title, title_budget), title_style),
-        Span::styled(meta, Style::default().fg(theme::AMBER_DIM())),
-    ])
+        Span::styled(format!("{:<7}", item.difficulty), difficulty_style),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:>6}", format!("+{}", thousands(item.reward_chips))),
+            reward_style,
+        ),
+    ];
+
+    if item.target > 1 && !done {
+        spans.push(Span::raw("  "));
+        if show_bar {
+            let filled = (item.visible_progress() as usize * ITEM_BAR_SLOTS)
+                / (item.target.max(1) as usize);
+            spans.extend(bar_spans(filled, ITEM_BAR_SLOTS));
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            format!(
+                "{}/{}",
+                thousands(i64::from(item.visible_progress())),
+                thousands(i64::from(item.target)),
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn bar_spans(filled: usize, slots: usize) -> Vec<Span<'static>> {
+    let filled = filled.min(slots);
+    vec![
+        Span::styled("▰".repeat(filled), Style::default().fg(theme::AMBER())),
+        Span::styled(
+            "▱".repeat(slots - filled),
+            Style::default().fg(theme::BORDER_DIM()),
+        ),
+    ]
+}
+
+fn difficulty_color(difficulty: &str) -> Style {
+    match difficulty {
+        "easy" => Style::default().fg(theme::SUCCESS()),
+        "medium" => Style::default().fg(theme::AMBER()),
+        "hard" => Style::default().fg(theme::ERROR()),
+        _ => Style::default().fg(theme::TEXT_DIM()),
+    }
+}
+
+fn thousands(value: i64) -> String {
+    let raw = value.abs().to_string();
+    let mut out = String::with_capacity(raw.len() + raw.len() / 3);
+    for (i, ch) in raw.chars().enumerate() {
+        if i > 0 && (raw.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if value < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -126,3 +336,7 @@ fn truncate(value: &str, max_chars: usize) -> String {
     out.push_str("...");
     out
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

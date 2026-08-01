@@ -1381,7 +1381,8 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Dcss
                     | HubGame::Brogue
                     | HubGame::Usurper
-                    | HubGame::Dopewars => {
+                    | HubGame::Dopewars
+                    | HubGame::Codekeep => {
                         app.leave_lateania();
                         app.lateania_service.delete_character_task(app.user_id);
                         app.banner = Some(crate::app::common::primitives::Banner::success(
@@ -1526,6 +1527,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.set_screen(Screen::Darkroom);
             app.enter_darkroom();
         }
+        HubGame::Codekeep => {
+            if !app.codekeep_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "CodeKeep is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Codekeep);
+            if let Some(state) = app.codekeep_state.as_mut() {
+                state.connect();
+            }
+        }
     }
 }
 
@@ -1669,6 +1682,13 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             }
             return true;
         }
+        return false;
+    }
+
+    if ctx.screen == Screen::Codekeep {
+        // Running bytes are intercepted before parsed input, and a non-running
+        // CodeKeep screen returns to the Games hub on the same tick (no exit
+        // grace), so there is no reachable launcher state to handle here.
         return false;
     }
 
@@ -3253,13 +3273,11 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             }
         }
         ChatClickKind::StoreBadge => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
         }
         ChatClickKind::StoreFlag => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
@@ -3375,6 +3393,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
+        Screen::Codekeep => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
@@ -3584,7 +3603,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
+fn open_hub_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3601,7 +3620,6 @@ fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state.open(tab);
     app.show_hub_modal = true;
 }
 
@@ -3611,7 +3629,7 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+        open_hub_modal_globally(app);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
@@ -3637,7 +3655,7 @@ fn pet_available_or_nudge(app: &mut App) -> bool {
     app.banner = Some(crate::app::common::primitives::Banner::error(
         "Unlock Pet Companion in Hub Shop",
     ));
-    open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+    open_hub_modal_globally(app);
     false
 }
 
@@ -3662,7 +3680,7 @@ pub(crate) fn pet_feed_globally(app: &mut App) {
     }
     let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
     if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
-        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+        open_hub_modal_globally(app);
     }
 }
 
@@ -3793,7 +3811,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 /// reached by typing `/shop` into a composer or through the locked-feature
 /// nudges, so this is the one shared entry point for both.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
-    open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+    open_hub_modal_globally(app);
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -4121,6 +4139,10 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
+        }
+        Screen::Codekeep => {
+            // Running-mode bytes are forwarded raw in App::handle_input; a
+            // non-running screen bounces back to Games on the same tick.
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);

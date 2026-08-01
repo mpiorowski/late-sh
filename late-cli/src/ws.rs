@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
@@ -23,7 +24,11 @@ use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, info, warn};
 
-use super::{clipboard, voice::VoiceRuntimeState};
+use super::{
+    clipboard,
+    mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    voice::VoiceRuntimeState,
+};
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
@@ -49,6 +54,16 @@ enum PairControlMessage {
     ToggleMute,
     VolumeUp,
     VolumeDown,
+    /// Absolute mute/volume fan-out. The server relays a paired client's own
+    /// `set_muted`/`set_volume` event (this CLI's MPRIS surface) to everyone
+    /// on the token, so the command that started at a desktop widget comes
+    /// back here as the state to apply.
+    SetMuted {
+        muted: bool,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
     RequestClipboardImage {
         /// Echoed back in the clipboard payload so the server can match the
         /// response to this exact request. None from older servers.
@@ -61,6 +76,18 @@ enum PairControlMessage {
         stream_url: Option<String>,
         #[serde(default)]
         station: Option<String>,
+    },
+    QueueUpdate {
+        #[serde(default)]
+        current: Option<YoutubeTrack>,
+    },
+    NowPlayingUpdate {
+        #[serde(default)]
+        mounts: HashMap<String, IcecastTrack>,
+    },
+    RadioMetaUpdate {
+        #[serde(default)]
+        stations: HashMap<String, RadioTrack>,
     },
     VoiceJoin {
         room: String,
@@ -78,12 +105,22 @@ enum PairControlMessage {
     },
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum PairAudioSource {
     Icecast,
     Youtube,
     Radio,
+}
+
+impl From<PairAudioSource> for MediaSource {
+    fn from(source: PairAudioSource) -> Self {
+        match source {
+            PairAudioSource::Icecast => Self::Icecast,
+            PairAudioSource::Youtube => Self::Youtube,
+            PairAudioSource::Radio => Self::Radio,
+        }
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -598,13 +635,21 @@ impl Drop for WebviewPlaybackController {
     }
 }
 
+/// Mutable client-side runtime driven by the pair websocket loop: the webview
+/// helper, voice state, and the desktop media surface with its command feed.
+pub(super) struct PairRuntime<'a> {
+    pub(super) webview: &'a mut WebviewPlaybackController,
+    pub(super) voice: &'a mut VoiceRuntimeState,
+    pub(super) desktop_media: &'a mut DesktopMedia,
+    pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
+}
+
 pub(super) async fn run_pair_ws(
     api_base_url: &str,
     token: &str,
     client: &PairClientInfo,
     playback: &PlaybackState<'_>,
-    webview: &mut WebviewPlaybackController,
-    voice: &mut VoiceRuntimeState,
+    runtime: PairRuntime<'_>,
 ) -> Result<()> {
     let ws_url = pair_ws_url(api_base_url, token)?;
     debug!("connecting pair websocket");
@@ -617,34 +662,42 @@ pub(super) async fn run_pair_ws(
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     let mut voice_speaking_poll = interval(Duration::from_millis(250));
     send_client_state(&mut ws, client, playback).await?;
-    if voice.joined {
-        send_voice_state(&mut ws, voice).await?;
+    if runtime.voice.joined {
+        send_voice_state(&mut ws, runtime.voice).await?;
     }
 
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                if voice.joined && voice.media_disconnected() {
+                if runtime.voice.joined && runtime.voice.media_disconnected() {
                     warn!("voice media disconnected; leaving voice state");
-                    voice.leave().await;
-                    send_voice_state(&mut ws, voice).await?;
+                    runtime.voice.leave().await;
+                    send_voice_state(&mut ws, runtime.voice).await?;
                 }
                 let payload = json!({
                     "event": "heartbeat",
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
-                webview.maintain_helper(
+                runtime.webview.maintain_helper(
                     playback.muted.load(Ordering::Relaxed),
                     playback.volume_percent.load(Ordering::Relaxed),
                 );
             }
-            _ = voice_state_heartbeat.tick(), if voice.joined => {
-                send_voice_state(&mut ws, voice).await?;
+            // A desktop media client (widget play/pause, a media key, the
+            // volume slider) issued a control. It is not applied locally: the
+            // server fans the resulting set_muted/set_volume back to every
+            // paired client, this CLI and the webview helper alike, which is
+            // what lets a widget press mute YouTube too.
+            Some(command) = runtime.desktop_commands.recv() => {
+                send_desktop_command(&mut ws, command).await?;
             }
-            _ = voice_speaking_poll.tick(), if voice.joined => {
-                if voice.sync_speaking_from_media() {
-                    send_voice_state(&mut ws, voice).await?;
+            _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
+                send_voice_state(&mut ws, runtime.voice).await?;
+            }
+            _ = voice_speaking_poll.tick(), if runtime.voice.joined => {
+                if runtime.voice.sync_speaking_from_media() {
+                    send_voice_state(&mut ws, runtime.voice).await?;
                 }
             }
             maybe_msg = ws.next() => {
@@ -654,7 +707,15 @@ pub(super) async fn run_pair_ws(
                 match msg? {
                     Message::Text(text) => {
                         let should_send_state =
-                            handle_pair_control(&text, &mut ws, playback, webview, voice).await?;
+                            handle_pair_control(
+                                &text,
+                                &mut ws,
+                                playback,
+                                runtime.webview,
+                                runtime.voice,
+                                runtime.desktop_media,
+                            )
+                            .await?;
                         if should_send_state {
                             send_client_state(&mut ws, client, playback).await?;
                         }
@@ -697,6 +758,7 @@ async fn handle_pair_control(
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
     voice: &mut VoiceRuntimeState,
+    desktop_media: &mut DesktopMedia,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -708,8 +770,11 @@ async fn handle_pair_control(
     match control {
         audio_control @ (PairControlMessage::ToggleMute
         | PairControlMessage::VolumeUp
-        | PairControlMessage::VolumeDown) => {
+        | PairControlMessage::VolumeDown
+        | PairControlMessage::SetMuted { .. }
+        | PairControlMessage::SetVolume { .. }) => {
             apply_audio_pair_control(audio_control, playback.muted, playback.volume_percent);
+            desktop_media.republish_audio_state();
             Ok(true)
         }
         PairControlMessage::SetPlaybackSource {
@@ -773,6 +838,23 @@ async fn handle_pair_control(
                 playback.muted.load(Ordering::Relaxed),
                 playback.volume_percent.load(Ordering::Relaxed),
             )?;
+            desktop_media.select_source(
+                source.into(),
+                station,
+                local_stream_url.map(str::to_string),
+            );
+            Ok(false)
+        }
+        PairControlMessage::QueueUpdate { current } => {
+            desktop_media.update_youtube(current);
+            Ok(false)
+        }
+        PairControlMessage::NowPlayingUpdate { mounts } => {
+            desktop_media.update_icecast(mounts);
+            Ok(false)
+        }
+        PairControlMessage::RadioMetaUpdate { stations } => {
+            desktop_media.update_radio(stations);
             Ok(false)
         }
         PairControlMessage::RequestClipboardImage { request_id } => {
@@ -832,6 +914,42 @@ async fn handle_pair_control(
     }
 }
 
+/// Forward a desktop media command (MPRIS play/pause, media keys, the volume
+/// slider) to the server as its pair-WS event. The server fans the result
+/// back to every paired client; nothing is applied locally here.
+#[cfg(target_os = "linux")]
+async fn send_desktop_command(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    command: DesktopCommand,
+) -> Result<()> {
+    let payload = match command {
+        DesktopCommand::SetMuted { muted } => json!({
+            "event": "set_muted",
+            "muted": muted,
+        }),
+        DesktopCommand::SetVolume { volume_percent } => json!({
+            "event": "set_volume",
+            "volume_percent": volume_percent,
+        }),
+    };
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
+}
+
+/// Off-Linux `DesktopCommand` is uninhabited, so this can never be reached;
+/// the empty match proves it to the compiler and keeps the pair loop cfg-free.
+#[cfg(not(target_os = "linux"))]
+async fn send_desktop_command(
+    _ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    command: DesktopCommand,
+) -> Result<()> {
+    match command {}
+}
+
 fn set_stream_url(stream_url: &Mutex<String>, stream_generation: &AtomicU64, url: &str) -> bool {
     let mut current = stream_url
         .lock()
@@ -880,7 +998,26 @@ fn apply_audio_pair_control(
             let new_volume = bump_volume(volume_percent, -5);
             info!(volume_percent = new_volume, "applied paired volume down");
         }
+        PairControlMessage::SetMuted { muted: new_muted } => {
+            muted.store(new_muted, Ordering::Relaxed);
+            info!(muted = new_muted, "applied paired mute set");
+        }
+        PairControlMessage::SetVolume {
+            volume_percent: new_volume,
+        } => {
+            volume_percent.store(new_volume, Ordering::Relaxed);
+            // A slider dragged off zero is a widget's only way back from
+            // pause, so a non-zero volume also unmutes; the webview helper
+            // applies the same rule to its own fan-out copy.
+            if new_volume > 0 {
+                muted.store(false, Ordering::Relaxed);
+            }
+            info!(volume_percent = new_volume, "applied paired volume set");
+        }
         PairControlMessage::SetPlaybackSource { .. }
+        | PairControlMessage::QueueUpdate { .. }
+        | PairControlMessage::NowPlayingUpdate { .. }
+        | PairControlMessage::RadioMetaUpdate { .. }
         | PairControlMessage::RequestClipboardImage { .. }
         | PairControlMessage::VoiceJoin { .. }
         | PairControlMessage::VoiceLeave
