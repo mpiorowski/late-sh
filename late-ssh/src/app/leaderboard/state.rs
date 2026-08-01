@@ -1,4 +1,7 @@
-use late_core::models::leaderboard::{DailyPuzzle, LeaderboardData, RankedEntry, ScoreGame};
+use late_core::models::{
+    chips::Difficulty,
+    leaderboard::{DailyPuzzle, LeaderboardData, RankedEntry, ScoreGame},
+};
 
 const EMPTY: &[RankedEntry] = &[];
 
@@ -32,13 +35,20 @@ impl Board {
         }
     }
 
-    /// One line under the board title saying what the numbers are.
-    pub(crate) fn hint(self) -> &'static str {
+    /// One line under the board title saying what the numbers are. The
+    /// ArcadeWins arm is formatted from [`Difficulty::points`] so the copy
+    /// cannot drift from the SQL the points come from.
+    pub(crate) fn hint(self) -> String {
         match self {
-            Self::TopChips => "monthly net chip delta, shop spend ignored",
-            Self::ArcadeWins => "daily puzzle points: easy 1 · medium 3 · hard 5",
-            Self::Daily(_) => "daily wins",
-            Self::Score(_) => "best score",
+            Self::TopChips => "monthly net chip delta, shop spend ignored".to_string(),
+            Self::ArcadeWins => format!(
+                "daily puzzle points: easy {} · medium {} · hard {}",
+                Difficulty::Easy.points(),
+                Difficulty::Medium.points(),
+                Difficulty::Hard.points(),
+            ),
+            Self::Daily(_) => "daily wins".to_string(),
+            Self::Score(_) => "best score".to_string(),
         }
     }
 

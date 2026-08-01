@@ -4,11 +4,14 @@ use ratatui::text::Line;
 
 use super::{
     super::svc::{QuestItem, QuestSnapshot},
-    heading_line, item_line, section_line, strip_height_for, strip_lines, thousands,
+    heading_line, item_line, section_line, strip_height_for, strip_lines,
 };
 
 fn text(line: &Line) -> String {
-    line.spans.iter().map(|span| span.content.as_ref()).collect()
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 fn quest_item(title: &str, difficulty: &str, target: i32, progress: i32) -> QuestItem {
@@ -36,7 +39,10 @@ fn heading_shows_streak_meter_and_next_bonus() {
         next_bonus_chips: 300,
     };
     let rendered = text(&heading_line(&streak, true));
-    assert!(rendered.contains("▰▰▰▱▱▱"), "3-day streak fills 3 of 6 slots: {rendered}");
+    assert!(
+        rendered.contains("▰▰▰▱▱▱"),
+        "3-day streak fills 3 of 6 slots: {rendered}"
+    );
     assert!(rendered.contains("3 days"), "{rendered}");
     assert!(rendered.contains("next daily +300 bonus"), "{rendered}");
 
@@ -52,7 +58,10 @@ fn heading_shows_streak_meter_and_next_bonus() {
         next_bonus_chips: 500,
     };
     let rendered = text(&heading_line(&capped, true));
-    assert!(rendered.contains("▰▰▰▰▰▰"), "capped streak fills the meter: {rendered}");
+    assert!(
+        rendered.contains("▰▰▰▰▰▰"),
+        "capped streak fills the meter: {rendered}"
+    );
     assert!(rendered.contains("max bonus +500/day"), "{rendered}");
 }
 
@@ -61,7 +70,11 @@ fn section_line_counts_done_and_sums_open_chips() {
     let mut done = quest_item("Win easy Sudoku", "easy", 1, 1);
     done.reward_chips = 150;
     let open = quest_item("Score 10,000 in Snake", "medium", 10_000, 0);
-    let rendered = text(&section_line("Daily", &[done.clone(), open], "resets 00:00 UTC"));
+    let rendered = text(&section_line(
+        "Daily",
+        &[done.clone(), open],
+        "resets 00:00 UTC",
+    ));
     assert!(rendered.contains("Daily 1/2"), "{rendered}");
     assert!(rendered.contains("+375 chips to earn"), "{rendered}");
     assert!(rendered.contains("resets 00:00 UTC"), "{rendered}");
@@ -72,23 +85,44 @@ fn section_line_counts_done_and_sums_open_chips() {
 
 #[test]
 fn item_line_shows_progress_bar_only_for_multi_step_quests() {
-    let scored = text(&item_line(&quest_item("Score 10,000 in Snake", "medium", 10_000, 4_000), 90));
+    let scored = text(&item_line(
+        &quest_item("Score 10,000 in Snake", "medium", 10_000, 4_000),
+        90,
+    ));
     assert!(scored.contains("○"), "{scored}");
-    assert!(scored.contains("▰▰▰▱▱▱▱▱"), "4,000 of 10,000 fills 3 of 8 slots: {scored}");
+    assert!(
+        scored.contains("▰▰▰▱▱▱▱▱"),
+        "4,000 of 10,000 fills 3 of 8 slots: {scored}"
+    );
     assert!(scored.contains("4,000/10,000"), "{scored}");
     assert!(scored.contains("+375"), "{scored}");
 
     let single = text(&item_line(&quest_item("Win easy Sudoku", "easy", 1, 0), 90));
-    assert!(!single.contains("▱"), "single-step quests get no bar: {single}");
+    assert!(
+        !single.contains("▱"),
+        "single-step quests get no bar: {single}"
+    );
     assert!(!single.contains("0/1"), "{single}");
 
-    let narrow = text(&item_line(&quest_item("Score 10,000 in Snake", "medium", 10_000, 4_000), 60));
-    assert!(!narrow.contains("▰"), "narrow terminals drop the bar: {narrow}");
+    let narrow = text(&item_line(
+        &quest_item("Score 10,000 in Snake", "medium", 10_000, 4_000),
+        60,
+    ));
+    assert!(
+        !narrow.contains("▰"),
+        "narrow terminals drop the bar: {narrow}"
+    );
     assert!(narrow.contains("4,000/10,000"), "{narrow}");
 
-    let done = text(&item_line(&quest_item("Score 10,000 in Snake", "medium", 10_000, 12_000), 90));
+    let done = text(&item_line(
+        &quest_item("Score 10,000 in Snake", "medium", 10_000, 12_000),
+        90,
+    ));
     assert!(done.contains("✓"), "{done}");
-    assert!(!done.contains("10,000/10,000"), "finished quests drop the progress tail: {done}");
+    assert!(
+        !done.contains("10,000/10,000"),
+        "finished quests drop the progress tail: {done}"
+    );
 }
 
 #[test]
@@ -116,24 +150,18 @@ fn strip_height_matches_rendered_lines_plus_separator() {
 fn weekly_reset_note_counts_days_to_exclusive_period_end() {
     let today = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
     let item = quest_item("Win draw-3 Solitaire", "hard", 1, 0);
-    let rendered = text(&strip_lines(
-        &QuestSnapshot {
-            user_id: None,
-            daily: Vec::new(),
-            weekly: vec![item],
-            daily_streak: DailyQuestStreakSnapshot::default(),
-        },
-        true,
-        today,
-        90,
-    )[3]);
+    let rendered = text(
+        &strip_lines(
+            &QuestSnapshot {
+                user_id: None,
+                daily: Vec::new(),
+                weekly: vec![item],
+                daily_streak: DailyQuestStreakSnapshot::default(),
+            },
+            true,
+            today,
+            90,
+        )[3],
+    );
     assert!(rendered.contains("resets in 4d"), "{rendered}");
-}
-
-#[test]
-fn thousands_groups_digits() {
-    assert_eq!(thousands(0), "0");
-    assert_eq!(thousands(999), "999");
-    assert_eq!(thousands(10_000), "10,000");
-    assert_eq!(thousands(1_234_567), "1,234,567");
 }

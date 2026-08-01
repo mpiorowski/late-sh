@@ -258,8 +258,8 @@ start-instance2:
 keys:
 	@if [ ! -f server_key ]; then ssh-keygen -t ed25519 -f server_key -N "" -q; fi
 
-# Fill the local Compose database with synthetic players so the Hub leaderboard
-# renders populated panels. Local development only: it owns the users whose
+# Fill the local Compose database with synthetic players so the Leaderboards
+# page renders populated boards. Local development only: it owns the users whose
 # fingerprints start with seed:leaderboard: and rewrites their stats on rerun.
 .PHONY: seed-leaderboard
 seed-leaderboard:

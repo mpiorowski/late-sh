@@ -491,7 +491,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
         "  /pet               toggle the pet strip in the Lounge",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages",
-                "  ?                  open this guide; Pair and terminal-specific tabs live here",
+        "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
         "  j / k              select older / newer message",

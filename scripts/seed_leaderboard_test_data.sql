@@ -113,6 +113,7 @@ DELETE FROM solitaire_daily_wins w USING seed_players p WHERE w.user_id = p.user
 DELETE FROM minesweeper_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM rubiks_cube_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM le_word_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
+DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
 
 -- Balances and a multi-event monthly chip ledger. Shop spending is present but
 -- intentionally excluded by the production monthly-earners query.
@@ -462,6 +463,27 @@ SELECT c.user_id, current_date - 400 + g.n * 9, 1 + (g.n % 6)
 FROM seed_current_player c
 CROSS JOIN generate_series(1, 24) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
+
+-- The rollup the all-time daily-win boards read. Production maintains it
+-- inside each win-insert statement; this seed writes win rows raw, so rebuild
+-- the seed players' totals from the tables just filled.
+INSERT INTO daily_win_totals (game, user_id, wins)
+SELECT w.game, w.user_id, COUNT(*)
+FROM (
+    SELECT 'sudoku' AS game, user_id FROM sudoku_daily_wins
+    UNION ALL
+    SELECT 'nonogram', user_id FROM nonogram_daily_wins
+    UNION ALL
+    SELECT 'minesweeper', user_id FROM minesweeper_daily_wins
+    UNION ALL
+    SELECT 'solitaire', user_id FROM solitaire_daily_wins
+    UNION ALL
+    SELECT 'le_word', user_id FROM le_word_daily_wins
+    UNION ALL
+    SELECT 'rubiks_cube', user_id FROM rubiks_cube_daily_wins
+) w
+JOIN seed_players p ON p.user_id = w.user_id
+GROUP BY w.game, w.user_id;
 
 COMMIT;
 

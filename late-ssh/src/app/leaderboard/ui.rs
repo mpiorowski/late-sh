@@ -12,7 +12,10 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use crate::app::common::{primitives::hint_line, theme};
+use crate::app::common::{
+    primitives::{hint_line, thousands},
+    theme,
+};
 
 use super::state::{Board, LeaderboardPageState};
 
@@ -46,19 +49,52 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>
     draw_rail(frame, columns[0], view.state);
     draw_detail(frame, columns[2], view);
     frame.render_widget(
-        Paragraph::new(hint_line(&[
-            ("j/k", "select board"),
-            ("Tab", "next page"),
-        ])),
+        Paragraph::new(hint_line(&[("j/k", "select board"), ("Tab", "next page")])),
         rows[2],
     );
 }
 
 fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
+    let (lines, selected_line) = rail_lines(state);
+
+    // Keep the selection visible on short terminals without recentering on
+    // every keypress: scroll only once it would leave the viewport.
+    let visible = area.height as usize;
+    let scroll = if visible >= lines.len() {
+        0
+    } else {
+        selected_line
+            .saturating_sub(visible.saturating_sub(2))
+            .min(lines.len().saturating_sub(visible))
+    };
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
+}
+
+/// The board rail. The bespoke boards lead under one "Boards" header; the
+/// roster boards get one header per group. Returns the built lines and the
+/// index of the selected row, so the caller can keep it scrolled into view.
+fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
+    let boards = state.boards();
+    let first_daily = boards
+        .iter()
+        .position(|board| matches!(board, Board::Daily(_)));
+    let first_score = boards
+        .iter()
+        .position(|board| matches!(board, Board::Score(_)));
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = 0usize;
-    for (index, board) in state.boards().iter().copied().enumerate() {
-        if let Some(header) = group_header(state.boards(), index) {
+    for (index, board) in boards.iter().copied().enumerate() {
+        let header = if Some(index) == first_daily {
+            Some("Daily Wins")
+        } else if Some(index) == first_score {
+            Some("High Scores")
+        } else if index == 0 {
+            Some("Boards")
+        } else {
+            None
+        };
+        if let Some(header) = header {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
@@ -80,41 +116,7 @@ fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
             Span::styled(board.title(), style),
         ]));
     }
-
-    // Keep the selection visible on short terminals without recentering on
-    // every keypress: scroll only once it would leave the viewport.
-    let visible = area.height as usize;
-    let scroll = if visible >= lines.len() {
-        0
-    } else {
-        selected_line
-            .saturating_sub(visible.saturating_sub(2))
-            .min(lines.len().saturating_sub(visible))
-    };
-    frame.render_widget(
-        Paragraph::new(lines).scroll((scroll as u16, 0)),
-        area,
-    );
-}
-
-/// The rail groups the roster boards under one header each; the bespoke
-/// boards lead ungrouped.
-fn group_header(boards: &[Board], index: usize) -> Option<&'static str> {
-    let first_daily = boards
-        .iter()
-        .position(|board| matches!(board, Board::Daily(_)));
-    let first_score = boards
-        .iter()
-        .position(|board| matches!(board, Board::Score(_)));
-    if Some(index) == first_daily {
-        Some("Daily Wins")
-    } else if Some(index) == first_score {
-        Some("High Scores")
-    } else if index == 0 {
-        Some("Boards")
-    } else {
-        None
-    }
+    (lines, selected_line)
 }
 
 fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
@@ -140,9 +142,9 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     match board.all_time(view.data) {
         Some(all_time) => {
             let columns = Layout::horizontal([
-                Constraint::Percentage(50),
+                Constraint::Fill(1),
                 Constraint::Length(2),
-                Constraint::Percentage(50),
+                Constraint::Fill(1),
             ])
             .split(rows[3]);
             draw_window(frame, columns[0], "monthly", monthly, board, view.user_id);
@@ -165,6 +167,29 @@ fn draw_window(
     if area.height < 3 || area.width < 12 {
         return;
     }
+    let capacity = (area.height as usize).saturating_sub(1);
+    let lines = window_lines(
+        heading,
+        entries,
+        board,
+        user_id,
+        capacity,
+        area.width as usize,
+    );
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// One standings window: heading, then up to `capacity` leader rows. When the
+/// viewer ranks below the visible leaders, their own row replaces the last
+/// two rows as an ellipsis tail.
+fn window_lines(
+    heading: &'static str,
+    entries: &[RankedEntry],
+    board: Board,
+    user_id: Uuid,
+    capacity: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![section_heading(heading)];
 
     if entries.is_empty() {
@@ -172,41 +197,31 @@ fn draw_window(
             Span::raw("  "),
             Span::styled(empty_copy(board), Style::default().fg(theme::TEXT_FAINT())),
         ]));
-        frame.render_widget(Paragraph::new(lines), area);
-        return;
+        return lines;
     }
 
-    // Leader rows fill the space; when the viewer ranks below the visible
-    // leaders their own row replaces the last two rows as an ellipsis tail.
-    let capacity = (area.height as usize).saturating_sub(1);
-    let own_row = entries.iter().find(|entry| entry.user_id == user_id);
-    let own_visible = own_row
-        .map(|own| {
-            entries
-                .iter()
-                .take(capacity)
-                .any(|entry| entry.user_id == own.user_id)
-        })
-        .unwrap_or(true);
+    let own_index = entries.iter().position(|entry| entry.user_id == user_id);
+    let own_visible = own_index.is_none_or(|index| index < capacity);
     let leader_rows = if own_visible {
         capacity
     } else {
         capacity.saturating_sub(2)
     };
 
-    let width = area.width as usize;
     for entry in entries.iter().take(leader_rows) {
         lines.push(entry_line(entry, board, entry.user_id == user_id, width));
     }
-    if !own_visible && let Some(own) = own_row {
+    if let Some(index) = own_index
+        && index >= capacity
+    {
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled("…", Style::default().fg(theme::TEXT_FAINT())),
         ]));
-        lines.push(entry_line(own, board, true, width));
+        lines.push(entry_line(&entries[index], board, true, width));
     }
 
-    frame.render_widget(Paragraph::new(lines), area);
+    lines
 }
 
 fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Line<'static> {
@@ -226,7 +241,7 @@ fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Lin
     };
 
     let rank = format!("  #{:<3}", entry.rank);
-    let mut value = format_value(entry.value);
+    let mut value = thousands(entry.value);
     let label = board.value_label();
     if !label.is_empty() {
         value.push(' ');
@@ -255,20 +270,6 @@ fn empty_copy(board: Board) -> &'static str {
     }
 }
 
-fn format_value(value: i64) -> String {
-    let raw = value.to_string();
-    let (sign, digits) = raw.strip_prefix('-').map_or(("", raw.as_str()), |rest| ("-", rest));
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + sign.len());
-    out.push_str(sign);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 fn truncate(value: &str, max_chars: usize) -> String {
     let count = value.chars().count();
     if count <= max_chars {
@@ -293,3 +294,7 @@ fn section_heading(title: &str) -> Line<'static> {
         Span::styled(" ──", dim),
     ])
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

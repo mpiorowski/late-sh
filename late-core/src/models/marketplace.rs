@@ -96,7 +96,6 @@ impl MarketplaceItem {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct UserPurchase {
     pub id: Uuid,

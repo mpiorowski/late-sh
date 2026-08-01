@@ -283,3 +283,22 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     }
     Line::from(spans)
 }
+
+/// Group digits with commas: `10000` → `"10,000"`. The shared formatter for
+/// every chip, score, and progress figure, so numbers read the same on all
+/// surfaces.
+pub(crate) fn thousands(value: i64) -> String {
+    let raw = value.to_string();
+    let (sign, digits) = raw
+        .strip_prefix('-')
+        .map_or(("", raw.as_str()), |rest| ("-", rest));
+    let mut out = String::with_capacity(sign.len() + digits.len() + digits.len() / 3);
+    out.push_str(sign);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}

@@ -1,4 +1,7 @@
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyPuzzle};
+use late_core::models::{
+    chips::Difficulty,
+    leaderboard::{DailyCompletionStatus, DailyPuzzle},
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -18,6 +21,19 @@ use crate::app::{
 };
 
 type DailyRewardTiers = &'static [(&'static str, i64)];
+
+/// The three-tier games pay [`Difficulty::chips`] per tier. Solitaire's draw
+/// modes are not difficulties, but pay the medium and hard chip amounts; the
+/// mapping lives here per the `Difficulty` doc.
+const TIERED_REWARDS: DailyRewardTiers = &[
+    (Difficulty::Easy.key(), Difficulty::Easy.chips()),
+    (Difficulty::Medium.key(), Difficulty::Medium.chips()),
+    (Difficulty::Hard.key(), Difficulty::Hard.chips()),
+];
+const SOLITAIRE_REWARDS: DailyRewardTiers = &[
+    ("draw-1", Difficulty::Medium.chips()),
+    ("draw-3", Difficulty::Hard.chips()),
+];
 type DailyRow = (
     usize,
     &'static str,
@@ -598,7 +614,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
             DailyPuzzle::Sudoku,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_NONOGRAMS,
@@ -606,7 +622,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
             DailyPuzzle::Nonogram,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_MINESWEEPER,
@@ -614,7 +630,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Flag mines, clear the field. Three lives.",
             true,
             DailyPuzzle::Minesweeper,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_SOLITAIRE,
@@ -622,7 +638,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Klondike with daily and personal deals over SSH.",
             true,
             DailyPuzzle::Solitaire,
-            &[("draw-1", 250), ("draw-3", 500)],
+            SOLITAIRE_REWARDS,
         ),
     ];
 

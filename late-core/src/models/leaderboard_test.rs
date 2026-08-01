@@ -103,3 +103,43 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     assert!(rival_status.completed(DailyPuzzle::RubiksCube));
     assert!(rival_status.completed_difficulty(DailyPuzzle::RubiksCube, "daily"));
 }
+
+/// Same-day replays upsert the win row (keep-best-score), so they must not
+/// inflate the `daily_win_totals` rollup the all-time boards read: the bump
+/// fires only on a fresh insert.
+#[tokio::test]
+async fn replayed_daily_win_does_not_double_count_all_time() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let solver = create_test_user(&test_db.db, "lb_replayer").await;
+    let today = Utc::now().date_naive();
+
+    sudoku::DailyWin::record_win(&client, solver.id, "hard".to_string(), today, 100)
+        .await
+        .expect("record first win");
+    sudoku::DailyWin::record_win(&client, solver.id, "hard".to_string(), today, 250)
+        .await
+        .expect("record same-day replay");
+    sudoku::DailyWin::record_win(&client, solver.id, "easy".to_string(), today, 90)
+        .await
+        .expect("record second tier win");
+
+    // Raw witness on the rollup itself: two fresh wins, no replay bump.
+    let wins: i64 = client
+        .query_one(
+            "SELECT wins FROM daily_win_totals WHERE game = 'sudoku' AND user_id = $1",
+            &[&solver.id],
+        )
+        .await
+        .expect("rollup row present")
+        .get(0);
+    assert_eq!(wins, 2);
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    let board = data
+        .daily_board(DailyPuzzle::Sudoku)
+        .expect("sudoku board present");
+    assert_eq!(entry_for(&board.all_time, solver.id).value, 2);
+}

@@ -28,7 +28,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::common::theme;
+use crate::app::common::{primitives::thousands, theme};
 
 use super::{
     state::QuestState,
@@ -88,10 +88,7 @@ fn strip_lines(
     today: NaiveDate,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::from(""),
-        heading_line(&snapshot.daily_streak, loaded),
-    ];
+    let mut lines = vec![Line::from(""), heading_line(&snapshot.daily_streak, loaded)];
     if !loaded {
         return lines;
     }
@@ -133,9 +130,7 @@ fn heading_line(streak: &DailyQuestStreakSnapshot, loaded: bool) -> Line<'static
         "  streak ",
         Style::default().fg(theme::TEXT_DIM()),
     ));
-    let filled = streak
-        .consecutive_days
-        .clamp(0, STREAK_BAR_SLOTS) as usize;
+    let filled = streak.consecutive_days.clamp(0, STREAK_BAR_SLOTS) as usize;
     spans.extend(bar_spans(filled, STREAK_BAR_SLOTS as usize));
     spans.push(Span::raw(" "));
 
@@ -284,8 +279,8 @@ fn item_line(item: &QuestItem, width: usize) -> Line<'static> {
     if item.target > 1 && !done {
         spans.push(Span::raw("  "));
         if show_bar {
-            let filled = (item.visible_progress() as usize * ITEM_BAR_SLOTS)
-                / (item.target.max(1) as usize);
+            let filled =
+                (item.visible_progress() as usize * ITEM_BAR_SLOTS) / (item.target.max(1) as usize);
             spans.extend(bar_spans(filled, ITEM_BAR_SLOTS));
             spans.push(Span::raw(" "));
         }
@@ -318,22 +313,6 @@ fn difficulty_color(difficulty: &str) -> Style {
         "medium" => Style::default().fg(theme::AMBER()),
         "hard" => Style::default().fg(theme::ERROR()),
         _ => Style::default().fg(theme::TEXT_DIM()),
-    }
-}
-
-fn thousands(value: i64) -> String {
-    let raw = value.abs().to_string();
-    let mut out = String::with_capacity(raw.len() + raw.len() / 3);
-    for (i, ch) in raw.chars().enumerate() {
-        if i > 0 && (raw.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    if value < 0 {
-        format!("-{out}")
-    } else {
-        out
     }
 }
 

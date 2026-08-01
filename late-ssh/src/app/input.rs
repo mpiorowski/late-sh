@@ -3603,7 +3603,10 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App) {
+/// Open the Shop modal from anywhere. The Shop has no global chord: it is
+/// reached by typing `/shop` into a composer or through the locked-feature
+/// nudges, so this is the one shared entry point for both.
+pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3629,7 +3632,7 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        open_hub_modal_globally(app);
+        open_shop_modal_globally(app);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
@@ -3655,7 +3658,7 @@ fn pet_available_or_nudge(app: &mut App) -> bool {
     app.banner = Some(crate::app::common::primitives::Banner::error(
         "Unlock Pet Companion in Hub Shop",
     ));
-    open_hub_modal_globally(app);
+    open_shop_modal_globally(app);
     false
 }
 
@@ -3680,7 +3683,7 @@ pub(crate) fn pet_feed_globally(app: &mut App) {
     }
     let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
     if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
-        open_hub_modal_globally(app);
+        open_shop_modal_globally(app);
     }
 }
 
@@ -3805,13 +3808,6 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
-}
-
-/// Open the Shop modal from anywhere. The Shop has no global chord: it is
-/// reached by typing `/shop` into a composer or through the locked-feature
-/// nudges, so this is the one shared entry point for both.
-pub(crate) fn open_shop_modal_globally(app: &mut App) {
-    open_hub_modal_globally(app);
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {

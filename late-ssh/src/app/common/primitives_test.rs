@@ -8,12 +8,14 @@ fn screen_next_cycles_top_level_screens() {
     assert_eq!(Screen::Arcade.next(), Screen::Games);
     assert_eq!(Screen::Games.next(), Screen::Artboard);
     assert_eq!(Screen::Artboard.next(), Screen::Pinstar);
-    assert_eq!(Screen::Pinstar.next(), Screen::Clubhouse);
+    assert_eq!(Screen::Pinstar.next(), Screen::Leaderboard);
+    assert_eq!(Screen::Leaderboard.next(), Screen::Clubhouse);
 }
 
 #[test]
 fn screen_prev_cycles_top_level_screens() {
-    assert_eq!(Screen::Clubhouse.prev(), Screen::Pinstar);
+    assert_eq!(Screen::Clubhouse.prev(), Screen::Leaderboard);
+    assert_eq!(Screen::Leaderboard.prev(), Screen::Pinstar);
     assert_eq!(Screen::Dashboard.prev(), Screen::Clubhouse);
     assert_eq!(Screen::Arcade.prev(), Screen::Dashboard);
     assert_eq!(Screen::Games.prev(), Screen::Arcade);
@@ -63,4 +65,13 @@ fn banner_is_active_for_recent_messages() {
         created_at: Instant::now() - Duration::from_secs(6),
     };
     assert!(!stale.is_active());
+}
+
+#[test]
+fn thousands_groups_digits() {
+    assert_eq!(thousands(0), "0");
+    assert_eq!(thousands(999), "999");
+    assert_eq!(thousands(10_000), "10,000");
+    assert_eq!(thousands(1_234_567), "1,234,567");
+    assert_eq!(thousands(-10_000), "-10,000");
 }

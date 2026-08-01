@@ -59,10 +59,21 @@ impl DailyWin {
     ) -> Result<Option<Self>> {
         let row = client
             .query_opt(
-                "INSERT INTO rubiks_cube_daily_wins (user_id, puzzle_date)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id, puzzle_date) DO NOTHING
-                 RETURNING *",
+                &format!(
+                    "WITH win AS (
+                         INSERT INTO rubiks_cube_daily_wins (user_id, puzzle_date)
+                         VALUES ($1, $2)
+                         ON CONFLICT (user_id, puzzle_date) DO NOTHING
+                         RETURNING *, true AS fresh_win
+                     ),
+                     total AS (
+                         {bump}
+                     )
+                     SELECT * FROM win",
+                    bump = super::leaderboard::bump_daily_win_total_sql(
+                        super::leaderboard::DailyPuzzle::RubiksCube
+                    ),
+                ),
                 &[&user_id, &puzzle_date],
             )
             .await?;
