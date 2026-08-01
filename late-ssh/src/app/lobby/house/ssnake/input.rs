@@ -1,5 +1,5 @@
 use crate::app::lobby::house::{
-    ssnake::state::{Direction, SsnakePhase, State},
+    ssnake::state::{Direction, State},
     types::InputAction,
 };
 
@@ -11,16 +11,8 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.leave_seat();
             InputAction::Handled
         }
-        b'n' | b'N' => {
-            state.start_round();
-            InputAction::Handled
-        }
-        b'[' | b'{' => {
-            state.select_arena(-1);
-            InputAction::Handled
-        }
-        b']' | b'}' => {
-            state.select_arena(1);
+        b'v' | b'V' => {
+            state.vote_skip();
             InputAction::Handled
         }
         b' ' | b'\r' | b'\n' if !seated => {
@@ -51,18 +43,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
     }
 }
 
+/// The arena never pauses, so arrows always mean "steer" — there is no
+/// between-matches state left for them to browse arenas in.
 pub fn handle_arrow(state: &mut State, key: u8) -> bool {
     if state.seat_index().is_none() {
         return false;
-    }
-    // Outside a running match, left/right browse the arena for the next game.
-    if state.snapshot().phase != SsnakePhase::Running {
-        match key {
-            b'C' => state.select_arena(1),
-            b'D' => state.select_arena(-1),
-            _ => return false,
-        }
-        return true;
     }
     match key {
         b'A' => state.steer(Direction::Up),

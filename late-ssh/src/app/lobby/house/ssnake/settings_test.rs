@@ -5,19 +5,17 @@ use serde_json::json;
 fn settings_round_trip() {
     let settings = SsnakeTableSettings {
         speed: SsnakeSpeed::Swift,
-        level: Some(3),
         seats: 4,
     };
     assert_eq!(
         SsnakeTableSettings::from_json(&settings.to_json()),
         settings
     );
-    let random = SsnakeTableSettings {
+    let relaxed = SsnakeTableSettings {
         speed: SsnakeSpeed::Classic,
-        level: None,
         seats: 2,
     };
-    assert_eq!(SsnakeTableSettings::from_json(&random.to_json()), random);
+    assert_eq!(SsnakeTableSettings::from_json(&relaxed.to_json()), relaxed);
 }
 
 #[test]
@@ -29,7 +27,7 @@ fn seats_clamp_to_table_bounds() {
     );
     assert_eq!(
         SsnakeTableSettings::from_json(&json!({ "seats": 9 })).seats,
-        4
+        5
     );
     assert_eq!(
         SsnakeTableSettings::from_json(&json!({ "seats": 3 })).seats,
@@ -41,14 +39,6 @@ fn seats_clamp_to_table_bounds() {
 fn unknown_speed_falls_back_to_classic() {
     let settings = SsnakeTableSettings::from_json(&json!({ "speed": "ludicrous" }));
     assert_eq!(settings.speed, SsnakeSpeed::Classic);
-}
-
-#[test]
-fn out_of_range_level_falls_back_to_random() {
-    let settings = SsnakeTableSettings::from_json(&json!({ "level": 9999 }));
-    assert_eq!(settings.level, None);
-    let settings = SsnakeTableSettings::from_json(&json!({ "level": "random" }));
-    assert_eq!(settings.level, None);
 }
 
 #[test]

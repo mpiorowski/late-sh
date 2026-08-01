@@ -76,7 +76,9 @@ chip_moves!(
     DailyBackgammonWin,
     DailyBriscolaWin,
     TronWin,
-    SsnakeWin,
+    SsnakeFood,
+    SsnakeArenaClear,
+    SsnakeCrash,
     GreendragonDragonSlain,
     NethackAmuletAcquired,
     NethackAscension,
@@ -119,7 +121,9 @@ impl ChipMove {
             Self::DailyBackgammonWin => "daily_backgammon_win",
             Self::DailyBriscolaWin => "daily_briscola_win",
             Self::TronWin => "tron_win",
-            Self::SsnakeWin => "ssnake_win",
+            Self::SsnakeFood => "ssnake_food",
+            Self::SsnakeArenaClear => "ssnake_arena_clear",
+            Self::SsnakeCrash => "ssnake_crash",
             Self::GreendragonDragonSlain => "greendragon_dragon_slain",
             Self::NethackAmuletAcquired => "nethack_amulet_acquired",
             Self::NethackAscension => "nethack_ascension",
@@ -131,9 +135,14 @@ impl ChipMove {
     /// The persisted `chip_ledger.source_kind` value.
     pub const fn source_kind(self) -> &'static str {
         match self {
-            Self::Credit | Self::Bet | Self::FloorRestore | Self::GiftSent | Self::GiftReceived => {
-                "user_chips"
-            }
+            Self::Credit
+            | Self::Bet
+            | Self::FloorRestore
+            | Self::GiftSent
+            | Self::GiftReceived
+            | Self::SsnakeFood
+            | Self::SsnakeArenaClear
+            | Self::SsnakeCrash => "user_chips",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -148,7 +157,6 @@ impl ChipMove {
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
             | Self::TronWin
-            | Self::SsnakeWin
             | Self::GreendragonDragonSlain
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
@@ -173,13 +181,14 @@ impl ChipMove {
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
             | Self::TronWin
-            | Self::SsnakeWin
+            | Self::SsnakeFood
+            | Self::SsnakeArenaClear
             | Self::GreendragonDragonSlain
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat => ChipDirection::Credit,
-            Self::Bet | Self::ShopPurchase => ChipDirection::Debit { floor: 0 },
+            Self::Bet | Self::ShopPurchase | Self::SsnakeCrash => ChipDirection::Debit { floor: 0 },
             Self::GiftSent | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
@@ -207,7 +216,9 @@ impl ChipMove {
             | Self::DailyBackgammonWin
             | Self::DailyBriscolaWin
             | Self::TronWin
-            | Self::SsnakeWin
+            | Self::SsnakeFood
+            | Self::SsnakeArenaClear
+            | Self::SsnakeCrash
             | Self::GreendragonDragonSlain
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
