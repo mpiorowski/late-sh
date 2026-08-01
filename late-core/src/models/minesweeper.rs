@@ -72,10 +72,21 @@ impl DailyWin {
     ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO minesweeper_daily_wins (user_id, difficulty_key, puzzle_date, score)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (user_id, difficulty_key, puzzle_date) DO UPDATE SET score = GREATEST(minesweeper_daily_wins.score, $4), updated = current_timestamp
-                 RETURNING *",
+                &format!(
+                    "WITH win AS (
+                         INSERT INTO minesweeper_daily_wins (user_id, difficulty_key, puzzle_date, score)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT (user_id, difficulty_key, puzzle_date) DO UPDATE SET score = GREATEST(minesweeper_daily_wins.score, $4), updated = current_timestamp
+                         RETURNING *, (xmax = 0) AS fresh_win
+                     ),
+                     total AS (
+                         {bump}
+                     )
+                     SELECT * FROM win",
+                    bump = super::leaderboard::bump_daily_win_total_sql(
+                        super::leaderboard::DailyPuzzle::Minesweeper
+                    ),
+                ),
                 &[&user_id, &difficulty_key, &puzzle_date, &score],
             )
             .await?;

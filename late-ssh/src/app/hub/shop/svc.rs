@@ -21,9 +21,8 @@ use late_core::{
             SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL, ULTIMATE_SPELL_KIND,
             USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
             aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
-            list_marketplace_items_for_admin, listen_for_shop_changes,
-            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_username_effect,
-            unequip_slot, update_marketplace_item_for_admin,
+            listen_for_shop_changes, purchase_item_by_sku_with_chat_effect,
+            purchase_item_by_sku_with_username_effect, unequip_slot,
         },
         shop_consumable_effect::ShopConsumableEffect,
         username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
@@ -380,28 +379,6 @@ impl ShopService {
                 }
             }
         });
-    }
-
-    pub async fn list_marketplace_items_for_admin(
-        &self,
-        is_admin: bool,
-    ) -> Result<Vec<late_core::models::marketplace::MarketplaceAdminRow>> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        list_marketplace_items_for_admin(&client).await
-    }
-
-    pub async fn update_marketplace_item_for_admin(
-        &self,
-        is_admin: bool,
-        update: late_core::models::marketplace::MarketplaceAdminUpdate,
-    ) -> Result<late_core::models::marketplace::MarketplaceAdminRow> {
-        anyhow::ensure!(is_admin, "admin access required");
-        let client = self.db.get().await?;
-        let row = update_marketplace_item_for_admin(&client, update).await?;
-        drop(client);
-        self.refresh_catalog_for_active_users().await?;
-        Ok(row)
     }
 
     pub fn use_aquarium_food_task(&self, user_id: Uuid) {

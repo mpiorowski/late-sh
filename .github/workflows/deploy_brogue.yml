@@ -54,9 +54,42 @@ jobs:
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
-  get_images:
-    name: get_current_ssh_web_image_tags
+  # Every release takes one of two paths, decided by live cluster state: the
+  # deployment exists -> image-only kubectl update; it does not exist (first
+  # deploy, disaster recovery) -> a terraform apply scoped with -target to the
+  # late-brogue resources, which creates them and touches nothing else.
+  check_deployment:
+    name: check_deployment_exists
     if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-brogue')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-brogue')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: check
+        id: check
+        run: |
+          if kubectl get deployment late-brogue -n default >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Bootstrap path: the other image tags are read from the cluster only to
+  # satisfy terraform.yml's required inputs; the targeted apply never plans the
+  # resources that consume them.
+  get_images:
+    name: get_current_image_tags
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: check_deployment
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     outputs:
@@ -118,10 +151,10 @@ jobs:
           tag=$(kubectl get deployment late-usurper -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
-  terraform:
-    name: terraform_apply
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-brogue')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-brogue')) }}
-    needs: [build_brogue, get_images]
+  terraform_bootstrap:
+    name: terraform_bootstrap_brogue
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: [build_brogue, get_images, check_deployment]
     uses: ./.github/workflows/terraform.yml
     permissions:
       contents: read
@@ -137,11 +170,12 @@ jobs:
       brogue_image_tag: ${{ needs.build_brogue.outputs.image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      targets: kubernetes_deployment_v1.late_brogue kubernetes_service_v1.late_brogue_sv
 
-  wait_for_brogue_rollout:
-    name: wait_for_brogue_rollout
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-brogue')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-brogue')) }}
-    needs: terraform
+  deploy:
+    name: deploy_brogue_image
+    if: ${{ needs.check_deployment.outputs.exists == 'true' }}
+    needs: [build_brogue, check_deployment]
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     steps:
@@ -152,6 +186,14 @@ jobs:
         uses: azure/k8s-set-context@v5
         with:
           kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      # Image-only deploy: touch nothing but this game's containers. Manifest
+      # changes (env, resources, PVCs) ship through deploy_infra instead.
+      - name: set_image
+        run: |
+          kubectl set image deployment/late-brogue -n default \
+            brogue-save-seed=${{ needs.build_brogue.outputs.image_tag }} \
+            late-brogue=${{ needs.build_brogue.outputs.image_tag }}
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment late-brogue -n default --timeout=180s

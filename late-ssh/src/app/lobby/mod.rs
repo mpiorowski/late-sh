@@ -1,4 +1,4 @@
-//! The Lobby: the single front door for multiplayer play (`Ctrl+Q`). Fronts
+//! The Lobby: the single front door for multiplayer play (`Ctrl+G`). Fronts
 //! two game domains that stay separate services: async daily correspondence
 //! matches (`daily/`) and live fixed house tables (`house/`).
 

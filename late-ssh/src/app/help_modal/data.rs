@@ -2,7 +2,7 @@ use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 use crate::app::common::qr::{Barcode, HalfBlock};
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
-    chips::{CHIP_FLOOR, INITIAL_CHIP_BALANCE, difficulty_bonus},
+    chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 use qrcodegen::{QrCode, QrCodeEcc};
@@ -167,10 +167,11 @@ pub(crate) fn bot_app_context() -> String {
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 334 points an hour, so reaching wasted wears off in about six hours and even a maxed-out binge is fully sober again half a day later.\n\
         - A buzz also comes out in your typing, in public rooms only (never DMs or private rooms). Letters inside a word get shuffled, more of them the drunker you are, but the first and last letter of every word stay put so it always stays readable. Tipsy is the odd stumbled word; wasted is most of the sentence, plus the occasional *hic*. Handles, room slugs, links, and code in backticks are never touched. The slurring is saved with the message, so it does not clear up when you sober up later.\n\
-        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), and Directory (5).\n\
+        - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Directory (5), and Leaderboards (6).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
-        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n",
+        - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n\
+        - Leaderboards page 6 holds every board: Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -195,9 +196,9 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar).\n\
-    - Tab / Shift+Tab cycles screens; number keys 0-5 jump straight to one.\n\
-    - Ctrl+O opens Settings from anywhere. Ctrl+G opens Hub (Quests, Shop, Leaderboard, Events). Ctrl+Q opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Directory (Profiles, Projects, Pinstar), 6 Leaderboards (every board, monthly and all-time).\n\
+    - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
+    - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
@@ -333,9 +334,9 @@ fn economy_lines() -> Vec<String> {
 fn chips_help_lines() -> Vec<String> {
     let start = INITIAL_CHIP_BALANCE;
     let floor = CHIP_FLOOR;
-    let easy = difficulty_bonus("easy");
-    let medium = difficulty_bonus("medium");
-    let hard = difficulty_bonus("hard");
+    let easy = Difficulty::Easy.chips();
+    let medium = Difficulty::Medium.chips();
+    let hard = Difficulty::Hard.chips();
     let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
     let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
     let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
@@ -344,7 +345,7 @@ fn chips_help_lines() -> Vec<String> {
     vec![
         "Late Chips".to_string(),
         "".to_string(),
-        "Late Chips are the single currency: one balance per account, spent in the Hub Shop and at the bar, and ranked monthly on the Top Chips board.".to_string(),
+        "Late Chips are the single currency: one balance per account, spent in the Shop and at the bar, and ranked monthly on the Top Chips board.".to_string(),
         format!("You start with {start} chips."),
         format!("You can never end up below {floor} chips: after a losing settlement at a betting table the floor is restored for you, so going broke is not a thing."),
         "This tab lists every way to earn chips. If something is not on this list, it does not pay chips.".to_string(),
@@ -368,7 +369,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Personal (non-daily) boards pay nothing; only the daily board pays.".to_string(),
         "  The high-score games (2048, Lateris, Snake, Traffic) pay no chips for a run on their own. They pay through Quests, and they rank you on the monthly leaderboards.".to_string(),
         "".to_string(),
-        "2. Quests (Ctrl+G, Quests tab)".to_string(),
+        "2. Quests (top of The Arcade, page 2)".to_string(),
         "  Two daily quests and one weekly quest are drawn for you on UTC boundaries.".to_string(),
         "  Every quest currently drawn is an Arcade quest: daily slot 1 easy, daily slot 2 medium, the weekly slot hard, all from the Arcade pool (daily puzzles plus score runs).".to_string(),
         "  easy daily         150 chips".to_string(),
@@ -383,7 +384,7 @@ fn chips_help_lines() -> Vec<String> {
         format!("  Watering pays {water} chips once per UTC day."),
         "  Classic and Dynamic Bonsai pay the same; you only get it once per day either way.".to_string(),
         "".to_string(),
-        "4. The Lobby (Ctrl+Q)".to_string(),
+        "4. The Lobby (Ctrl+G)".to_string(),
         "  Nothing in the Lobby except Poker and Blackjack risks your chips. Everywhere else the winner is paid out of the house and the losers lose nothing: you cannot go down by playing.".to_string(),
         "".to_string(),
         "  Daily correspondence matches, paid per match won, no limit:".to_string(),
@@ -426,7 +427,7 @@ fn chips_help_lines() -> Vec<String> {
         "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, and quests.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
-        "  Hub Shop (Ctrl+G) for badges, flags, effects, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
+        "  The Shop (/shop) for badges, flags, effects, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
         "  @bartender drinks in the Clubhouse.".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
@@ -484,12 +485,12 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
-        "  Ctrl+G             open Hub",
-        "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  Ctrl+G             open / close the Lobby (daily games + house tables)",
+        "  /shop              open the Shop",
+        "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in the Shop",
         "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
         "  /pet               toggle the pet strip in the Lounge",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages",
-        "  Ctrl+Q             open / close the Lobby (daily games + house tables)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
         "",
         "Messages",
@@ -834,8 +835,8 @@ fn lobby_help_lines() -> Vec<String> {
     [
         "Lobby",
         "",
-        "The Lobby (Ctrl+Q) is the front door for multiplayer play: async daily matches plus the fixed house tables, with paired embedded chat.",
-        "  Ctrl+Q            open / close the Lobby",
+        "The Lobby (Ctrl+G) is the front door for multiplayer play: async daily matches plus the fixed house tables, with paired embedded chat.",
+        "  Ctrl+G            open / close the Lobby",
         "  j / k or \u{2191} / \u{2193}   move through matches and house tables",
         "  Enter             claim / open a match, or sit at a house table",
         "  Esc               close the Lobby",
@@ -944,10 +945,11 @@ fn overview_lines() -> Vec<String> {
         "Primary screens",
         "  0 Clubhouse       the Late Lounge: walk around, everyone is live",
         "  1 Home            chat, music, and live activity",
-        "  2 The Arcade      daily puzzles, endless games, leaderboard",
-        "  3 Games           immersive door games, including NetHack and CodeKeep",
+        "  2 The Arcade      daily puzzles, endless games, quests at the top",
+        "  3 Games           door games: Lateania, Rebels, NetHack, CodeKeep",
         "  4 Artboard        shared persistent ASCII canvas",
         "  5 Directory       Profiles, Projects, and Pinstar",
+        "  6 Leaderboards    every board, monthly and all-time",
         "",
         "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
         "over your head and land in #lounge), w waves, x dances, Enter interacts.",
@@ -964,9 +966,9 @@ fn overview_lines() -> Vec<String> {
         "  ?                 open this guide",
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
-        "  Ctrl+G            open Hub",
-        "  Ctrl+Q            open / close the Lobby (daily games + house tables)",
-        "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in Shop",
+        "  Ctrl+G            open / close the Lobby (daily games + house tables)",
+        "  /shop             open the Shop",
+        "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in the Shop",
         "  /aquarium feed    feed your Aquarium with bought Aquarium Food",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
@@ -991,11 +993,9 @@ fn overview_lines() -> Vec<String> {
         "  favorites appear first in the room rail and room picker",
         "  `                 hop Home chat and games waiting on you (boards, tables, dailies)",
         "",
-        "Hub",
-        "  Ctrl+G            open Quests, Shop, Leaderboard, Events",
-        "  Tab / Shift+Tab   switch Hub tabs",
-        "  1-4               jump to Hub tab",
-        "  Shop              j/k select, [/] subtab, Enter buy with Late Chips",
+        "Shop",
+        "  /shop             open the Shop modal from any composer",
+        "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
         "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",
         "Jump search",
@@ -1018,10 +1018,7 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+Y            copy the selected hit's text",
         "  /search [query]   open message search from the composer",
         "",
-        "Home room shortcuts",
-        "  Ctrl+Q            open the Lobby (daily games + house tables)",
-        "",
-        "This modal",
+                "This modal",
         "  Tab / Shift+Tab   next / previous tab",
         "  j / k / ↑ / ↓     scroll current tab",
         "  ? / Esc / q       close",
@@ -1219,7 +1216,7 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "Why country matters".to_string(),
         "".to_string(),
-        "The saved ISO country code belongs to profile/settings identity surfaces; equipped chat flags come from Hub Shop."
+        "The saved ISO country code belongs to profile/settings identity surfaces; equipped chat flags come from the Shop (/shop)."
             .to_string(),
         "".to_string(),
         "Notifications".to_string(),
@@ -1321,7 +1318,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "Dynamic Bonsai is the living tree. It is not a fixed ladder of pictures: it keeps a real branch graph, and every choice you make is remembered in how it grows next. Water it, steer the tips, cut your mistakes, and pinch foliage, and the silhouette becomes a record of how you tended it.",
         "",
-        "Unlock it in the Hub Shop for 1000 chips. While it is equipped, w opens Dynamic Bonsai instead of classic Bonsai; clear the slot to switch back.",
+        "Unlock it in the Shop (/shop) for 1000 chips. While it is equipped, w opens Dynamic Bonsai instead of classic Bonsai; clear the slot to switch back.",
         "",
         "Controls",
         "  w                 water, or replant when the tree has died",
@@ -1441,13 +1438,13 @@ fn bonsai_help_lines() -> Vec<String> {
         "  the bonsai stage is one part of the chat username badge stack",
         "",
         "Pet Companion",
-        "  Unlock            Hub Shop companion bought with Late Chips",
+        "  Unlock            Shop companion bought with Late Chips (/shop)",
         "  strip             lives above the Lounge composer once unlocked",
         "  /pet              show or hide the strip",
         "  /feed             spend one pet food, or click the bowl or the pet",
         "  once fed it strolls the screen for 30 minutes; one meal per day",
         "  /water            water (daily), or click the water bowl",
-        "  pet food is a Hub Shop item; an empty bowl shows ? when you are out",
+        "  pet food is a Shop item; an empty bowl shows ? when you are out",
         "  /petname [name]   show or set your pet's name",
         "  3-day care streak keeps it happy",
     ]

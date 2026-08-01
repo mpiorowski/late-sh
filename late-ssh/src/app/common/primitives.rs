@@ -73,6 +73,7 @@ pub enum Screen {
     Darkroom,
     Artboard,
     Pinstar,
+    Leaderboard,
     Clubhouse,
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
@@ -88,7 +89,7 @@ pub enum Screen {
 
 impl Screen {
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through Directory (`5`). The door games (Lateania, Rebels, Nethack,
+    /// through Leaderboards (`6`). The door games (Lateania, Rebels, Nethack,
     /// Green Dragon) are reached through the Games hub, not the tab bar, so
     /// they are absent from the cycle; if one is somehow current,
     /// `next`/`prev` fall back to the hub that owns them.
@@ -99,7 +100,8 @@ impl Screen {
             Screen::Arcade => Screen::Games,
             Screen::Games => Screen::Artboard,
             Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::Clubhouse,
+            Screen::Pinstar => Screen::Leaderboard,
+            Screen::Leaderboard => Screen::Clubhouse,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -118,12 +120,13 @@ impl Screen {
 
     pub fn prev(self) -> Self {
         match self {
-            Screen::Clubhouse => Screen::Pinstar,
+            Screen::Clubhouse => Screen::Leaderboard,
             Screen::Dashboard => Screen::Clubhouse,
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
             Screen::Artboard => Screen::Games,
             Screen::Pinstar => Screen::Artboard,
+            Screen::Leaderboard => Screen::Pinstar,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -187,6 +190,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
         Screen::Pinstar => "Directory",
+        Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
@@ -278,4 +282,23 @@ pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
         spans.push(Span::styled(format!(" {desc}"), desc_style));
     }
     Line::from(spans)
+}
+
+/// Group digits with commas: `10000` → `"10,000"`. The shared formatter for
+/// every chip, score, and progress figure, so numbers read the same on all
+/// surfaces.
+pub(crate) fn thousands(value: i64) -> String {
+    let raw = value.to_string();
+    let (sign, digits) = raw
+        .strip_prefix('-')
+        .map_or(("", raw.as_str()), |rest| ("-", rest));
+    let mut out = String::with_capacity(sign.len() + digits.len() + digits.len() / 3);
+    out.push_str(sign);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
