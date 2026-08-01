@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: ""
+      targets:
+        description: "Space-separated terraform resource addresses. When set, the apply is scoped to exactly these resources plus their dependencies and touches nothing else in the cluster."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   terraform:
@@ -134,8 +139,10 @@ jobs:
         run: terraform validate
 
       # CRD-installing operators must be applied first because kubernetes_manifest
-      # resources validate against the API schema at plan time.
+      # resources validate against the API schema at plan time. A targeted apply
+      # never plans kubernetes_manifest resources, so it skips this step.
       - name: terraform_apply_operators
+        if: ${{ inputs.targets == '' }}
         working-directory: ./infra
         run: |
           terraform apply -auto-approve -compact-warnings \
@@ -146,4 +153,11 @@ jobs:
 
       - name: terraform_apply
         working-directory: ./infra
-        run: terraform apply -auto-approve
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          args=""
+          for t in $TARGETS; do
+            args="$args -target=$t"
+          done
+          terraform apply -auto-approve $args

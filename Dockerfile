@@ -135,56 +135,145 @@ RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ==============================================================================
-# Stage 3: Builder - Build dependencies (cached), then all binaries
+# Stage 3: Builder - ssh + web only (the heavy late-core dependents)
 # ==============================================================================
+# Door hosts compile in their own builder-<door> stages below, so a door image
+# build never pays for the late-ssh/late-web compile and vice versa.
 FROM chef AS builder
 
-# Copy recipe and cook ALL dependencies (cached until any dep changes)
+# Copy recipe and cook ssh/web dependencies (cached until any dep changes)
 COPY --from=planner /app/recipe.json recipe.json
 COPY vendor vendor
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
-    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web -p late-codekeep -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper
+    cargo chef cook --release --features otel --recipe-path recipe.json -p late-core -p late-ssh -p late-web
 
-# Copy actual source code
+# Copy actual source code. The other workspace members stay manifest stubs so
+# `cargo metadata` resolves the workspace without building them.
 COPY Cargo.toml Cargo.lock ./
 COPY late-core late-core
 COPY late-ssh late-ssh
 COPY late-web late-web
-COPY late-codekeep late-codekeep
-COPY late-nethack late-nethack
-COPY late-dcss late-dcss
-COPY late-brogue late-brogue
-COPY late-dopewars late-dopewars
-COPY late-usurper late-usurper
 COPY vendor vendor
 COPY late-cli/Cargo.toml late-cli/Cargo.toml
 COPY late-webview/Cargo.toml late-webview/Cargo.toml
-RUN mkdir -p late-cli/src late-webview/src && \
+COPY late-codekeep/Cargo.toml late-codekeep/Cargo.toml
+COPY late-nethack/Cargo.toml late-nethack/Cargo.toml
+COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
+COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
+COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
+COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
+RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "" > late-webview/src/lib.rs && \
-    echo "fn main() {}" > late-webview/src/main.rs
+    echo "fn main() {}" > late-webview/src/main.rs && \
+    echo "fn main() {}" > late-codekeep/src/main.rs && \
+    echo "fn main() {}" > late-nethack/src/main.rs && \
+    echo "fn main() {}" > late-dcss/src/main.rs && \
+    echo "fn main() {}" > late-brogue/src/main.rs && \
+    echo "fn main() {}" > late-dopewars/src/main.rs && \
+    echo "fn main() {}" > late-usurper/src/main.rs
 # Build deployable binaries only (late-cli and late-webview excluded - local
 # CLI tooling; the webview helper ships via deploy_cli.yml, not these images).
-# late-nethack/late-dcss/late-dopewars have no otel feature; they are built
-# without the workspace feature flag.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
     cargo build --release --features otel -p late-ssh -p late-web && \
-    cargo build --release -p late-codekeep -p late-nethack -p late-dcss -p late-brogue -p late-dopewars -p late-usurper && \
     cp /app/target/release/late-ssh /app/late-ssh-bin && \
-    cp /app/target/release/late-web /app/late-web-bin && \
-    cp /app/target/release/late-codekeep /app/late-codekeep-bin && \
-    cp /app/target/release/late-nethack /app/late-nethack-bin && \
-    cp /app/target/release/late-dcss /app/late-dcss-bin && \
-    cp /app/target/release/late-brogue /app/late-brogue-bin && \
-    cp /app/target/release/late-dopewars /app/late-dopewars-bin && \
-    cp /app/target/release/late-usurper /app/late-usurper-bin
+    cp /app/target/release/late-web /app/late-web-bin
 
 # Build frontend assets
 RUN cd late-web && npm install && npm run tailwind:build
+
+# ==============================================================================
+# Stage 3a: Door builders - one per host crate
+# ==============================================================================
+# Each stage cooks and compiles ONLY its own door crate (no door depends on
+# late-core, verified in their manifests). The planner tree provides every
+# other member as a manifest stub, then the real source overlays its stub.
+# The doors have no otel feature; they build without the workspace flag.
+FROM chef AS door-builder-base
+COPY --from=planner /app/recipe.json recipe.json
+COPY vendor vendor
+
+FROM door-builder-base AS builder-codekeep
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-codekeep
+COPY --from=planner /app /app
+COPY late-codekeep late-codekeep
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-codekeep && \
+    cp /app/target/release/late-codekeep /app/late-codekeep-bin
+
+FROM door-builder-base AS builder-nethack
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-nethack
+COPY --from=planner /app /app
+COPY late-nethack late-nethack
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-nethack && \
+    cp /app/target/release/late-nethack /app/late-nethack-bin
+
+FROM door-builder-base AS builder-dcss
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-dcss
+COPY --from=planner /app /app
+COPY late-dcss late-dcss
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-dcss && \
+    cp /app/target/release/late-dcss /app/late-dcss-bin
+
+FROM door-builder-base AS builder-brogue
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-brogue
+COPY --from=planner /app /app
+COPY late-brogue late-brogue
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-brogue && \
+    cp /app/target/release/late-brogue /app/late-brogue-bin
+
+FROM door-builder-base AS builder-dopewars
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-dopewars
+COPY --from=planner /app /app
+COPY late-dopewars late-dopewars
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-dopewars && \
+    cp /app/target/release/late-dopewars /app/late-dopewars-bin
+
+FROM door-builder-base AS builder-usurper
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-usurper
+COPY --from=planner /app /app
+COPY late-usurper late-usurper
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-usurper && \
+    cp /app/target/release/late-usurper /app/late-usurper-bin
 
 # ==============================================================================
 # Stage 3b: Dev base - Rust toolchain + dev deps
@@ -321,7 +410,7 @@ COPY --from=nethack-build /var/games/nethack-var /var/games/nethack-var
 RUN mkdir -p /usr/games \
     && ln -sf /var/games/nethack/nethack /usr/games/nethack \
     && chown -R late:late /var/games/nethack-var
-COPY --from=builder /app/late-nethack-bin /app/late-nethack
+COPY --from=builder-nethack /app/late-nethack-bin /app/late-nethack
 USER late
 
 EXPOSE 2323
@@ -351,7 +440,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /var/lib/late-dopewars && chown late:late /var/lib/late-dopewars
 COPY --from=dopewars-build /dopewars /usr/games/dopewars
-COPY --from=builder /app/late-dopewars-bin /app/late-dopewars
+COPY --from=builder-dopewars /app/late-dopewars-bin /app/late-dopewars
 USER late
 
 EXPOSE 2324
@@ -369,7 +458,7 @@ COPY --from=codekeep-build /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=codekeep-build /usr/local/bin/codekeep /usr/local/bin/codekeep
 COPY --from=codekeep-build /opt/codekeep /opt/codekeep
 RUN mkdir -p /var/lib/late-codekeep && chown late:late /var/lib/late-codekeep
-COPY --from=builder /app/late-codekeep-bin /app/late-codekeep
+COPY --from=builder-codekeep /app/late-codekeep-bin /app/late-codekeep
 USER late
 
 EXPOSE 2328
@@ -401,7 +490,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /var/lib/late-dcss && chown late:late /var/lib/late-dcss
 COPY --from=dcss-build /opt/dcss /opt/dcss
 RUN mkdir -p /usr/games && ln -sf /opt/dcss/bin/crawl /usr/games/crawl
-COPY --from=builder /app/late-dcss-bin /app/late-dcss
+COPY --from=builder-dcss /app/late-dcss-bin /app/late-dcss
 USER late
 
 EXPOSE 2325
@@ -421,7 +510,7 @@ FROM runtime-base AS runtime-usurper
 USER root
 RUN mkdir -p /var/lib/late-usurper && chown late:late /var/lib/late-usurper
 COPY --from=usurper-build /opt/usurper /opt/usurper
-COPY --from=builder /app/late-usurper-bin /app/late-usurper
+COPY --from=builder-usurper /app/late-usurper-bin /app/late-usurper
 USER late
 
 EXPOSE 2326
@@ -451,7 +540,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /var/lib/late-brogue && chown late:late /var/lib/late-brogue
 COPY --from=brogue-build /opt/brogue /opt/brogue
 RUN mkdir -p /usr/games && ln -sf /opt/brogue/brogue /usr/games/brogue
-COPY --from=builder /app/late-brogue-bin /app/late-brogue
+COPY --from=builder-brogue /app/late-brogue-bin /app/late-brogue
 USER late
 
 EXPOSE 2327
