@@ -943,13 +943,6 @@ impl App {
             changed = true;
         }
 
-        let admin_tick = self.hub_admin_state.tick(self.is_admin);
-        changed |= admin_tick.changed;
-        if let Some(banner) = admin_tick.banner {
-            self.banner = Some(banner);
-            changed = true;
-        }
-
         // Active ultimates animate every tick; the expiry edge (active
         // before the retain, inactive after) still needs one frame to clear.
         let ultimate_was_active = self.ultimate_state.has_active_effect();

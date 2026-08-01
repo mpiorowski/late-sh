@@ -381,7 +381,7 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     pub(crate) login_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub(crate) help_modal_state: help_modal::state::HelpModalState,
-    pub(crate) hub_state: hub::state::HubState,
+    pub(crate) leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState,
     pub(crate) aquarium_state: hub::aquarium::state::AquariumState,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
@@ -538,7 +538,6 @@ pub struct App {
     /// Hub Shop
     pub(crate) quest_state: crate::app::hub::dailies::state::QuestState,
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
-    pub(crate) hub_admin_state: crate::app::hub::admin::state::AdminState,
     pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
 
@@ -1125,10 +1124,6 @@ impl App {
             config.shop_service.clone(),
             config.shop_snapshot_rx,
         );
-        let hub_admin_state = crate::app::hub::admin::state::AdminState::new(
-            config.quest_service.clone(),
-            config.shop_service.clone(),
-        );
         let aquarium_area = aquarium_area_for_terminal(cols, rows);
         let mut aquarium_state =
             crate::app::hub::aquarium::state::AquariumState::default_for_area(aquarium_area)?;
@@ -1192,7 +1187,7 @@ impl App {
             ultimate_cooldown_was_running: false,
             login_announcements: config.initial_announcements,
             help_modal_state: help_modal::state::HelpModalState::new(),
-            hub_state: hub::state::HubState::new(),
+            leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
             aquarium_state,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
@@ -1315,7 +1310,6 @@ impl App {
             pet_state,
             quest_state,
             shop_state,
-            hub_admin_state,
             ultimate_service: config.ultimate_service,
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
@@ -1853,7 +1847,6 @@ impl App {
             self.show_mod_modal = false;
             self.show_bonsai_v2_modal = false;
         }
-        self.hub_state.ensure_visible_tab(self.is_admin);
     }
 
     pub fn set_artboard_banned_for_tests(&mut self, banned: bool) {

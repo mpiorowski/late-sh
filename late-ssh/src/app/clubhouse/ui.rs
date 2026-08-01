@@ -1280,12 +1280,12 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 )),
                 Line::default(),
                 Line::from(vec![
-                    Span::styled("[Ctrl+Q] ", key),
+                    Span::styled("[Ctrl+G] ", key),
                     Span::styled("the lobby: house tables + daily games", text),
                 ]),
                 Line::from(vec![
-                    Span::styled("[Ctrl+G] ", key),
-                    Span::styled("the hub, quests · shop · leaderboard", text),
+                    Span::styled("[/shop] ", key),
+                    Span::styled("the shop: cosmetics, companions, effects", text),
                 ]),
                 Line::from(vec![
                     Span::styled("[?] ", key),

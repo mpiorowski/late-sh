@@ -1,7 +1,7 @@
 //! Right-sidebar Lobby panel (daily correspondence games): passive, fixed
 //! height, stable chrome. Slots render dashes when empty so the panel never
 //! changes shape between states; all interaction lives in the modal
-//! (`Ctrl+Q`).
+//! (`Ctrl+G`).
 
 use ratatui::{
     Frame,
@@ -201,7 +201,7 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
     ])
 }
 
-/// `ctrl+q · \` toggle` — the two keys that front the Lobby: `ctrl+q` opens
+/// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
 /// the modal, and the backtick toggles you through the games waiting on you
 /// (boards on your move, seated tables, unfinished dailies) and back to chat.
 /// Constant chrome, both keys always shown.
@@ -211,7 +211,7 @@ fn hints_line() -> Line<'static> {
         .add_modifier(Modifier::BOLD);
     let sep_style = Style::default().fg(theme::TEXT_FAINT());
     Line::from(vec![
-        Span::styled("ctrl+q", key_style),
+        Span::styled("ctrl+g", key_style),
         Span::styled(" · ", sep_style),
         Span::styled("`", key_style.fg(theme::AMBER())),
         Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),

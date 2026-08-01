@@ -54,10 +54,128 @@ jobs:
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
+  # Every release takes one of two paths, decided by live cluster state: the
+  # deployment exists -> image-only kubectl update; it does not exist (first
+  # deploy, disaster recovery) -> a terraform apply scoped with -target to the
+  # late-dcss resources, which creates them and touches nothing else.
+  check_deployment:
+    name: check_deployment_exists
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-dcss')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-dcss')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: check
+        id: check
+        run: |
+          if kubectl get deployment late-dcss -n default >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Bootstrap path: the other image tags are read from the cluster only to
+  # satisfy terraform.yml's required inputs; the targeted apply never plans the
+  # resources that consume them.
+  get_images:
+    name: get_current_image_tags
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: check_deployment
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
+      web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
+      dopewars_image_tag: ${{ steps.dopewars_image.outputs.image_tag }}
+      codekeep_image_tag: ${{ steps.codekeep_image.outputs.image_tag }}
+      usurper_image_tag: ${{ steps.usurper_image.outputs.image_tag }}
+      brogue_image_tag: ${{ steps.brogue_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_ssh_image_tag
+        id: ssh_image
+        run: |
+          tag=$(kubectl get deployment service-ssh -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_web_image_tag
+        id: web_image
+        run: |
+          tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_dopewars_image_tag
+        id: dopewars_image
+        run: |
+          tag=$(kubectl get deployment late-dopewars -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_codekeep_image_tag
+        id: codekeep_image
+        run: |
+          tag=$(kubectl get deployment late-codekeep -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_usurper_image_tag
+        id: usurper_image
+        run: |
+          tag=$(kubectl get deployment late-usurper -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_brogue_image_tag
+        id: brogue_image
+        run: |
+          tag=$(kubectl get deployment late-brogue -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  terraform_bootstrap:
+    name: terraform_bootstrap_dcss
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: [build_dcss, get_images, check_deployment]
+    uses: ./.github/workflows/terraform.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      ssh_image_tag: ${{ needs.get_images.outputs.ssh_image_tag }}
+      web_image_tag: ${{ needs.get_images.outputs.web_image_tag }}
+      nethack_image_tag: ${{ needs.get_images.outputs.nethack_image_tag }}
+      dopewars_image_tag: ${{ needs.get_images.outputs.dopewars_image_tag }}
+      codekeep_image_tag: ${{ needs.get_images.outputs.codekeep_image_tag }}
+      dcss_image_tag: ${{ needs.build_dcss.outputs.image_tag }}
+      usurper_image_tag: ${{ needs.get_images.outputs.usurper_image_tag }}
+      brogue_image_tag: ${{ needs.get_images.outputs.brogue_image_tag }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      targets: kubernetes_deployment_v1.late_dcss kubernetes_service_v1.late_dcss_sv
+
   deploy:
     name: deploy_dcss_image
-    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-dcss')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-dcss')) }}
-    needs: build_dcss
+    if: ${{ needs.check_deployment.outputs.exists == 'true' }}
+    needs: [build_dcss, check_deployment]
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
     steps:

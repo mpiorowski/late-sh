@@ -160,6 +160,9 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\x1b[Z");
+    wait_for_render_contains(&mut app, " Leaderboards ").await;
+
+    app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Directory").await;
 
     app.handle_input(b"\x1b[Z");
@@ -201,6 +204,9 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, " Directory ").await;
 
     app.handle_input(b"\t");
+    wait_for_render_contains(&mut app, " Leaderboards ").await;
+
+    app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Clubhouse ").await;
 
     app.handle_input(b"\t");
@@ -208,7 +214,35 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
 }
 
 #[tokio::test]
-async fn global_ctrl_g_opens_hub_on_dashboard() {
+async fn global_ctrl_o_opens_settings_on_dashboard() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-o-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-o-flow-it");
+    wait_for_render_contains(&mut app, " Home ").await;
+
+    // Ctrl+O opens settings modal
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, "Theme").await;
+
+    // Esc to close settings, back to Home
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("Theme"),
+        "expected Esc to close settings; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
+async fn global_ctrl_g_toggles_lobby_and_slash_shop_opens_shop() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "ctrl-g-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -221,17 +255,31 @@ async fn global_ctrl_g_opens_hub_on_dashboard() {
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-g-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
 
-    // Ctrl+G opens hub modal
+    // Ctrl+G owns the Lobby now; the same chord closes it again. The footer
+    // always says " Lobby ", so assert on modal-only section copy instead.
     app.handle_input(b"\x07");
-    wait_for_render_contains(&mut app, "Leaderboard").await;
+    wait_for_render_contains(&mut app, "house tables").await;
+    app.handle_input(b"\x07");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("house tables"),
+        "expected Ctrl+G to close the lobby; frame={frame:?}"
+    );
 
-    // Esc to close hub
+    // The Shop has no chord: /shop in the composer opens it, Esc closes.
+    // Composing needs a selected room, so wait for the lounge row first.
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Compose (Enter send").await;
+    app.handle_input(b"/shop\r");
+    wait_for_render_contains(&mut app, "-- Shop --").await;
     app.handle_input(b"\x1b");
     tokio::time::sleep(Duration::from_millis(60)).await;
     let frame = render_plain(&mut app);
     assert!(
-        !frame.contains("Leaderboard"),
-        "expected Esc to close hub; frame={frame:?}"
+        !frame.contains("-- Shop --"),
+        "expected Esc to close the shop; frame={frame:?}"
     );
 }
 

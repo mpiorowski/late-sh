@@ -1,4 +1,4 @@
-//! The house: fixed multiplayer tables living behind the Lobby (`Ctrl+Q`).
+//! The house: fixed multiplayer tables living behind the Lobby (`Ctrl+G`).
 //! One table per `HouseTable` variant, no user creation, no DB rows. The
 //! runtimes here (poker, blackjack, asterion, tron) are the survivors of the
 //! Rooms-domain demolition.

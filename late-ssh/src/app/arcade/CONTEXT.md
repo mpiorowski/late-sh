@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/arcade`
-- Last updated: 2026-07-15 (backtick workspace cycle now includes unfinished Arcade dailies via `workspace.rs::ArcadeStop`; Rubik's Cube daily board persists in `rubiks_cube_games`)
+- Last updated: 2026-07-30 (daily/weekly quest strip renders at the top of the lobby via `hub::dailies::ui::draw_arcade_strip`; per-game leaderboards are roster-generated from `DailyPuzzle`/`ScoreGame` in `late-core/src/models/leaderboard.rs`)
 - Purpose: local working context for The Arcade screen and single-player terminal games.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -24,7 +24,7 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
 
 - `mod.rs` declares Arcade modules.
 - `input.rs` routes The Arcade lobby and selected active game input.
-- `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers.
+- `ui.rs` renders the lobby and exposes Arcade-only bottom-bar/status helpers. The lobby carves `hub::dailies::ui::arcade_strip_height(quest_state)` rows off the top for the quest strip (streak-meter heading plus grouped Daily/Weekly sections, from `QuestState`) whenever the area leaves at least 13 rows for the game list below it; active games never show it.
 - `twenty_forty_eight/`, `tetris/`, and `snake/` are high-score games.
 - `traffic/` is a multi-track high-score game. Each track finish is graded to a normalized `0..=1000` score (`Track::grade_time`, from the track's theoretical fastest/slowest completion time, so every track yields a comparable range regardless of its distance/speed definition); crashing before the finish scores nothing. The user's Traffic high score is the **sum** of their per-track bests. Persistence keeps one best per `(user, track_key)` in `traffic_track_scores` plus a mirrored aggregate row in `traffic_high_scores` (`= SUM(track scores)`) so leaderboard queries stay uniform with the other high-score games. `track_key` is the `Track::name`.
 - `rubiks_cube/` is a daily deterministic puzzle game with a real cube state, face turns, a three-face angled render, and a compact net. It records one daily win per user/date, publishes Activity for the once-per-day base chip payout and Hub quest progress, and counts toward Arcade Wins. The in-progress cube persists per user in `rubiks_cube_games` (54-char sticker string + move count, saved fire-and-forget on every move/reset; rows from an older date are ignored on load since the daily scramble is deterministic).
@@ -49,7 +49,7 @@ Per-game directories generally follow:
 ## Navigation
 
 - The top-level screen is `Screen::Arcade`, key `2`, rendered as `The Arcade`.
-- `Tab` / `Shift+Tab` cycle through Dashboard/Home -> Arcade -> Games -> Tables -> Artboard -> Directory. The three door games (Lateania, Rebels, NetHack) are reached from the Games hub, not the tab cycle.
+- `Tab` / `Shift+Tab` cycle Clubhouse -> Home -> Arcade -> Games -> Artboard -> Directory -> Leaderboards. The door games are reached from the Games hub, not the tab cycle.
 - Lobby order is defined in `arcade/input.rs` as `LOBBY_GAME_ORDER`; keep it in sync with `arcade/ui.rs` render order.
 - `j/k` and up/down arrows move through the lobby.
 - `Enter` launches the selected available game and sets `is_playing_game = true`.
@@ -98,10 +98,8 @@ Arcade wiring checklist:
 - Update `CONTEXT.md` and this file if the game changes Arcade categories, service ownership, or leaderboard semantics.
 
 Leaderboard/Hub checklist:
-- High-score games must write final score events through a `late-core` model method so monthly Hub boards do not depend only on legacy high-score table `updated` timestamps. Lateris and Snake also publish hidden quest Activity score events on final score submission; Snake includes the reached level for weekly/daily quest matching.
-- Add the monthly score board fetch in `late-core/src/models/leaderboard.rs`.
-- Add the all-time high-score fetch if the aggregate `high_scores` list should include the game.
-- Render the new board in `app/hub/leaderboard.rs` only if it belongs in the compact Hub view. Do not put Hub UI under `arcade/`.
+- High-score games must write final score events through a `late-core` model method so monthly boards do not depend only on legacy high-score table `updated` timestamps. Lateris and Snake also publish hidden quest Activity score events on final score submission; Snake includes the reached level for weekly/daily quest matching.
+- Add the game to the matching roster in `late-core/src/models/leaderboard.rs`: a `DailyPuzzle` variant enrolls it in the per-game win boards, Arcade Wins points, today's champions, and daily statuses at once; a `ScoreGame` variant enrolls its monthly/all-time score boards. The compiler walks you through the per-variant facts, and the Leaderboards page (`app/leaderboard/`) picks the board up from the roster with no page change.
 
 Testing guidance:
 - Pure rules and key-routing helpers get inline unit tests in `state.rs` or `input.rs`.
@@ -120,7 +118,7 @@ Testing guidance:
 - Generic chip balance mutations in `late-core/src/models/chips.rs` notify `chip_user_changed` with the affected `user_id`; Hub Shop listens to that channel to refresh active balance snapshots.
 - Daily puzzle services record the persisted win and publish `ActivityEvent::GameWon`; `ChipService`'s activity reward task awards the corresponding daily puzzle base chips from `reward_templates` and records the once-per-UTC-day claim in `game_payout_claims`.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event with the difficulty key in `detail` so Hub Dailies quests can match goals such as "win medium Sudoku".
-- `hub::svc::LeaderboardService` refreshes from DB every 30s. Immediate win callouts come from Activity; Hub leaderboard surfaces lag until the next refresh.
+- `hub::svc::LeaderboardService` refreshes from DB every 5 minutes while subscribed. Immediate win callouts come from Activity; the Leaderboards page lags until the next refresh.
 
 ## Nonogram Runtime
 
@@ -167,7 +165,7 @@ Destructive daily/personal puzzle reset keys use a local confirmation flag. Sudo
 
 ## Known Gaps
 
-- Hub leaderboard refresh is polling-based, so Activity and leaderboard surfaces can briefly disagree.
+- Leaderboard refresh is polling-based, so Activity and the Leaderboards page can briefly disagree.
 - Nonogram generation remains an offline maintainer task; runtime has no fallback generator.
 - Some high-score game state is still per-user single-slot rather than multi-run history.
 - Arcade and Rooms share chips/cards through `app/games`, but have separate runtime and UI ownership; keep those boundaries explicit when adding casino or multiplayer features.

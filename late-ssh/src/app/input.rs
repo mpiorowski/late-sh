@@ -26,7 +26,6 @@ use vte::{Params, Parser, Perform};
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
 const CTRL_O: u8 = 0x0F;
-const CTRL_Q: u8 = 0x11;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 
@@ -2842,13 +2841,14 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
 
     match x {
         // Top title text starts immediately after the left border. The digit
-        // cells in " late.sh | 0 1 2 3 4 5 | ..." land on these columns.
+        // cells in " late.sh | 0 1 2 3 4 5 6 | ..." land on these columns.
         12 => Some(Screen::Clubhouse),
         14 => Some(Screen::Dashboard),
         16 => Some(Screen::Arcade),
         18 => Some(Screen::Games),
         20 => Some(Screen::Artboard),
         22 => Some(Screen::Pinstar),
+        24 => Some(Screen::Leaderboard),
         _ => None,
     }
 }
@@ -3273,13 +3273,11 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             }
         }
         ChatClickKind::StoreBadge => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Badges);
         }
         ChatClickKind::StoreFlag => {
-            app.hub_state.open(crate::app::hub::state::HubTab::Shop);
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
@@ -3397,6 +3395,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Dopewars => false,
         Screen::Codekeep => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
+        Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
         Screen::Pinstar => {
             // Arrows handled via handle_dedicated_screen_input
@@ -3604,7 +3603,10 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
+/// Open the Shop modal from anywhere. The Shop has no global chord: it is
+/// reached by typing `/shop` into a composer or through the locked-feature
+/// nudges, so this is the one shared entry point for both.
+pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3621,7 +3623,6 @@ fn open_hub_modal_globally(app: &mut App, tab: crate::app::hub::state::HubTab) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    app.hub_state.open(tab);
     app.show_hub_modal = true;
 }
 
@@ -3631,7 +3632,7 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "Unlock Aquarium in Hub Shop",
         ));
-        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+        open_shop_modal_globally(app);
         return;
     }
     app.show_aquarium_tray = !app.show_aquarium_tray;
@@ -3657,7 +3658,7 @@ fn pet_available_or_nudge(app: &mut App) -> bool {
     app.banner = Some(crate::app::common::primitives::Banner::error(
         "Unlock Pet Companion in Hub Shop",
     ));
-    open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+    open_shop_modal_globally(app);
     false
 }
 
@@ -3682,7 +3683,7 @@ pub(crate) fn pet_feed_globally(app: &mut App) {
     }
     let outcome = app.pet_state.feed(app.shop_state.pet_food_quantity());
     if outcome == crate::app::pet::state::FeedOutcome::OutOfFood {
-        open_hub_modal_globally(app, crate::app::hub::state::HubTab::Shop);
+        open_shop_modal_globally(app);
     }
 }
 
@@ -3794,10 +3795,8 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         CTRL_G => {
-            open_hub_modal_globally(app, crate::app::hub::state::HubTab::Dailies);
-            true
-        }
-        CTRL_Q => {
+            // The Lobby owns the friendlier chord: Ctrl+Q is intercepted by
+            // some terminals and the Lobby is the surface people live in.
             // Toggle: the daily surface is built for fast in-and-out, so the
             // same chord that opens it closes it.
             if app.show_lobby_modal {
@@ -4061,6 +4060,11 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.set_screen(Screen::Pinstar);
             true
         }
+        b'6' if !artboard_blocks_page_switch => {
+            reset_composers_for_page_change(app);
+            app.set_screen(Screen::Leaderboard);
+            true
+        }
         b'0' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
             app.set_screen(Screen::Clubhouse);
@@ -4138,6 +4142,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Arcade => {
             crate::app::arcade::input::handle_key(app, byte);
+        }
+        Screen::Leaderboard => {
+            crate::app::leaderboard::input::handle_key(app, byte);
         }
         Screen::Artboard => {
             let _ = crate::app::artboard::page::handle_key(app, byte);

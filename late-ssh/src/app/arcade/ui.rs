@@ -1,4 +1,7 @@
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyGame};
+use late_core::models::{
+    chips::Difficulty,
+    leaderboard::{DailyCompletionStatus, DailyPuzzle},
+};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -18,12 +21,25 @@ use crate::app::{
 };
 
 type DailyRewardTiers = &'static [(&'static str, i64)];
+
+/// The three-tier games pay [`Difficulty::chips`] per tier. Solitaire's draw
+/// modes are not difficulties, but pay the medium and hard chip amounts; the
+/// mapping lives here per the `Difficulty` doc.
+const TIERED_REWARDS: DailyRewardTiers = &[
+    (Difficulty::Easy.key(), Difficulty::Easy.chips()),
+    (Difficulty::Medium.key(), Difficulty::Medium.chips()),
+    (Difficulty::Hard.key(), Difficulty::Hard.chips()),
+];
+const SOLITAIRE_REWARDS: DailyRewardTiers = &[
+    ("draw-1", Difficulty::Medium.chips()),
+    ("draw-3", Difficulty::Hard.chips()),
+];
 type DailyRow = (
     usize,
     &'static str,
     &'static str,
     bool,
-    DailyGame,
+    DailyPuzzle,
     DailyRewardTiers,
 );
 
@@ -253,6 +269,7 @@ pub struct ArcadeHubView<'a> {
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub daily_completion: Option<&'a DailyCompletionStatus>,
+    pub quest_state: &'a crate::app::hub::dailies::state::QuestState,
 }
 
 pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
@@ -304,7 +321,20 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
         return;
     }
 
-    let content_area = area;
+    // Quests live at the top of the lobby, not in a modal: they are all
+    // arcade quests, so they belong where the games are launched. Short
+    // terminals drop the strip before the game list loses room.
+    let strip_height = crate::app::hub::dailies::ui::arcade_strip_height(view.quest_state);
+    let content_area = if area.height >= strip_height + 13 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(strip_height), Constraint::Min(0)])
+            .split(area);
+        crate::app::hub::dailies::ui::draw_arcade_strip(frame, rows[0], view.quest_state);
+        rows[1]
+    } else {
+        area
+    };
 
     let show_header = content_area.height >= 25;
     let layout = if show_header {
@@ -575,7 +605,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Le Word",
             "Guess the daily five-letter word in six tries.",
             true,
-            DailyGame::LeWord,
+            DailyPuzzle::LeWord,
             &[("daily", super::le_word::state::DAILY_WIN_REWARD_CHIPS)],
         ),
         (
@@ -583,32 +613,32 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Sudoku",
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
-            DailyGame::Sudoku,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Sudoku,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_NONOGRAMS,
             "Nonograms",
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
-            DailyGame::Nonogram,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Nonogram,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_MINESWEEPER,
             "Minesweeper",
             "Flag mines, clear the field. Three lives.",
             true,
-            DailyGame::Minesweeper,
-            &[("easy", 100), ("medium", 250), ("hard", 500)],
+            DailyPuzzle::Minesweeper,
+            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_SOLITAIRE,
             "Solitaire",
             "Klondike with daily and personal deals over SSH.",
             true,
-            DailyGame::Solitaire,
-            &[("draw-1", 250), ("draw-3", 500)],
+            DailyPuzzle::Solitaire,
+            SOLITAIRE_REWARDS,
         ),
     ];
 
@@ -667,7 +697,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     description_style: Style::default().fg(theme::TEXT_DIM()),
                     status: daily_reward_status_spans(
                         view.daily_completion,
-                        DailyGame::RubiksCube,
+                        DailyPuzzle::RubiksCube,
                         &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
                     ),
                     label_width: 16,
@@ -714,7 +744,7 @@ fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
 
 fn daily_reward_status_spans(
     status: Option<&DailyCompletionStatus>,
-    game: DailyGame,
+    game: DailyPuzzle,
     tiers: &[(&str, i64)],
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(tiers.len() * 2);

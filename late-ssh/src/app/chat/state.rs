@@ -552,6 +552,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
+    requested_shop_modal: bool,
     requested_mod_modal: bool,
     requested_ultimate_modal: bool,
     requested_pair: Option<PairRequest>,
@@ -739,6 +740,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_room_info_modal: None,
             requested_settings_modal: false,
+            requested_shop_modal: false,
             requested_mod_modal: false,
             requested_ultimate_modal: false,
             requested_pair: None,
@@ -1005,6 +1007,10 @@ impl ChatState {
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
+    }
+
+    pub fn take_requested_shop_modal(&mut self) -> bool {
+        std::mem::take(&mut self.requested_shop_modal)
     }
 
     pub fn take_requested_room_info_modal(&mut self) -> Option<RoomInfoRequest> {
@@ -2106,6 +2112,12 @@ impl ChatState {
         if body.trim() == "/settings" {
             self.clear_composer_after_submit();
             self.requested_settings_modal = true;
+            return None;
+        }
+
+        if body.trim() == "/shop" {
+            self.clear_composer_after_submit();
+            self.requested_shop_modal = true;
             return None;
         }
 
