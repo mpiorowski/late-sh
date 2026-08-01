@@ -2,13 +2,18 @@
 //! render as a compact strip at the top of The Arcade lobby instead of a
 //! Hub tab: see the quest, launch the game, no modal in between.
 //!
-//! Layout (rows are dynamic, `arcade_strip_height` must match `strip_lines`):
+//! Layout (rows are dynamic, `arcade_strip_height` must match `strip_lines`;
+//! the strip shares the lobby's 4-column left padding so it reads as one
+//! screen with the game list below it):
 //!
 //! ```text
+//!
 //! ─── Quests ───  streak ▰▰▰▱▱▱ 3 days · next daily +300 bonus
+//!
 //!   Daily 0/2 · +525 chips to earn · resets 00:00 UTC
 //!     ○ Win easy Sudoku            easy     +150
 //!     ○ Score 10,000 in Snake      medium   +375  ▰▱▱▱▱▱▱▱ 4,000/10,000
+//!
 //!   Weekly 0/1 · +750 chips to earn · resets in 4d
 //!     ○ Win draw-3 Solitaire       hard     +750
 //! ```
@@ -17,7 +22,7 @@ use chrono::{NaiveDate, Utc};
 use late_core::models::quest::{DailyQuestStreakSnapshot, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -43,15 +48,17 @@ pub(crate) fn arcade_strip_height(state: &QuestState) -> u16 {
     strip_height_for(state.snapshot(), state.is_loaded())
 }
 
-/// Content rows plus one blank separator before the lobby content.
+/// Content rows plus one blank separator before the lobby content. Each
+/// section brings its own blank line above it, matching the airy rhythm of
+/// the game list below the strip.
 fn strip_height_for(snapshot: &QuestSnapshot, loaded: bool) -> u16 {
-    let mut rows: usize = 1;
+    let mut rows: usize = 2;
     if loaded {
         if !snapshot.daily.is_empty() {
-            rows += 1 + snapshot.daily.len();
+            rows += 2 + snapshot.daily.len();
         }
         if !snapshot.weekly.is_empty() {
-            rows += 1 + snapshot.weekly.len();
+            rows += 2 + snapshot.weekly.len();
         }
     }
     (rows + 1) as u16
@@ -61,14 +68,18 @@ pub(crate) fn draw_arcade_strip(frame: &mut Frame, area: Rect, state: &QuestStat
     if area.width == 0 || area.height == 0 {
         return;
     }
+    // Same 4-column left padding as the lobby's game list, so the strip
+    // lines up with the section headings below it.
+    let columns = Layout::horizontal([Constraint::Length(4), Constraint::Min(0)]).split(area);
+    let content = columns[1];
     let today = Utc::now().date_naive();
     let lines = strip_lines(
         state.snapshot(),
         state.is_loaded(),
         today,
-        area.width as usize,
+        content.width as usize,
     );
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines), content);
 }
 
 fn strip_lines(
@@ -77,11 +88,15 @@ fn strip_lines(
     today: NaiveDate,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![heading_line(&snapshot.daily_streak, loaded)];
+    let mut lines = vec![
+        Line::from(""),
+        heading_line(&snapshot.daily_streak, loaded),
+    ];
     if !loaded {
         return lines;
     }
     if !snapshot.daily.is_empty() {
+        lines.push(Line::from(""));
         lines.push(section_line("Daily", &snapshot.daily, "resets 00:00 UTC"));
         for item in &snapshot.daily {
             lines.push(item_line(item, width));
@@ -89,6 +104,7 @@ fn strip_lines(
     }
     if !snapshot.weekly.is_empty() {
         let note = weekly_reset_note(&snapshot.weekly, today);
+        lines.push(Line::from(""));
         lines.push(section_line("Weekly", &snapshot.weekly, &note));
         for item in &snapshot.weekly {
             lines.push(item_line(item, width));
@@ -98,16 +114,13 @@ fn strip_lines(
 }
 
 fn heading_line(streak: &DailyQuestStreakSnapshot, loaded: bool) -> Line<'static> {
-    let dim = Style::default().fg(theme::BORDER());
+    // Same style as the game list's section headings ("─── Score Games ───"),
+    // so the strip reads as the first section of the lobby.
     let accent = Style::default()
         .fg(theme::AMBER())
         .add_modifier(Modifier::BOLD);
 
-    let mut spans = vec![
-        Span::styled("─── ", dim),
-        Span::styled("Quests", accent),
-        Span::styled(" ───", dim),
-    ];
+    let mut spans = vec![Span::styled("─── Quests ───", accent)];
     if !loaded {
         spans.push(Span::styled(
             "  loading",

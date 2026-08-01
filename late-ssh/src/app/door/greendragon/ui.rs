@@ -199,7 +199,7 @@ fn draw_stats(frame: &mut Frame, area: Rect, c: &Character) {
         .border_style(Style::default().fg(theme::TEXT_FAINT()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), inner);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn draw_main(frame: &mut Frame, area: Rect, state: &State, c: &Character) {

@@ -108,8 +108,8 @@ fn strip_height_matches_rendered_lines_plus_separator() {
 
     let loading = QuestSnapshot::default();
     let lines = strip_lines(&loading, false, today, 90);
-    assert_eq!(lines.len(), 1);
-    assert_eq!(strip_height_for(&loading, false), 2);
+    assert_eq!(lines.len(), 2, "top padding plus the heading");
+    assert_eq!(strip_height_for(&loading, false), 3);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn weekly_reset_note_counts_days_to_exclusive_period_end() {
         true,
         today,
         90,
-    )[1]);
+    )[3]);
     assert!(rendered.contains("resets in 4d"), "{rendered}");
 }
 
