@@ -688,6 +688,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
         }),
         vec![
             RoomSlot::Room(lounge),
@@ -752,6 +753,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             favorite_room_ids: &[],
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
         })
     };
 
@@ -837,6 +839,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
+        sticky_unread_dm: None,
     });
     let dm_order: Vec<_> = order
         .into_iter()
@@ -874,6 +877,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
+        sticky_unread_dm: None,
     });
 
     assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
@@ -892,8 +896,231 @@ fn visual_order_hides_dm_with_ignored_peer() {
         favorite_room_ids: &[dm_bob.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
+        sticky_unread_dm: None,
     });
     assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
+}
+
+#[test]
+fn visual_order_promotes_unread_dms_above_channels() {
+    let me = Uuid::from_u128(1);
+    let alice = Uuid::from_u128(2);
+    let bob = Uuid::from_u128(3);
+    let carol = Uuid::from_u128(4);
+    let lounge = Uuid::from_u128(10);
+    let public_alpha = Uuid::from_u128(20);
+    let dm_alice = make_dm(me, alice);
+    let dm_bob = make_dm(me, bob);
+    let dm_carol = make_dm(me, carol);
+
+    let mut usernames = HashMap::new();
+    usernames.insert(alice, "alice".to_string());
+    usernames.insert(bob, "bob".to_string());
+    usernames.insert(carol, "carol".to_string());
+
+    let rooms = vec![
+        make_room(lounge, "lounge", "public", true, Some("lounge")),
+        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        (dm_alice.clone(), Vec::new()),
+        (dm_bob.clone(), Vec::new()),
+        (dm_carol.clone(), Vec::new()),
+    ];
+    // Carol is favorited, so she stays in Favorites even while unread.
+    let unread_counts = HashMap::from([(dm_bob.id, 3), (dm_carol.id, 1)]);
+
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
+        rooms: &rooms,
+        user_id: me,
+        usernames: &usernames,
+        unread_counts: &unread_counts,
+        room_last_message_at: &HashMap::new(),
+        feeds_available: false,
+        favorite_room_ids: &[dm_carol.id],
+        collapsed_sections: &HashSet::new(),
+        ignored_user_ids: &HashSet::new(),
+        sticky_unread_dm: None,
+    });
+
+    assert_eq!(
+        order,
+        vec![
+            RoomSlot::Room(dm_carol.id),
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+            RoomSlot::Room(dm_bob.id),
+            RoomSlot::Room(public_alpha),
+            RoomSlot::Room(dm_alice.id),
+        ]
+    );
+}
+
+#[test]
+fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
+    let me = Uuid::from_u128(1);
+    let bob = Uuid::from_u128(3);
+    let public_alpha = Uuid::from_u128(20);
+    let dm_bob = make_dm(me, bob);
+
+    let mut usernames = HashMap::new();
+    usernames.insert(bob, "bob".to_string());
+
+    let rooms = vec![
+        make_room(public_alpha, "topic", "public", false, Some("alpha")),
+        (dm_bob.clone(), Vec::new()),
+    ];
+    let order = |sticky: Option<Uuid>| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            // Opening the DM zeroes its count, which is exactly the moment the
+            // row must not move.
+            unread_counts: &HashMap::from([(dm_bob.id, 0)]),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            favorite_room_ids: &[],
+            collapsed_sections: &HashSet::new(),
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: sticky,
+        })
+    };
+
+    let dm_index = |order: &[RoomSlot]| {
+        order
+            .iter()
+            .position(|slot| *slot == RoomSlot::Room(dm_bob.id))
+            .expect("dm present")
+    };
+    let channel_index = |order: &[RoomSlot]| {
+        order
+            .iter()
+            .position(|slot| *slot == RoomSlot::Room(public_alpha))
+            .expect("channel present")
+    };
+
+    let reading = order(Some(dm_bob.id));
+    assert!(dm_index(&reading) < channel_index(&reading));
+
+    // Reading any other room releases it, and the DM drops back down.
+    let left = order(None);
+    assert!(dm_index(&left) > channel_index(&left));
+}
+
+#[test]
+fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
+    let me = Uuid::from_u128(1);
+    let alice = Uuid::from_u128(2);
+    let bob = Uuid::from_u128(3);
+    let dm_alice = make_dm(me, alice);
+    let dm_bob = make_dm(me, bob);
+
+    let mut usernames = HashMap::new();
+    usernames.insert(alice, "alice".to_string());
+    usernames.insert(bob, "bob".to_string());
+
+    let rooms = vec![(dm_alice.clone(), Vec::new()), (dm_bob.clone(), Vec::new())];
+
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
+        rooms: &rooms,
+        user_id: me,
+        usernames: &usernames,
+        unread_counts: &HashMap::from([(dm_bob.id, 2)]),
+        room_last_message_at: &HashMap::new(),
+        feeds_available: false,
+        favorite_room_ids: &[],
+        collapsed_sections: &HashSet::from([RoomSection::Dms]),
+        ignored_user_ids: &HashSet::new(),
+        sticky_unread_dm: None,
+    });
+
+    // Collapsing DMs folds away the read ones only; an unread DM lives in its
+    // own group and stays reachable.
+    assert!(order.contains(&RoomSlot::Room(dm_bob.id)));
+    assert!(!order.contains(&RoomSlot::Room(dm_alice.id)));
+}
+
+#[test]
+fn sticky_unread_dm_holds_the_open_dm_until_another_room_is_read() {
+    let dm = Uuid::from_u128(1);
+    let other_dm = Uuid::from_u128(2);
+    let channel = Uuid::from_u128(3);
+
+    // Opening an unread DM claims the slot.
+    let sticky = next_sticky_unread_dm(NextStickyUnreadDm {
+        current: None,
+        room_id: dm,
+        is_dm: true,
+        unread: true,
+    });
+    assert_eq!(sticky, Some(dm));
+
+    // A message landing while it is open re-marks it read; it must stay.
+    assert_eq!(
+        next_sticky_unread_dm(NextStickyUnreadDm {
+            current: sticky,
+            room_id: dm,
+            is_dm: true,
+            unread: false,
+        }),
+        Some(dm)
+    );
+
+    // Reading a channel or an already-read DM releases it.
+    assert_eq!(
+        next_sticky_unread_dm(NextStickyUnreadDm {
+            current: sticky,
+            room_id: channel,
+            is_dm: false,
+            unread: true,
+        }),
+        None
+    );
+    assert_eq!(
+        next_sticky_unread_dm(NextStickyUnreadDm {
+            current: sticky,
+            room_id: other_dm,
+            is_dm: true,
+            unread: false,
+        }),
+        None
+    );
+
+    // Moving straight into another unread DM hands the slot over.
+    assert_eq!(
+        next_sticky_unread_dm(NextStickyUnreadDm {
+            current: sticky,
+            room_id: other_dm,
+            is_dm: true,
+            unread: true,
+        }),
+        Some(other_dm)
+    );
+}
+
+#[test]
+fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
+    let me = Uuid::from_u128(1);
+    let bob = Uuid::from_u128(3);
+    let dm_bob = make_dm(me, bob);
+    let usernames = HashMap::new();
+    let rooms = vec![(dm_bob.clone(), Vec::new())];
+
+    let order = visual_order_for_rooms(RoomVisualOrderInput {
+        rooms: &rooms,
+        user_id: me,
+        usernames: &usernames,
+        unread_counts: &HashMap::from([(dm_bob.id, 5)]),
+        room_last_message_at: &HashMap::new(),
+        feeds_available: false,
+        favorite_room_ids: &[],
+        collapsed_sections: &HashSet::new(),
+        ignored_user_ids: &HashSet::from([bob]),
+        sticky_unread_dm: None,
+    });
+
+    assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
 }
 
 #[test]

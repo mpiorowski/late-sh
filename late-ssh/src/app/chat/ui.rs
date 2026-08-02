@@ -37,8 +37,8 @@ use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, compare_dm_rooms_for_nav, is_chat_list_room, is_selected_slot,
-    visual_order_for_rooms,
+    SelectedRoomSlotState, compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored,
+    is_chat_list_room, is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
 
@@ -2540,6 +2540,9 @@ pub struct ChatRenderInput<'a> {
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    /// The DM held in the promoted unread group while it is being read (see
+    /// `ChatState::note_sticky_unread_dm`).
+    pub sticky_unread_dm: Option<Uuid>,
     pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
@@ -2619,6 +2622,7 @@ pub(crate) struct ChatRoomListView<'a> {
     pub room_section_prefix_armed: bool,
     pub current_user_id: Uuid,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    pub sticky_unread_dm: Option<Uuid>,
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
@@ -2952,6 +2956,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         room_section_prefix_armed: view.room_section_prefix_armed,
         current_user_id: view.current_user_id,
         ignored_user_ids: view.ignored_user_ids,
+        sticky_unread_dm: view.sticky_unread_dm,
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
@@ -3546,6 +3551,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
         ignored_user_ids: view.ignored_user_ids,
+        sticky_unread_dm: view.sticky_unread_dm,
     });
     // Bumped rooms are advertised as read-only text at the top of the rail;
     // they are not part of `order`, so they take no jump key and never
@@ -3590,7 +3596,9 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         ]);
         Line::from(spans)
     };
-    let effect_section_header = |label: &'static str| -> Line<'static> {
+    // Header for the groups that carry no collapse toggle: the bumped-room
+    // strip and the promoted unread DMs.
+    let plain_section_header = |label: &'static str| -> Line<'static> {
         Line::from(Span::styled(
             label,
             Style::default()
@@ -3719,7 +3727,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         })
         .collect();
     if !bumped_slugs.is_empty() {
-        push_row(effect_section_header("bumped"), None, false);
+        push_row(plain_section_header("bumped"), None, false);
         for slug in &bumped_slugs {
             push_row(
                 Line::from(Span::styled(
@@ -3773,6 +3781,46 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_slot(RoomSlot::Discover, &mut push_row);
     }
 
+    // DMs split in two: the ones wanting an answer ride directly under Core,
+    // the rest keep the bottom of the rail. Favorited DMs stay in Favorites,
+    // and an ignored peer's DM shows in neither (same rule as
+    // `visual_order_for_rooms`, which is the navigation half of this mirror).
+    let (mut unread_dms, mut dms): (
+        Vec<&(ChatRoom, Vec<ChatMessage>)>,
+        Vec<&(ChatRoom, Vec<ChatMessage>)>,
+    ) = view
+        .chat_rooms
+        .iter()
+        .filter(|(r, _)| {
+            is_chat_list_room(r)
+                && r.kind == "dm"
+                && !favorite_ids.contains(&r.id)
+                && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
+        })
+        .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
+    let sort_dms = |dms: &mut [&(ChatRoom, Vec<ChatMessage>)]| {
+        dms.sort_by(|(a_room, _), (b_room, _)| {
+            compare_dm_rooms_for_nav(
+                a_room,
+                b_room,
+                view.current_user_id,
+                view.usernames,
+                view.unread_counts,
+                view.room_last_message_at,
+            )
+        });
+    };
+    sort_dms(&mut unread_dms);
+    sort_dms(&mut dms);
+
+    if !unread_dms.is_empty() {
+        push_row(blank(), None, false);
+        push_row(plain_section_header("unread dms"), None, false);
+        for (room, _) in &unread_dms {
+            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        }
+    }
+
     let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
         .chat_rooms
         .iter()
@@ -3794,21 +3842,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
     }
 
-    let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
-        .chat_rooms
-        .iter()
-        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
-        .collect();
-    dms.sort_by(|(a_room, _), (b_room, _)| {
-        compare_dm_rooms_for_nav(
-            a_room,
-            b_room,
-            view.current_user_id,
-            view.usernames,
-            view.unread_counts,
-            view.room_last_message_at,
-        )
-    });
     if !dms.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Dms), None, false);
