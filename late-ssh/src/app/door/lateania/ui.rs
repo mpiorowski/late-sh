@@ -444,6 +444,47 @@ fn is_service_room(id: u32) -> bool {
         })
 }
 
+/// Pull off-screen POI arrows in from the widget border so they hug the
+/// explored cluster instead of floating at the panel's far edge, where nothing
+/// ties them to the map they annotate. Arrows collapsing onto the same cell
+/// keep boss priority.
+fn hug_poi_arrows(
+    arrows: Vec<super::worldmap::MapArrow>,
+    canvas: &[Vec<super::worldmap::Tile>],
+) -> Vec<super::worldmap::MapArrow> {
+    use super::worldmap::{MapArrow, Tile};
+
+    let mut bounds: Option<(usize, usize, usize, usize)> = None;
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            if !matches!(tile, Tile::Empty) {
+                let b = bounds.get_or_insert((r, c, r, c));
+                b.0 = b.0.min(r);
+                b.1 = b.1.min(c);
+                b.2 = b.2.max(r);
+                b.3 = b.3.max(c);
+            }
+        }
+    }
+    let Some((r0, c0, r1, c1)) = bounds else {
+        return arrows;
+    };
+    let max_r = canvas.len() - 1;
+    let max_c = canvas[0].len() - 1;
+    let mut hugged: std::collections::BTreeMap<(usize, usize), MapArrow> =
+        std::collections::BTreeMap::new();
+    for a in arrows {
+        let row = a.row.clamp(r0.saturating_sub(1), (r1 + 1).min(max_r));
+        let col = a.col.clamp(c0.saturating_sub(1), (c1 + 1).min(max_c));
+        let moved = MapArrow { row, col, ..a };
+        let e = hugged.entry((row, col)).or_insert(moved);
+        if a.boss && !e.boss {
+            *e = moved;
+        }
+    }
+    hugged.into_values().collect()
+}
+
 /// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
 /// centred on the player. `@` is the player's room; arrows / wasd pan the
 /// camera and Enter re-centres (handled in input.rs).
@@ -653,8 +694,9 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         }
     }
 
-    // Off-field bosses/tameables get a border arrow pointing the way (no spoiler).
-    for arrow in poi_arrows(coords, center, cols, height) {
+    // Off-field bosses/tameables get a direction arrow hugging the explored
+    // cluster's edge (no spoiler of where exactly).
+    for arrow in hug_poi_arrows(poi_arrows(coords, center, cols, height), &canvas) {
         if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
             let style = if arrow.boss { boss_style } else { tame_style };
             *cell = (arrow.glyph.to_string(), style);
@@ -690,7 +732,11 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled("\u{2302}", service_style),
             Span::styled(" town ", dim),
             Span::styled("\u{2666}", node_style),
-            Span::styled(" node", dim),
+            Span::styled(" node ", dim),
+            Span::styled("\u{2192}", boss_style),
+            Span::styled(" off-map ", dim),
+            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" path", dim),
         ])),
         rows[2],
     );
@@ -814,8 +860,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         })
         .collect();
 
-    // Off-screen POI direction arrows on the border.
-    for arrow in poi_arrows(coords, center, cols, height) {
+    // Off-screen POI direction arrows, hugging the explored cluster's edge.
+    for arrow in hug_poi_arrows(poi_arrows(coords, center, cols, height), &canvas) {
         if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
             let style = if arrow.boss { boss_style } else { tame_style };
             *cell = (arrow.glyph.to_string(), style);

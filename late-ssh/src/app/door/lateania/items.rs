@@ -1047,6 +1047,19 @@ pub const ITEMS: &[Item] = &[
         220,
         1500,
     ),
+    // The top-end repeatable gold sink. Legendary EQUIPMENT was pulled from
+    // every shop (it outclassed Frontier drops); a consumable is spent, not
+    // worn, so it can carry a deep price without bending the power curve.
+    consumable(
+        1306,
+        "Wyrmfire Cordial",
+        "Liquid dragonflame in cut crystal - the Apothecary's proudest vice, \
+         priced for purses that survived the deep roads.",
+        Rarity::Legendary,
+        650,
+        350,
+        2400,
+    ),
     // ---- Valuables (sold to any merchant) -------------------------------
     Item {
         id: 1400,
@@ -2041,6 +2054,32 @@ const ARCHIPELAGO_ZONE_WORDS: [&str; 20] = [
     "Reefwarden",
 ];
 
+/// (attack, hp, armor) for a generated-realm piece at 1-based tier `t`. ONE
+/// table, shared by every realm gear ladder and by the Archipelago finds that
+/// continue the same curve past Kaelmyr - a hand-mirrored copy of it once
+/// drifted when the ring line was retuned.
+fn realm_slot_stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+    match slot {
+        Slot::Weapon => (30 + t * 3, 0, 0),
+        Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),
+        Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
+        Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
+        Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
+        Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
+        // Raised twice: the Curio Cart's Vaultkeeper's Band (Epic, power 59)
+        // used to beat a Frontier tier-1 ring outright, and the first raise
+        // cleared it by a single point while dropping armor 3 -> 1, which
+        // still read as a sidegrade in the field. Tier 1 now clears the shop
+        // ceiling with the same real headroom every other slot gets.
+        Slot::Ring => (8 + t, 30 + t * 4, 2 + t / 2),
+        // Trinket used to land just under the Curio Cart's shop-bought Epic
+        // (Wyrmscale Talisman, power 56): a Frontier tier-1 charm read as a
+        // downgrade. Raised so tier 1 clears every shop trinket with room to
+        // spare.
+        Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
+    }
+}
+
 /// Two items per zone/island: even zones get a weapon + ring, odd zones get a
 /// chest + trinket, so the roster reads as a real gear mix rather than one
 /// slot repeated. `stats` computes (attack, hp, armor) for a slot given the
@@ -2163,16 +2202,9 @@ fn build_archipelago_finds() -> Vec<Item> {
     // Continues the exact curve `build_generated_items` leaves off at the end
     // of Kaelmyr (power_offset 40, tier 20 -> t=60), so the Archipelago's
     // finds pick up with zero discontinuity and keep climbing past it - the
-    // deadliest ground in the world outclasses even the Ashen Reach.
-    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
-        match slot {
-            Slot::Weapon => (30 + t * 3, 0, 0),
-            Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
-            Slot::Ring => (8 + t, 26 + t * 4, 1 + t / 2),
-            Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
-            _ => (0, 0, 0),
-        }
-    }
+    // deadliest ground in the world outclasses even the Ashen Reach. Shares
+    // `realm_slot_stats` with the realm ladders: a hand-mirrored copy of that
+    // table once drifted when the ring line was retuned.
     (0..ARCHIPELAGO_ZONE_WORDS.len())
         .flat_map(|zone| {
             let t = 60 + zone as i32 + 1;
@@ -2184,7 +2216,7 @@ fn build_archipelago_finds() -> Vec<Item> {
                 Rarity::Legendary,
                 (220 + t * 85) as i64,
                 "A find from the Shattered Archipelago, salt-cursed and past all reason strong.",
-                stats,
+                realm_slot_stats,
             )
         })
         .collect()
@@ -2264,22 +2296,7 @@ fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
             let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
             let desc: &'static str =
                 Box::leak((realm.gear_desc)(&type_name.to_ascii_lowercase()).into_boxed_str());
-            let (attack, max_hp, armor) = match slot {
-                Slot::Weapon => (30 + t * 3, 0, 0),
-                Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),
-                Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
-                Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
-                Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
-                Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
-                // Also raised: the Curio Cart's Vaultkeeper's Band (Epic, power
-                // 59) used to beat a Frontier tier-1 ring outright.
-                Slot::Ring => (8 + t, 26 + t * 4, 1 + t / 2),
-                // Trinket used to land just under the Curio Cart's shop-bought
-                // Epic (Wyrmscale Talisman, power 56): a Frontier tier-1 charm
-                // read as a downgrade. Raised so tier 1 clears every shop
-                // trinket with room to spare.
-                Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
-            };
+            let (attack, max_hp, armor) = realm_slot_stats(*slot, t);
             out.push(Item {
                 id,
                 name,
@@ -2368,7 +2385,7 @@ pub const SHOPS: &[Shop] = &[
         npc_name: "Old Mirela",
         shop_name: "The Apothecary",
         greeting: "Shelves of bottles glint behind a stooped woman who smells of crushed herbs. \"Hurt, are you? I have just the thing.\"",
-        stock: &[1300, 1301, 1302, 1303, 1304, 1305],
+        stock: &[1300, 1301, 1302, 1303, 1304, 1305, 1306],
     },
     Shop {
         room: 203,

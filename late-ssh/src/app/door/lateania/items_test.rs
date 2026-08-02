@@ -204,6 +204,13 @@ fn shops_offer_gold_sinks_without_selling_legendary_gear() {
     assert!(
         all_stock
             .iter()
+            .any(|it| matches!(it.kind, ItemKind::Consumable { .. }) && it.price >= 2_000),
+        "the top-end gold sink is a premium repeatable consumable (>= 2,000g), \
+         since Legendary equipment left the shops"
+    );
+    assert!(
+        all_stock
+            .iter()
             .all(|it| !matches!(it.kind, ItemKind::Equipment(_)) || it.rarity != Rarity::Legendary),
         "no shop should sell Legendary equipment - that tier is earned, not bought"
     );
@@ -285,13 +292,16 @@ fn frontier_tier_one_beats_every_shop_slot() {
     };
     let tier1: Vec<&Item> = frontier_loot(0).iter().filter_map(|id| item(*id)).collect();
     for slot in Slot::WEARABLE {
-        let Some(piece) = tier1.iter().find(|it| it.slot() == Some(slot)) else {
-            continue;
-        };
+        let piece = tier1
+            .iter()
+            .find(|it| it.slot() == Some(slot))
+            .unwrap_or_else(|| panic!("Frontier tier 1 must cover every wearable slot: {slot:?}"));
         let ceiling = shop_ceiling_power(slot);
+        // Real headroom, not a squeak: a one-point win over a shop piece (or
+        // one that trades away armor) still reads as a sidegrade in the field.
         assert!(
-            piece.power() > ceiling,
-            "Frontier tier-1 {slot:?} (power {}) should beat the shop ceiling (power {ceiling})",
+            piece.power() >= ceiling + 5,
+            "Frontier tier-1 {slot:?} (power {}) should clear the shop ceiling (power {ceiling}) with headroom",
             piece.power()
         );
     }
@@ -339,7 +349,8 @@ fn crafted_gear_climbs_every_tier_and_clears_the_shop_ceiling() {
     // jerkin) should be a decent, strictly-improving upgrade tier over tier -
     // no flat or backwards steps - and the top tier (skill 100, the trade's
     // own endgame) should clear what plain gold can buy in the same slot.
-    let lines: [(fn(u32) -> u32, Slot); 4] = [
+    type CraftLine = (fn(u32) -> u32, Slot);
+    let lines: [CraftLine; 4] = [
         (smith_weapon_id, Slot::Weapon),
         (wood_weapon_id, Slot::Weapon),
         (smith_armor_id, Slot::Chest),

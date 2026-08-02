@@ -152,6 +152,9 @@ pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
                 if rel.contains_key(&dest)
                     || coords.contains_key(&dest)
                     || region_layout(dest).is_some()
+                    // A home's doorway: never walked, so each plot's interior
+                    // seeds later as its own island clear of the town grid.
+                    || super::housing::crosses_threshold(rid, dest)
                 {
                     continue;
                 }

@@ -5,7 +5,8 @@ fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
     // Fifty classic beasts, plus the ten Wildbound rideables at the summit.
     assert_eq!(TAMEABLE_COUNT, 60, "fifty beasts + ten Wildbound mounts");
     // The taming difficulty is non-decreasing across the list (small -> large
-    // -> harder and harder), and spans the whole 1..=50 range.
+    // -> harder and harder), the fifty classic beasts spanning 1..=50 and the
+    // Wildbound mounts continuing above them.
     for w in TAMEABLE.windows(2) {
         assert!(
             w[1].tame_level >= w[0].tame_level,

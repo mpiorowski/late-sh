@@ -223,9 +223,6 @@ struct DrawContext<'a> {
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
-    needs_interaction_onboarding: bool,
-    onboarding_selected: usize,
-    onboarding_option_rects: &'a std::cell::Cell<[Option<Rect>; 3]>,
     show_mod_modal: bool,
     show_hub_modal: bool,
     show_aquarium_tray: bool,
@@ -1025,9 +1022,6 @@ impl App {
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
-                        needs_interaction_onboarding: self.needs_interaction_onboarding,
-                        onboarding_selected: self.onboarding_selected,
-                        onboarding_option_rects: &self.onboarding_option_rects,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
                         show_aquarium_tray: self.show_aquarium_tray,
@@ -1700,16 +1694,6 @@ impl App {
                 inner,
                 ctx.terminal_image_protocol,
                 terminal_images,
-            );
-        }
-
-        // The one-time first-run prompt draws over everything.
-        if ctx.needs_interaction_onboarding {
-            crate::app::onboarding::ui::draw(
-                frame,
-                inner,
-                ctx.onboarding_selected,
-                ctx.onboarding_option_rects,
             );
         }
 

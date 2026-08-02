@@ -1182,8 +1182,7 @@ impl russh::server::Handler for ClientHandler {
             }
 
             // Keyboard-only sessions never turn on mouse reporting, so the
-            // terminal keeps its own selection/copy. First-run (unchosen) users
-            // default to mouse-on so the onboarding prompt itself is clickable.
+            // terminal keeps its own selection/copy.
             let mouse_on = app.lock().await.interaction_mode.mouse_enabled();
             let init = App::enter_alt_screen(mouse_on);
             let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;

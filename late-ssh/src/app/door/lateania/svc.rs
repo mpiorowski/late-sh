@@ -1824,15 +1824,19 @@ struct PlayerState {
     /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
     craft_skills: HashMap<CraftSkill, i64>,
     /// Total Animal Taming xp (the beastmaster trade). Its level is a pure
-    /// function of this, on the same 1..=50 curve. Persisted (schema v14).
+    /// function of this, on the same skill curve (1..=SKILL_MAX_LEVEL).
+    /// Persisted (schema v14).
     taming_xp: i64,
     /// Whether the live walk-around field (RPG mode) is on for this character.
     /// A rendering preference, but persisted so it survives across sessions.
     rpg_mode: bool,
-    /// A weapon coated with poison: (damage per tick, strikes remaining). Each
-    /// landed melee hit leaves a poison DoT and spends one charge. Transient.
+    /// When this player last spoke on a zone/world scope, for the anti-spam
+    /// broadcast cooldown. Session-only.
+    last_broadcast: Option<Instant>,
     /// Riding the companion (Wildbound mounts). Session-only.
     mounted: bool,
+    /// A weapon coated with poison: (damage per tick, strikes remaining). Each
+    /// landed melee hit leaves a poison DoT and spends one charge. Transient.
     weapon_poison: Option<(i32, u8)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
@@ -2394,6 +2398,10 @@ const GAME_RESPAWN: Duration = Duration::from_secs(40);
 const NODE_RESPAWN: Duration = Duration::from_secs(45);
 /// How long a beast stays spooked (and un-approachable) after a failed tame.
 const TAME_COOLDOWN: Duration = Duration::from_secs(30);
+/// Minimum gap between one player's zone/world broadcasts. Room speech is
+/// self-limiting (only co-located players hear it); a global channel needs a
+/// brake or one voice can flood every log in Lateania.
+const BROADCAST_COOLDOWN: Duration = Duration::from_secs(10);
 /// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
 const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
 /// Strikes a single weapon-coating lasts before the poison is spent.
@@ -2528,6 +2536,7 @@ impl WorldState {
             craft_skills: HashMap::new(),
             taming_xp: 0,
             rpg_mode: true,
+            last_broadcast: None,
             mounted: false,
             weapon_poison: None,
             escort: None,
@@ -5099,8 +5108,11 @@ impl WorldState {
         let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
             return;
         };
-        let bonus_xp = (80 + boss_level * 24) as i64;
-        let bonus_gold = (35 + boss_level * 6) as i64;
+        // Wildbound only widened the level DISPLAYED over a foe's head; the
+        // bounty stays pinned to the old ceiling so that change pays nothing.
+        let reward_level = boss_level.min(super::world::LEVEL_KNEE);
+        let bonus_xp = (80 + reward_level * 24) as i64;
+        let bonus_gold = (35 + reward_level * 6) as i64;
         if let Some(p) = self.players.get_mut(&user_id) {
             p.completed_quests.push(zone);
             p.xp += bonus_xp;
@@ -5315,6 +5327,28 @@ impl WorldState {
         let Some(room_id) = self.players.get(&user_id).map(|p| p.room) else {
             return;
         };
+        // Zone/world scopes carry to players who never chose to stand near
+        // you; hold each voice to one broadcast per cooldown window.
+        if !matches!(scope, ChatScope::Room) {
+            let now = Instant::now();
+            let held = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.last_broadcast)
+                .is_some_and(|last| now.duration_since(last) < BROADCAST_COOLDOWN);
+            if held {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    "You've just called out - give the echo a breath before shouting again."
+                        .to_string(),
+                );
+                return;
+            }
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.last_broadcast = Some(now);
+            }
+        }
         let recipients: Vec<Uuid> = match scope {
             ChatScope::Room => self
                 .players
@@ -7279,6 +7313,39 @@ impl WorldState {
         let mut players = HashMap::new();
         let time_of_day = self.time_of_day().label();
         let weather = self.weather().label();
+        // ONE pass over the world's mobs and players per snapshot, shared by
+        // every player's view below. Snapshots run on every publish inside the
+        // global lock, and the world holds thousands of spawns: sweeping them
+        // once per PLAYER made every keystroke O(players x mobs).
+        let coords = super::worldmap::world_coords();
+        let mut mobs_by_room: HashMap<RoomId, Vec<&MobInstance>> = HashMap::new();
+        let mut foe_rooms: Vec<(RoomId, super::worldmap::Coord)> = Vec::new();
+        for m in self.mobs.values() {
+            if !m.alive || !m.revealed {
+                continue;
+            }
+            let seen = mobs_by_room.entry(m.current_room).or_default();
+            if seen.is_empty()
+                && let Some(&c) = coords.get(&m.current_room)
+            {
+                foe_rooms.push((m.current_room, c));
+            }
+            seen.push(m);
+        }
+        // Rooms holding at least one adventurer. A viewer's own room is
+        // filtered out per player below, so "another adventurer" needs no
+        // identity here, only occupancy.
+        let mut occupied_rooms: Vec<(RoomId, super::worldmap::Coord)> = Vec::new();
+        {
+            let mut seen: HashSet<RoomId> = HashSet::new();
+            for other in self.players.values() {
+                if seen.insert(other.room)
+                    && let Some(&c) = coords.get(&other.room)
+                {
+                    occupied_rooms.push((other.room, c));
+                }
+            }
+        }
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
             let (room_name, room_desc, zone, safe, exits) = match room {
@@ -7305,10 +7372,10 @@ impl WorldState {
                     Vec::new(),
                 ),
             };
-            let mobs: Vec<MobView> = self
-                .mobs
-                .values()
-                .filter(|m| m.alive && m.revealed && m.current_room == player.room)
+            let mobs: Vec<MobView> = mobs_by_room
+                .get(&player.room)
+                .into_iter()
+                .flatten()
                 .map(|m| MobView {
                     id: m.spawn.id,
                     name: m.spawn.name.to_string(),
@@ -7320,57 +7387,32 @@ impl WorldState {
                     targeted: player.target == Some(m.spawn.id),
                 })
                 .collect();
-            // Foes lairing in nearby rooms (not this one), so the live field can
-            // mark where danger sits. Bounded to a window around the player on the
-            // same level; the field's own fog still hides rooms never seen.
-            let nearby_foes: Vec<RoomId> = {
-                let coords = super::worldmap::world_coords();
+            // Foes lairing in nearby rooms (not this one) and other adventurers
+            // in the same window, so the live field can mark where danger and
+            // company sit. Bounded to a window around the player on the same
+            // level; the field's own fog still hides rooms never seen. Only the
+            // field draws these, so a session without it pays nothing.
+            let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
-                    Some(&pc) => {
-                        let mut rooms: std::collections::HashSet<RoomId> =
-                            std::collections::HashSet::new();
-                        for m in self.mobs.values() {
-                            if !m.alive || !m.revealed || m.current_room == player.room {
-                                continue;
-                            }
-                            if let Some(c) = coords.get(&m.current_room)
-                                && c.z == pc.z
-                                && (c.x - pc.x).abs() <= 16
-                                && (c.y - pc.y).abs() <= 12
-                            {
-                                rooms.insert(m.current_room);
-                            }
-                        }
-                        rooms.into_iter().collect()
+                    Some(&pc) if player.rpg_mode => {
+                        let in_window = |c: &super::worldmap::Coord| {
+                            c.z == pc.z && (c.x - pc.x).abs() <= 16 && (c.y - pc.y).abs() <= 12
+                        };
+                        (
+                            foe_rooms
+                                .iter()
+                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .map(|(r, _)| *r)
+                                .collect(),
+                            occupied_rooms
+                                .iter()
+                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .map(|(r, _)| *r)
+                                .collect(),
+                        )
                     }
-                    None => Vec::new(),
-                }
-            };
-            // Other adventurers in nearby rooms, same window, so the field shows
-            // where people are.
-            let nearby_players: Vec<RoomId> = {
-                let coords = super::worldmap::world_coords();
-                match coords.get(&player.room) {
-                    Some(&pc) => {
-                        let mut rooms: std::collections::HashSet<RoomId> =
-                            std::collections::HashSet::new();
-                        for other in self.players.values() {
-                            if other.user_id == *user_id || other.room == player.room {
-                                continue;
-                            }
-                            if let Some(c) = coords.get(&other.room)
-                                && c.z == pc.z
-                                && (c.x - pc.x).abs() <= 16
-                                && (c.y - pc.y).abs() <= 12
-                            {
-                                rooms.insert(other.room);
-                            }
-                        }
-                        rooms.into_iter().collect()
-                    }
-                    None => Vec::new(),
-                }
-            };
+                    _ => (Vec::new(), Vec::new()),
+                };
             let occupants: Vec<OccupantView> = self
                 .players
                 .values()

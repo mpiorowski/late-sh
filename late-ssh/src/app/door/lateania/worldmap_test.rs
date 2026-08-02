@@ -93,6 +93,25 @@ fn generated_zones_are_collision_free_and_the_core_stays_tight() {
 }
 
 #[test]
+fn housing_interiors_never_share_a_cell_with_the_town() {
+    use crate::app::door::lateania::housing::{HOUSING_BASE, is_housing_room};
+
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    for (c, ids) in &clashes {
+        let interior = ids
+            .iter()
+            .any(|&id| id != HOUSING_BASE && is_housing_room(id));
+        assert!(
+            !interior,
+            "house interior collided with the world at {c:?}: rooms {ids:?} - the \
+             field would draw another room's paths around a player standing inside",
+        );
+    }
+}
+
+#[test]
 fn dump_level_draws_the_neighbourhood_around_the_player() {
     let world = seed_world();
     let coords = derive_coords(&world);

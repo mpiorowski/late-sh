@@ -811,13 +811,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // The one-time first-run prompt blocks the app until a mode is chosen (but
-    // reserved chords above, like quit, still work).
-    if app.needs_interaction_onboarding {
-        crate::app::onboarding::input::handle_input(app, event);
-        return;
-    }
-
     if app.show_quit_confirm {
         quit_confirm::input::handle_input(app, event);
         return;

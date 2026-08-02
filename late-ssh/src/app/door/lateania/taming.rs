@@ -689,8 +689,8 @@ pub fn tame_chance(taming_xp: i64, beast: &PetSpecies) -> u32 {
 
 /// Xp awarded for a *successful* tame: scales with the beast's difficulty, so
 /// taming a great wyrm is worth far more than a hare. Kept generous enough that
-/// working up the fifty beasts is a real, rewarding progression on the shared
-/// 1..=50 curve.
+/// working up the beasts is a real, rewarding progression on the shared
+/// skill curve.
 pub fn tame_xp(beast: &PetSpecies) -> i32 {
     30 + beast.tame_level * beast.tame_level / 2
 }

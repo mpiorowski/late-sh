@@ -96,6 +96,12 @@ pub struct Room {
     pub safe: bool,
 }
 
+/// The pre-Wildbound level ceiling, and the knee of the two-slope display
+/// curve in `MobSpawn::level`. Reward math (the zone-boss bounty) stays
+/// pinned to it: display levels run past it to 100, but a payout derived
+/// from a level must never grow because the number over a foe's head did.
+pub const LEVEL_KNEE: i32 = 60;
+
 /// A mob template that spawns at a home room.
 #[derive(Clone, Debug)]
 pub struct MobSpawn {
@@ -134,14 +140,13 @@ impl MobSpawn {
     pub fn level(&self) -> i32 {
         let power = self.max_hp + self.damage * 4;
         // The knee: the power at which the old slope reached the old ceiling.
-        const KNEE_POWER: i32 = 60 * 14; // 840
-        const KNEE_LEVEL: i32 = 60;
+        const KNEE_POWER: i32 = LEVEL_KNEE * 14; // 840
         let level = if power <= KNEE_POWER {
             power / 14
         } else {
             // Spread the endgame's remaining power over the 60..=100 band. The
             // toughest boss in the world (~6800 power) lands right at the cap.
-            KNEE_LEVEL + (power - KNEE_POWER) / 150
+            LEVEL_KNEE + (power - KNEE_POWER) / 150
         };
         level.clamp(1, super::classes::Class::MAX_LEVEL)
     }
@@ -1741,12 +1746,22 @@ pub const VILLAGERS: &[Feature] = &[
 ];
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
-    FEATURES
-        .iter()
-        .chain(VILLAGERS.iter())
-        .chain(waystone_features().iter())
-        .filter(|f| f.room == room)
-        .collect()
+    // Indexed once: this is called per map cell per frame (via the field's
+    // service glyph) and per snapshot, and a linear scan of FEATURES plus 146
+    // villagers plus the waystones was the hottest part of both.
+    static BY_ROOM: OnceLock<HashMap<RoomId, Vec<&'static Feature>>> = OnceLock::new();
+    let by_room = BY_ROOM.get_or_init(|| {
+        let mut by_room: HashMap<RoomId, Vec<&'static Feature>> = HashMap::new();
+        for f in FEATURES
+            .iter()
+            .chain(VILLAGERS.iter())
+            .chain(waystone_features().iter())
+        {
+            by_room.entry(f.room).or_default().push(f);
+        }
+        by_room
+    });
+    by_room.get(&room).cloned().unwrap_or_default()
 }
 
 const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
@@ -1898,7 +1913,7 @@ pub struct CritterSpawn {
     pub mythical: bool,
     /// Can be won over as a stray companion (Genesys) - fed and looked after
     /// over several consecutive days, it joins you on top of any other
-    /// companion you already keep. See `svc::feed_stray`.
+    /// companion you already keep. See `svc::feed_wild_critter`.
     pub adoptable: bool,
 }
 

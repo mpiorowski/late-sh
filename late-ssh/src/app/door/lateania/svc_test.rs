@@ -2540,6 +2540,42 @@ fn nearby_foes_lists_foes_in_neighbouring_rooms() {
 }
 
 #[test]
+fn rpg_mode_off_skips_the_field_hint_lists() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = there;
+    }
+    // With the field hidden, the hint lists are dead weight; the snapshot
+    // must not spend the window scan on them.
+    s.players.get_mut(&uid(1)).unwrap().rpg_mode = false;
+    let snap = s.snapshot();
+    let view = &snap.players[&uid(1)];
+    assert!(
+        view.nearby_foes.is_empty() && view.nearby_players.is_empty(),
+        "no field, no nearby hints"
+    );
+    // The room's own mob list is combat UI, not a field hint: still there.
+    assert!(
+        s.players.get_mut(&uid(1)).map(|p| p.room = there).is_some()
+            && !s.snapshot().players[&uid(1)].mobs.is_empty(),
+        "the in-room mob list is unaffected by rpg_mode"
+    );
+}
+
+#[test]
 fn a_hidden_foe_is_not_leaked_onto_the_field() {
     const HERE: RoomId = 2001;
     let mut s = world();
@@ -2610,7 +2646,7 @@ fn a_mounted_step_strides_the_full_length_of_the_road() {
     // Find a straight 6-room east chain inside one region (no gateways).
     let chain = {
         let mut found: Option<Vec<RoomId>> = None;
-        'scan: for (&start, _) in &s.world.rooms {
+        'scan: for &start in s.world.rooms.keys() {
             let mut chain = vec![start];
             let mut cur = start;
             for _ in 0..5 {
@@ -2759,6 +2795,31 @@ fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
 }
 
 #[test]
+fn zone_boss_bounty_stays_pinned_to_the_legacy_level_cap() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let xp_before = s.players[&uid(1)].xp;
+    let gold_before = s.players[&uid(1)].gold;
+    // Wildbound widened DISPLAY levels to 100, promising "no xp or drop
+    // changes". A boss now reading level 100 must still pay the bounty the
+    // old 60-cap paid, or the display change silently inflates 20 one-time
+    // payouts.
+    s.complete_quest(uid(1), 0, 100);
+    let p = &s.players[&uid(1)];
+    assert_eq!(
+        p.xp - xp_before,
+        80 + 60 * 24,
+        "bounty xp pinned to the knee"
+    );
+    assert_eq!(
+        p.gold - gold_before,
+        35 + 60 * 6,
+        "bounty gold pinned to the knee"
+    );
+}
+
+#[test]
 fn say_defaults_to_the_room_and_ignores_other_rooms() {
     let mut s = world();
     s.join(uid(1));
@@ -2816,9 +2877,11 @@ fn zone_say_reaches_the_whole_zone_but_not_other_zones() {
         "a different zone should never hear it"
     );
 
-    // The short "/z" form works the same way.
+    // The short "/z" form works the same way (cooldown reset: this test is
+    // about scope parsing, not the broadcast brake).
     s.players.get_mut(&uid(1)).unwrap().log.clear();
     s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = None;
     s.say(uid(1), "/z short form works too");
     assert!(
         s.players[&uid(2)]
@@ -2854,15 +2917,64 @@ fn world_say_reaches_every_adventurer_in_lateania() {
         "world scope should reach every player, any zone"
     );
 
-    // The short "/w" form works the same way.
+    // The short "/w" form works the same way (cooldown reset: this test is
+    // about scope parsing, not the broadcast brake).
     s.players.get_mut(&uid(1)).unwrap().log.clear();
     s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = None;
     s.say(uid(1), "/w short form too");
     assert!(
         s.players[&uid(2)]
             .log
             .iter()
             .any(|l| l.text.contains("short form too"))
+    );
+}
+
+#[test]
+fn broadcasts_are_held_by_a_cooldown_but_room_speech_is_not() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // Tasmania, hears world only
+
+    s.say(uid(1), "/world first call");
+    s.say(uid(1), "/world second call");
+    let log2 = &s.players[&uid(2)].log;
+    assert!(log2.iter().any(|l| l.text.contains("first call")));
+    assert!(
+        !log2.iter().any(|l| l.text.contains("second call")),
+        "a second broadcast inside the cooldown window is held"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("give the echo a breath")),
+        "the held speaker is told why nothing went out"
+    );
+
+    // Room speech never trips the broadcast brake.
+    s.say(uid(1), "hello room");
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say: hello room")
+    );
+
+    // Once the window has passed, the next broadcast goes out.
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = Some(Instant::now() - BROADCAST_COOLDOWN);
+    s.say(uid(1), "/world third call");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("third call")),
+        "an expired cooldown lets the next broadcast through"
     );
 }
 

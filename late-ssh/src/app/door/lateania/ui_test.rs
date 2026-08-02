@@ -1,8 +1,54 @@
 use super::{
-    compare_span, fit, inventory_item_tag, line_rows, meter, rarity_color, scroll_offset,
-    star_rating, wrapped_rows,
+    compare_span, fit, hug_poi_arrows, inventory_item_tag, line_rows, meter, rarity_color,
+    scroll_offset, star_rating, wrapped_rows,
 };
+use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
+
+#[test]
+fn poi_arrows_hug_the_explored_cluster_with_boss_priority() {
+    // A 10x10 canvas whose explored cluster occupies rows/cols 4..=5.
+    let mut canvas = vec![vec![Tile::Empty; 10]; 10];
+    canvas[4][4] = Tile::Room(1);
+    canvas[5][5] = Tile::Room(2);
+
+    let arrows = vec![
+        // A tame arrow far away on the widget border...
+        MapArrow {
+            row: 0,
+            col: 9,
+            glyph: '\u{2197}',
+            boss: false,
+        },
+        // ...and a boss arrow that clamps onto the same cluster-edge cell.
+        MapArrow {
+            row: 2,
+            col: 9,
+            glyph: '\u{2192}',
+            boss: true,
+        },
+    ];
+    let hugged = hug_poi_arrows(arrows, &canvas);
+
+    // Both collapse onto the cluster's north-east corner cell (3, 6); the boss
+    // outranks the tame arrow there.
+    assert_eq!(hugged.len(), 1);
+    assert_eq!((hugged[0].row, hugged[0].col), (3, 6));
+    assert!(hugged[0].boss, "a boss arrow outranks a tame on one cell");
+
+    // An empty canvas (nothing explored) leaves arrows untouched.
+    let empty = vec![vec![Tile::Empty; 10]; 10];
+    let kept = hug_poi_arrows(
+        vec![MapArrow {
+            row: 0,
+            col: 9,
+            glyph: '\u{2197}',
+            boss: false,
+        }],
+        &empty,
+    );
+    assert_eq!((kept[0].row, kept[0].col), (0, 9));
+}
 
 #[test]
 fn rarity_color_uses_the_standard_rpg_palette() {
