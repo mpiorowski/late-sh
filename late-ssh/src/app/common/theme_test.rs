@@ -55,6 +55,43 @@ fn text_brightness_adjustment_lightens_and_darkens_primary_text() {
 }
 
 #[test]
+fn dim_and_faint_text_never_matches_a_highlight_background() {
+    // Rows can be overlaid with a selection/highlight background while
+    // keeping their existing (possibly dim/faint) foreground color, so if a
+    // palette assigns a highlight background the same color as its dim/faint
+    // text, that text goes invisible on selection (the Terminal palette's
+    // Indexed(8) collision this guards against).
+    for option in OPTIONS {
+        set_current_by_id(option.id);
+        let dim = TEXT_DIM();
+        let faint = TEXT_FAINT();
+        let selection = BG_SELECTION();
+        let highlight = BG_HIGHLIGHT();
+        assert_ne!(
+            dim, selection,
+            "{}: text_dim matches bg_selection",
+            option.id
+        );
+        assert_ne!(
+            faint, selection,
+            "{}: text_faint matches bg_selection",
+            option.id
+        );
+        assert_ne!(
+            dim, highlight,
+            "{}: text_dim matches bg_highlight",
+            option.id
+        );
+        assert_ne!(
+            faint, highlight,
+            "{}: text_faint matches bg_highlight",
+            option.id
+        );
+    }
+    set_current_by_id("contrast");
+}
+
+#[test]
 fn every_theme_group_has_distinct_bit() {
     let mut mask = 0u32;
     for group in ThemeGroup::ALL {

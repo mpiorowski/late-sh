@@ -3992,8 +3992,8 @@ const PALETTE_AMOLED_CERULEAN: Palette = Palette {
 
 const PALETTE_TERMINAL: Palette = Palette {
     bg_canvas: Color::Indexed(0),      // Black
-    bg_selection: Color::Indexed(8),   // Bright Black (dark gray)
-    bg_highlight: Color::Indexed(8),   // Bright Black
+    bg_selection: Color::Indexed(4),   // Blue
+    bg_highlight: Color::Indexed(4),   // Blue
     border_dim: Color::Indexed(8),     // Bright Black
     border: Color::Indexed(7),         // White (normal gray)
     border_active: Color::Indexed(4),  // Blue
