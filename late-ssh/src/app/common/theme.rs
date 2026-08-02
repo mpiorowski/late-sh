@@ -2104,7 +2104,7 @@ const PALETTE_ENA: Palette = Palette {
     border_dim: Color::Rgb(41, 95, 247),
     border: Color::Rgb(253, 231, 1),
     border_active: Color::Rgb(227, 207, 182),
-    text_faint: Color::Rgb(41, 95, 247),
+    text_faint: Color::Rgb(130, 150, 210),
     text_dim: Color::Rgb(253, 231, 1),
     text_muted: Color::Rgb(180, 180, 180),
     text: Color::Rgb(209, 209, 209),
