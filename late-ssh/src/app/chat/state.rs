@@ -263,7 +263,6 @@ pub enum RoomSection {
     Favorites,
     Core,
     Channels,
-    Updates,
     Dms,
 }
 
@@ -275,7 +274,6 @@ impl RoomSection {
             RoomSection::Favorites => "favorites",
             RoomSection::Core => "core",
             RoomSection::Channels => "channels",
-            RoomSection::Updates => "updates",
             RoomSection::Dms => "dms",
         }
     }
@@ -285,7 +283,6 @@ impl RoomSection {
             RoomSection::Favorites => b'f',
             RoomSection::Core => b'o',
             RoomSection::Channels => b'c',
-            RoomSection::Updates => b'u',
             RoomSection::Dms => b'd',
         }
     }
@@ -296,7 +293,6 @@ impl RoomSection {
             "favorites" => Some(RoomSection::Favorites),
             "core" => Some(RoomSection::Core),
             "channels" => Some(RoomSection::Channels),
-            "updates" => Some(RoomSection::Updates),
             "dms" => Some(RoomSection::Dms),
             _ => None,
         }

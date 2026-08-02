@@ -663,8 +663,8 @@ fn room_section_suffixes_map_plain_keys_to_sections() {
     assert_eq!(room_section_suffix(b'f'), Some(RoomSection::Favorites));
     assert_eq!(room_section_suffix(b'o'), Some(RoomSection::Core));
     assert_eq!(room_section_suffix(b'c'), Some(RoomSection::Channels));
-    assert_eq!(room_section_suffix(b'u'), Some(RoomSection::Updates));
     assert_eq!(room_section_suffix(b'd'), Some(RoomSection::Dms));
+    assert_eq!(room_section_suffix(b'u'), None);
     assert_eq!(room_section_suffix(b'x'), None);
 }
 

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-02 (unread DMs are promoted to their own `unread dms` group directly under Core, held in place while you read them by `ChatState::sticky_unread_dm`; the rail now applies the same ignored-peer DM filter as navigation)
+- Last updated: 2026-08-02 (unread DMs are promoted to their own `unread dms` group directly under Core, held in place while you read them by `ChatState::sticky_unread_dm`; the rail now applies the same ignored-peer DM filter as navigation; the unrendered `RoomSection::Updates` variant and its `u` fold key are gone)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -181,7 +181,7 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 
 Reading a DM zeroes its unread count on the same frame (`mark_room_read`), which would drop it out of the promoted group with the cursor still on it. `ChatState::sticky_unread_dm` holds exactly one DM in the group while it is being read: `note_sticky_unread_dm` claims it when an unread DM is marked read, keeps it while that same room is re-marked (every message landing in a visible room does that), and releases it when any other room is read, so it falls back into the DMs section once you look away. The decision is the pure `next_sticky_unread_dm`; the promotion predicate `dm_is_promoted_unread` is shared by `visual_order_for_rooms` and the rail so the two mirrors cannot disagree.
 
-`RoomSection::Updates` remains only for legacy Directory-hosted Showcase/Work state; collapsing Updates does not affect Home rail entries.
+`RoomSection` is the closed roster of collapsible rail sections: Favorites, Core, Channels, Dms. Each one is rendered, foldable from its header, and reachable by its `shortcut` key; a variant that no section header draws is dead weight, so add one only alongside the header that renders it. The Showcase/Work feeds moved to Directory page 7 and took the old `Updates` section with them.
 
 Hub Shop room effects add render-time top sections in the cozy room rail. Active `room_bump` effects on non-permanent public topic rooms render first under a dedicated `bumped` section as plain synthetic `join #slug` text rows; the synthetic row never shows glow/spark/pulse/hack/bump suffixes. The real room stays in its normal navigation section if the viewer has it, and pressing Enter on the synthetic row joins/moves through the existing public-room join path. `room_spark`, `room_glow`, and `room_pulse` are one-minute page-level visuals over the selected room content; they must not add top text, promote rooms, or restyle room-list rows. `pinned_vibe` is sold as Hack Room: for one hour it is the only effect allowed to change real room-list text/color, adding the `hacking` suffix for every viewer. Active effects flow through `ChatRoomListView.active_room_effects`. Hit testing uses the same visual slot list, so bumped room clicks stay aligned with rendering.
 

@@ -712,7 +712,6 @@ fn room_section_label_round_trips() {
         RoomSection::Favorites,
         RoomSection::Core,
         RoomSection::Channels,
-        RoomSection::Updates,
         RoomSection::Dms,
     ] {
         assert_eq!(RoomSection::from_label(section.label()), Some(section));
@@ -763,7 +762,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
     assert!(full.contains(&RoomSlot::Room(public_alpha)));
     assert!(full.contains(&RoomSlot::Room(dm_bob.id)));
 
-    // Channels collapsed: the channel drops out, Core/Updates/DMs stay.
+    // Channels collapsed: the channel drops out, Core and DMs stay.
     let channels_collapsed = HashSet::from([RoomSection::Channels]);
     let c = order(&channels_collapsed);
     assert!(!c.contains(&RoomSlot::Room(public_alpha)));
@@ -781,15 +780,6 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
     // Discover now lives at the bottom of Core, so it collapses with it.
     assert!(!co.contains(&RoomSlot::Discover));
     assert!(co.contains(&RoomSlot::Room(public_alpha)));
-
-    // Updates is now hosted by the Directory page, not the Home rail.
-    let updates_collapsed = HashSet::from([RoomSection::Updates]);
-    let u = order(&updates_collapsed);
-    assert!(u.contains(&RoomSlot::News));
-    assert!(!u.contains(&RoomSlot::Showcase));
-    assert!(!u.contains(&RoomSlot::Work));
-    // Discover lives in Core, which is expanded here, so it stays present.
-    assert!(u.contains(&RoomSlot::Discover));
 
     // DMs collapsed: the DM drops out.
     let dms_collapsed = HashSet::from([RoomSection::Dms]);

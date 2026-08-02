@@ -3761,7 +3761,6 @@ fn room_section_suffix(byte: u8) -> Option<RoomSection> {
         b'f' | b'F' => Some(RoomSection::Favorites),
         b'o' | b'O' => Some(RoomSection::Core),
         b'c' | b'C' => Some(RoomSection::Channels),
-        b'u' | b'U' => Some(RoomSection::Updates),
         b'd' | b'D' => Some(RoomSection::Dms),
         _ => None,
     }
