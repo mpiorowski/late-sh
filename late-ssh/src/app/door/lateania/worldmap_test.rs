@@ -587,8 +587,9 @@ fn poi_arrows_point_off_screen_pois_to_the_border() {
 }
 
 // A discovered room whose neighbours are all still fog must not read as a
-// stranded island: each exit into the unknown gets a faint direction arrow so
-// the player can see a path continues that way (direction only, no spoiler).
+// stranded island: each exit into the unknown gets a faint half-stub of path
+// so the player can see a trail continues that way (direction only, no
+// spoiler, and never an arrow - arrows read as controls).
 #[test]
 fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
     use super::Tile;
@@ -623,13 +624,13 @@ fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
         hints > 0,
         "a discovered room surrounded by fog must sprout at least one exit hint"
     );
-    // Hints are direction glyphs, never overwriting the player's own cell.
+    // Hints are path stubs (the corridor glyphs), never arrows.
     for row in &canvas {
         for tile in row {
             if let Tile::Hint(g) = tile {
                 assert!(
-                    "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(*g),
-                    "hint glyph {g:?} is not a direction arrow"
+                    "\u{2500}\u{2502}".contains(*g),
+                    "hint glyph {g:?} is not a path stub"
                 );
             }
         }

@@ -495,10 +495,11 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
-    /// A path-continuation hint: this room links to a visited room that the map
-    /// can't draw right beside it (the hand-authored core doesn't lay perfectly
-    /// flat, so some branches scatter). The arrow points the way the exit runs,
-    /// so no reachable room ever reads as a stranded island.
+    /// A path-continuation hint: a faint half-stub of corridor showing that an
+    /// exit runs on (into fog, or toward a visited room the map can't draw
+    /// right beside it - the hand-authored core doesn't lay perfectly flat).
+    /// Always a `─`/`│` stub, never an arrow: on the field a line means
+    /// "walkable path" and nothing else.
     Hint(char),
 }
 
@@ -554,10 +555,11 @@ pub fn map_canvas(
         };
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
-                // An exit into the fog: draw a faint arrow pointing the way the
-                // path runs so a discovered room (a boss you've found, the edge
-                // of your exploration) never reads as stranded. Direction only,
-                // into an empty adjacent cell - no spoiler of what waits there.
+                // An exit into the fog: a faint half-stub of path trailing off
+                // into the unknown, so a discovered room never reads as
+                // stranded. A stub, not an arrow - on the field a line means
+                // "walkable path" and nothing else, and arrows read as
+                // controls. No spoiler of what waits at the far end.
                 let (dx, dy) = match dir {
                     Dir::East => (1, 0),
                     Dir::West => (-1, 0),
@@ -570,7 +572,8 @@ pub fn map_canvas(
                     && (0..rows).contains(&hy)
                     && canvas[hy as usize][hx as usize] == Tile::Empty
                 {
-                    canvas[hy as usize][hx as usize] = Tile::Hint(arrow_glyph(dx, dy));
+                    let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
+                    canvas[hy as usize][hx as usize] = Tile::Hint(stub);
                 }
                 continue;
             }
@@ -587,11 +590,11 @@ pub fn map_canvas(
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
                 _ if dc.z == c.z => {
                     // Linked on the same level but not in the adjacent cell (the
-                    // hand-authored core scatters some branches). Point toward the
-                    // neighbour on the dominant axis, into an empty cell only, so
-                    // no reachable room reads as a stranded island.
-                    let glyph = arrow_glyph(dc.x - c.x, dc.y - c.y);
-                    let (hx, hy) = if (dc.x - c.x).abs() >= (dc.y - c.y).abs() {
+                    // hand-authored core scatters some branches). A half-stub
+                    // toward the neighbour on the dominant axis, into an empty
+                    // cell only, so no reachable room reads as a stranded island.
+                    let horizontal = (dc.x - c.x).abs() >= (dc.y - c.y).abs();
+                    let (hx, hy) = if horizontal {
                         (sc + (dc.x - c.x).signum(), sr)
                     } else {
                         (sc, sr + (dc.y - c.y).signum())
@@ -600,7 +603,8 @@ pub fn map_canvas(
                         && (0..rows).contains(&hy)
                         && canvas[hy as usize][hx as usize] == Tile::Empty
                     {
-                        canvas[hy as usize][hx as usize] = Tile::Hint(glyph);
+                        let stub = if horizontal { '\u{2500}' } else { '\u{2502}' };
+                        canvas[hy as usize][hx as usize] = Tile::Hint(stub);
                     }
                 }
                 _ => {} // stairs (up/down): not drawn on a flat level

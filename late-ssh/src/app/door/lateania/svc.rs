@@ -297,6 +297,20 @@ pub enum LogKind {
     Loot,
 }
 
+/// How a room description came about, deciding the Travel line in the Recent
+/// feed. In field mode (rpg on) the moving `@` and the Here panel already tell
+/// the story of a step through known land, so only a discovery earns a line;
+/// classic mode keeps its per-step breadcrumb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Arrival {
+    /// Re-describing in place (a look around, an ambient refresh): no line.
+    Silent,
+    /// Travel into a room already on the player's map.
+    Revisit,
+    /// First footfall in this room.
+    Discovery,
+}
+
 /// Who hears a spoken line: the room (the default, unchanged), everyone in
 /// the same named zone, or every adventurer currently in Lateania. Chosen per
 /// message with a leading `/z`/`/zone` or `/w`/`/world` marker; see `say`.
@@ -3128,13 +3142,19 @@ impl WorldState {
         } else if let Some(player) = self.players.get_mut(&user_id) {
             player.frontier_descent_pending = false;
         }
+        let mut first_visit = false;
         if let Some(player) = self.players.get_mut(&user_id) {
             player.frontier_descent_pending = false;
             player.previous_room = Some(from);
             player.room = dest;
-            Arc::make_mut(&mut player.visited).insert(dest);
+            first_visit = Arc::make_mut(&mut player.visited).insert(dest);
         }
-        self.describe_room(user_id);
+        let arrival = if first_visit {
+            Arrival::Discovery
+        } else {
+            Arrival::Revisit
+        };
+        self.describe_room_context(user_id, arrival);
         self.apply_critter_perks(user_id);
         self.move_followers(user_id, from, dest, dir);
         self.continue_ride(user_id, dir);
@@ -4064,7 +4084,7 @@ impl WorldState {
     }
 
     fn look(&mut self, user_id: Uuid) {
-        self.describe_room_context(user_id, false);
+        self.describe_room_context(user_id, Arrival::Silent);
     }
 
     /// Reveal any Ambushers lurking in the player's room: they spring out and
@@ -4116,10 +4136,10 @@ impl WorldState {
     }
 
     fn describe_room(&mut self, user_id: Uuid) {
-        self.describe_room_context(user_id, true);
+        self.describe_room_context(user_id, Arrival::Revisit);
     }
 
-    fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
+    fn describe_room_context(&mut self, user_id: Uuid, arrival: Arrival) {
         self.reveal_ambushers(user_id);
         if !matches!(self.players.get(&user_id), Some(p) if p.respawn_at.is_none()) {
             return;
@@ -4143,6 +4163,7 @@ impl WorldState {
         let Some(room) = self.world.room(room_id) else {
             return;
         };
+        let rpg_mode = player.rpg_mode;
         let name = room.name.to_string();
         let desc = room.desc.to_string();
         let mut exits: Vec<String> = room
@@ -4163,8 +4184,21 @@ impl WorldState {
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
-        if announce_travel {
-            self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+        match arrival {
+            Arrival::Silent => {}
+            // A discovery in field mode carries the room's prose too: the
+            // field layout has no Now panel, so the feed is the one place a
+            // newly found room gets to describe itself.
+            Arrival::Discovery if rpg_mode => {
+                self.log_to(user_id, LogKind::Travel, format!("You find {name}."));
+                self.log_to(user_id, LogKind::Travel, desc.clone());
+            }
+            // Field-mode steps through known land say nothing: the @ moved and
+            // the Here panel names the room. Classic mode keeps its breadcrumb.
+            Arrival::Revisit if rpg_mode => {}
+            Arrival::Discovery | Arrival::Revisit => {
+                self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+            }
         }
         self.log_to(user_id, LogKind::Room, format!("== {name} =="));
         self.log_to(user_id, LogKind::Room, desc);

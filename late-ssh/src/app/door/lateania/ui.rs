@@ -86,21 +86,22 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     } else {
         SIDE_NARROW
     };
-    // Wide terminals get the live field as a centre column: log on the left,
-    // the rendered world you walk through in the middle, room prose on the right.
-    // Below this width there isn't room for three columns, so the field folds
-    // away and the classic log + side view stands in (the minimap still rides in
-    // the side panel there).
+    // Wide terminals get the live field with the message log as a full-width
+    // strip along the bottom, the way terminal roguelikes have always laid it:
+    // log lines are sentences, and sentences want width, not a narrow rail.
+    // Below this width the field folds away and the classic log + side view
+    // stands in (the minimap still rides in the side panel there).
     if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
+        let log_h = (area.height / 4).clamp(4, 7);
+        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(log_h)]).split(area);
         let cols = Layout::horizontal([
-            Constraint::Length(24),     // log
             Constraint::Min(24),        // live field (fills the middle)
-            Constraint::Length(side_w), // room description + foes
+            Constraint::Length(side_w), // room summary + foes
         ])
-        .split(area);
-        draw_log(frame, cols[0], &view);
-        draw_field(frame, cols[1], &view);
-        draw_room_side(frame, cols[2], state, &view, usernames, false);
+        .split(rows[0]);
+        draw_field(frame, cols[0], &view);
+        draw_room_side(frame, cols[1], state, &view, usernames, false);
+        draw_log_strip(frame, rows[1], &view);
         return;
     }
 
@@ -447,7 +448,8 @@ fn is_service_room(id: u32) -> bool {
 /// Pull off-screen POI arrows in from the widget border so they hug the
 /// explored cluster instead of floating at the panel's far edge, where nothing
 /// ties them to the map they annotate. Arrows collapsing onto the same cell
-/// keep boss priority.
+/// keep boss priority. Atlas only: the live field draws no POI arrows, so a
+/// glyph next to `@` can never masquerade as a movement affordance.
 fn hug_poi_arrows(
     arrows: Vec<super::worldmap::MapArrow>,
     canvas: &[Vec<super::worldmap::Tile>],
@@ -485,17 +487,16 @@ fn hug_poi_arrows(
     hugged.into_values().collect()
 }
 
-/// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
-/// centred on the player. `@` is the player's room; arrows / wasd pan the
-/// camera and Enter re-centres (handled in input.rs).
 /// The live play field: a scrolling, biome-coloured top-down view kept centred
 /// on the player, so ordinary movement walks you across a rendered world (the
 /// terrain and paths ahead are drawn as you go, fog lifting as you explore).
-/// Unlike the overhead map (`m`), this never pans - it just follows you - and it
-/// sits beside the room description so the prose is always right there.
+/// Unlike the overhead map (`m`), this never pans - it just follows you. Lines
+/// on the field mean exactly one thing, walkable path: bright stubs are the
+/// current room's exits, faint stubs are paths running on into fog. POI
+/// direction arrows belong to the atlas only.
 fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     use super::world::region_atlas_entry;
-    use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
+    use super::worldmap::{Tile, map_canvas, poi, world_coords};
 
     if area.height < 3 || area.width < 8 {
         return;
@@ -694,12 +695,32 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         }
     }
 
-    // Off-field bosses/tameables get a direction arrow hugging the explored
-    // cluster's edge (no spoiler of where exactly).
-    for arrow in hug_poi_arrows(poi_arrows(coords, center, cols, height), &canvas) {
-        if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
-            let style = if arrow.boss { boss_style } else { tame_style };
-            *cell = (arrow.glyph.to_string(), style);
+    // The current room's exits, drawn as bright stubs from the player's own
+    // cell: the map answers "which way can I walk right now" exactly where the
+    // eye rests. Exits come from the room data, not the geometry, so the stub
+    // is an honest affordance even where the hand-authored graph scatters a
+    // destination somewhere non-adjacent. Rooms sit on even offsets, so the
+    // stub cell (one step out) can never hold another room's glyph.
+    let exit_style = Style::default()
+        .fg(Color::Rgb(220, 185, 120))
+        .add_modifier(Modifier::BOLD);
+    for (dir, _) in &view.exits {
+        let (dx, dy, glyph) = match dir {
+            Dir::East => (1, 0, '\u{2500}'),
+            Dir::West => (-1, 0, '\u{2500}'),
+            Dir::North => (0, -1, '\u{2502}'),
+            Dir::South => (0, 1, '\u{2502}'),
+            // The side panel's exits line carries the stairs.
+            Dir::Up | Dir::Down => continue,
+        };
+        let (sc, sr) = (cx + dx, cy + dy);
+        if (0..cols).contains(&sc)
+            && (0..height).contains(&sr)
+            && let Some(cell) = cells
+                .get_mut(sr as usize)
+                .and_then(|r| r.get_mut(sc as usize))
+        {
+            *cell = (glyph.to_string(), exit_style);
         }
     }
 
@@ -733,10 +754,10 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled(" town ", dim),
             Span::styled("\u{2666}", node_style),
             Span::styled(" node ", dim),
-            Span::styled("\u{2192}", boss_style),
-            Span::styled(" off-map ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" path", dim),
+            Span::styled("\u{2500}", exit_style),
+            Span::styled(" way out ", dim),
+            Span::styled("\u{2500}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" unexplored", dim),
         ])),
         rows[2],
     );
@@ -1238,6 +1259,29 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
         area.height.saturating_sub(1) as usize,
     ));
     frame.render_widget(side_paragraph(lines), area);
+}
+
+/// The field layout's message feed: a full-width strip under the field, newest
+/// line at the bottom, a rule above so the world and the words don't bleed into
+/// each other. No "Now" block and no header - room context lives in the side
+/// panel, and every row here is a line of actual events.
+fn draw_log_strip(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    if area.height < 2 || area.width == 0 {
+        return;
+    }
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(separator_line(rows[0].width as usize)),
+        rows[0],
+    );
+    let width = rows[1].width as usize;
+    let entries = collapsed_recent_entries(view);
+    let mut lines: Vec<Line<'static>> = entries
+        .iter()
+        .flat_map(|(kind, text)| wrapped_log_line(*kind, text, width))
+        .collect();
+    let start = lines.len().saturating_sub(rows[1].height as usize);
+    frame.render_widget(Paragraph::new(lines.split_off(start)), rows[1]);
 }
 
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {

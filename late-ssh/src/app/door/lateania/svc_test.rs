@@ -1955,19 +1955,54 @@ fn combat_tick_logs_player_auto_attack() {
 }
 
 #[test]
-fn movement_keeps_a_compact_travel_line_in_recent_log() {
+fn field_mode_logs_discoveries_only_and_classic_logs_every_arrival() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Mage);
-    s.move_player(uid(1), Dir::North);
 
-    assert!(
+    // First footfall in field mode (rpg on by default): a discovery line plus
+    // the room's prose, which has nowhere else to live on the field layout.
+    s.move_player(uid(1), Dir::North);
+    let flagon_desc = s
+        .world
+        .room(s.players[&uid(1)].room)
+        .expect("player stands in a real room")
+        .desc
+        .to_string();
+    let travel_texts = |s: &WorldState| -> Vec<String> {
         s.players[&uid(1)]
             .log
             .iter()
-            .any(|line| line.kind == LogKind::Travel
-                && line.text == "Arrived at Embergate - The Gilded Flagon."),
-        "movement should leave a compact room-visit breadcrumb"
+            .filter(|l| l.kind == LogKind::Travel)
+            .map(|l| l.text.clone())
+            .collect()
+    };
+    let after_discovery = travel_texts(&s);
+    assert!(
+        after_discovery.contains(&"You find Embergate - The Gilded Flagon.".to_string()),
+        "first footfall should announce the discovery: {after_discovery:?}"
+    );
+    assert!(
+        after_discovery.contains(&flagon_desc),
+        "the discovery should carry the room's prose into the feed"
+    );
+
+    // Stepping back through known land in field mode says nothing: the @ on
+    // the field and the Here panel already tell the story.
+    s.move_player(uid(1), Dir::South);
+    assert_eq!(
+        travel_texts(&s),
+        after_discovery,
+        "a field-mode revisit must not add travel lines"
+    );
+
+    // Classic mode keeps the per-step breadcrumb, discovery or not.
+    s.players.get_mut(&uid(1)).unwrap().rpg_mode = false;
+    s.move_player(uid(1), Dir::North);
+    assert_eq!(
+        travel_texts(&s).last().map(String::as_str),
+        Some("Arrived at Embergate - The Gilded Flagon."),
+        "classic mode should keep its room-visit breadcrumb"
     );
 }
 
