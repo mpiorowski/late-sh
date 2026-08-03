@@ -30,10 +30,12 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     let state = &mut app.chat.cyberspace;
     if !state.is_linked() {
         // The pane is the pitch + login funnel until an account is linked.
+        // Unhandled bytes fall through so global keys (quit, jump) keep working.
         if matches!(byte, b'\r' | b'\n') {
             state.open_link_modal();
+            return true;
         }
-        return true;
+        return false;
     }
     match byte {
         b'j' | b'J' => {

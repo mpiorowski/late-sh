@@ -320,7 +320,9 @@ impl ArticleService {
         // here so no share path (chat link, RSS share) can route their
         // content into the summarizer.
         if is_ai_blocklisted_url(url) {
-            anyhow::bail!("cyberspace.online links can't be shared to news (their terms bar AI summaries)");
+            anyhow::bail!(
+                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
+            );
         }
 
         // 1. Quick existence check — acquire and release before the slow AI work

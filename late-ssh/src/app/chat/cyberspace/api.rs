@@ -285,7 +285,10 @@ impl CsApi {
         id_token: Option<&str>,
         body: &serde_json::Value,
     ) -> Result<T, CsApiError> {
-        let mut request = self.http.post(format!("{}{path}", self.base_url)).json(body);
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .json(body);
         if let Some(token) = id_token {
             request = request.bearer_auth(token);
         }
@@ -300,7 +303,9 @@ fn transport(error: reqwest::Error) -> CsApiError {
     CsApiError::Transport(error.without_url().to_string())
 }
 
-async fn decode_envelope<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, CsApiError> {
+async fn decode_envelope<T: DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, CsApiError> {
     let status = response.status();
     let body = response.text().await.map_err(transport)?;
     parse_envelope(status.as_u16(), &body)

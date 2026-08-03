@@ -81,7 +81,10 @@ fn draw_pitch(frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("No account yet? Sign up at ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                "No account yet? Sign up at ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
             Span::styled(
                 "https://cyberspace.online",
                 Style::default().fg(theme::AMBER()),
@@ -177,10 +180,7 @@ fn feed_entry_lines(post: &CsPost) -> Vec<Line<'static>> {
         ));
     }
     if post.is_nsfw {
-        meta.push(Span::styled(
-            " - NSFW",
-            Style::default().fg(theme::ERROR()),
-        ));
+        meta.push(Span::styled(" - NSFW", Style::default().fg(theme::ERROR())));
     }
     vec![
         Line::from(Span::styled(
@@ -279,7 +279,9 @@ fn draw_thread(frame: &mut Frame, area: Rect, state: &State) {
     let max_scroll = lines.len().saturating_sub(area.height as usize);
     let scroll = state.thread_scroll.min(max_scroll) as u16;
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
         area,
     );
 }
@@ -394,7 +396,13 @@ fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
     ])
     .split(inner);
     frame.render_widget(hint_line(link.busy, "link"), areas[0]);
-    draw_input_field(frame, areas[1], "Email", &link.email, link.focus == LinkField::Email);
+    draw_input_field(
+        frame,
+        areas[1],
+        "Email",
+        &link.email,
+        link.focus == LinkField::Email,
+    );
     draw_input_field(
         frame,
         areas[2],
@@ -431,7 +439,10 @@ fn draw_compose_modal(frame: &mut Frame, area: Rect, compose: &ComposeModal) {
     draw_input_field(
         frame,
         areas[1],
-        &format!("Title {}/{TITLE_MAX_CHARS}", compose.title.lines().join(" ").chars().count()),
+        &format!(
+            "Title {}/{TITLE_MAX_CHARS}",
+            compose.title.lines().join(" ").chars().count()
+        ),
         &compose.title,
         compose.focus == ComposeField::Title,
     );
@@ -449,7 +460,13 @@ fn draw_compose_modal(frame: &mut Frame, area: Rect, compose: &ComposeModal) {
         &compose.body,
         compose.focus == ComposeField::Body,
     );
-    draw_modal_status(frame, areas[4], compose.busy, &compose.error, "Publishing...");
+    draw_modal_status(
+        frame,
+        areas[4],
+        compose.busy,
+        &compose.error,
+        "Publishing...",
+    );
 }
 
 fn draw_reply_modal(frame: &mut Frame, area: Rect, reply: &ReplyModal) {
@@ -483,19 +500,27 @@ fn draw_reply_modal(frame: &mut Frame, area: Rect, reply: &ReplyModal) {
 
 fn hint_line(busy: bool, verb: &str) -> Paragraph<'static> {
     let spans = if busy {
-        vec![Span::styled(
-            "Esc".to_string(),
-            Style::default().fg(theme::ERROR()),
-        ),
-        Span::styled(" cancel".to_string(), Style::default().fg(theme::TEXT_DIM()))]
+        vec![
+            Span::styled("Esc".to_string(), Style::default().fg(theme::ERROR())),
+            Span::styled(
+                " cancel".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]
     } else {
         vec![
             Span::styled("Enter".to_string(), Style::default().fg(theme::SUCCESS())),
             Span::styled(format!(" {verb}  "), Style::default().fg(theme::TEXT_DIM())),
             Span::styled("Tab".to_string(), Style::default().fg(theme::AMBER())),
-            Span::styled(" next  ".to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                " next  ".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
             Span::styled("Esc".to_string(), Style::default().fg(theme::ERROR())),
-            Span::styled(" discard".to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                " discard".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]
     };
     Paragraph::new(Line::from(spans)).style(Style::default().bg(theme::BG_CANVAS()))

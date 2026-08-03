@@ -211,7 +211,9 @@ impl State {
 
     pub fn open_compose_modal(&mut self) -> Option<Banner> {
         if !self.is_linked() {
-            return Some(Banner::error("Link your cyberspace account first: /cs link"));
+            return Some(Banner::error(
+                "Link your cyberspace account first: /cs link",
+            ));
         }
         self.modal = Some(Modal::Compose(ComposeModal {
             title: new_themed_textarea("Title (optional)", WrapMode::None, true),
@@ -410,9 +412,7 @@ impl State {
                     self.modal = None;
                 }
                 let label = title.as_deref().unwrap_or("your entry");
-                Some(Banner::success(&format!(
-                    "Published {label} on cyberspace"
-                )))
+                Some(Banner::success(&format!("Published {label} on cyberspace")))
             }
             CsEvent::ReplyPosted { user_id, .. } if user_id == self.user_id => {
                 if matches!(self.modal, Some(Modal::Reply(_))) {

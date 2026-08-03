@@ -11,9 +11,7 @@ fn dead_service(db: late_core::db::Db) -> CyberspaceService {
     CyberspaceService::new(db, "http://127.0.0.1:1".to_string())
 }
 
-async fn next_event(
-    rx: &mut tokio::sync::broadcast::Receiver<CsEvent>,
-) -> CsEvent {
+async fn next_event(rx: &mut tokio::sync::broadcast::Receiver<CsEvent>) -> CsEvent {
     tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("event within timeout")

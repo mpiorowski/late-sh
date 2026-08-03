@@ -1026,9 +1026,9 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "dnd").await;
 
     // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
-    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
-    // Press l four times to reach dnd from lounge.
-    app.handle_input(b"llll");
+    // cyberspace, "+ browse rooms" (Discover, last in Core), then dnd
+    // (channels section). Press l five times to reach dnd from lounge.
+    app.handle_input(b"lllll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");

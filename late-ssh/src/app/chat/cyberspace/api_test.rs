@@ -86,7 +86,8 @@ fn login_tokens_parse_with_and_without_refresh_token() {
     assert_eq!(tokens.id_token, "id-1");
     assert_eq!(tokens.refresh_token.as_deref(), Some("r-1"));
 
-    let refresh = r#"{ "data": { "idToken": "id-2", "rtdbToken": "x", "rtdbUrl": "https://example" } }"#;
+    let refresh =
+        r#"{ "data": { "idToken": "id-2", "rtdbToken": "x", "rtdbUrl": "https://example" } }"#;
     let tokens: LoginTokens = parse_envelope(200, refresh).expect("refresh tokens");
     assert_eq!(tokens.id_token, "id-2");
     assert!(tokens.refresh_token.is_none());

@@ -17,8 +17,12 @@ fn youtube_url_detection_covers_common_hosts() {
 #[test]
 fn ai_blocklist_covers_cyberspace_and_nothing_else() {
     assert!(is_ai_blocklisted_url("https://cyberspace.online/odd/post"));
-    assert!(is_ai_blocklisted_url("https://api.cyberspace.online/v1/posts"));
-    assert!(!is_ai_blocklisted_url("https://example.com/cyberspace.online"));
+    assert!(is_ai_blocklisted_url(
+        "https://api.cyberspace.online/v1/posts"
+    ));
+    assert!(!is_ai_blocklisted_url(
+        "https://example.com/cyberspace.online"
+    ));
     assert!(!is_ai_blocklisted_url("https://notcyberspace.online/post"));
 }
 

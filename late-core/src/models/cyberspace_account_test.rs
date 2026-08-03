@@ -15,10 +15,9 @@ async fn upsert_replaces_existing_link_and_delete_forgets_it() {
     assert_eq!(first.cs_username, "odd");
 
     // Re-link replaces identity and token in place, never a second row.
-    let second =
-        CyberspaceAccount::upsert_for_user(&client, user.id, "uid-2", "odd2", "refresh-2")
-            .await
-            .expect("re-link");
+    let second = CyberspaceAccount::upsert_for_user(&client, user.id, "uid-2", "odd2", "refresh-2")
+        .await
+        .expect("re-link");
     assert_eq!(second.id, first.id);
 
     let found = CyberspaceAccount::find_by_user_id(&client, user.id)

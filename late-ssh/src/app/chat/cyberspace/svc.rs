@@ -202,7 +202,11 @@ impl CyberspaceService {
                 .await;
                 match result {
                     Ok(_) => {
-                        service.tokens.lock().expect("token cache lock").remove(&user_id);
+                        service
+                            .tokens
+                            .lock()
+                            .expect("token cache lock")
+                            .remove(&user_id);
                         service.publish(CsEvent::Unlinked { user_id });
                     }
                     Err(e) => {
@@ -336,7 +340,12 @@ impl CyberspaceService {
         );
     }
 
-    async fn do_link(&self, user_id: Uuid, email: String, password: String) -> Result<String, String> {
+    async fn do_link(
+        &self,
+        user_id: Uuid,
+        email: String,
+        password: String,
+    ) -> Result<String, String> {
         let tokens = match self.api.login(&email, &password).await {
             Ok(tokens) => tokens,
             Err(e) => return Err(format!("login failed: {e}")),
