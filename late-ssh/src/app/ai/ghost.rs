@@ -975,12 +975,12 @@ const GREETINGS: [&str; 8] = [
     "One comped pour for the newest regular. Don't get used to it.",
 ];
 
-/// The clubhouse tutorial's one-shot bartender welcome, comping the newcomer's
-/// first drink. Scripted and local: it is drawn straight into the walker's own
-/// bartender banner and never posted to #lounge, so the room is not made to
-/// watch every first-timer get their free pour, and the line lands the instant
-/// they reach the bar instead of waiting on a model. It stays pure flavor: the
-/// "press i to talk" mechanic is taught by the BarLesson popup that follows.
+/// The tour's hidden treasure: the one-shot bartender welcome comping the
+/// newcomer's first drink when they walk up to the glowing bar. Scripted and
+/// local: it is drawn straight into the walker's own bartender banner and
+/// never posted to #lounge, so the room is not made to watch every
+/// first-timer get their free pour, and the line lands the instant they
+/// reach the counter instead of waiting on a model.
 pub fn bartender_tutorial_greeting(username: &str) -> String {
     let mut rng = TinyRng::seeded();
     format!("@{username} {}", GREETINGS[rng.next_usize(GREETINGS.len())])

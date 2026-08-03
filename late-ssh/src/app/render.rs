@@ -1545,6 +1545,18 @@ impl App {
             terminal_images.clear();
         }
 
+        // The first-visit tour's page-stop box (top-right). The clubhouse
+        // draws its own tutorial overlays; toasts draw after, so they win
+        // the corner while they last.
+        if screen != Screen::Clubhouse {
+            crate::app::clubhouse::ui::draw_tour_overlay(
+                frame,
+                inner,
+                ctx.clubhouse_state.tutorial,
+                screen,
+            );
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {

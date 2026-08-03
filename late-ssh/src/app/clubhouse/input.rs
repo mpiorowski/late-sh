@@ -28,14 +28,12 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     }
 
     if let Some(byte) = event_byte(event) {
-        // A tutorial popup wants Enter before anything else. There is no Esc
-        // skip: the tour only ends by reaching the bartender.
+        // The homecoming popup wants Enter before anything else. There is no
+        // Esc skip: the tour only ends back here, settling in. The player
+        // stays in the tavern; the glowing bar is theirs to find.
         if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
             if app.clubhouse.tutorial_advance() {
                 app.persist_clubhouse_tutorial_done();
-                // The last box sends them off to the chat: land on the
-                // dashboard (#lounge on Home), page 1.
-                app.set_screen(Screen::Dashboard);
             }
             return true;
         }
@@ -117,7 +115,7 @@ fn handle_walk(app: &mut App, event: &ParsedInput) -> bool {
     // any locally-handled key would on the chat screens.
     app.music_prefix_armed = false;
     app.clubhouse.walk(dx, dy);
-    if app.clubhouse.tutorial_reached_bar() {
+    if app.clubhouse.welcome_pour_due() {
         app.show_clubhouse_bartender_welcome();
     }
     true

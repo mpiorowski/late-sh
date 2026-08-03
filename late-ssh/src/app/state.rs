@@ -2018,6 +2018,9 @@ impl App {
         if self.screen == Screen::Clubhouse {
             self.clubhouse.enter_screen();
         }
+        // The first-visit tour advances on page entry, so digits and Tab
+        // both move it along.
+        self.clubhouse.tutorial_screen_entered(screen);
         self.sync_visible_chat_room();
     }
 
@@ -2348,14 +2351,14 @@ impl App {
         self.show_profile_modal = true;
     }
 
-    /// The tutorial's @bartender welcome: a scripted line pinned in the
-    /// newcomer's own bartender banner (see `ghost::bartender_tutorial_greeting`).
-    /// It stays on this client, so #lounge is not made to watch every
-    /// first-timer collect their comped pour.
+    /// The hidden treasure at the end of the tour: a scripted @bartender
+    /// welcome pinned in the newcomer's own bartender banner (see
+    /// `ghost::bartender_tutorial_greeting`) plus the comped first pour. It
+    /// stays on this client, so #lounge is not made to watch every
+    /// first-timer collect their free drink. Fires on the first walk up to
+    /// the counter in the tour session (`State::welcome_pour_due`); the
+    /// once-ever guarantee is the DB insert behind the comp.
     pub(crate) fn show_clubhouse_bartender_welcome(&mut self) {
-        // Reaching the bar is the tutorial's finish line: the welcome round is
-        // on the house, so lock the walkthrough in as done and comp the pour.
-        self.persist_clubhouse_tutorial_done();
         let username = self.profile_state.profile().username.clone();
         self.clubhouse.show_local_bartender_line(
             crate::app::ai::ghost::bartender_tutorial_greeting(&username),
@@ -2371,11 +2374,14 @@ impl App {
                 .grant_free_drink(target, late_core::models::drinks::WELCOME_DRINK_POINTS)
                 .await
             {
-                Ok(drinks) => {
+                Ok(Some(drinks)) => {
                     if let Some(lobby) = lobby {
                         lobby.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
                     }
                 }
+                // They have drunk before (a tour rerun after a mid-tour
+                // disconnect): the line is just flavor, nothing to glow.
+                Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(error = ?err, user_id = %target, "welcome drink comp failed");
                 }

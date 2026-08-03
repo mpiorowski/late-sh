@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-07-27 (bartender only ever pours for the patron who mentions him: the `gift` action and the `@bartender round` house-round command are removed, since both forced the drunk-text shuffle onto someone who never chose to drink; he now points anyone buying for someone else at `/gift @user <n>` instead, which moves chips only, not a buzz)
+- Last updated: 2026-08-03 (first-visit tutorial became the page tour: the door box now leads into a forced walk of every top-level page in number order, ends back in the tavern, and the bartender's comped welcome pour moved out of the route to become the hidden treasure behind the pulsing bar sign; the comp is now guarded once-ever in the DB)
 - Status: Active
 
 ## 1. Summary
@@ -107,25 +107,38 @@ room is the chat surface, and the full history lives in #lounge on Home.
   them. The lounge is still pinned as the visible chat room for read cursors
   (`sync_visible_chat_room`).
 
-## 5. First-visit tutorial
+## 5. First-visit tour
 
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
   (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
-  first clubhouse entry: spawns the player at the door (`Tutorial::Welcome`),
-  advances to `GoToBar` on first step (bar sign pulses, small pinned hint),
-  reaching the counter triggers `BarLesson` plus a one-shot @bartender
-  greeting posted to #lounge (`App::send_clubhouse_bartender_greeting`):
-  AI-generated in his voice when the AI service is up, falling back to a
-  scripted line on disabled AI, errors, or a 6s timeout
-  (`ghost::bartender_tutorial_greeting`); either way it must tell them to
-  press `i`. Then `SendOff` lists the walkable landmarks (arcade 2, heavy
-  door 3, easel 4) plus Ctrl+G (the Lobby modal); its
-  Enter finishes the tour and drops the player onto the dashboard (#lounge
-  on Home, page 1) so they land in the chat.
-- Enter advances popups (`tutorial_capturing_keys`); Esc anywhere skips
-  (arm in `dispatch_escape`). Completion persists once via
+  first clubhouse entry: spawns the player at the door (`Tutorial::Welcome`,
+  walk keys + Ctrl+O), first step moves to `Wander` (a pinned nudge naming
+  `1`), then the tour walks every top-level page in number order:
+  `VisitChat` (1) -> `VisitArcade` (2) -> `VisitGames` (3) ->
+  `VisitArtboard` (4) -> `VisitDirectory` (5) -> `VisitLeaderboard` (6) ->
+  `Homecoming` (0, back in the tavern). Each stop advances only when its
+  page is entered (`State::tutorial_screen_entered`, hooked in
+  `App::set_screen`), so digits and Tab both work and a detour never skips
+  a stop; the pitch box for the current stop pins top-right on its own page
+  (`ui::draw_tour_overlay`, called from `render.rs` on non-clubhouse
+  screens and from the clubhouse's `draw_tutorial` when a mid-tour player
+  wanders home early), a one-line nudge names the expected key anywhere
+  else. `Homecoming`'s Enter finishes the tour in place: the player stays
+  in the tavern.
+- Enter only advances the homecoming popup (`tutorial_capturing_keys`);
+  there is no Esc skip. Completion persists once via
   `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure
   only logged: worst case the tour runs again next session).
+- **The hidden treasure:** the bartender is deliberately absent from the
+  route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
+  banner only, never posted to #lounge) plus the comped welcome pour fire
+  the first time the newcomer walks up to the counter in the tour session
+  (`State::welcome_pour_due`), whenever that happens. After `Homecoming`
+  the bar sign pulses until the pour is claimed (`State::bar_glow`), the
+  only pointer at it. The once-ever guarantee is
+  `UserDrinks::record_welcome_pour`, an insert-only comp that returns
+  `None` for anyone who has ever drunk, so tour reruns after a mid-tour
+  disconnect can't double-comp.
 - The Ctrl+O profile nudge lives here on purpose: the old
   "open settings on connect" behavior was removed in favor of this beat.
 

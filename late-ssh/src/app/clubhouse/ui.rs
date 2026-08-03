@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
+use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use late_core::api_types::NowPlaying;
@@ -512,9 +513,9 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // The tutorial's "find the bar" beat pulses the bar sign so the goal
-    // reads from across the room.
-    if view.state.tutorial == Tutorial::GoToBar {
+    // Once the tour has come home, the bar sign pulses until the newcomer
+    // claims the hidden welcome pour: the only pointer at the treasure.
+    if view.state.bar_glow() {
         let pulse = if (t / 8).is_multiple_of(2) {
             theme::AMBER_GLOW()
         } else {
@@ -1196,8 +1197,11 @@ fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_
     );
 }
 
-/// The first-visit walkthrough boxes. Returns true when a tutorial overlay
-/// owned the frame (prop popovers wait their turn).
+/// The first-visit tour's tavern boxes: the welcome mat, the wander nudge,
+/// and the homecoming send-off. The page stops between them live in
+/// [`draw_tour_overlay`], which also renders a reminder here when a mid-tour
+/// player wanders home early. Returns true when a tutorial overlay owned the
+/// frame (prop popovers wait their turn).
 fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bool {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1225,14 +1229,23 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 ]),
                 Line::default(),
                 Line::from(Span::styled(
-                    "the bartender is waving you over, head northwest to the bar.",
+                    "take a step and we'll walk the house.",
                     text,
                 )),
             ],
         ),
-        Tutorial::BarLesson => (
-            " O the bartender leans in ",
+        Tutorial::Homecoming => (
+            " ☾ make yourself at home ☽ ",
             vec![
+                Line::from(Span::styled(
+                    "that was the house. this room is its map:",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "walk up to anything and press Enter to step through.",
+                    text,
+                )),
+                Line::default(),
                 Line::from(vec![
                     Span::styled("[i] ", key),
                     Span::styled("say something, it floats over your head", text),
@@ -1242,69 +1255,30 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("wave · ", text),
                     Span::styled("[x] ", key),
                     Span::styled("dance · ", text),
-                    Span::styled("[t] ", key),
-                    Span::styled("talk to the bartender", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Ctrl+/] ", key),
-                    Span::styled("jump to any room or DM", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+]] ", key),
-                    Span::styled("pick an icon, spice up your words", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Enter] ", key),
-                    Span::styled("got it", dim),
-                ]),
-            ],
-        ),
-        Tutorial::SendOff => (
-            " ☾ make yourself at home ☽ ",
-            vec![
-                Line::from(Span::styled(
-                    "the room is a map of the house, walk up and press Enter:",
-                    text,
-                )),
-                Line::default(),
-                Line::from(Span::styled("arcade cabinet (2) · artboard (4)", text)),
-                Line::from(Span::styled(
-                    "heavy door (3): real NetHack, Green Dragon reborn",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "jukebox picks the music · the dog is a dog",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
                     Span::styled("[Ctrl+G] ", key),
-                    Span::styled("the lobby: house tables + daily games", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[/shop] ", key),
-                    Span::styled("the shop: cosmetics, companions, effects", text),
+                    Span::styled("the lobby", text),
                 ]),
                 Line::from(vec![
                     Span::styled("[?] ", key),
                     Span::styled("the full guide, any time", text),
                 ]),
                 Line::default(),
+                Line::from(Span::styled("the bar glows late for new faces.", dim)),
+                Line::default(),
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
-                    Span::styled("head to the chat", dim),
+                    Span::styled("settle in", dim),
                 ]),
             ],
         ),
-        Tutorial::GoToBar => {
+        Tutorial::Wander => {
             // A small nudge, pinned bottom-left, out of the walking path.
-            let lines = vec![Line::from(Span::styled(
-                "find the glowing bar, northwest",
-                text,
-            ))];
-            let width = (34u16).min(inner.width.saturating_sub(2));
+            let lines = vec![Line::from(vec![
+                Span::styled("when you're ready, press ", text),
+                Span::styled("[1]", key),
+                Span::styled(": the chat", text),
+            ])];
+            let width = (38u16).min(inner.width.saturating_sub(2));
             let height = 3u16.min(inner.height);
             let rect = Rect {
                 x: inner.x + 1,
@@ -1318,13 +1292,23 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(border)
-                        .title(Span::styled(" ↖ the bar ", border)),
+                        .title(Span::styled(" ✦ the tour ", border)),
                 ),
                 rect,
             );
             return false;
         }
-        _ => return false,
+        Tutorial::VisitChat
+        | Tutorial::VisitArcade
+        | Tutorial::VisitGames
+        | Tutorial::VisitArtboard
+        | Tutorial::VisitDirectory
+        | Tutorial::VisitLeaderboard => {
+            // Wandered home mid-tour: the nudge keeps naming the next page.
+            draw_tour_overlay(frame, inner, view.state.tutorial, Screen::Clubhouse);
+            return false;
+        }
+        Tutorial::Off | Tutorial::Pending | Tutorial::Done => return false,
     };
 
     let width = (lines
@@ -1354,6 +1338,176 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         rect,
     );
     true
+}
+
+/// The page stops of the first-visit tour. `render.rs` calls this on every
+/// non-clubhouse screen; the clubhouse calls it from [`draw_tutorial`] when
+/// a mid-tour player wanders home early. On the stop's own page the full
+/// pitch box pins top-right; on any other screen a one-line nudge keeps
+/// naming the key that resumes the route. Off-tour stages draw nothing.
+pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen: Screen) {
+    let key = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+    let border = Style::default().fg(theme::AMBER());
+
+    let (home, title, pitch, next_key, next_label): (Screen, &str, Vec<Line>, &str, &str) =
+        match stage {
+            Tutorial::VisitChat => (
+                Screen::Dashboard,
+                " ✦ the tour · home ",
+                vec![
+                    Line::from(Span::styled(
+                        "every room, thread and DM on late.sh lives here.",
+                        text,
+                    )),
+                    Line::from(vec![
+                        Span::styled("[i] ", key),
+                        Span::styled("write · ", text),
+                        Span::styled("[Ctrl+/] ", key),
+                        Span::styled("switch rooms · ", text),
+                        Span::styled("[Ctrl+]] ", key),
+                        Span::styled("pick an icon", text),
+                    ]),
+                ],
+                "2",
+                "the arcade",
+            ),
+            Tutorial::VisitArcade => (
+                Screen::Arcade,
+                " ✦ the tour · the arcade ",
+                vec![
+                    Line::from(Span::styled(
+                        "solo games: Lateris, Snake, 2048, Sudoku, Solitaire...",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "daily puzzles pay chips; quests and streaks stack up top.",
+                        text,
+                    )),
+                ],
+                "3",
+                "the heavy door",
+            ),
+            Tutorial::VisitGames => (
+                Screen::Games,
+                " ✦ the tour · the games ",
+                vec![
+                    Line::from(Span::styled(
+                        "the big ones live behind this door:",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "Lateania, our own MMO. NetHack, the real thing.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "DCSS, the most played roguelike alive. Green Dragon reborn.",
+                        text,
+                    )),
+                ],
+                "4",
+                "the artboard",
+            ),
+            Tutorial::VisitArtboard => (
+                Screen::Artboard,
+                " ✦ the tour · the artboard ",
+                vec![
+                    Line::from(Span::styled(
+                        "one shared canvas, the whole house draws at once.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "leave a mark, someone will draw beside it by morning.",
+                        text,
+                    )),
+                ],
+                "5",
+                "the directory",
+            ),
+            Tutorial::VisitDirectory => (
+                Screen::Pinstar,
+                " ✦ the tour · the directory ",
+                vec![
+                    Line::from(Span::styled(
+                        "the people: profiles, projects, what everyone builds.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "your profile gets a public page on the web.",
+                        text,
+                    )),
+                ],
+                "6",
+                "the leaderboards",
+            ),
+            Tutorial::VisitLeaderboard => (
+                Screen::Leaderboard,
+                " ✦ the tour · the leaderboards ",
+                vec![
+                    Line::from(Span::styled(
+                        "every game keeps score: chips, wins, streaks.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "your name lands here sooner than you think.",
+                        text,
+                    )),
+                ],
+                "0",
+                "home to the lounge",
+            ),
+            Tutorial::Off
+            | Tutorial::Pending
+            | Tutorial::Welcome
+            | Tutorial::Wander
+            | Tutorial::Homecoming
+            | Tutorial::Done => return,
+        };
+
+    let lines: Vec<Line> = if screen == home {
+        let mut lines = pitch;
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::styled(format!("[{next_key}] "), key),
+            Span::styled(format!("next: {next_label}"), text),
+        ]));
+        lines
+    } else {
+        vec![Line::from(vec![
+            Span::styled("the tour waits: ", text),
+            Span::styled(format!("[{next_key}] "), key),
+            Span::styled(next_label.to_string(), text),
+        ])]
+    };
+
+    let width = (lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+        .max(title.chars().count())
+        + 4)
+    .min(usize::from(area.width).saturating_sub(2)) as u16;
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.x + area.width.saturating_sub(width + 1),
+        y: area.y + 1,
+        width,
+        height,
+    };
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border)
+                .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
+        ),
+        rect,
+    );
 }
 
 fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
