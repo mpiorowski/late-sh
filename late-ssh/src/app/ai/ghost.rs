@@ -333,6 +333,18 @@ impl GhostService {
                             ) {
                                 continue;
                             }
+                            // Read-only pre-filter so a hammering patron costs
+                            // a map lookup here instead of a pooled connection
+                            // and two queries inside the task. Rooms he never
+                            // answers in hold no ladder state, so this reads
+                            // `None` there and the real gates still decide.
+                            if self
+                                .mention_ladders
+                                .remaining(LadderBot::Bot, message.user_id, message.room_id)
+                                .is_some()
+                            {
+                                continue;
+                            }
                             let svc = self.clone();
                             let bot = bot.clone();
                             tokio::spawn(async move {
@@ -369,12 +381,15 @@ impl GhostService {
 
         // Ladder check sits after the DM skip so rooms he never answers in
         // never accrue ladder state (the composer banner reads that state).
-        if let Decision::Throttled { .. } = self.mention_ladders.check_and_step(
+        // The loop's pre-filter is only a fast path; this is the step that
+        // counts, since tasks race each other past it.
+        match self.mention_ladders.check_and_step(
             LadderBot::Bot,
             trigger_message.user_id,
             trigger_message.room_id,
         ) {
-            return Ok(());
+            Decision::Answer => {}
+            Decision::Throttled { .. } => return Ok(()),
         }
 
         if !ChatRoomMember::is_member(&client, trigger_message.room_id, bot.id).await? {
@@ -632,6 +647,16 @@ impl GhostService {
                             if !contains_mention(&message.body, &bartender.username) {
                                 continue;
                             }
+                            // Read-only pre-filter, same reasoning as @bot's:
+                            // throttled mentions never reach the DB, and rooms
+                            // he is not in hold no state for this to read.
+                            if self
+                                .mention_ladders
+                                .remaining(LadderBot::Bartender, message.user_id, message.room_id)
+                                .is_some()
+                            {
+                                continue;
+                            }
                             let svc = self.clone();
                             let bartender = bartender.clone();
                             tokio::spawn(async move {
@@ -667,13 +692,15 @@ impl GhostService {
 
         // Ladder check sits after the membership gate so rooms he never
         // answers in never accrue ladder state (the composer banner reads
-        // that state).
-        if let Decision::Throttled { .. } = self.mention_ladders.check_and_step(
+        // that state). The loop's pre-filter is only a fast path; this is
+        // the step that counts, since tasks race each other past it.
+        match self.mention_ladders.check_and_step(
             LadderBot::Bartender,
             trigger_message.user_id,
             trigger_message.room_id,
         ) {
-            return Ok(());
+            Decision::Answer => {}
+            Decision::Throttled { .. } => return Ok(()),
         }
 
         let (messages, balance, drunk_level) = {

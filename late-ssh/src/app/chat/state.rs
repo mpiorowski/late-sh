@@ -6076,11 +6076,6 @@ fn sentence_case(text: &str) -> String {
     }
 }
 
-/// Given a message list containing `current`, return the id of the message
-/// that should take over the selection when `current` is deleted: prefer the
-/// next index (older message, since the list is ordered newest-first), fall
-/// back to the previous index if `current` was the last item, or `None` if
-/// `current` is not in the list.
 /// Compact retry hint for the bot cooldown banner. Minutes round up so the
 /// banner never promises an earlier retry than the ladder allows.
 fn format_cooldown(remaining: Duration) -> String {
@@ -6092,6 +6087,11 @@ fn format_cooldown(remaining: Duration) -> String {
     }
 }
 
+/// Given a message list containing `current`, return the id of the message
+/// that should take over the selection when `current` is deleted: prefer the
+/// next index (older message, since the list is ordered newest-first), fall
+/// back to the previous index if `current` was the last item, or `None` if
+/// `current` is not in the list.
 fn adjacent_message_id(msgs: &[ChatMessage], current: Uuid) -> Option<Uuid> {
     let idx = msgs.iter().position(|m| m.id == current)?;
     msgs.get(idx + 1)
