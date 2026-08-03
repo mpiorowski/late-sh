@@ -575,8 +575,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Synthetic entries",
         "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
         "  A DM with unread messages sits under core in an unread dms group,",
-        "  and drops back to dms once read.",
-        "  Directory page 6 contains Profiles, Projects, and Pinstar.",
+        "  and drops back to dms once you open another room.",
+        "  Directory page 5 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
     .map(str::to_string)

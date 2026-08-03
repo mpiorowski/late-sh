@@ -17,7 +17,7 @@ Included here:
 - Home chat rooms, DMs, public/private topic rooms, synthetic entries, and game-backed room chat.
 - Home/Dashboard chat center, room rail, and the embedded game-chat surfaces (house tables, daily match boards).
 - Message composer, replies, edits, deletes, reactions, ignores, overlays, and autocomplete.
-- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 7.
+- Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles still use chat-adjacent services/state, but their UI is hosted on Directory page 5.
 - Chat service refresh/tail/event contracts, DB model constraints, keybindings, tests, and gotchas.
 
 Global SSH, audio, games, profile, rooms/blackjack, observability, and repo-wide test policy stay in the root context.
@@ -41,8 +41,8 @@ late-ssh/src/app/chat/
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
-|-- showcase/                    # Projects service/state/UI reused by Directory page 7
-`-- work/                        # Profiles service/state/UI reused by Directory page 7
+|-- showcase/                    # Projects service/state/UI reused by Directory page 5
+`-- work/                        # Profiles service/state/UI reused by Directory page 5
 ```
 
 Related tests:
@@ -179,9 +179,9 @@ Visual order is defined in `state.rs::visual_order_for_rooms` and mirrored by co
 4. Other non-DM chat-list rooms/channels, excluding favorites.
 5. DMs, sorted by unread status, then snapshot latest-message activity, then peer display name. Do not derive this order from lazily loaded room tails.
 
-Reading a DM zeroes its unread count on the same frame (`mark_room_read`), which would drop it out of the promoted group with the cursor still on it. `ChatState::sticky_unread_dm` holds exactly one DM in the group while it is being read: `note_sticky_unread_dm` claims it when an unread DM is marked read, keeps it while that same room is re-marked (every message landing in a visible room does that), and releases it when any other room is read, so it falls back into the DMs section once you look away. The decision is the pure `next_sticky_unread_dm`; the promotion predicate `dm_is_promoted_unread` is shared by `visual_order_for_rooms` and the rail so the two mirrors cannot disagree.
+Reading a DM zeroes its unread count on the same frame (`mark_room_read`), which would drop it out of the promoted group with the cursor still on it. `ChatState::sticky_unread_dm` holds exactly one DM in the group while it is being read: `note_sticky_unread_dm` claims it when an unread DM is marked read, keeps it while that same room is re-marked (every message landing in a visible room does that), and releases it when any other room is read, so it falls back into the DMs section as soon as you open something else. Reading is the only release: `sync_visible_chat_room` marks a room read only when one is visible, so leaving Home for a screen with no chat room (the Arcade, Games) parks the DM in the promoted group, badge-less, until the next room is opened. The decision is the pure `next_sticky_unread_dm`; the promotion predicate `dm_is_promoted_unread` is shared by `visual_order_for_rooms` and the rail so the two mirrors cannot disagree.
 
-`RoomSection` is the closed roster of collapsible rail sections: Favorites, Core, Channels, Dms. Each one is rendered, foldable from its header, and reachable by its `shortcut` key; a variant that no section header draws is dead weight, so add one only alongside the header that renders it. The Showcase/Work feeds moved to Directory page 7 and took the old `Updates` section with them.
+`RoomSection` is the closed roster of collapsible rail sections: Favorites, Core, Channels, Dms. Each one is rendered, foldable from its header, and reachable by its `shortcut` key; a variant that no section header draws is dead weight, so add one only alongside the header that renders it. The Showcase/Work feeds moved to Directory page 5 and took the old `Updates` section with them.
 
 Hub Shop room effects add render-time top sections in the cozy room rail. Active `room_bump` effects on non-permanent public topic rooms render first under a dedicated `bumped` section as plain synthetic `join #slug` text rows; the synthetic row never shows glow/spark/pulse/hack/bump suffixes. The real room stays in its normal navigation section if the viewer has it, and pressing Enter on the synthetic row joins/moves through the existing public-room join path. `room_spark`, `room_glow`, and `room_pulse` are one-minute page-level visuals over the selected room content; they must not add top text, promote rooms, or restyle room-list rows. `pinned_vibe` is sold as Hack Room: for one hour it is the only effect allowed to change real room-list text/color, adding the `hacking` suffix for every viewer. Active effects flow through `ChatRoomListView.active_room_effects`. Hit testing uses the same visual slot list, so bumped room clicks stay aligned with rendering.
 
@@ -199,7 +199,7 @@ Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_c
 Room navigation:
 - `h`/`l`, left/right arrows, `Ctrl+P`/`Ctrl+N` switch room selection.
 - `Space` activates room-jump mode, assigning keys from `ROOM_JUMP_KEYS`. Jumping to the already selected room/synthetic entry still re-runs the entry's read/list side effects so stale unread badges clear.
-- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Mentions, and custom room browse. Showcase/Projects and Work/Profiles live on Directory page 7 instead. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
+- Global `Ctrl+/` opens the room jump modal. Rows include unread counts and synthetic entries for RSS, News, Mentions, and custom room browse. Showcase/Projects and Work/Profiles live on Directory page 5 instead. Results are ordered favorites first, then unread entries, then latest message/activity; typed `@` and `#` prefixes filter to DMs or rooms while keeping that ordering.
 - A leading `?` flips the same modal into message search (`app/room_search_modal`): `?query` searches every joined room, `?#room query` scopes to one room, `?@user query` to one DM (scope tokens resolve against joined rooms only; an unresolved scope never fires). Searches are debounced 300ms, need `SEARCH_MIN_CHARS` (3) chars, run one-at-a-time latest-wins by request id through `ChatService::search_messages_task` (`read_permits`-gated, `SEARCH_RESULTS_LIMIT` 50 newest hits). The SQL (`ChatMessage::search_for_user`) is a LIKE-escaped ILIKE join on `chat_room_members` (membership is the auth boundary), excluding game rooms, system-feed authors, and the caller's ignored users; migration 114 adds the `pg_trgm` GIN index that makes it indexed. Results live in `ChatState.message_search` (snippets precomputed around the first match at drain time); the modal renders hits plus a fixed-height detail pane showing the full body with a context window of up to 4 messages either side (dim `author: body` rows around the highlighted hit). Context loads lazily per selected hit through `ChatService::load_message_context_task` (`ChatMessage::list_around`: `(created, id)` cursors both directions, membership checked, system-feed and ignored authors excluded), cached by message id with a single in-flight slot so fast scrolling converges instead of fanning out; a failed fetch caches an empty window rather than refiring every tick. The pane uses fixed slots, so the hit row never moves while context fills in. Enter lands in the hit's room and selects the message if it is in the loaded tail, else registers `pending_search_jump`, resolved (or dropped with a banner) when the tail lands. `Ctrl+Y` copies the selected hit. `/search [query]` opens the modal pre-filled with `?query`.
 - While composing on Home, `Ctrl+N`/`Ctrl+P` switch real rooms while preserving draft text and dropping reply/edit state.
 - Synthetic entries are selected with booleans (`news_selected`, `notifications_selected`, `discover_selected`, `showcase_selected`, `work_selected`), not `selected_room_id`.
@@ -246,7 +246,7 @@ The main composer is a `ratatui_textarea::TextArea<'static>`.
 
 `/members` renders a styled overlay with online members first, offline members second, each group sorted alphabetically. Preserve the fixed status-cell shape so overlay rows do not jump as online state changes.
 
-Directory page 7 uses the Work/Profiles and Showcase/Projects substates from chat. Its local `directory::state` search mode is independent of Home room search: `s` opens a case-insensitive substring search on Profiles or Projects, arrows move the filtered selection, `Enter` selects the underlying Work/Showcase item, and `Esc` exits search.
+Directory page 5 uses the Work/Profiles and Showcase/Projects substates from chat. Its local `directory::state` search mode is independent of Home room search: `s` opens a case-insensitive substring search on Profiles or Projects, arrows move the filtered selection, `Enter` selects the underlying Work/Showcase item, and `Esc` exits search.
 
 Starting compose in a room:
 - Clears message selection.
@@ -588,7 +588,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
-Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 7 routes `/` directly to Projects/Profiles filtering.
+Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 5 routes `/` directly to Projects/Profiles filtering.
 
 When changing keybindings, update root `CONTEXT.md`'s keybinding checklist plus the relevant input handler, help modal, footer hints, and tests.
 

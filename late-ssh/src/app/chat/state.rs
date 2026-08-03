@@ -5042,7 +5042,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // without losing the ones asking for an answer.
     let mut unread_dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .filter(|(r, _)| !pushed_rooms.contains(&r.id))
         .filter(|(r, _)| dm_is_promoted_unread(r.id, unread_counts, sticky_unread_dm))
@@ -5083,7 +5083,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
@@ -5117,7 +5117,9 @@ pub(crate) struct NextStickyUnreadDm {
 /// arrive. The DM you are reading stays put: every message landing in a
 /// visible room re-marks it read, and that must not release it. Reading
 /// anything else does release it, so the DM drops back down as soon as you
-/// look away.
+/// open another room. Nothing else releases it: a screen with no visible chat
+/// room never marks anything read, so the DM keeps the promoted slot until you
+/// come back and open something.
 pub(crate) fn next_sticky_unread_dm(input: NextStickyUnreadDm) -> Option<Uuid> {
     let NextStickyUnreadDm {
         current,
