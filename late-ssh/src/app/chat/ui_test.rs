@@ -583,6 +583,7 @@ fn chat_view<'a>(
         current_user_id: Uuid::nil(),
         afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
         ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
+        sticky_unread_dm: None,
         show_flag_fallback: false,
         cursor_visible: false,
         mention_matches: &[],
@@ -1366,6 +1367,160 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
             "expected {expected:?} in {rendered:?}"
         );
     }
+}
+
+fn rail_dm(id: u128, peer: Uuid) -> ChatRoom {
+    ChatRoom {
+        id: Uuid::from_u128(id),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "dm".to_string(),
+        visibility: "dm".to_string(),
+        auto_join: false,
+        slug: None,
+        permanent: false,
+        language_code: None,
+        dm_user_a: Some(Uuid::nil()),
+        dm_user_b: Some(peer),
+        topic: None,
+        rules: None,
+        created_by: None,
+    }
+}
+
+fn rail_channel(id: u128, slug: &str) -> ChatRoom {
+    ChatRoom {
+        id: Uuid::from_u128(id),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "topic".to_string(),
+        visibility: "public".to_string(),
+        auto_join: false,
+        slug: Some(slug.to_string()),
+        permanent: false,
+        language_code: None,
+        dm_user_a: None,
+        dm_user_b: None,
+        topic: None,
+        rules: None,
+        created_by: None,
+    }
+}
+
+#[test]
+fn cozy_room_rail_lifts_unread_dms_above_channels() {
+    let alice = Uuid::from_u128(101);
+    let bob = Uuid::from_u128(102);
+    let dm_alice = rail_dm(1, alice);
+    let dm_bob = rail_dm(2, bob);
+    let rust = rail_channel(3, "rust");
+    let rooms = vec![
+        (dm_alice.clone(), Vec::new()),
+        (dm_bob.clone(), Vec::new()),
+        (rust.clone(), Vec::new()),
+    ];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(alice, "alice".to_string()), (bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::from([(dm_bob.id, 2)]);
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    let row_of = |slot: RoomSlot| {
+        room_rows
+            .hit_slots
+            .iter()
+            .position(|hit| *hit == Some(slot))
+            .unwrap_or_else(|| panic!("{slot:?} missing from {rendered:?}"))
+    };
+    let header_of = |label: &str| {
+        rendered
+            .iter()
+            .position(|line| strip_room_section_header_prefix(line) == label)
+            .unwrap_or_else(|| panic!("{label:?} header missing from {rendered:?}"))
+    };
+
+    // The unread DM sits in its own group between Core and Channels; the read
+    // one keeps the bottom of the rail.
+    assert!(header_of("unread dms") < row_of(RoomSlot::Room(dm_bob.id)));
+    assert!(row_of(RoomSlot::Room(dm_bob.id)) < header_of("channels"));
+    assert!(header_of("channels") < row_of(RoomSlot::Room(rust.id)));
+    assert!(header_of("dms") < row_of(RoomSlot::Room(dm_alice.id)));
+}
+
+#[test]
+fn cozy_room_rail_hides_dm_with_ignored_peer() {
+    let bob = Uuid::from_u128(102);
+    let dm_bob = rail_dm(2, bob);
+    let rooms = vec![(dm_bob.clone(), Vec::new())];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::from([(dm_bob.id, 4)]);
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let ignored = HashSet::from([bob]);
+    let mut view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+    view.ignored_user_ids = &ignored;
+
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+
+    // An ignored peer must not be able to resurface the DM, or its unread
+    // badge, in the rail. Navigation already hides it.
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(dm_bob.id))),
+        "ignored peer's dm rendered in {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("bob")),
+        "ignored peer's dm rendered in {rendered:?}"
+    );
 }
 
 #[test]

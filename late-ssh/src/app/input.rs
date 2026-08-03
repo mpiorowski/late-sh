@@ -2889,6 +2889,7 @@ fn chat_room_list_view<'a>(
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
         ignored_user_ids: app.chat.ignored_user_ids(),
+        sticky_unread_dm: app.chat.sticky_unread_dm,
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
@@ -3771,7 +3772,6 @@ fn room_section_suffix(byte: u8) -> Option<RoomSection> {
         b'f' | b'F' => Some(RoomSection::Favorites),
         b'o' | b'O' => Some(RoomSection::Core),
         b'c' | b'C' => Some(RoomSection::Channels),
-        b'u' | b'U' => Some(RoomSection::Updates),
         b'd' | b'D' => Some(RoomSection::Dms),
         _ => None,
     }

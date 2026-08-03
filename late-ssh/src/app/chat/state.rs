@@ -264,7 +264,6 @@ pub enum RoomSection {
     Favorites,
     Core,
     Channels,
-    Updates,
     Dms,
 }
 
@@ -276,7 +275,6 @@ impl RoomSection {
             RoomSection::Favorites => "favorites",
             RoomSection::Core => "core",
             RoomSection::Channels => "channels",
-            RoomSection::Updates => "updates",
             RoomSection::Dms => "dms",
         }
     }
@@ -286,7 +284,6 @@ impl RoomSection {
             RoomSection::Favorites => b'f',
             RoomSection::Core => b'o',
             RoomSection::Channels => b'c',
-            RoomSection::Updates => b'u',
             RoomSection::Dms => b'd',
         }
     }
@@ -297,7 +294,6 @@ impl RoomSection {
             "favorites" => Some(RoomSection::Favorites),
             "core" => Some(RoomSection::Core),
             "channels" => Some(RoomSection::Channels),
-            "updates" => Some(RoomSection::Updates),
             "dms" => Some(RoomSection::Dms),
             _ => None,
         }
@@ -467,6 +463,9 @@ pub struct ChatState {
     pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
+    /// The DM currently held in the promoted unread-DMs group even though its
+    /// unread count is already zero. See `note_sticky_unread_dm`.
+    pub(crate) sticky_unread_dm: Option<Uuid>,
     visible_room_id: Option<Uuid>,
     room_tx: watch::Sender<Option<Uuid>>,
     refresh_tx: mpsc::UnboundedSender<()>,
@@ -691,6 +690,7 @@ impl ChatState {
             room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
+            sticky_unread_dm: None,
             visible_room_id: None,
             room_tx,
             refresh_tx,
@@ -879,9 +879,27 @@ impl ChatState {
     }
 
     pub fn mark_room_read(&mut self, room_id: Uuid) {
+        self.note_sticky_unread_dm(room_id);
         self.pending_read_rooms.insert(room_id);
         self.unread_counts.insert(room_id, 0);
         self.pending_read_flush.queue(room_id, Instant::now());
+    }
+
+    /// Remember the DM being read so the promoted unread-DMs group can hold it
+    /// in place. Reading is what zeroes the unread count, so this runs before
+    /// the count is cleared.
+    fn note_sticky_unread_dm(&mut self, room_id: Uuid) {
+        let unread = self.unread_counts.get(&room_id).copied().unwrap_or(0) > 0;
+        let is_dm = self
+            .rooms
+            .iter()
+            .any(|(room, _)| room.id == room_id && room.kind == "dm");
+        self.sticky_unread_dm = next_sticky_unread_dm(NextStickyUnreadDm {
+            current: self.sticky_unread_dm,
+            room_id,
+            is_dm,
+            unread,
+        });
     }
 
     pub fn mark_room_read_at(&self, room_id: Uuid, read_at: DateTime<Utc>) {
@@ -1779,7 +1797,7 @@ impl ChatState {
 
     /// Build the flat visual navigation order.
     /// Order matches the cozy rail exactly: favorites, core/mentions/news/rss,
-    /// channels, updates, DMs.
+    /// unread DMs, channels, DMs.
     pub(crate) fn visual_order(&self) -> Vec<RoomSlot> {
         visual_order_for_rooms(RoomVisualOrderInput {
             rooms: &self.rooms,
@@ -1791,6 +1809,7 @@ impl ChatState {
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
             ignored_user_ids: &self.ignored_user_ids,
+            sticky_unread_dm: self.sticky_unread_dm,
         })
     }
 
@@ -4942,6 +4961,7 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    pub sticky_unread_dm: Option<Uuid>,
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -4957,6 +4977,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         favorite_room_ids,
         collapsed_sections,
         ignored_user_ids,
+        sticky_unread_dm,
     } = input;
 
     let mut order = Vec::new();
@@ -5014,6 +5035,34 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         order.push(RoomSlot::Discover);
     }
 
+    // Unread DMs ride above Channels: at the bottom of the rail nobody was
+    // finding them. Favorited DMs keep their favorites slot instead (they are
+    // already in `pushed_rooms`), and the group ignores the DMs collapse
+    // toggle, which is what makes collapsing DMs a way to hide the read ones
+    // without losing the ones asking for an answer.
+    let mut unread_dms: Vec<_> = rooms
+        .iter()
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
+        .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
+        .filter(|(r, _)| !pushed_rooms.contains(&r.id))
+        .filter(|(r, _)| dm_is_promoted_unread(r.id, unread_counts, sticky_unread_dm))
+        .collect();
+    unread_dms.sort_by(|(a_room, _), (b_room, _)| {
+        compare_dm_rooms_for_nav(
+            a_room,
+            b_room,
+            user_id,
+            usernames,
+            unread_counts,
+            room_last_message_at,
+        )
+    });
+    order.extend(
+        unread_dms
+            .iter()
+            .filter_map(|(r, _)| pushed_rooms.insert(r.id).then_some(RoomSlot::Room(r.id))),
+    );
+
     // Channels: all non-DM rooms outside Core, public + private merged.
     let channels_collapsed = collapsed_sections.contains(&RoomSection::Channels);
     for (room, _) in rooms {
@@ -5034,7 +5083,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     let dms_collapsed = collapsed_sections.contains(&RoomSection::Dms);
     let mut dms: Vec<_> = rooms
         .iter()
-        .filter(|(r, _)| r.kind == "dm")
+        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm")
         .filter(|(r, _)| !dm_peer_is_ignored(r, user_id, ignored_user_ids))
         .collect();
     dms.sort_by(|(a_room, _), (b_room, _)| {
@@ -5052,6 +5101,49 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     }));
 
     order
+}
+
+pub(crate) struct NextStickyUnreadDm {
+    pub current: Option<Uuid>,
+    pub room_id: Uuid,
+    pub is_dm: bool,
+    pub unread: bool,
+}
+
+/// Which DM the promoted unread group holds after `room_id` is marked read.
+///
+/// Opening a DM zeroes its unread count on the same frame, so without this the
+/// row (and its jump key) would move out from under the cursor the instant you
+/// arrive. The DM you are reading stays put: every message landing in a
+/// visible room re-marks it read, and that must not release it. Reading
+/// anything else does release it, so the DM drops back down as soon as you
+/// open another room. Nothing else releases it: a screen with no visible chat
+/// room never marks anything read, so the DM keeps the promoted slot until you
+/// come back and open something.
+pub(crate) fn next_sticky_unread_dm(input: NextStickyUnreadDm) -> Option<Uuid> {
+    let NextStickyUnreadDm {
+        current,
+        room_id,
+        is_dm,
+        unread,
+    } = input;
+
+    match current {
+        Some(sticky) if sticky == room_id => Some(sticky),
+        _ => (is_dm && unread).then_some(room_id),
+    }
+}
+
+/// Whether a DM belongs in the promoted unread group above Channels: it has
+/// unread messages, or it is the DM being read right now (see
+/// `ChatState::note_sticky_unread_dm`). Shared by the navigation order and the
+/// rail so the two cannot disagree about which DMs got promoted.
+pub(crate) fn dm_is_promoted_unread(
+    room_id: Uuid,
+    unread_counts: &HashMap<Uuid, i64>,
+    sticky_unread_dm: Option<Uuid>,
+) -> bool {
+    unread_counts.get(&room_id).copied().unwrap_or(0) > 0 || sticky_unread_dm == Some(room_id)
 }
 
 pub(crate) fn compare_dm_rooms_for_nav(
@@ -5095,7 +5187,7 @@ fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
 /// Whether `room` is a DM whose other participant is ignored. Such DMs are
 /// hidden from every room-list section (favorites included) so an ignored peer
 /// can't resurface the DM or its unread state by sending again.
-fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
+pub(crate) fn dm_peer_is_ignored(room: &ChatRoom, user_id: Uuid, ignored: &HashSet<Uuid>) -> bool {
     room.kind == "dm" && dm_peer_id(room, user_id).is_some_and(|peer| ignored.contains(&peer))
 }
 
