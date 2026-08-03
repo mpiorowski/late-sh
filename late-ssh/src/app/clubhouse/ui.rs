@@ -1444,10 +1444,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 Screen::Games,
                 " ✦ the tour · the games ",
                 vec![
-                    Line::from(Span::styled(
-                        "the big ones live behind this door:",
-                        text,
-                    )),
+                    Line::from(Span::styled("the big ones live behind this door:", text)),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("Lateania", name),
@@ -1465,10 +1462,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled("DCSS", name),
                         Span::styled(": the most played roguelike alive. pick a species,", text),
                     ]),
-                    Line::from(Span::styled(
-                        "pick a god, dive for the Orb.",
-                        text,
-                    )),
+                    Line::from(Span::styled("pick a god, dive for the Orb.", text)),
                     Line::from(vec![
                         Span::styled("Brogue", name),
                         Span::styled(": the most beautiful dungeon ASCII ever drew.", text),

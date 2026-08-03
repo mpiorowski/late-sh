@@ -242,5 +242,8 @@ async fn welcome_pour_never_comps_a_prior_drinker() {
         .grant_free_drink(user.id, late_core::models::drinks::WELCOME_DRINK_POINTS)
         .await
         .expect("comp call succeeds");
-    assert!(comp.is_none(), "a prior drinker never gets the welcome pour");
+    assert!(
+        comp.is_none(),
+        "a prior drinker never gets the welcome pour"
+    );
 }
