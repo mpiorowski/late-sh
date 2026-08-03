@@ -1892,7 +1892,11 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
             showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
-            work: crate::app::chat::work::svc::WorkService::new(db),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
         },
         user_id,
         crate::authz::Permissions::new(false, false),

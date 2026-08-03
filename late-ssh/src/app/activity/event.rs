@@ -64,6 +64,11 @@ pub enum ActivityKind {
     UsernameEffectApplied {
         effect: late_core::models::username_effect::UsernameEffect,
     },
+    /// A linked user published an entry on cyberspace.online from late.sh.
+    /// Announces our user's own action, never cyberspace content.
+    CyberspacePosted {
+        title: Option<String>,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -73,7 +78,9 @@ pub enum ActivityKind {
 impl ActivityKind {
     pub fn category(&self) -> ActivityCategory {
         match self {
-            Self::UserJoined | Self::UsernameEffectApplied { .. } => ActivityCategory::Session,
+            Self::UserJoined
+            | Self::UsernameEffectApplied { .. }
+            | Self::CyberspacePosted { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
@@ -393,6 +400,27 @@ impl ActivityEvent {
                 match_id,
             },
             format!("drew with {} at {game_label}", player_b.as_ref()),
+        )
+    }
+
+    /// A linked user published an entry on cyberspace.online. Names the title
+    /// when the entry has one; the story is the action, not the content.
+    pub fn cyberspace_posted(
+        user_id: Uuid,
+        username: impl Into<String>,
+        title: Option<String>,
+    ) -> Self {
+        let action = match title.as_deref() {
+            Some(title) if !title.trim().is_empty() => {
+                format!("published \"{}\" on cyberspace", title.trim())
+            }
+            _ => "published an entry on cyberspace".to_string(),
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::CyberspacePosted { title },
+            action,
         )
     }
 

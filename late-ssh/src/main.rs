@@ -182,6 +182,11 @@ async fn main() -> anyhow::Result<()> {
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
+    let cyberspace_service = late_ssh::app::chat::cyberspace::svc::CyberspaceService::new(
+        db.clone(),
+        late_ssh::app::chat::cyberspace::api::BASE_URL.to_string(),
+    )
+    .with_activity(activity_publisher.clone());
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
@@ -325,6 +330,7 @@ async fn main() -> anyhow::Result<()> {
         notification_service: notification_service.clone(),
         article_service,
         feed_service,
+        cyberspace_service,
         showcase_service,
         work_service,
         profile_service,

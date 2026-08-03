@@ -237,6 +237,7 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
+    cyberspace_modal: Option<&'a chat::cyberspace::state::Modal>,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -629,6 +630,7 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
+            && !self.chat.cyberspace_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
             && !self.chat.showcase_selected
@@ -649,6 +651,9 @@ impl App {
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
             feeds_view,
+            cyberspace_selected: self.chat.cyberspace_selected,
+            cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
             news_view,
@@ -891,6 +896,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -908,6 +914,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -1036,6 +1043,7 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
+                        cyberspace_modal: self.chat.cyberspace.modal.as_ref(),
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
@@ -1611,6 +1619,10 @@ impl App {
             chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
         }
 
+        if let Some(cyberspace_modal) = ctx.cyberspace_modal {
+            chat::cyberspace::ui::draw_modal(frame, inner, cyberspace_modal);
+        }
+
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(
                 frame,
@@ -1741,6 +1753,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_hub_modal
         || ctx.show_profile_modal
         || ctx.show_poll_modal
+        || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()

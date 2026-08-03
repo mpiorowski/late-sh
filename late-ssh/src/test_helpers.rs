@@ -261,6 +261,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ai_service,
         article_service,
         feed_service,
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service,
         work_service,
         profile_service,
@@ -414,6 +418,10 @@ fn make_app_with_chat_service_and_permissions(
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
@@ -607,6 +615,10 @@ pub fn make_app_with_paired_client(
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),

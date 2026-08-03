@@ -41,7 +41,7 @@ use crate::usernames::UsernameResolver;
 
 use super::{
     commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
-    discover, feeds, news, notifications,
+    cyberspace, discover, feeds, news, notifications,
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, ReportKind, RoomMemberListItem},
@@ -243,11 +243,40 @@ pub(crate) enum PetCommand {
     Water,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CyberspaceCommand {
+    Open,
+    Post,
+    Link,
+    Unlink,
+    Invalid,
+}
+
+/// `/cs` and `/cyberspace` with an optional subcommand. `None` means the
+/// body is not a cyberspace command at all (falls through to other handlers).
+fn parse_cyberspace_command(body: &str) -> Option<CyberspaceCommand> {
+    let trimmed = body.trim();
+    let rest = trimmed
+        .strip_prefix("/cyberspace")
+        .or_else(|| trimmed.strip_prefix("/cs"))?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    Some(match rest.trim() {
+        "" => CyberspaceCommand::Open,
+        "post" => CyberspaceCommand::Post,
+        "link" => CyberspaceCommand::Link,
+        "unlink" => CyberspaceCommand::Unlink,
+        _ => CyberspaceCommand::Invalid,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RoomSlot {
     Room(Uuid),
     Feeds,
     News,
+    Cyberspace,
     Notifications,
     Discover,
     Showcase,
@@ -308,6 +337,7 @@ pub(crate) struct SelectedRoomSlotState {
     pub selected_room_id: Option<Uuid>,
     pub feeds_selected: bool,
     pub news_selected: bool,
+    pub cyberspace_selected: bool,
     pub notifications_selected: bool,
     pub discover_selected: bool,
     pub showcase_selected: bool,
@@ -319,6 +349,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         RoomSlot::Room(room_id) => {
             !selected.feeds_selected
                 && !selected.news_selected
+                && !selected.cyberspace_selected
                 && !selected.notifications_selected
                 && !selected.discover_selected
                 && !selected.showcase_selected
@@ -327,6 +358,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
         }
         RoomSlot::Feeds => selected.feeds_selected,
         RoomSlot::News => selected.news_selected,
+        RoomSlot::Cyberspace => selected.cyberspace_selected,
         RoomSlot::Notifications => selected.notifications_selected,
         RoomSlot::Discover => selected.discover_selected,
         RoomSlot::Showcase => selected.showcase_selected,
@@ -337,6 +369,7 @@ pub(crate) fn is_selected_slot(slot: RoomSlot, selected: SelectedRoomSlotState) 
 fn synthetic_entry_selected(selected: SelectedRoomSlotState) -> bool {
     selected.feeds_selected
         || selected.news_selected
+        || selected.cyberspace_selected
         || selected.notifications_selected
         || selected.discover_selected
         || selected.showcase_selected
@@ -349,6 +382,9 @@ fn current_slot_from_state(state: SelectedRoomSlotState) -> Option<RoomSlot> {
     }
     if state.news_selected {
         return Some(RoomSlot::News);
+    }
+    if state.cyberspace_selected {
+        return Some(RoomSlot::Cyberspace);
     }
     if state.notifications_selected {
         return Some(RoomSlot::Notifications);
@@ -527,6 +563,8 @@ pub struct ChatState {
     pub(crate) feeds_selected: bool,
     pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
+    pub(crate) cyberspace_selected: bool,
+    pub cyberspace: cyberspace::state::State,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
@@ -619,6 +657,7 @@ pub(crate) struct ChatServices {
     pub feeds: feeds::svc::FeedService,
     pub showcases: showcase::svc::ShowcaseService,
     pub work: work::svc::WorkService,
+    pub cyberspace: cyberspace::svc::CyberspaceService,
 }
 
 impl Drop for ChatState {
@@ -642,6 +681,7 @@ impl ChatState {
             feeds: feed_service,
             showcases: showcase_service,
             work: work_service,
+            cyberspace: cyberspace_service,
         } = services;
         let event_rx = service.subscribe_events();
         let moderation_event_rx = service.subscribe_moderation_events();
@@ -721,6 +761,8 @@ impl ChatState {
             feeds_selected: false,
             feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
+            cyberspace_selected: false,
+            cyberspace: cyberspace::state::State::new(cyberspace_service, user_id),
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
@@ -1126,6 +1168,7 @@ impl ChatState {
     fn visible_real_room_id_for_poll(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
+            || self.cyberspace_selected
             || self.notifications_selected
             || self.discover_selected
             || self.showcase_selected
@@ -1206,6 +1249,7 @@ impl ChatState {
         self.room_jump_active = false;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -1665,6 +1709,7 @@ impl ChatState {
             selected_room_id: self.selected_room_id,
             feeds_selected: self.feeds_selected,
             news_selected: self.news_selected,
+            cyberspace_selected: self.cyberspace_selected,
             notifications_selected: self.notifications_selected,
             discover_selected: self.discover_selected,
             showcase_selected: self.showcase_selected,
@@ -1699,6 +1744,8 @@ impl ChatState {
             Some("news")
         } else if self.feeds_selected {
             Some("rss")
+        } else if self.cyberspace_selected {
+            Some("cyberspace")
         } else if self.notifications_selected {
             Some("mentions")
         } else if self.discover_selected {
@@ -1716,6 +1763,7 @@ impl ChatState {
         let label = self.selected_synthetic_entry_label()?;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -1757,6 +1805,7 @@ impl ChatState {
     pub(crate) fn selected_favorite_room_id(&self) -> Option<Uuid> {
         if self.feeds_selected
             || self.news_selected
+            || self.cyberspace_selected
             || self.notifications_selected
             || self.discover_selected
             || self.showcase_selected
@@ -1820,6 +1869,11 @@ impl ChatState {
                 self.select_news();
                 changed
             }
+            RoomSlot::Cyberspace => {
+                let changed = !self.cyberspace_selected;
+                self.select_cyberspace();
+                changed
+            }
             RoomSlot::Notifications => {
                 let changed = !self.notifications_selected;
                 self.select_notifications();
@@ -1850,6 +1904,7 @@ impl ChatState {
                 }
                 let changed = self.feeds_selected
                     || self.news_selected
+                    || self.cyberspace_selected
                     || self.notifications_selected
                     || self.discover_selected
                     || self.showcase_selected
@@ -1857,6 +1912,7 @@ impl ChatState {
                     || self.selected_room_id != Some(next_id);
                 self.feeds_selected = false;
                 self.news_selected = false;
+                self.cyberspace_selected = false;
                 self.notifications_selected = false;
                 self.discover_selected = false;
                 self.showcase_selected = false;
@@ -1901,6 +1957,8 @@ impl ChatState {
 
         let current_item = if self.feeds_selected {
             RoomSlot::Feeds
+        } else if self.cyberspace_selected {
+            RoomSlot::Cyberspace
         } else if self.notifications_selected {
             RoomSlot::Notifications
         } else if self.discover_selected {
@@ -2119,6 +2177,35 @@ impl ChatState {
             self.clear_composer_after_submit();
             self.requested_shop_modal = true;
             return None;
+        }
+
+        if let Some(command) = parse_cyberspace_command(&body) {
+            self.clear_composer_after_submit();
+            match command {
+                CyberspaceCommand::Open => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return None;
+                }
+                CyberspaceCommand::Post => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    return self.cyberspace.open_compose_modal();
+                }
+                CyberspaceCommand::Link => {
+                    self.select_cyberspace();
+                    self.pending_chat_screen_switch = true;
+                    self.cyberspace.open_link_modal();
+                    return None;
+                }
+                CyberspaceCommand::Unlink => {
+                    self.cyberspace.unlink();
+                    return None;
+                }
+                CyberspaceCommand::Invalid => {
+                    return Some(Banner::error("Usage: /cs [post|link|unlink]"));
+                }
+            }
         }
 
         if body.trim() == "/mod" {
@@ -3296,6 +3383,7 @@ impl ChatState {
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
+        let cyberspace_tick = self.cyberspace.tick();
         self.flush_pending_read_cursors_if_due();
         let banner = moderation_banner
             .or(banner)
@@ -3303,7 +3391,8 @@ impl ChatState {
             .or(news_tick.banner)
             .or(notif_tick.banner)
             .or(showcase_tick.banner)
-            .or(work_tick.banner);
+            .or(work_tick.banner)
+            .or(cyberspace_tick.banner);
         ChatTick {
             banner,
             changed: changed
@@ -3311,7 +3400,8 @@ impl ChatState {
                 || news_tick.changed
                 || notif_tick.changed
                 || showcase_tick.changed
-                || work_tick.changed,
+                || work_tick.changed
+                || cyberspace_tick.changed,
         }
     }
 
@@ -3319,6 +3409,7 @@ impl ChatState {
         self.room_jump_active = false;
         self.feeds_selected = true;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -3329,10 +3420,25 @@ impl ChatState {
         self.feeds.mark_read();
     }
 
+    pub fn select_cyberspace(&mut self) {
+        self.room_jump_active = false;
+        self.cyberspace_selected = true;
+        self.feeds_selected = false;
+        self.news_selected = false;
+        self.notifications_selected = false;
+        self.discover_selected = false;
+        self.showcase_selected = false;
+        self.work_selected = false;
+        self.selected_message_id = None;
+        self.highlighted_message_id = None;
+        self.cyberspace.opened();
+    }
+
     pub fn select_news(&mut self) {
         self.room_jump_active = false;
         self.feeds_selected = false;
         self.news_selected = true;
+        self.cyberspace_selected = false;
         self.notifications_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
@@ -3352,6 +3458,7 @@ impl ChatState {
         self.notifications_selected = true;
         self.feeds_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.discover_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
@@ -3367,6 +3474,7 @@ impl ChatState {
         self.feeds_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
@@ -3382,6 +3490,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
@@ -3397,6 +3506,7 @@ impl ChatState {
         self.discover_selected = false;
         self.notifications_selected = false;
         self.news_selected = false;
+        self.cyberspace_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
         self.work.list();
@@ -4004,6 +4114,7 @@ impl ChatState {
                 ChatEvent::DmOpened { user_id, room_id } if self.user_id == user_id => {
                     self.feeds_selected = false;
                     self.news_selected = false;
+                    self.cyberspace_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
@@ -4052,6 +4163,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.feeds_selected = false;
                     self.news_selected = false;
+                    self.cyberspace_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
@@ -4089,6 +4201,7 @@ impl ChatState {
                 } if self.user_id == user_id => {
                     self.feeds_selected = false;
                     self.news_selected = false;
+                    self.cyberspace_selected = false;
                     self.notifications_selected = false;
                     self.discover_selected = false;
                     self.showcase_selected = false;
@@ -4966,6 +5079,8 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if feeds_available {
             order.push(RoomSlot::Feeds);
         }
+        // Always visible: unlinked users get the pitch + login funnel.
+        order.push(RoomSlot::Cyberspace);
     }
 
     // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
@@ -5779,6 +5894,7 @@ fn adjacent_composer_room(
             RoomSlot::Room(room_id) => Some(*room_id),
             RoomSlot::Feeds
             | RoomSlot::News
+            | RoomSlot::Cyberspace
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase

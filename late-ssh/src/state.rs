@@ -114,6 +114,7 @@ pub struct State {
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: FeedService,
+    pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: ShowcaseService,
     pub work_service: WorkService,
     pub profile_service: ProfileService,

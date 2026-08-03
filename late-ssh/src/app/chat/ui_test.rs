@@ -529,6 +529,9 @@ fn chat_view<'a>(
         feeds_selected: false,
         feeds_processing: false,
         feeds_unread_count: 0,
+        cyberspace_selected: false,
+        cyberspace_unread_count: 0,
+        cyberspace: None,
         feeds_view: crate::app::chat::feeds::ui::FeedListView {
             entries: &[],
             selected_index: 0,

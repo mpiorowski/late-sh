@@ -892,6 +892,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    if app.chat.cyberspace.modal_active() {
+        chat::cyberspace::input::handle_modal_input(app, event);
+        return;
+    }
+
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
@@ -2455,6 +2460,10 @@ fn dispatch_escape(app: &mut App) {
         chat::polls::input::handle_escape(app);
         return;
     }
+    if app.chat.cyberspace.modal_active() {
+        chat::cyberspace::input::handle_modal_escape(app);
+        return;
+    }
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_escape(app);
         return;
@@ -2892,6 +2901,8 @@ fn chat_room_list_view<'a>(
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
+        cyberspace_selected: app.chat.cyberspace_selected,
+        cyberspace_unread_count: app.chat.cyberspace.unread_count(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
@@ -3180,6 +3191,7 @@ fn chat_scroll_clicks_blocked(app: &App) -> bool {
         || app.show_profile_modal
         || app.show_sheet_modal
         || app.show_poll_modal
+        || app.chat.cyberspace.modal_active()
         || app.show_quit_confirm
         || app.show_bonsai_modal
         || app.show_lobby_modal

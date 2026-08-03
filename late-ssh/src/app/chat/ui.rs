@@ -2500,6 +2500,10 @@ pub struct ChatRenderInput<'a> {
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
     pub feeds_view: super::feeds::ui::FeedListView<'a>,
+    pub cyberspace_selected: bool,
+    pub cyberspace_unread_count: i64,
+    /// `None` only in pure render tests; the app always passes the state.
+    pub cyberspace: Option<&'a super::cyberspace::state::State>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -2622,6 +2626,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
+    pub cyberspace_selected: bool,
+    pub cyberspace_unread_count: i64,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub notifications_selected: bool,
@@ -2875,7 +2881,11 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
 
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    if view.notifications_selected || view.discover_selected || view.feeds_selected {
+    if view.notifications_selected
+        || view.discover_selected
+        || view.feeds_selected
+        || view.cyberspace_selected
+    {
         ChatSelectionMode::Compact
     } else if view.news_selected {
         ChatSelectionMode::Composer {
@@ -2955,6 +2965,8 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
+        cyberspace_selected: view.cyberspace_selected,
+        cyberspace_unread_count: view.cyberspace_unread_count,
         news_selected: view.news_selected,
         news_unread_count: view.news_unread_count,
         notifications_selected: view.notifications_selected,
@@ -2970,6 +2982,9 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
 pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String> {
     if view.feeds_selected {
         return Some("rss".to_string());
+    }
+    if view.cyberspace_selected {
+        return Some("cyberspace".to_string());
     }
     if view.news_selected {
         return Some("news".to_string());
@@ -3050,6 +3065,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     let room_selected = |room_id| {
         !view.feeds_selected
             && !view.news_selected
+            && !view.cyberspace_selected
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
@@ -3176,6 +3192,35 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         };
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
+
+    let cyberspace_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.cyberspace_selected,
+        );
+        let style = if view.cyberspace_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.cyberspace_unread_count > 0 {
+            format!(
+                "{prefix}cyberspace ({})",
+                format_unread_badge(view.cyberspace_unread_count)
+            )
+        } else {
+            format!("{prefix}cyberspace")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(
+        cyberspace_line,
+        Some(RoomSlot::Cyberspace),
+        view.cyberspace_selected,
+    );
 
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
@@ -3852,6 +3897,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         }
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
+        RoomSlot::Cyberspace => ("cyberspace".to_string(), view.cyberspace_unread_count),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
@@ -3965,6 +4011,7 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             selected_room_id: view.selected_room_id,
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
+            cyberspace_selected: view.cyberspace_selected,
             notifications_selected: view.notifications_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
@@ -4133,6 +4180,10 @@ fn draw_selected_content(
 
     if feeds_selected {
         super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
+    } else if view.cyberspace_selected {
+        if let Some(cyberspace) = view.cyberspace {
+            super::cyberspace::ui::draw_pane(frame, messages_area, cyberspace);
+        }
     } else if view.notifications_selected {
         super::notifications::ui::draw_notification_list(
             frame,
@@ -4295,6 +4346,21 @@ fn draw_selected_content(
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         }
+    } else if view.cyberspace_selected {
+        let hint_block = Block::default()
+            .title(" Cyberspace ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        let hint = view
+            .cyberspace
+            .map(super::cyberspace::ui::footer_hint)
+            .unwrap_or_default();
+        let hint_text = Paragraph::new(Line::from(Span::styled(
+            hint,
+            Style::default().fg(theme::TEXT_DIM()),
+        )))
+        .block(hint_block);
+        frame.render_widget(hint_text, composer_area);
     } else if view.notifications_selected {
         let hint_block = Block::default()
             .title(" Mentions ")
