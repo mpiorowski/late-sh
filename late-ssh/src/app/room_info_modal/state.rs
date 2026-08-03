@@ -74,6 +74,9 @@ pub(crate) struct RoomInfoModalState {
     owner_label: String,
     topic: TextArea<'static>,
     rules: TextArea<'static>,
+    /// Screen rects of the two fields (Topic, Rules), recorded each frame so a
+    /// click can focus the field under the pointer.
+    field_rects: std::cell::Cell<[Option<ratatui::layout::Rect>; 2]>,
 }
 
 impl RoomInfoModalState {
@@ -87,6 +90,33 @@ impl RoomInfoModalState {
 
     pub(crate) fn focus(&self) -> Field {
         self.focus
+    }
+
+    pub(crate) fn set_focus(&mut self, field: Field) {
+        self.focus = field;
+    }
+
+    /// Record a field's screen rect during draw (for click-to-focus).
+    pub(crate) fn record_field_rect(&self, field: Field, rect: ratatui::layout::Rect) {
+        let mut rects = self.field_rects.get();
+        rects[field as usize] = Some(rect);
+        self.field_rects.set(rects);
+    }
+
+    /// The field whose rect contains `(x, y)`, if a click landed on one.
+    pub(crate) fn field_at(&self, x: u16, y: u16) -> Option<Field> {
+        let rects = self.field_rects.get();
+        for (i, rect) in rects.iter().enumerate() {
+            if let Some(r) = rect
+                && x >= r.x
+                && x < r.x + r.width
+                && y >= r.y
+                && y < r.y + r.height
+            {
+                return Some(if i == 0 { Field::Topic } else { Field::Rules });
+            }
+        }
+        None
     }
 
     pub(crate) fn room_label(&self) -> &str {

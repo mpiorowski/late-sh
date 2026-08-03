@@ -732,6 +732,133 @@ pub const ITEMS: &[Item] = &[
         1900,
         None,
     ),
+    // ---- Legs and Feet (the Outfitter, cont'd) ---------------------------
+    //
+    // These two slots used to have exactly one shop item apiece (the starting
+    // Common piece) and nothing past it, so there was no shop upgrade path for
+    // legs or boots at all. Filled out to match Head/Chest/Hands: Uncommon,
+    // Rare, and Epic rungs, each kept below the Frontier's tier-1 power for
+    // that slot so the Frontier still opens a real step up.
+    eq(
+        1126,
+        "Studded Greaves",
+        "Leather reinforced with a line of steel studs down each thigh.",
+        Slot::Legs,
+        Rarity::Uncommon,
+        0,
+        16,
+        3,
+        95,
+        None,
+    ),
+    eq(
+        1127,
+        "Chainmail Leggings",
+        "Riveted links, heavier than leather but they turn a blade.",
+        Slot::Legs,
+        Rarity::Uncommon,
+        0,
+        20,
+        4,
+        150,
+        Some(Class::Warrior),
+    ),
+    eq(
+        1128,
+        "Ranger's Legwraps",
+        "Close-fitted wraps that don't snag on bramble or bowstring.",
+        Slot::Legs,
+        Rarity::Rare,
+        3,
+        22,
+        3,
+        310,
+        Some(Class::Ranger),
+    ),
+    eq(
+        1129,
+        "Plate Greaves",
+        "Full steel plate from hip to knee; slow, but it holds.",
+        Slot::Legs,
+        Rarity::Rare,
+        0,
+        28,
+        5,
+        360,
+        None,
+    ),
+    eq(
+        1130,
+        "Saintly Legguards",
+        "Blessed steel etched with a line of scripture down each shin.",
+        Slot::Legs,
+        Rarity::Epic,
+        1,
+        34,
+        6,
+        850,
+        Some(Class::Cleric),
+    ),
+    eq(
+        1131,
+        "Reinforced Boots",
+        "Soled in good leather with a steel cap at the toe.",
+        Slot::Feet,
+        Rarity::Uncommon,
+        0,
+        10,
+        2,
+        85,
+        None,
+    ),
+    eq(
+        1132,
+        "Swiftstep Boots",
+        "Light as slippers, quiet as a held breath.",
+        Slot::Feet,
+        Rarity::Uncommon,
+        2,
+        8,
+        1,
+        110,
+        Some(Class::Rogue),
+    ),
+    eq(
+        1133,
+        "Ironclad Sabatons",
+        "Articulated steel plates that still let you run.",
+        Slot::Feet,
+        Rarity::Rare,
+        0,
+        16,
+        3,
+        270,
+        Some(Class::Warrior),
+    ),
+    eq(
+        1134,
+        "Boots of the Vigil",
+        "Never seem to tire, no matter how far the road runs.",
+        Slot::Feet,
+        Rarity::Epic,
+        0,
+        22,
+        3,
+        700,
+        None,
+    ),
+    eq(
+        1135,
+        "Battleworn Vambraces",
+        "Dented, re-strapped, and still going; the mark of a hand that's used them.",
+        Slot::Hands,
+        Rarity::Epic,
+        5,
+        18,
+        3,
+        750,
+        None,
+    ),
     // ---- Trinkets and rings (the Curio Cart) ----------------------------
     eq(
         1200,
@@ -920,6 +1047,19 @@ pub const ITEMS: &[Item] = &[
         220,
         1500,
     ),
+    // The top-end repeatable gold sink. Legendary EQUIPMENT was pulled from
+    // every shop (it outclassed Frontier drops); a consumable is spent, not
+    // worn, so it can carry a deep price without bending the power curve.
+    consumable(
+        1306,
+        "Wyrmfire Cordial",
+        "Liquid dragonflame in cut crystal - the Apothecary's proudest vice, \
+         priced for purses that survived the deep roads.",
+        Rarity::Legendary,
+        650,
+        350,
+        2400,
+    ),
     // ---- Valuables (sold to any merchant) -------------------------------
     Item {
         id: 1400,
@@ -1005,7 +1145,7 @@ pub const ITEMS: &[Item] = &[
 /// Base id for the raw-material catalog.
 pub const MATERIAL_BASE: u32 = 4000;
 /// Tiers per gathering skill (levels of material, low to high).
-pub const MATERIAL_TIERS: u32 = 5;
+pub const MATERIAL_TIERS: u32 = 6;
 
 /// The item id of the raw material a skill drops at a given tier (0-based). The
 /// `skill_index` is `skills::GatherSkill::index`.
@@ -1014,9 +1154,16 @@ pub const fn material_id(skill_index: u32, tier: u32) -> u32 {
 }
 
 /// Names per skill (rows follow `GatherSkill::index`) and tier (columns low->high).
-const MATERIAL_NAMES: [[&str; 5]; 5] = [
+const MATERIAL_NAMES: [[&str; 6]; 5] = [
     // Woodcutting
-    ["Birch Log", "Oak Log", "Ash Log", "Yew Log", "Ironbark Log"],
+    [
+        "Birch Log",
+        "Oak Log",
+        "Ash Log",
+        "Yew Log",
+        "Ironbark Log",
+        "Worldtree Log",
+    ],
     // Mining
     [
         "Copper Ore",
@@ -1024,6 +1171,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Iron Ore",
         "Silver Ore",
         "Mithril Ore",
+        "Starmetal Ore",
     ],
     // Fishing
     [
@@ -1032,6 +1180,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Grey Pike",
         "Deep Sturgeon",
         "Moonscale Fish",
+        "Abyss Eel",
     ],
     // Foraging
     [
@@ -1040,6 +1189,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Bloodthistle",
         "Frostbloom",
         "Sunmoss",
+        "Dreamlotus",
     ],
     // Skinning
     [
@@ -1048,6 +1198,7 @@ const MATERIAL_NAMES: [[&str; 5]; 5] = [
         "Boar Hide",
         "Bear Pelt",
         "Direhide",
+        "Wyrmhide",
     ],
 ];
 
@@ -1061,7 +1212,7 @@ const MATERIAL_FLAVOR: [&str; 5] = [
 ];
 
 fn build_materials() -> Vec<Item> {
-    let mut out = Vec::with_capacity(25);
+    let mut out = Vec::with_capacity(30);
     for (s, names) in MATERIAL_NAMES.iter().enumerate() {
         for (t, name) in names.iter().enumerate() {
             let tier = t as i64;
@@ -1071,7 +1222,8 @@ fn build_materials() -> Vec<Item> {
             let rarity = match t {
                 0 | 1 => Rarity::Common,
                 2 | 3 => Rarity::Uncommon,
-                _ => Rarity::Rare,
+                4 => Rarity::Rare,
+                _ => Rarity::Epic,
             };
             out.push(Item {
                 id: material_id(s as u32, t as u32),
@@ -1146,125 +1298,137 @@ pub const fn masterwork_id(n: u32) -> u32 {
 /// The tier of a poison item id, if `id` is one (used to route it to the
 /// weapon-coating action instead of the normal consumable path).
 pub fn poison_tier(id: u32) -> Option<u32> {
-    (0..5).find(|&t| poison_id(t) == id)
+    (0..6).find(|&t| poison_id(t) == id)
 }
 
 /// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
 /// regen buff on top of its heal).
 pub fn food_tier(id: u32) -> Option<u32> {
-    (0..5).find(|&t| food_id(t) == id)
+    (0..6).find(|&t| food_id(t) == id)
 }
 
-const INGOT_NAMES: [&str; 5] = [
+const INGOT_NAMES: [&str; 6] = [
     "Copper Ingot",
     "Tin Ingot",
     "Iron Ingot",
     "Silver Ingot",
     "Mithril Ingot",
+    "Starmetal Ingot",
 ];
-const PLANK_NAMES: [&str; 5] = [
+const PLANK_NAMES: [&str; 6] = [
     "Birch Plank",
     "Oak Plank",
     "Ash Plank",
     "Yew Plank",
     "Ironbark Plank",
+    "Worldtree Plank",
 ];
-const LEATHER_NAMES: [&str; 5] = [
+const LEATHER_NAMES: [&str; 6] = [
     "Rough Leather",
     "Thick Leather",
     "Boar Leather",
     "Bear Leather",
     "Dire Leather",
+    "Wyrmleather",
 ];
-const SMITH_WEAPON_NAMES: [&str; 5] = [
+const SMITH_WEAPON_NAMES: [&str; 6] = [
     "Copper Sword",
     "Tin Sabre",
     "Iron Sword",
     "Silver Sword",
     "Mithril Sword",
+    "Starmetal Greatblade",
 ];
-const SMITH_ARMOR_NAMES: [&str; 5] = [
+const SMITH_ARMOR_NAMES: [&str; 6] = [
     "Copper Cuirass",
     "Tin Cuirass",
     "Iron Cuirass",
     "Silver Cuirass",
     "Mithril Cuirass",
+    "Starmetal Aegis",
 ];
-const WOOD_WEAPON_NAMES: [&str; 5] = [
+const WOOD_WEAPON_NAMES: [&str; 6] = [
     "Birch Shortbow",
     "Oak Longbow",
     "Ash Recurve",
     "Yew Warbow",
     "Ironbark Greatbow",
+    "Worldtree Skybow",
 ];
-const LEATHER_ARMOR_NAMES: [&str; 5] = [
+const LEATHER_ARMOR_NAMES: [&str; 6] = [
     "Rough Jerkin",
     "Thick Jerkin",
     "Boarhide Vest",
     "Bearhide Coat",
     "Direhide Cuirass",
+    "Wyrmhide Mantle",
 ];
-const POTION_NAMES: [&str; 5] = [
+const POTION_NAMES: [&str; 6] = [
     "Minor Healing Draught",
     "Lesser Healing Draught",
     "Greater Healing Draught",
     "Superior Healing Draught",
     "Master Healing Draught",
+    "Phoenix Elixir",
 ];
-const POISON_NAMES: [&str; 5] = [
+const POISON_NAMES: [&str; 6] = [
     "Weak Toxin",
     "Numbing Poison",
     "Virulent Bile",
     "Deadly Venom",
     "Wyrm Venom",
+    "Voidvenom",
 ];
-const FOOD_NAMES: [&str; 5] = [
+const FOOD_NAMES: [&str; 6] = [
     "Grilled Bream",
     "Pan-Seared Trout",
     "Smoked Pike",
     "Sturgeon Steak",
     "Moonscale Feast",
+    "Feast of the Wilds",
 ];
 
-const INTER_RARITY: [Rarity; 5] = [
+const INTER_RARITY: [Rarity; 6] = [
     Rarity::Common,
-    Rarity::Common,
-    Rarity::Uncommon,
-    Rarity::Uncommon,
-    Rarity::Rare,
-];
-const FINAL_RARITY: [Rarity; 5] = [
     Rarity::Common,
     Rarity::Uncommon,
     Rarity::Uncommon,
     Rarity::Rare,
     Rarity::Epic,
 ];
+const FINAL_RARITY: [Rarity; 6] = [
+    Rarity::Common,
+    Rarity::Uncommon,
+    Rarity::Uncommon,
+    Rarity::Rare,
+    Rarity::Epic,
+    Rarity::Legendary,
+];
 
 fn build_crafted() -> Vec<Item> {
     let mut out = Vec::new();
     // Per-tier stat/price tables (index 0..5, low to high).
-    const INGOT_PRICE: [i64; 5] = [24, 54, 96, 150, 220];
-    const PLANK_PRICE: [i64; 5] = [20, 46, 84, 130, 190];
-    const LEATHER_PRICE: [i64; 5] = [22, 50, 90, 140, 205];
-    const WEAPON_ATK: [i32; 5] = [6, 11, 16, 21, 26];
-    const WEAPON_PRICE: [i64; 5] = [60, 140, 260, 440, 700];
-    const BOW_ATK: [i32; 5] = [5, 10, 15, 20, 25];
-    const BOW_PRICE: [i64; 5] = [55, 130, 250, 430, 690];
-    const PLATE_HP: [i32; 5] = [8, 16, 26, 40, 60];
-    const PLATE_ARM: [i32; 5] = [1, 2, 3, 4, 6];
-    const PLATE_PRICE: [i64; 5] = [70, 150, 280, 460, 720];
-    const JERKIN_HP: [i32; 5] = [6, 12, 20, 30, 44];
-    const JERKIN_ARM: [i32; 5] = [1, 1, 2, 3, 4];
-    const JERKIN_PRICE: [i64; 5] = [50, 120, 230, 400, 640];
-    const POTION_HEAL: [i32; 5] = [25, 45, 75, 120, 180];
-    const POTION_PRICE: [i64; 5] = [20, 45, 90, 160, 260];
-    const POISON_PRICE: [i64; 5] = [15, 40, 80, 140, 220];
-    const FOOD_HEAL: [i32; 5] = [20, 35, 55, 85, 130];
-    const FOOD_REST: [i32; 5] = [10, 20, 35, 55, 85];
-    const FOOD_PRICE: [i64; 5] = [15, 35, 70, 120, 190];
+    const INGOT_PRICE: [i64; 6] = [24, 54, 96, 150, 220, 330];
+    const PLANK_PRICE: [i64; 6] = [20, 46, 84, 130, 190, 290];
+    const LEATHER_PRICE: [i64; 6] = [22, 50, 90, 140, 205, 310];
+    const WEAPON_ATK: [i32; 6] = [6, 11, 16, 21, 26, 34];
+    const WEAPON_PRICE: [i64; 6] = [60, 140, 260, 440, 700, 1100];
+    const BOW_ATK: [i32; 6] = [5, 10, 15, 20, 25, 33];
+    const BOW_PRICE: [i64; 6] = [55, 130, 250, 430, 690, 1080];
+    const PLATE_HP: [i32; 6] = [8, 16, 26, 40, 60, 88];
+    const PLATE_ARM: [i32; 6] = [1, 2, 3, 4, 6, 8];
+    const PLATE_PRICE: [i64; 6] = [70, 150, 280, 460, 720, 1150];
+    const JERKIN_HP: [i32; 6] = [6, 12, 20, 30, 44, 66];
+    const JERKIN_ARM: [i32; 6] = [1, 1, 2, 3, 4, 6];
+    const JERKIN_PRICE: [i64; 6] = [50, 120, 230, 400, 640, 1020];
+    const POTION_HEAL: [i32; 6] = [25, 45, 75, 120, 180, 270];
+    const POTION_PRICE: [i64; 6] = [20, 45, 90, 160, 260, 400];
+    const POISON_PRICE: [i64; 6] = [15, 40, 80, 140, 220, 350];
+    const FOOD_HEAL: [i32; 6] = [20, 35, 55, 85, 130, 195];
+    const FOOD_REST: [i32; 6] = [10, 20, 35, 55, 85, 130];
+    const FOOD_PRICE: [i64; 6] = [15, 35, 70, 120, 190, 300];
 
-    for t in 0..5usize {
+    for t in 0..6usize {
         let tu = t as u32;
         // Intermediates (sellable valuables and recipe inputs).
         out.push(valuable(
@@ -1569,6 +1733,7 @@ pub fn item(id: u32) -> Option<&'static Item> {
         .or_else(|| frontier_items().iter().find(|i| i.id == id))
         .or_else(|| reaches_items().iter().find(|i| i.id == id))
         .or_else(|| kaelmyr_items().iter().find(|i| i.id == id))
+        .or_else(|| regional_finds().iter().find(|i| i.id == id))
         .or_else(|| materials().iter().find(|i| i.id == id))
         .or_else(|| crafted().iter().find(|i| i.id == id))
         .or_else(|| fish().iter().find(|i| i.id == id))
@@ -1810,6 +1975,292 @@ fn build_kaelmyr_items() -> Vec<Item> {
     })
 }
 
+// ---- Regional finds: Sunderlakes, Broceliande, Archipelago (Wildbound) ---
+//
+// Three continents had no gear identity of their own: the Sunderlakes traded
+// purely in fish, Broceliande just borrowed a slice of the Frontier's own
+// catalog, and every Archipelago boss dropped from the Reaches table again -
+// so exploring them for combat gear had nothing to offer past what the
+// Frontier already gave you. Every zone/island's notable now also has a
+// genuine shot at two uniquely named finds of its own: modest for the two
+// gentler continents (never outclassing the Frontier's own top tier), and a
+// real step past Kaelmyr for the Archipelago, which rides Kaelmyr's own
+// endgame curve. 14 + 20 + 20 zones x 2 pieces = 108 new pieces of loot.
+
+pub const SUNDERLAKES_FIND_BASE: u32 = 3600;
+pub const BROCELIANDE_FIND_BASE: u32 = 3700;
+pub const ARCHIPELAGO_FIND_BASE: u32 = 3800;
+
+const SUNDERLAKES_ZONE_WORDS: [&str; 14] = [
+    "Reedwrought",
+    "Mireglass",
+    "Duskwater",
+    "Loamforged",
+    "Sedgebound",
+    "Glimmerdeep",
+    "Fenlight",
+    "Coldspring",
+    "Marshwarden",
+    "Driftreed",
+    "Stillmere",
+    "Brackenmoor",
+    "Hollowfen",
+    "Willowdeep",
+];
+
+const BROCELIANDE_ZONE_WORDS: [&str; 20] = [
+    "Wildwood",
+    "Hartbound",
+    "Fawnlight",
+    "Thicketborn",
+    "Mossbound",
+    "Stagheart",
+    "Fernshade",
+    "Duskgrove",
+    "Hollowvine",
+    "Timberwrought",
+    "Nightgrove",
+    "Ashenbriar",
+    "Duskfawn",
+    "Elderoak",
+    "Wintermoss",
+    "Emberleaf",
+    "Foxglove",
+    "Bramblewrought",
+    "Greencrown",
+    "Verdantfall",
+];
+
+const ARCHIPELAGO_ZONE_WORDS: [&str; 20] = [
+    "Reefbound",
+    "Tideworn",
+    "Saltcursed",
+    "Wreckbound",
+    "Stormwrack",
+    "Gullborne",
+    "Driftmarked",
+    "Maelbound",
+    "Shoalwrought",
+    "Brinecursed",
+    "Tempestborn",
+    "Wraithtide",
+    "Duskreef",
+    "Hollowtide",
+    "Sunkenmark",
+    "Farshore",
+    "Deepcaller",
+    "Worldsedge",
+    "Abyssalis",
+    "Reefwarden",
+];
+
+/// (attack, hp, armor) for a generated-realm piece at 1-based tier `t`. ONE
+/// table, shared by every realm gear ladder and by the Archipelago finds that
+/// continue the same curve past Kaelmyr - a hand-mirrored copy of it once
+/// drifted when the ring line was retuned.
+fn realm_slot_stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+    match slot {
+        Slot::Weapon => (30 + t * 3, 0, 0),
+        Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),
+        Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
+        Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
+        Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
+        Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
+        // Raised twice: the Curio Cart's Vaultkeeper's Band (Epic, power 59)
+        // used to beat a Frontier tier-1 ring outright, and the first raise
+        // cleared it by a single point while dropping armor 3 -> 1, which
+        // still read as a sidegrade in the field. Tier 1 now clears the shop
+        // ceiling with the same real headroom every other slot gets.
+        Slot::Ring => (8 + t, 30 + t * 4, 2 + t / 2),
+        // Trinket used to land just under the Curio Cart's shop-bought Epic
+        // (Wyrmscale Talisman, power 56): a Frontier tier-1 charm read as a
+        // downgrade. Raised so tier 1 clears every shop trinket with room to
+        // spare.
+        Slot::Trinket => (6 + t, 34 + t * 5, 3 + t / 2),
+    }
+}
+
+/// Two items per zone/island: even zones get a weapon + ring, odd zones get a
+/// chest + trinket, so the roster reads as a real gear mix rather than one
+/// slot repeated. `stats` computes (attack, hp, armor) for a slot given the
+/// 1-based tier `t`.
+#[allow(clippy::too_many_arguments)]
+fn build_regional_pair(
+    base: u32,
+    zone: usize,
+    word: &'static str,
+    t: i32,
+    rarity: Rarity,
+    price: i64,
+    desc: &'static str,
+    stats: fn(Slot, i32) -> (i32, i32, i32),
+) -> [Item; 2] {
+    let (slot_a, suffix_a, slot_b, suffix_b) = if zone.is_multiple_of(2) {
+        (Slot::Weapon, "Blade", Slot::Ring, "Band")
+    } else {
+        (Slot::Chest, "Cuirass", Slot::Trinket, "Charm")
+    };
+    let name_a: &'static str = Box::leak(format!("{word} {suffix_a}").into_boxed_str());
+    let name_b: &'static str = Box::leak(format!("{word} {suffix_b}").into_boxed_str());
+    let (a1, h1, r1) = stats(slot_a, t);
+    let (a2, h2, r2) = stats(slot_b, t);
+    [
+        eq(
+            base + zone as u32 * 2,
+            name_a,
+            desc,
+            slot_a,
+            rarity,
+            a1,
+            h1,
+            r1,
+            price,
+            None,
+        ),
+        eq(
+            base + zone as u32 * 2 + 1,
+            name_b,
+            desc,
+            slot_b,
+            rarity,
+            a2,
+            h2,
+            r2,
+            price,
+            None,
+        ),
+    ]
+}
+
+fn build_sunderlakes_finds() -> Vec<Item> {
+    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+        match slot {
+            Slot::Weapon => (6 + t, 0, 0),
+            Slot::Chest => (0, 16 + t * 3, 2 + t / 2),
+            Slot::Ring => (1 + t / 4, 6 + t, t / 5),
+            Slot::Trinket => (1 + t / 3, 8 + (t * 3) / 2, t / 5),
+            _ => (0, 0, 0),
+        }
+    }
+    (0..SUNDERLAKES_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = zone as i32 + 1;
+            let rarity = if zone < 7 {
+                Rarity::Uncommon
+            } else {
+                Rarity::Rare
+            };
+            build_regional_pair(
+                SUNDERLAKES_FIND_BASE,
+                zone,
+                SUNDERLAKES_ZONE_WORDS[zone],
+                t,
+                rarity,
+                (150 + t * 40) as i64,
+                "A find from the Sunderlakes, water-worn and quietly well made.",
+                stats,
+            )
+        })
+        .collect()
+}
+
+fn build_broceliande_finds() -> Vec<Item> {
+    fn stats(slot: Slot, t: i32) -> (i32, i32, i32) {
+        match slot {
+            Slot::Weapon => (10 + t, 0, 0),
+            Slot::Chest => (0, 24 + t * 4, 3 + t / 2),
+            Slot::Ring => (2 + t / 2, 10 + t * 2, t / 3),
+            Slot::Trinket => (2 + t / 2, 14 + t * 2, 1 + t / 3),
+            _ => (0, 0, 0),
+        }
+    }
+    (0..BROCELIANDE_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = zone as i32 + 1;
+            // A named find is never just Common, even in the shallowest zone.
+            let rarity = match zone / 5 {
+                0 => Rarity::Uncommon,
+                1 => Rarity::Uncommon,
+                2 => Rarity::Rare,
+                _ => Rarity::Epic,
+            };
+            build_regional_pair(
+                BROCELIANDE_FIND_BASE,
+                zone,
+                BROCELIANDE_ZONE_WORDS[zone],
+                t,
+                rarity,
+                (220 + t * 60) as i64,
+                "A find from the deep Greenwood, grown as much as made.",
+                stats,
+            )
+        })
+        .collect()
+}
+
+fn build_archipelago_finds() -> Vec<Item> {
+    // Continues the exact curve `build_generated_items` leaves off at the end
+    // of Kaelmyr (power_offset 40, tier 20 -> t=60), so the Archipelago's
+    // finds pick up with zero discontinuity and keep climbing past it - the
+    // deadliest ground in the world outclasses even the Ashen Reach. Shares
+    // `realm_slot_stats` with the realm ladders: a hand-mirrored copy of that
+    // table once drifted when the ring line was retuned.
+    (0..ARCHIPELAGO_ZONE_WORDS.len())
+        .flat_map(|zone| {
+            let t = 60 + zone as i32 + 1;
+            build_regional_pair(
+                ARCHIPELAGO_FIND_BASE,
+                zone,
+                ARCHIPELAGO_ZONE_WORDS[zone],
+                t,
+                Rarity::Legendary,
+                (220 + t * 85) as i64,
+                "A find from the Shattered Archipelago, salt-cursed and past all reason strong.",
+                realm_slot_stats,
+            )
+        })
+        .collect()
+}
+
+/// All 108 regional finds together, built once and leaked to 'static so they
+/// slot into the same `item(id)` lookup as everything else.
+pub fn regional_finds() -> &'static [Item] {
+    static CATALOG: OnceLock<Vec<Item>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let mut out = build_sunderlakes_finds();
+        out.extend(build_broceliande_finds());
+        out.extend(build_archipelago_finds());
+        out
+    })
+}
+
+/// The two regional-find ids for a Sunderlakes zone's notable.
+pub fn sunderlakes_find_ids(zone: usize) -> [u32; 2] {
+    let z = zone.min(SUNDERLAKES_ZONE_WORDS.len() - 1) as u32;
+    [
+        SUNDERLAKES_FIND_BASE + z * 2,
+        SUNDERLAKES_FIND_BASE + z * 2 + 1,
+    ]
+}
+
+/// The two regional-find ids for a Broceliande zone's notable.
+pub fn broceliande_find_ids(zone: usize) -> [u32; 2] {
+    let z = zone.min(BROCELIANDE_ZONE_WORDS.len() - 1) as u32;
+    [
+        BROCELIANDE_FIND_BASE + z * 2,
+        BROCELIANDE_FIND_BASE + z * 2 + 1,
+    ]
+}
+
+/// The two regional-find ids for an Archipelago island's boss.
+pub fn archipelago_find_ids(isle: usize) -> [u32; 2] {
+    let z = isle.min(ARCHIPELAGO_ZONE_WORDS.len() - 1) as u32;
+    [
+        ARCHIPELAGO_FIND_BASE + z * 2,
+        ARCHIPELAGO_FIND_BASE + z * 2 + 1,
+    ]
+}
+
 struct GeneratedRealm {
     base_id: u32,
     /// Added to the 1-based tier before computing stats, so a later realm's
@@ -1845,16 +2296,7 @@ fn build_generated_items(realm: GeneratedRealm) -> Vec<Item> {
             let name: &'static str = Box::leak(format!("{mat} {type_name}").into_boxed_str());
             let desc: &'static str =
                 Box::leak((realm.gear_desc)(&type_name.to_ascii_lowercase()).into_boxed_str());
-            let (attack, max_hp, armor) = match slot {
-                Slot::Weapon => (30 + t * 3, 0, 0),
-                Slot::Head => (2 + t / 2, 32 + t * 5, 5 + t / 2),
-                Slot::Chest => (1 + t / 3, 58 + t * 8, 8 + t),
-                Slot::Legs => (t / 2, 38 + t * 6, 6 + t),
-                Slot::Hands => (6 + t, 20 + t * 3, 3 + t / 2),
-                Slot::Feet => (t / 2, 24 + t * 3, 3 + t / 2),
-                Slot::Ring => (6 + t, 20 + t * 3, t / 2),
-                Slot::Trinket => (4 + t / 2, 28 + t * 4, 2 + t / 2),
-            };
+            let (attack, max_hp, armor) = realm_slot_stats(*slot, t);
             out.push(Item {
                 id,
                 name,
@@ -1912,15 +2354,21 @@ pub struct Shop {
 }
 
 /// Every storefront in Embergate, keyed to the room its NPC stands in.
+// Gold shops sell up to Epic; Legendary gear is earned, not bought - the King's
+// crown outclasses whatever coin can buy, not the other way round. That used
+// to be backwards: the Mythril Arming Sword, Masterwork Greathelm/Gauntlets,
+// Runic Warplate, and Dragonbone Reliquary were all plain gold purchases that
+// outclassed early Frontier drops, so a Frontier zone that was meant to feel
+// dangerous instead handed out a downgrade. Those five items still exist (ids
+// unchanged, so nothing already equipped breaks) - they've simply moved out of
+// the shops and into the world as real finds; see the Wildbound-era loot pass.
 pub const SHOPS: &[Shop] = &[
     Shop {
         room: 3, // Market Row -> the smithy
         npc_name: "Bruna Ironhand",
         shop_name: "The Ember Forge",
         greeting: "Bruna looks up from the anvil, soot on her brow. \"Steel for steel's work. What'll it be?\"",
-        stock: &[
-            1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010,
-        ],
+        stock: &[1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009],
     },
     Shop {
         room: 201,
@@ -1929,7 +2377,7 @@ pub const SHOPS: &[Shop] = &[
         greeting: "A wiry man peers over a counter heaped with hide and mail. \"Armor keeps a body breathing. Browse, browse.\"",
         stock: &[
             1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108, 1109, 1110, 1111, 1112, 1113,
-            1120, 1121, 1122,
+            1126, 1127, 1128, 1129, 1130, 1131, 1132, 1133, 1134, 1135,
         ],
     },
     Shop {
@@ -1937,14 +2385,14 @@ pub const SHOPS: &[Shop] = &[
         npc_name: "Old Mirela",
         shop_name: "The Apothecary",
         greeting: "Shelves of bottles glint behind a stooped woman who smells of crushed herbs. \"Hurt, are you? I have just the thing.\"",
-        stock: &[1300, 1301, 1302, 1303, 1304, 1305],
+        stock: &[1300, 1301, 1302, 1303, 1304, 1305, 1306],
     },
     Shop {
         room: 203,
         npc_name: "Pell the Magpie",
         shop_name: "The Curio Cart",
         greeting: "A grinning fellow guards a cart of glittering oddments. \"Rings, charms, lucky bits and bobs! All genuine, mostly.\"",
-        stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207],
+        stock: &[1200, 1201, 1202, 1203, 1204, 1205, 1206],
     },
 ];
 

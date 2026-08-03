@@ -57,6 +57,10 @@ impl DoorGame for LateaniaDoorGame {
         handle_arrow(app, key)
     }
 
+    fn handle_mouse(&self, app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+        handle_mouse(app, mouse)
+    }
+
     fn leave_active(&self, app: &mut App) -> bool {
         leave_active_game(app)
     }
@@ -106,6 +110,15 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
+    // Only meaningful once you're in the world with a character; the landing has
+    // no clickable chips.
+    let Some(state) = app.lateania_state.as_mut() else {
+        return false;
+    };
+    super::input::handle_mouse(state, mouse)
 }
 
 fn handle_arrow(app: &mut App, key: u8) -> bool {

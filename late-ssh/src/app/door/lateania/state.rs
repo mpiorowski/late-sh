@@ -6,9 +6,10 @@
 // list panels. All real actions delegate to the service's *_task methods; this
 // struct never blocks and never mutates world truth.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
+use ratatui::layout::Rect;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -60,6 +61,34 @@ pub enum Panel {
     Map,
 }
 
+/// A combat action a player can trigger by clicking its on-screen chip, mapping
+/// one-to-one to a key: [`ClickAction::Attack`] is space/x, [`ClickAction::Quaff`]
+/// is Q, [`ClickAction::Flee`] is z, and [`ClickAction::Ability`] is the digit of
+/// that action-bar slot. The mouse handler resolves a click to one of these and
+/// then calls the very same method the key would.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickAction {
+    Attack,
+    Quaff,
+    Flee,
+    Ability(u8),
+    /// Lock onto the foe with this spawn id (a click on its roster row).
+    AttackMob(u32),
+}
+
+/// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
+/// geometry can be unit-tested without standing up a whole `State`.
+fn hit_at(hits: &[(Rect, ClickAction)], x: u16, y: u16) -> Option<ClickAction> {
+    hits.iter()
+        .find(|(r, _)| {
+            x >= r.x
+                && x < r.x.saturating_add(r.width)
+                && y >= r.y
+                && y < r.y.saturating_add(r.height)
+        })
+        .map(|(_, action)| *action)
+}
+
 pub struct State {
     user_id: Uuid,
     session_id: Uuid,
@@ -73,6 +102,10 @@ pub struct State {
     /// (which only holds `&State`) can keep the highlighted row inside a
     /// scroll-off margin. Reset whenever the panel changes.
     list_scroll: Cell<usize>,
+    /// Absolute screen rects of the combat action-bar chips, recorded fresh each
+    /// draw so a mouse click can resolve to the same action as its key. Interior-
+    /// mutable because the render pass only holds `&State`.
+    combat_hits: RefCell<Vec<(Rect, ClickAction)>>,
     /// Category headers the player has folded in the collapsible list panels
     /// (crafting / inventory / shop), by prefixed key (e.g. `"inv:Weapons"`).
     /// Session-only; folds a long list down to its category headers.
@@ -112,6 +145,7 @@ impl State {
             panel: Panel::Room,
             cursor: 0,
             list_scroll: Cell::new(0),
+            combat_hits: RefCell::new(Vec::new()),
             collapsed: std::collections::HashSet::new(),
             joined: true,
             join_pending: true,
@@ -151,12 +185,6 @@ impl State {
             changed = true;
         }
         changed
-    }
-
-    pub fn touch_activity(&mut self) {
-        if self.ensure_player_present() {
-            self.svc.touch_activity_task(self.user_id);
-        }
     }
 
     pub fn ensure_player_present(&mut self) -> bool {
@@ -222,6 +250,15 @@ impl State {
     /// True when the graphical overhead world map is the active panel.
     pub fn map_open(&self) -> bool {
         self.panel == Panel::Map
+    }
+
+    /// Flip between the live-map RPG view and the plain text MUD view. The
+    /// preference lives on the character (persisted), so this routes through the
+    /// service; the next snapshot carries the new value into the view.
+    pub fn toggle_rpg_mode(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.toggle_rpg_mode_task(self.user_id);
+        }
     }
 
     /// Where the world map is looking, relative to the player.
@@ -435,8 +472,11 @@ impl State {
     // ---- Local chat (say) ----------------------------------------------
     //
     // Composing a line captures keystrokes until Enter (send) or Esc (cancel).
-    // Sending routes through the service's world-local `say`, so Lateania chat
-    // stays inside Lateania and never reaches late.sh's global feed.
+    // Sending routes through the service's `say`, which is scope-aware: a
+    // leading `/z`/`/zone` reaches everyone in the same named zone, `/w`/
+    // `/world` reaches every adventurer in Lateania, and no marker means the
+    // room, same as it always has. Whichever scope, this is still world-local
+    // chat - it never reaches late.sh's own global feed.
 
     /// True while the player is typing a chat line (input capture is active).
     pub fn chat_active(&self) -> bool {
@@ -490,6 +530,20 @@ impl State {
     pub fn recall(&mut self) {
         if self.ensure_player_present() {
             self.svc.recall_task(self.user_id);
+        }
+    }
+
+    /// Fix a personal waypoint at the current room.
+    pub fn set_waypoint(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.set_waypoint_task(self.user_id);
+        }
+    }
+
+    /// Warp to the marked personal waypoint, from anywhere.
+    pub fn warp_to_waypoint(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.warp_to_waypoint_task(self.user_id);
         }
     }
 
@@ -551,6 +605,61 @@ impl State {
     pub fn flee(&mut self) {
         if self.ensure_player_present() {
             self.svc.flee_task(self.user_id);
+        }
+    }
+
+    /// Mount or dismount the companion (Wildbound rideable beasts).
+    pub fn toggle_mount(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.toggle_mount_task(self.user_id);
+        }
+    }
+
+    /// Quaff the best healing potion without leaving the combat view, so you can
+    /// keep an eye on both health bars instead of opening the inventory panel.
+    pub fn quaff(&mut self) {
+        if self.ensure_player_present() {
+            self.svc.quaff_task(self.user_id);
+        }
+    }
+
+    /// Drop last frame's action-bar hit-map. Called at the top of every draw so a
+    /// bar that isn't shown this frame (map open, etc.) leaves nothing clickable.
+    pub fn clear_combat_hits(&self) {
+        self.combat_hits.borrow_mut().clear();
+    }
+
+    /// Record the absolute screen rect of one action-bar chip during draw.
+    pub fn record_combat_hit(&self, rect: Rect, action: ClickAction) {
+        self.combat_hits.borrow_mut().push((rect, action));
+    }
+
+    /// The action whose chip covers cell `(x, y)`, if a click landed on one.
+    pub fn combat_hit_at(&self, x: u16, y: u16) -> Option<ClickAction> {
+        hit_at(&self.combat_hits.borrow(), x, y)
+    }
+
+    /// Perform a click-resolved combat action (routes to the same method its key
+    /// does). Returns whether a chip was actually hit.
+    pub fn click_combat(&mut self, x: u16, y: u16) -> bool {
+        let Some(action) = self.combat_hit_at(x, y) else {
+            return false;
+        };
+        match action {
+            ClickAction::Attack => self.attack(),
+            ClickAction::Quaff => self.quaff(),
+            ClickAction::Flee => self.flee(),
+            ClickAction::Ability(slot) => self.use_ability(slot),
+            ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),
+        }
+        true
+    }
+
+    /// Lock onto a specific foe (a click on its roster row) and start trading
+    /// blows; the combat tick carries it from there, same as a plain attack.
+    pub fn attack_mob(&mut self, mob_id: u32) {
+        if self.ensure_player_present() {
+            self.svc.engage_mob_task(self.user_id, mob_id);
         }
     }
 

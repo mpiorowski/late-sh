@@ -454,6 +454,28 @@ impl ProfileService {
         );
     }
 
+    /// Persist the chosen interaction mode (keyboard / mouse / hybrid).
+    pub fn set_interaction_mode(
+        &self,
+        user_id: Uuid,
+        mode: late_core::models::user::InteractionMode,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_interaction_mode(&client, user_id, mode).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist interaction mode");
+                }
+            }
+            .instrument(info_span!("profile.interaction_mode_task", user_id = %user_id)),
+        );
+    }
+
     pub fn delete_account(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(

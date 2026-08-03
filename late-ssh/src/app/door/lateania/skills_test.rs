@@ -54,6 +54,25 @@ fn curve_steepens_late() {
 }
 
 #[test]
+fn the_trade_curve_keeps_a_gentler_flat_slope_past_the_old_cap() {
+    // The 1..=50 half is the pre-Wildbound curve, exactly.
+    assert_eq!(
+        xp_for_skill_level(50),
+        712_030,
+        "the 1..=50 trade curve must not move"
+    );
+    // Past the knee every level costs a flat 50k; skill 100 costs ~3.2M total
+    // instead of the ~7.58M an untouched cubic run to a doubled cap produced.
+    assert_eq!(xp_for_skill_level(51) - xp_for_skill_level(50), 50_000);
+    assert_eq!(xp_for_skill_level(100), 712_030 + 50 * 50_000);
+    // No dip at the seam.
+    assert!(
+        xp_for_skill_level(51) - xp_for_skill_level(50)
+            >= xp_for_skill_level(50) - xp_for_skill_level(49)
+    );
+}
+
+#[test]
 fn level_for_xp_inverts_the_curve_and_caps() {
     for level in 1..=SKILL_MAX_LEVEL {
         assert_eq!(skill_level_for_xp(xp_for_skill_level(level)), level);

@@ -17,6 +17,7 @@ fn round_trips_through_json() {
         banked_gold: 1400,
         hp: 42,
         room: 18,
+        waypoint: Some(2400),
         visited: vec![1, 5, 18],
         inventory: vec![1300, 1301],
         equipped: vec![("weapon".to_string(), 1004)],
@@ -31,20 +32,25 @@ fn round_trips_through_json() {
         archetype: Some("assassin".to_string()),
         pet: Some("dire_wolf".to_string()),
         pet_loyalty: 250,
+        stray: Some(7),
+        stray_bond: Some((12, 3, 19_500)),
         owned_plot: Some(3),
         house_furniture: vec![(9040, "feather_bed".to_string())],
         appearance: vec![1, 2, 3, 4, 5],
         skills: vec![("woodcutting".to_string(), 900), ("mining".to_string(), 40)],
         craft_skills: vec![("smithing".to_string(), 300)],
         taming_xp: 1500,
+        rpg_mode: false,
     });
     let json = c.to_json();
     let back = SavedCharacter::from_json(&json).expect("parses");
+    assert!(!back.rpg_mode, "the RPG-mode preference round-trips");
     assert_eq!(back.class(), Some(Class::Rogue));
     assert_eq!(back.xp, 1234);
     assert_eq!(back.level, 7);
     assert_eq!(back.gold, 560);
     assert_eq!(back.banked_gold, 1400);
+    assert_eq!(back.waypoint, Some(2400));
     assert_eq!(back.visited, vec![1, 5, 18]);
     assert_eq!(back.inventory, vec![1300, 1301]);
     assert_eq!(back.equipped, vec![("weapon".to_string(), 1004)]);
@@ -56,6 +62,8 @@ fn round_trips_through_json() {
     assert_eq!(back.archetype.as_deref(), Some("assassin"));
     assert_eq!(back.pet.as_deref(), Some("dire_wolf"));
     assert_eq!(back.pet_loyalty, 250);
+    assert_eq!(back.stray, Some(7));
+    assert_eq!(back.stray_bond, Some((12, 3, 19_500)));
     assert_eq!(back.owned_plot, Some(3));
     assert_eq!(
         back.house_furniture,

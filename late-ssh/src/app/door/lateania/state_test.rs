@@ -29,3 +29,47 @@ fn enter_equips_loose_gear_and_uses_consumables() {
     assert_eq!(inv_action(&row(Some("weapon"), false)), InvAction::Equip);
     assert_eq!(inv_action(&row(None, false)), InvAction::Use);
 }
+
+// ---- combat action-bar click hit-testing ----------------------------------
+
+use super::{ClickAction, hit_at};
+use ratatui::layout::Rect;
+
+#[test]
+fn a_click_resolves_to_the_chip_under_it() {
+    let hits = vec![
+        (Rect::new(0, 20, 5, 1), ClickAction::Attack),
+        (Rect::new(6, 20, 7, 1), ClickAction::Quaff),
+        (Rect::new(14, 20, 6, 1), ClickAction::Flee),
+    ];
+    assert_eq!(
+        hit_at(&hits, 2, 20),
+        Some(ClickAction::Attack),
+        "inside the attack chip"
+    );
+    assert_eq!(
+        hit_at(&hits, 6, 20),
+        Some(ClickAction::Quaff),
+        "left edge is inclusive"
+    );
+    assert_eq!(
+        hit_at(&hits, 12, 20),
+        Some(ClickAction::Quaff),
+        "right edge is exclusive-1"
+    );
+    assert_eq!(
+        hit_at(&hits, 13, 20),
+        None,
+        "the gap between chips hits nothing"
+    );
+    assert_eq!(
+        hit_at(&hits, 2, 19),
+        None,
+        "a click on the row above misses"
+    );
+    assert_eq!(
+        hit_at(&hits, 40, 20),
+        None,
+        "a click past the last chip misses"
+    );
+}

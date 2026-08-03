@@ -26,6 +26,25 @@ fn xp_curve_slows_after_early_story_levels() {
 }
 
 #[test]
+fn the_xp_curve_keeps_a_gentler_flat_slope_past_the_old_cap() {
+    // The 1..=50 half is the pre-Wildbound curve, exactly: nobody's progress
+    // moves.
+    assert_eq!(
+        xp_for_level(50),
+        1_217_282,
+        "the 1..=50 curve must not move"
+    );
+    // Past the knee every level costs a flat 75k: 50->100 lands near 3x the
+    // whole 1->50 journey, instead of the ~7x an untouched cubic run to a
+    // doubled cap produced (which stranded the level-100 capstone abilities).
+    assert_eq!(xp_for_level(51) - xp_for_level(50), 75_000);
+    assert_eq!(xp_for_level(100), 1_217_282 + 50 * 75_000);
+    // No dip at the seam: the first summit level is at least as dear as the
+    // last climb level.
+    assert!(xp_for_level(51) - xp_for_level(50) >= xp_for_level(50) - xp_for_level(49));
+}
+
+#[test]
 fn level_and_xp_round_trip() {
     for l in 1..=Class::MAX_LEVEL {
         let xp = xp_for_level(l);

@@ -18,7 +18,7 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{Panel, State},
+    state::{ClickAction, Panel, State},
     svc::{LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
@@ -86,9 +86,133 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     } else {
         SIDE_NARROW
     };
+    // Wide terminals get the live field with the message log as a full-width
+    // strip along the bottom, the way terminal roguelikes have always laid it:
+    // log lines are sentences, and sentences want width, not a narrow rail.
+    // Below this width the field folds away and the classic log + side view
+    // stands in (the minimap still rides in the side panel there).
+    if state.panel() == Panel::Room && view.rpg_mode && area.width >= 96 {
+        let log_h = (area.height / 4).clamp(4, 7);
+        let rows = Layout::vertical([Constraint::Min(3), Constraint::Length(log_h)]).split(area);
+        let cols = Layout::horizontal([
+            Constraint::Min(24),        // live field (fills the middle)
+            Constraint::Length(side_w), // room summary + foes
+        ])
+        .split(rows[0]);
+        draw_field(frame, cols[0], &view);
+        draw_room_side(frame, cols[1], state, &view, usernames, false);
+        draw_log_strip(frame, rows[1], &view);
+        return;
+    }
+
     let cols = Layout::horizontal([Constraint::Min(26), Constraint::Length(side_w)]).split(area);
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
+}
+
+/// One chip on the combat action bar: its label, the action a click triggers,
+/// and whether it is ready (dim when a spell can't be paid for right now).
+struct Chip {
+    label: String,
+    action: ClickAction,
+    ready: bool,
+}
+
+/// Build the action-bar chips left to right within `max_width`: Attack first,
+/// then as many ability slots as fit, always keeping room for Quaff and Flee on
+/// the end (the two a wounded player reaches for most). Kept pure so the layout
+/// is unit-testable.
+fn combat_chips(view: &PlayerView, max_width: u16) -> Vec<Chip> {
+    let width_of = |s: &str| UnicodeWidthStr::width(s) as u16;
+    let attack = Chip {
+        label: "\u{2694} Atk".to_string(), // ⚔
+        action: ClickAction::Attack,
+        ready: true,
+    };
+    let quaff = Chip {
+        label: "\u{2665} Quaff".to_string(), // ♥
+        action: ClickAction::Quaff,
+        ready: true,
+    };
+    let flee = Chip {
+        label: "\u{2691} Flee".to_string(), // ⚑
+        action: ClickAction::Flee,
+        ready: true,
+    };
+    // Reserve the trailing Quaff/Flee (plus a space before each) so abilities in
+    // the middle never crowd them off the row.
+    let reserved = width_of(&quaff.label) + 1 + width_of(&flee.label) + 1;
+    let mut chips = vec![attack];
+    let mut used = width_of(&chips[0].label);
+    for a in &view.abilities {
+        // Slot 10 is cast with `0`, matching the keybind; show that digit.
+        let key = if a.slot == 10 { 0 } else { a.slot };
+        let label = format!("{key} {}", truncate_chars(&a.name, 7));
+        let w = width_of(&label) + 1; // leading space between chips
+        if used + w + reserved > max_width {
+            break;
+        }
+        used += w;
+        chips.push(Chip {
+            label,
+            action: ClickAction::Ability(a.slot),
+            ready: a.ready,
+        });
+    }
+    chips.push(quaff);
+    chips.push(flee);
+    chips
+}
+
+/// The clickable combat action bar: a single row of chips whose absolute rects
+/// are recorded so a click resolves to the same action as its key.
+fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let chips = combat_chips(view, area.width);
+    let mut spans: Vec<Span> = Vec::new();
+    let mut col = area.x;
+    for (i, chip) in chips.iter().enumerate() {
+        if i > 0 && col < area.x.saturating_add(area.width) {
+            spans.push(Span::raw(" "));
+            col += 1;
+        }
+        let w = UnicodeWidthStr::width(chip.label.as_str()) as u16;
+        state.record_combat_hit(
+            Rect {
+                x: col,
+                y: area.y,
+                width: w,
+                height: 1,
+            },
+            chip.action,
+        );
+        let style = match chip.action {
+            ClickAction::Attack => Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+            ClickAction::Quaff => Style::default().fg(theme::SUCCESS()),
+            ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
+            ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
+            ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
+            // Foe rows carry AttackMob, never the action bar; kept for exhaustiveness.
+            ClickAction::AttackMob(_) => Style::default().fg(theme::TEXT_DIM()),
+        };
+        spans.push(Span::styled(chip.label.clone(), style));
+        col += w;
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Truncate to `max` display columns, adding a trailing dot when clipped.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('.');
+    out
 }
 
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
@@ -133,18 +257,40 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         }
         false => (rows[1], None),
     };
+    // Last frame's clickable chips are stale now; a bar that isn't drawn this
+    // frame (map open, cramped view) must leave nothing behind to click.
+    state.clear_combat_hits();
     if view.classed && state.map_open() && map_fits(body) {
         draw_world_map(frame, body, state, &view);
     } else {
+        // A classed adventurer gets a clickable action bar on the bottom row -
+        // attack, ability slots, quaff, flee - so a fight can be run with the
+        // mouse without leaving the view. Keyboard keeps working unchanged.
+        let game_area = if view.classed && body.height >= 6 {
+            let split = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(body);
+            draw_action_bar(frame, split[1], state, &view);
+            split[0]
+        } else {
+            body
+        };
         // Below the graphical map's minimum, Panel::Map falls back to the text
         // atlas in the side panel (see `draw_side`).
-        draw_game(frame, body, state, usernames);
+        draw_game(frame, game_area, state, usernames);
     }
     if let (Some(text), Some(prompt)) = (chat, prompt) {
+        // Reflect the channel a `/z` or `/w` marker will send to before it's
+        // sent, so the scope is never a surprise.
+        let label = if text.starts_with("/zone ") || text.starts_with("/z ") {
+            "Say to zone: "
+        } else if text.starts_with("/world ") || text.starts_with("/w ") {
+            "Say to Lateania: "
+        } else {
+            "Say: "
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    "Say: ",
+                    label,
                     Style::default()
                         .fg(theme::AMBER_GLOW())
                         .add_modifier(Modifier::BOLD),
@@ -172,6 +318,14 @@ fn map_fits(area: Rect) -> bool {
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
+/// A short land name for the map overlay: the atlas carries full titles like
+/// "Embergate & the King's Road", but a map label wants just "Embergate". Drop
+/// any " & ..." or ", ..." tail so the name fits a clear run and reads at a glance.
+fn land_label(name: &str) -> &str {
+    let name = name.split(" & ").next().unwrap_or(name);
+    name.split(", ").next().unwrap_or(name)
+}
+
 fn biome_style(biome: super::world::Biome) -> (char, Color) {
     use super::world::Biome;
     match biome {
@@ -187,9 +341,428 @@ fn biome_style(biome: super::world::Biome) -> (char, Color) {
     }
 }
 
-/// The overhead world map (Panel::Map): a scrollable, biome-coloured overview
-/// centred on the player. `@` is the player's room; arrows / wasd pan the
-/// camera and Enter re-centres (handled in input.rs).
+/// One artistic ground tile for the live field: the biome's terrain drawn as a
+/// scatter of little glyphs (grass tufts, trees, waves, ash, rock) picked by a
+/// hash of the world cell, so the ground looks hand-strewn and varied yet stays
+/// perfectly stable as you walk (no shimmer) instead of a flat wash of one char.
+/// `(hx, hy)` are stable per-world-location coordinates. Every biome has its own
+/// palette so a forest, a lake, an ash waste, and a cavern each read at a glance.
+fn field_ground(biome: super::world::Biome, hx: i32, hy: i32) -> (char, Color) {
+    use super::world::Biome;
+    // Cheap stable spatial hash -> a bucket 0..15. Low buckets are the rarer
+    // decorations (trees/flowers/rocks); the rest is base ground, so features
+    // sprinkle in sparsely.
+    let h = (hx.wrapping_mul(73_856_093) ^ hy.wrapping_mul(19_349_663)) as u32;
+    let b = (h >> 4) % 16;
+    match biome {
+        // Home fields: lush grass with the odd wildflower.
+        Biome::Heartland => match b {
+            0 => ('*', Color::Rgb(230, 205, 90)),
+            1 => ('\u{2740}', Color::Rgb(225, 130, 150)), // ❀
+            2..=3 => ('"', Color::Rgb(105, 165, 80)),
+            4..=6 => (',', Color::Rgb(95, 155, 72)),
+            _ => ('.', Color::Rgb(80, 140, 66)),
+        },
+        // Open overworld: drier, wind-combed grass.
+        Biome::Plains => match b {
+            0 => ('\'', Color::Rgb(180, 175, 95)),
+            1..=2 => ('"', Color::Rgb(160, 160, 85)),
+            3..=5 => (',', Color::Rgb(150, 150, 78)),
+            _ => ('.', Color::Rgb(135, 138, 72)),
+        },
+        // Capitals and villages: flagstone and cobble.
+        Biome::Urban => match b {
+            0 => ('#', Color::Rgb(150, 150, 155)),
+            1 => ('=', Color::Rgb(140, 140, 145)),
+            2..=3 => (':', Color::Rgb(120, 120, 128)),
+            _ => ('.', Color::Rgb(105, 105, 114)),
+        },
+        // Greenwood: dark undergrowth studded with trees.
+        Biome::Forest => match b {
+            0 => ('\u{2660}', Color::Rgb(40, 105, 48)), // ♠ tree
+            1 => ('\u{2663}', Color::Rgb(46, 120, 55)), // ♣ tree
+            2..=3 => ('"', Color::Rgb(58, 118, 62)),
+            4..=6 => (',', Color::Rgb(52, 105, 58)),
+            _ => ('.', Color::Rgb(44, 92, 52)),
+        },
+        // Open water: rolling waves.
+        Biome::Water => match b {
+            0..=1 => ('\u{2248}', Color::Rgb(90, 140, 220)), // ≈
+            2..=4 => ('~', Color::Rgb(70, 120, 205)),
+            _ => ('~', Color::Rgb(58, 105, 190)),
+        },
+        // Archipelago: pale shore and shallows.
+        Biome::Islands => match b {
+            0 => ('\u{2248}', Color::Rgb(95, 180, 190)),
+            1..=2 => ('~', Color::Rgb(85, 170, 182)),
+            3..=4 => ('.', Color::Rgb(205, 195, 150)), // sand
+            _ => (',', Color::Rgb(120, 175, 165)),
+        },
+        // Ashen Reach: cinders and cooling embers.
+        Biome::Ash => match b {
+            0 => ('%', Color::Rgb(180, 90, 70)),
+            1 => ('*', Color::Rgb(205, 110, 60)), // ember
+            2..=3 => ('"', Color::Rgb(120, 80, 78)),
+            4..=5 => (',', Color::Rgb(105, 72, 70)),
+            _ => ('.', Color::Rgb(88, 66, 66)),
+        },
+        // Caverns: rock floor with the odd boulder.
+        Biome::Cavern => match b {
+            0 => ('\u{2593}', Color::Rgb(120, 112, 128)), // ▓ rock
+            1 => ('#', Color::Rgb(108, 100, 118)),
+            2..=3 => ('\u{00b7}', Color::Rgb(130, 122, 140)), // ·
+            4..=5 => (',', Color::Rgb(102, 96, 112)),
+            _ => ('.', Color::Rgb(88, 84, 98)),
+        },
+        // Badlands: cracked hardpan and scrub.
+        Biome::Badlands => match b {
+            0 => ('\u{25b2}', Color::Rgb(150, 110, 70)), // ▲ mesa
+            1..=2 => (':', Color::Rgb(165, 125, 80)),
+            3..=5 => (',', Color::Rgb(150, 115, 74)),
+            _ => ('.', Color::Rgb(135, 104, 68)),
+        },
+    }
+}
+
+/// Whether a room offers a service worth marking on the field: a merchant, a
+/// crafting station, or an actionable feature (stable, portal, bank, quest
+/// board, housing clerk, fountain). All static, so this costs no snapshot data.
+fn is_service_room(id: u32) -> bool {
+    use super::world::FeatureKind;
+    super::items::shop_at(id).is_some()
+        || !super::world::craft_stations_at(id).is_empty()
+        || super::world::features_at(id).iter().any(|f| {
+            matches!(
+                f.kind,
+                FeatureKind::Fountain
+                    | FeatureKind::Bank
+                    | FeatureKind::Board
+                    | FeatureKind::Stable
+                    | FeatureKind::Housing
+                    | FeatureKind::Portal
+                    | FeatureKind::CraftStation(_)
+            )
+        })
+}
+
+/// Pull off-screen POI arrows in from the widget border so they hug the
+/// explored cluster instead of floating at the panel's far edge, where nothing
+/// ties them to the map they annotate. Arrows collapsing onto the same cell
+/// keep boss priority. Atlas only: the live field draws no POI arrows, so a
+/// glyph next to `@` can never masquerade as a movement affordance.
+fn hug_poi_arrows(
+    arrows: Vec<super::worldmap::MapArrow>,
+    canvas: &[Vec<super::worldmap::Tile>],
+) -> Vec<super::worldmap::MapArrow> {
+    use super::worldmap::{MapArrow, Tile};
+
+    let mut bounds: Option<(usize, usize, usize, usize)> = None;
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            if !matches!(tile, Tile::Empty) {
+                let b = bounds.get_or_insert((r, c, r, c));
+                b.0 = b.0.min(r);
+                b.1 = b.1.min(c);
+                b.2 = b.2.max(r);
+                b.3 = b.3.max(c);
+            }
+        }
+    }
+    let Some((r0, c0, r1, c1)) = bounds else {
+        return arrows;
+    };
+    let max_r = canvas.len() - 1;
+    let max_c = canvas[0].len() - 1;
+    let mut hugged: std::collections::BTreeMap<(usize, usize), MapArrow> =
+        std::collections::BTreeMap::new();
+    for a in arrows {
+        let row = a.row.clamp(r0.saturating_sub(1), (r1 + 1).min(max_r));
+        let col = a.col.clamp(c0.saturating_sub(1), (c1 + 1).min(max_c));
+        let moved = MapArrow { row, col, ..a };
+        let e = hugged.entry((row, col)).or_insert(moved);
+        if a.boss && !e.boss {
+            *e = moved;
+        }
+    }
+    hugged.into_values().collect()
+}
+
+/// The live play field: a scrolling, biome-coloured top-down view kept centred
+/// on the player, so ordinary movement walks you across a rendered world (the
+/// terrain and paths ahead are drawn as you go, fog lifting as you explore).
+/// Unlike the overhead map (`m`), this never pans - it just follows you. Lines
+/// on the field mean exactly one thing, walkable path: bright stubs are the
+/// current room's exits, faint stubs are paths running on into fog. POI
+/// direction arrows belong to the atlas only.
+fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    use super::world::region_atlas_entry;
+    use super::worldmap::{Tile, map_canvas, poi, world_coords};
+
+    if area.height < 3 || area.width < 8 {
+        return;
+    }
+    let coords = world_coords();
+    let Some(player_room) = view.room else {
+        return;
+    };
+    let Some(&center) = coords.get(&player_room) else {
+        frame.render_widget(
+            Paragraph::new("No field view for this place.")
+                .style(Style::default().fg(theme::TEXT_DIM())),
+            area,
+        );
+        return;
+    };
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // where-am-i header
+        Constraint::Min(1),    // the field itself
+        Constraint::Length(1), // colour key
+    ])
+    .split(area);
+
+    // Header: the land you stand in and the depth, so the field is grounded.
+    let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
+    let depth = match center.z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    };
+    let mut header = vec![Span::styled(
+        region_name.to_string(),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !tier.is_empty() {
+        header.push(Span::styled(
+            format!("  ·  {tier}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    header.push(Span::styled(
+        format!("  ·  {depth}"),
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(header)), rows[0]);
+
+    let body = rows[1];
+    let cols = body.width as i32;
+    let height = body.height as i32;
+    let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
+
+    // The player token turns hostile-red in a fight, so a glance at the field
+    // tells you combat is on even with your eyes off the log.
+    let player_style = if view.mobs.is_empty() {
+        Style::default()
+            .fg(Color::Rgb(250, 240, 140))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Rgb(240, 120, 90))
+            .add_modifier(Modifier::BOLD)
+    };
+    let boss_style = Style::default()
+        .fg(Color::Rgb(250, 210, 90))
+        .add_modifier(Modifier::BOLD);
+    let tame_style = Style::default()
+        .fg(Color::Rgb(230, 140, 160))
+        .add_modifier(Modifier::BOLD);
+    // Trodden paths between rooms: a warm dim so they read as trails cut through
+    // the terrain rather than fences.
+    let path_style = Style::default().fg(Color::Rgb(150, 120, 82));
+
+    // Rooms sit on even offsets from the centre cell; `(hx, hy)` are stable
+    // world coordinates for a cell so the ground scatter never shimmers as you
+    // walk. The biome under an empty cell is borrowed from the nearest drawn
+    // room, so terrain fills the gaps between explored rooms and simply stops at
+    // the fog (an empty cell with no drawn neighbour stays black = unknown).
+    let (cx, cy) = (cols / 2, height / 2);
+    let biome_at = |sr: i32, sc: i32| -> Option<super::world::Biome> {
+        for (dr, dc) in [
+            (0, 0),
+            (-1, 0),
+            (1, 0),
+            (0, -1),
+            (0, 1),
+            (-1, -1),
+            (-1, 1),
+            (1, -1),
+            (1, 1),
+        ] {
+            let (r, c) = (sr + dr, sc + dc);
+            if r >= 0
+                && r < height
+                && c >= 0
+                && c < cols
+                && let Tile::Room(id) = canvas[r as usize][c as usize]
+            {
+                return Some(super::world::biome_of(id));
+            }
+        }
+        None
+    };
+    // `is_room` distinguishes the two ways a biome fills a cell. Open biomes
+    // scatter the same ground everywhere. Enclosed ones (caverns) instead carve:
+    // rooms and corridors are open floor, and the space between is solid rock, so
+    // an interior reads as passages cut through stone rather than an open plain.
+    let terrain_cell = |sr: i32, sc: i32, biome: super::world::Biome, is_room: bool| {
+        let hx = 2 * center.x + (sc - cx);
+        let hy = 2 * center.y + (sr - cy);
+        if matches!(biome, super::world::Biome::Cavern) {
+            let h = (hx.wrapping_mul(73_856_093) ^ hy.wrapping_mul(19_349_663)) as u32;
+            if is_room {
+                let ch = if h.is_multiple_of(6) { ',' } else { '.' };
+                (
+                    ch.to_string(),
+                    Style::default().fg(Color::Rgb(140, 132, 152)),
+                )
+            } else {
+                // Mostly medium rock with the odd darker/heavier block for texture.
+                let ch = match h % 8 {
+                    0 => '\u{2588}',     // █
+                    1 | 2 => '\u{2593}', // ▓
+                    _ => '\u{2592}',     // ▒
+                };
+                (ch.to_string(), Style::default().fg(Color::Rgb(78, 73, 92)))
+            }
+        } else {
+            let (g, color) = field_ground(biome, hx, hy);
+            (g.to_string(), Style::default().fg(color))
+        }
+    };
+
+    // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
+    // the static atlas; a red dagger marks a room holding a live foe (from the
+    // snapshot's nearby list); a gem marks a harvestable resource room (static).
+    let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
+    let players: std::collections::HashSet<u32> = view.nearby_players.iter().copied().collect();
+    let foe_style = Style::default()
+        .fg(Color::Rgb(235, 90, 80))
+        .add_modifier(Modifier::BOLD);
+    let player_near_style = Style::default()
+        .fg(Color::Rgb(120, 210, 235))
+        .add_modifier(Modifier::BOLD);
+    let service_style = Style::default().fg(Color::Rgb(180, 160, 235));
+    let node_style = Style::default().fg(Color::Rgb(210, 180, 110));
+    let room_glyph = |id: u32, sr: i32, sc: i32| -> (String, Style) {
+        if foes.contains(&id) {
+            return ("\u{2020}".to_string(), foe_style); // † a foe lairs here
+        }
+        if let Some(p) = poi(id) {
+            if p.boss.is_some() {
+                return ("\u{2605}".to_string(), boss_style); // ★
+            }
+            if p.tameable.is_some() {
+                return ("\u{2665}".to_string(), tame_style); // ♥
+            }
+        }
+        if players.contains(&id) {
+            return ("\u{263a}".to_string(), player_near_style); // ☺ another adventurer
+        }
+        if is_service_room(id) {
+            return ("\u{2302}".to_string(), service_style); // ⌂ a shop / stable / station / portal
+        }
+        if !super::world::nodes_at(id).is_empty() {
+            return ("\u{2666}".to_string(), node_style); // ♦ a resource to gather
+        }
+        terrain_cell(sr, sc, super::world::biome_of(id), true)
+    };
+
+    let mut cells: Vec<Vec<(String, Style)>> =
+        vec![
+            vec![(" ".to_string(), Style::default()); cols.max(0) as usize];
+            height.max(0) as usize
+        ];
+    for sr in 0..height {
+        for sc in 0..cols {
+            let cell = match canvas[sr as usize][sc as usize] {
+                // Rooms melt into the terrain (the ground scatter carries the
+                // biome); only the player, landmarks, and paths stand proud.
+                Tile::Room(id) if id == player_room => ("@".to_string(), player_style),
+                Tile::Room(id) => room_glyph(id, sr, sc),
+                Tile::LinkH => ("\u{2500}".to_string(), path_style),
+                Tile::LinkV => ("\u{2502}".to_string(), path_style),
+                // A path running off into the unknown: a faint arrow pointing the
+                // way, so a discovered spot never looks stranded (no spoiler).
+                Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+                Tile::Empty => match biome_at(sr, sc) {
+                    Some(biome) => terrain_cell(sr, sc, biome, false),
+                    None => (" ".to_string(), Style::default()),
+                },
+            };
+            cells[sr as usize][sc as usize] = cell;
+        }
+    }
+
+    // The current room's exits, drawn as bright stubs from the player's own
+    // cell: the map answers "which way can I walk right now" exactly where the
+    // eye rests. Exits come from the room data, not the geometry, so the stub
+    // is an honest affordance even where the hand-authored graph scatters a
+    // destination somewhere non-adjacent. Rooms sit on even offsets, so the
+    // stub cell (one step out) can never hold another room's glyph.
+    let exit_style = Style::default()
+        .fg(Color::Rgb(220, 185, 120))
+        .add_modifier(Modifier::BOLD);
+    for (dir, _) in &view.exits {
+        let (dx, dy, glyph) = match dir {
+            Dir::East => (1, 0, '\u{2500}'),
+            Dir::West => (-1, 0, '\u{2500}'),
+            Dir::North => (0, -1, '\u{2502}'),
+            Dir::South => (0, 1, '\u{2502}'),
+            // The side panel's exits line carries the stairs.
+            Dir::Up | Dir::Down => continue,
+        };
+        let (sc, sr) = (cx + dx, cy + dy);
+        if (0..cols).contains(&sc)
+            && (0..height).contains(&sr)
+            && let Some(cell) = cells
+                .get_mut(sr as usize)
+                .and_then(|r| r.get_mut(sc as usize))
+        {
+            *cell = (glyph.to_string(), exit_style);
+        }
+    }
+
+    let lines: Vec<Line> = cells
+        .into_iter()
+        .map(|row| {
+            Line::from(
+                row.into_iter()
+                    .map(|(ch, style)| Span::styled(ch, style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body);
+
+    // Colour key, so every marker on the field reads at a glance.
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("@", player_style),
+            Span::styled(" you ", dim),
+            Span::styled("\u{2020}", foe_style),
+            Span::styled(" foe ", dim),
+            Span::styled("\u{263a}", player_near_style),
+            Span::styled(" player ", dim),
+            Span::styled("\u{2605}", boss_style),
+            Span::styled(" boss ", dim),
+            Span::styled("\u{2665}", tame_style),
+            Span::styled(" tame ", dim),
+            Span::styled("\u{2302}", service_style),
+            Span::styled(" town ", dim),
+            Span::styled("\u{2666}", node_style),
+            Span::styled(" node ", dim),
+            Span::styled("\u{2500}", exit_style),
+            Span::styled(" way out ", dim),
+            Span::styled("\u{2500}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" unexplored", dim),
+        ])),
+        rows[2],
+    );
+}
+
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
@@ -214,7 +787,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Constraint::Length(1), // header
         Constraint::Min(1),    // map body
         Constraint::Length(2), // cell inspector (crosshair target)
-        Constraint::Length(1), // controls + legend
+        Constraint::Length(1), // controls + marker legend
+        Constraint::Length(1), // terrain key (biomes in view)
     ])
     .split(area);
 
@@ -274,6 +848,12 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let tame_style = Style::default()
         .fg(Color::Rgb(230, 140, 160))
         .add_modifier(Modifier::BOLD);
+    let gather_style = Style::default()
+        .fg(Color::Rgb(150, 200, 120))
+        .add_modifier(Modifier::BOLD);
+    let elite_style = Style::default()
+        .fg(Color::Rgb(210, 120, 90))
+        .add_modifier(Modifier::BOLD);
     let link_style = Style::default().fg(theme::BORDER_DIM());
 
     let mut cells: Vec<Vec<(String, Style)>> = canvas
@@ -284,10 +864,13 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     Tile::Empty => (" ".to_string(), Style::default()),
                     Tile::LinkH => ("\u{2500}".to_string(), link_style), // ─
                     Tile::LinkV => ("\u{2502}".to_string(), link_style), // │
+                    Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
                     Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                         Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
+                        Some(p) if p.elite_foe.is_some() => ("\u{25c6}".to_string(), elite_style),
+                        Some(p) if p.gather.is_some() => ("\u{2692}".to_string(), gather_style),
                         _ => {
                             let (g, color) = biome_style(super::world::biome_of(*id));
                             (g.to_string(), Style::default().fg(color))
@@ -298,11 +881,77 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         })
         .collect();
 
-    // Off-screen POI direction arrows on the border.
-    for arrow in poi_arrows(coords, center, cols, height) {
+    // Off-screen POI direction arrows, hugging the explored cluster's edge.
+    for arrow in hug_poi_arrows(poi_arrows(coords, center, cols, height), &canvas) {
         if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
             let style = if arrow.boss { boss_style } else { tame_style };
             *cell = (arrow.glyph.to_string(), style);
+        }
+    }
+
+    // Land labels: name each explored region once, near the centroid of its
+    // rooms in view, so you can see which land is which at a glance. Only lands
+    // you've set foot in are drawn (canvas already holds only seen rooms), and
+    // the text lands only in empty cells so it never hides a room or a marker.
+    let mut land_centroids: std::collections::HashMap<&'static str, (i32, i32, i32)> =
+        std::collections::HashMap::new();
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            if let Tile::Room(id) = tile
+                && let Some((name, _)) = region_atlas_entry(*id)
+            {
+                let e = land_centroids.entry(name).or_insert((0, 0, 0));
+                e.0 += r as i32;
+                e.1 += c as i32;
+                e.2 += 1;
+            }
+        }
+    }
+    let label_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::ITALIC);
+    let rows_n = cells.len();
+    for (name, (sum_r, sum_c, count)) in land_centroids {
+        // A stray room or two shouldn't plant a label; wait for a real presence.
+        if count < 3 {
+            continue;
+        }
+        let text: Vec<char> = land_label(name).chars().collect();
+        let len = text.len();
+        let mid_r = sum_r / count;
+        let ideal_c = ((sum_c / count) - (len as i32) / 2).max(0);
+
+        // Find a clear horizontal run of `len` cells near the centroid so the
+        // name reads whole rather than being chopped up by rooms and corridors.
+        // Scan rows outward from the centroid, nudging left/right a little; if
+        // nothing clear turns up, drop the label - better absent than garbled.
+        let is_clear = |cells: &[Vec<(String, Style)>], r: usize, c0: usize| {
+            c0 + len <= cols as usize && (0..len).all(|i| cells[r][c0 + i].0 == " ")
+        };
+        let mut spot = None;
+        'search: for dr in 0..=5i32 {
+            for r in [mid_r - dr, mid_r + dr] {
+                if r < 0 || r as usize >= rows_n {
+                    continue;
+                }
+                let r = r as usize;
+                for dc in 0..=10i32 {
+                    for c in [ideal_c + dc, ideal_c - dc] {
+                        if c >= 0 && is_clear(&cells, r, c as usize) {
+                            spot = Some((r, c as usize));
+                            break 'search;
+                        }
+                    }
+                }
+                if dr == 0 {
+                    break; // mid_r - 0 == mid_r + 0; don't scan it twice
+                }
+            }
+        }
+        if let Some((r, c0)) = spot {
+            for (i, ch) in text.iter().enumerate() {
+                cells[r][c0 + i] = (ch.to_string(), label_style);
+            }
         }
     }
 
@@ -356,6 +1005,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             if let Some(t) = p.tameable {
                 parts.push(format!("tame {t}"));
             }
+            if let Some(g) = p.gather {
+                parts.push(format!("gather {g}"));
+            }
             if !p.monsters.is_empty() {
                 parts.push(format!("foes {}", p.monsters.join(", ")));
             }
@@ -377,22 +1029,66 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     }
     frame.render_widget(Paragraph::new(inspect), rows[2]);
 
-    // Footer: controls + marker legend.
+    // Footer line 1: controls + marker legend.
+    let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(
-                "wasd/arrows pan · <> level · Enter re-centre · m close    ",
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
+            Span::styled("wasd pan · <> level · Enter re-centre · m close   ", dim),
             Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-            Span::styled(" boss  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" boss ", dim),
             Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame  ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" tame ", dim),
+            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+            Span::styled(" foe ", dim),
+            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+            Span::styled(" gather ", dim),
             Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" off-map", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(" off-map ", dim),
+            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" path", dim),
         ])),
         rows[3],
     );
+
+    // Footer line 2: terrain key, showing only the biomes actually in view so it
+    // stays legible instead of listing every biome in the world.
+    use super::world::Biome;
+    let mut present: Vec<Biome> = Vec::new();
+    for row in &canvas {
+        for tile in row {
+            if let Tile::Room(id) = tile {
+                let b = super::world::biome_of(*id);
+                if !present.contains(&b) {
+                    present.push(b);
+                }
+            }
+        }
+    }
+    // Fixed order so the key doesn't reshuffle as you pan.
+    const BIOME_ORDER: [(Biome, &str); 9] = [
+        (Biome::Heartland, "heartland"),
+        (Biome::Plains, "plains"),
+        (Biome::Urban, "town"),
+        (Biome::Forest, "forest"),
+        (Biome::Water, "water"),
+        (Biome::Islands, "isles"),
+        (Biome::Ash, "ash"),
+        (Biome::Cavern, "caves"),
+        (Biome::Badlands, "badlands"),
+    ];
+    let mut key: Vec<Span> = vec![Span::styled(
+        "terrain  ",
+        Style::default().fg(theme::TEXT_FAINT()),
+    )];
+    for (biome, label) in BIOME_ORDER {
+        if !present.contains(&biome) {
+            continue;
+        }
+        let (glyph, color) = biome_style(biome);
+        key.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
+        key.push(Span::styled(format!(" {label}  "), dim));
+    }
+    frame.render_widget(Paragraph::new(Line::from(key)), rows[4]);
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
@@ -565,6 +1261,29 @@ fn draw_compact(frame: &mut Frame, area: Rect, view: &PlayerView) {
     frame.render_widget(side_paragraph(lines), area);
 }
 
+/// The field layout's message feed: a full-width strip under the field, newest
+/// line at the bottom, a rule above so the world and the words don't bleed into
+/// each other. No "Now" block and no header - room context lives in the side
+/// panel, and every row here is a line of actual events.
+fn draw_log_strip(frame: &mut Frame, area: Rect, view: &PlayerView) {
+    if area.height < 2 || area.width == 0 {
+        return;
+    }
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(separator_line(rows[0].width as usize)),
+        rows[0],
+    );
+    let width = rows[1].width as usize;
+    let entries = collapsed_recent_entries(view);
+    let mut lines: Vec<Line<'static>> = entries
+        .iter()
+        .flat_map(|(kind, text)| wrapped_log_line(*kind, text, width))
+        .collect();
+    let start = lines.len().saturating_sub(rows[1].height as usize);
+    frame.render_widget(Paragraph::new(lines.split_off(start)), rows[1]);
+}
+
 fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
     if area.height < 12 {
         let lines = recent_log_tail(view, area.width as usize, area.height as usize);
@@ -604,7 +1323,7 @@ fn draw_side(
     usernames: &UsernameLookup<'_>,
 ) {
     if state.panel() == Panel::Room {
-        draw_room_side(frame, area, view, usernames);
+        draw_room_side(frame, area, state, view, usernames, true);
         return;
     }
 
@@ -757,25 +1476,45 @@ fn wrapped_rows(text: &str, width: usize) -> usize {
 fn draw_room_side(
     frame: &mut Frame,
     area: Rect,
+    state: &State,
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
+    with_minimap: bool,
 ) {
-    let map = minimap_lines(&view.minimap);
-    if map.is_empty() {
-        frame.render_widget(
-            Paragraph::new(room_panel(view, usernames, area.width as usize)),
-            area,
-        );
-        return;
-    }
+    let map = if with_minimap {
+        minimap_lines(&view.minimap)
+    } else {
+        // The live field column already shows the surroundings; the little
+        // minimap would just be a redundant echo beside it.
+        Vec::new()
+    };
+    let panel_area = if map.is_empty() {
+        area
+    } else {
+        let map_h = map.len().min(area.height as usize) as u16;
+        let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
+        frame.render_widget(Paragraph::new(map), rows[1]);
+        rows[0]
+    };
 
-    let map_h = map.len().min(area.height as usize) as u16;
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(map_h)]).split(area);
-    frame.render_widget(
-        Paragraph::new(room_panel(view, usernames, rows[0].width as usize)),
-        rows[0],
-    );
-    frame.render_widget(Paragraph::new(map), rows[1]);
+    let (lines, foe_hits) = room_panel(view, usernames, panel_area.width as usize);
+    // Make each visible foe row clickable: its rect is where the panel (drawn
+    // from the top, one pre-wrapped line per row) places that line. Rows scrolled
+    // off the bottom just aren't recorded, so they aren't clickable.
+    for (idx, mob_id) in foe_hits {
+        if (idx as u16) < panel_area.height {
+            state.record_combat_hit(
+                Rect {
+                    x: panel_area.x,
+                    y: panel_area.y + idx as u16,
+                    width: panel_area.width,
+                    height: 1,
+                },
+                ClickAction::AttackMob(mob_id),
+            );
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), panel_area);
 }
 
 /// Titles panel: a selectable list of earned titles with their levels. Enter
@@ -917,11 +1656,15 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+/// The room side panel. Returns the lines plus, for each foe, the line index of
+/// its roster row and its spawn id, so the caller can record a clickable rect
+/// over each foe (click a foe to lock onto it).
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>) {
+    let mut foe_hits: Vec<(usize, u32)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
@@ -947,6 +1690,25 @@ fn room_panel(
         ]));
         lines.push(Line::from(Span::styled(
             format!("    lead to {dest}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    // Mounted: say what carries you and how far each step goes.
+    if let Some(riding) = &view.riding {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  \u{265e} riding ".to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(riding.clone(), Style::default().fg(theme::AMBER_GLOW())),
+        ]));
+    }
+    // A personal waypoint, if one is set: a reminder it's there to warp to.
+    if view.waypoint_set {
+        lines.push(Line::from(Span::styled(
+            "  \u{2691} waypoint set (/ to warp)".to_string(),
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
@@ -1023,12 +1785,23 @@ fn room_panel(
         // get whatever width is left in the panel.
         let name_w = (width.saturating_sub(13)).clamp(6, 16);
         for mob in &view.mobs {
-            let (marker, weight) = if mob.boss {
-                ("‡ ", Modifier::BOLD)
+            let mut weight = if mob.boss {
+                Modifier::BOLD
             } else {
-                ("  ", Modifier::empty())
+                Modifier::empty()
+            };
+            // The foe you're locked onto gets a » marker so a click's effect is
+            // visible; a boss keeps its ‡. The target is always bold.
+            let marker = if mob.targeted {
+                weight |= Modifier::BOLD;
+                "\u{00bb} " // »
+            } else if mob.boss {
+                "\u{2021} " // ‡
+            } else {
+                "  "
             };
             let labelled = format!("Lv{:<2} {}", mob.level, mob.name);
+            foe_hits.push((lines.len(), mob.id));
             lines.push(roster_row(
                 marker,
                 &labelled,
@@ -1079,18 +1852,27 @@ fn room_panel(
     if !view.wildlife.is_empty() {
         lines.push(section("Wildlife"));
         for w in &view.wildlife {
-            let (marker, color) = match w.kind.as_str() {
-                "boon" => ("✦ ", theme::BADGE_GOLD()),
-                "huntable" => ("» ", theme::AMBER()),
-                _ => ("~ ", theme::TEXT_DIM()),
+            // Mythical creatures (Genesys) always stand out, whatever else
+            // they are - a boon or a huntable can still be a wonder to look at.
+            let (marker, color) = if w.mythical {
+                ("✵ ", theme::BOT())
+            } else {
+                match w.kind.as_str() {
+                    "boon" => ("✦ ", theme::BADGE_GOLD()),
+                    "huntable" => ("» ", theme::AMBER()),
+                    _ => ("~ ", theme::TEXT_DIM()),
+                }
             };
-            let detail = if !w.perk.is_empty() {
+            let mut detail = if !w.perk.is_empty() {
                 format!(", a boon ({})", w.perk)
             } else if w.kind == "huntable" {
                 ", game (attack to hunt)".to_string()
             } else {
                 String::new()
             };
+            if w.adoptable {
+                detail.push_str(", feed it daily (~) and it may take to you as a stray");
+            }
             lines.extend(side_text_wrap(
                 &format!("{marker}{}{detail}", w.name),
                 color,
@@ -1141,7 +1923,7 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    lines
+    (lines, foe_hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,
@@ -2752,7 +3534,11 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(hint("j k", "quests titles"));
     lines.push(hint("r f", "recall follow"));
     lines.push(hint(";", "nearest haven"));
-    lines.push(hint("'", "say (local chat)"));
+    lines.push(hint(": /", "set waypoint / warp"));
+    if view.pet.is_some() {
+        lines.push(hint("~", "feed companion"));
+    }
+    lines.push(hint("'", "say (/z zone, /w world)"));
     if view.shop.is_some() {
         lines.push(hint("b", "shop"));
     }
@@ -2769,6 +3555,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("i", "the ways (portal)"));
     }
     lines.push(hint("m", "world atlas"));
+    lines.push(hint("G", "mount / dismount"));
     lines.push(hint("Esc", "leave"));
     lines
 }
@@ -3296,6 +4083,9 @@ fn interactable_color(kind: &str) -> ratatui::style::Color {
     match kind {
         "fountain" => theme::SUCCESS(),
         "bank" | "board" | "stable" | "clerk" => theme::AMBER_GLOW(),
+        // Villagers (Genesys) get their own colour so they stand out at a
+        // glance from every other lookable thing in the room.
+        "villager" => theme::BOT(),
         _ if is_craft_station(kind) => theme::AMBER_GLOW(),
         _ => theme::MENTION(),
     }
@@ -3313,7 +4103,10 @@ fn is_craft_station(kind: &str) -> bool {
 /// Whether a feature kind is something you actively use/trade at (vs. just look
 /// at). Drives a brighter, bolder treatment so actionable things pop.
 fn is_actionable_feature(kind: &str) -> bool {
-    matches!(kind, "fountain" | "bank" | "board" | "stable" | "clerk") || is_craft_station(kind)
+    matches!(
+        kind,
+        "fountain" | "bank" | "board" | "stable" | "clerk" | "villager"
+    ) || is_craft_station(kind)
 }
 
 #[cfg(test)]

@@ -35,9 +35,49 @@ pub(crate) struct ScratchpadState {
     /// once), and the app is only ever touched under its own mutex, so there
     /// is no contention to speak of.
     highlight_cache: RefCell<HighlightCache>,
+    /// The editor's content area plus its (vscroll, hscroll), recorded each
+    /// frame so a click can be mapped to a text row/column. `None` until drawn.
+    editor_viewport: std::cell::Cell<Option<(ratatui::layout::Rect, usize, usize)>>,
 }
 
 impl ScratchpadState {
+    /// Record the editor's content area and scroll offsets for click mapping
+    /// (called from the render pass, which only holds `&self`).
+    pub(crate) fn record_viewport(
+        &self,
+        content_area: ratatui::layout::Rect,
+        vscroll: usize,
+        hscroll: usize,
+    ) {
+        self.editor_viewport
+            .set(Some((content_area, vscroll, hscroll)));
+    }
+
+    /// Move the caret to where a click landed in the editor. Returns whether the
+    /// click was inside the editor's content area.
+    pub(crate) fn click_to_cursor(&mut self, x: u16, y: u16) -> bool {
+        let Some((area, vscroll, hscroll)) = self.editor_viewport.get() else {
+            return false;
+        };
+        if x < area.x || x >= area.x + area.width || y < area.y || y >= area.y + area.height {
+            return false;
+        }
+        let row = vscroll + (y - area.y) as usize;
+        let col = hscroll + (x - area.x) as usize;
+        self.editor
+            .move_cursor(CursorMove::Jump(row as u16, col as u16));
+        true
+    }
+
+    /// Scroll the view by moving the caret (the viewport tracks the caret), so
+    /// a wheel over the editor pages through the buffer.
+    pub(crate) fn scroll_lines(&mut self, up: bool) {
+        for _ in 0..3 {
+            self.editor
+                .move_cursor(if up { CursorMove::Up } else { CursorMove::Down });
+        }
+    }
+
     pub(crate) fn new(
         registry: SharedScratchpadRegistry,
         shared: SharedScratchpad,
@@ -65,6 +105,7 @@ impl ScratchpadState {
             last_seen_revision,
             partner_cursor,
             highlight_cache: RefCell::new(HighlightCache::default()),
+            editor_viewport: std::cell::Cell::new(None),
         }
     }
 

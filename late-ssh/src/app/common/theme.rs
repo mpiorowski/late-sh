@@ -2104,7 +2104,7 @@ const PALETTE_ENA: Palette = Palette {
     border_dim: Color::Rgb(41, 95, 247),
     border: Color::Rgb(253, 231, 1),
     border_active: Color::Rgb(227, 207, 182),
-    text_faint: Color::Rgb(41, 95, 247),
+    text_faint: Color::Rgb(130, 150, 210),
     text_dim: Color::Rgb(253, 231, 1),
     text_muted: Color::Rgb(180, 180, 180),
     text: Color::Rgb(209, 209, 209),
@@ -2134,7 +2134,7 @@ const PALETTE_ENA_DREAM_BBQ: Palette = Palette {
     border_dim: Color::Rgb(91, 134, 148),
     border: Color::Rgb(230, 131, 140),
     border_active: Color::Rgb(241, 230, 198),
-    text_faint: Color::Rgb(21, 94, 85),
+    text_faint: Color::Rgb(130, 180, 170),
     text_dim: Color::Rgb(143, 183, 198),
     text_muted: Color::Rgb(209, 209, 209),
     text: Color::Rgb(209, 209, 209),
@@ -2225,7 +2225,7 @@ const PALETTE_FACEBOOK_DARK: Palette = Palette {
     border: Color::Rgb(8, 102, 255),
     border_active: Color::Rgb(255, 255, 255),
     text_faint: Color::Rgb(0, 76, 194),
-    text_dim: Color::Rgb(8, 102, 255),
+    text_dim: Color::Rgb(140, 180, 255),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
     text_bright: Color::Rgb(255, 255, 255),
@@ -2254,7 +2254,7 @@ const PALETTE_TWITTER_DARK: Palette = Palette {
     border_dim: Color::Rgb(20, 100, 160),
     border: Color::Rgb(29, 155, 240),
     border_active: Color::Rgb(255, 255, 255),
-    text_faint: Color::Rgb(20, 100, 160),
+    text_faint: Color::Rgb(140, 180, 220),
     text_dim: Color::Rgb(29, 155, 240),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
@@ -2284,7 +2284,7 @@ const PALETTE_TELEGRAM_DARK: Palette = Palette {
     border_dim: Color::Rgb(25, 110, 155),
     border: Color::Rgb(36, 161, 222),
     border_active: Color::Rgb(255, 255, 255),
-    text_faint: Color::Rgb(25, 110, 155),
+    text_faint: Color::Rgb(140, 185, 215),
     text_dim: Color::Rgb(36, 161, 222),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
@@ -3992,8 +3992,8 @@ const PALETTE_AMOLED_CERULEAN: Palette = Palette {
 
 const PALETTE_TERMINAL: Palette = Palette {
     bg_canvas: Color::Indexed(0),      // Black
-    bg_selection: Color::Indexed(8),   // Bright Black (dark gray)
-    bg_highlight: Color::Indexed(8),   // Bright Black
+    bg_selection: Color::Indexed(4),   // Blue
+    bg_highlight: Color::Indexed(4),   // Blue
     border_dim: Color::Indexed(8),     // Bright Black
     border: Color::Indexed(7),         // White (normal gray)
     border_active: Color::Indexed(4),  // Blue
