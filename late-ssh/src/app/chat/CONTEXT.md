@@ -36,6 +36,7 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages
+|-- cyberspace/                  # Synthetic Cyberspace entry: personal client for cyberspace.online
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
@@ -52,6 +53,7 @@ late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(tes
 |-- svc_test.rs                  # Broad ChatService DB-backed coverage
 |-- sheet_test.rs                # Character-sheet model/service coverage
 |-- state_test.rs                # Placeholder; direct ChatState tests need more accessors
+|-- cyberspace/svc_test.rs       # CyberspaceService DB-backed coverage (dead base URL, no network)
 |-- news/svc_test.rs             # ArticleService DB-backed coverage
 |-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
 `-- work/svc_test.rs             # WorkService DB-backed coverage
@@ -60,7 +62,7 @@ late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cur
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
+`notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
 `chat_slow_mode.rs`, `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
@@ -268,6 +270,7 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
+- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/feed` and `/water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
@@ -439,7 +442,14 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies the selected public work profile link when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 
-### Notifications / Mentions
+### Cyberspace
+
+- late.sh as a personal client for cyberspace.online (`chat/cyberspace/`: `api.rs` typed reqwest client, `svc.rs` orchestration + per-user id-token cache, `state.rs`/`input.rs`/`ui.rs` pane and modals).
+- **Their API terms are load-bearing**: no bots, no scraping/caching for redistribution, no feeding their content to AI. Every call runs under the linked user's own bearer token on a human action; fetched content lives only in the fetching session's memory and renders only for that user; `news/svc.rs::is_ai_blocklisted_url` hard-stops cyberspace.online URLs at the summarizer.
+- Linking: `/cs link` modal → `POST /v1/auth/login` → store only the Firebase refresh token in `cyberspace_accounts` (one row per user, upsert replaces). id tokens are cached in-memory per user for 50 minutes and re-minted via `POST /v1/auth/refresh`; a rejected refresh means the link is broken and the pane asks for a re-link. `/cs unlink` deletes the row and drops the cached token.
+- The rail entry is always visible in Core (below rss); unlinked users get a pitch + Enter-to-link funnel. Views: feed (j/k, Enter opens a thread), thread (j/k scroll, r reply, b back), notifications (opened with n; loading marks all read server-side, same contract as RSS). Unread badge comes from `GET /v1/notifications/unread-count`, fetched at session init and on pane actions, never polled in the background.
+- Posting: `/cs post` or `p` opens the compose modal (title/topics/body); the modal stays open and busy until the service answers so a failed publish never eats the draft. A created entry publishes `ActivityKind::CyberspacePosted` (a #lounge story line naming the title, throttle-keyed on it).
+- No shared snapshot: `CsEvent` broadcasts carry their data and sessions filter by `user_id`, because content is per-user by their terms and nothing may be shared across users.
 
 - Backed by `notifications` joined with actor, room, and message preview data.
 - Snapshot is user-targeted; consumers must ignore snapshots where `snapshot.user_id != current_user`.
@@ -582,6 +592,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
+| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `n` notifications, `r` refresh/reply, `b` back |
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 

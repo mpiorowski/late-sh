@@ -1,7 +1,7 @@
 use late_core::test_utils::{create_test_user, test_db};
 
-use super::state::{Modal, State, parse_topics};
-use super::svc::CyberspaceService;
+use crate::app::chat::cyberspace::state::{Modal, State, parse_topics};
+use crate::app::chat::cyberspace::svc::CyberspaceService;
 
 async fn test_state() -> State {
     let test_db = test_db().await;

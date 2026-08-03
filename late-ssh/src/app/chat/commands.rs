@@ -105,6 +105,8 @@ const COMMANDS: &[Command] = &[
     global("brb", "go AFK and mute audio (/brb back in 5)"),
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
     global("coffee", "post coffee cup"),
+    global("cs", "cyberspace (/cs post, /cs link, /cs unlink)"),
+    global("cyberspace", "open the cyberspace tab (alias /cs)"),
     global("dm", "open a DM (/dm @user)"),
     global("exit", "quit confirm"),
     global("feed", "feed your pet with pet food"),

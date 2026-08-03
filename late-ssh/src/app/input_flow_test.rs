@@ -867,7 +867,8 @@ async fn client_side_chat_commands_render_without_persisting_messages() {
     app.handle_input(b"?");
     assert!(!app.show_help, "? should close the guide");
 
-    app.handle_input(b"llll");
+    // lounge → mentions → news → cyberspace → browse rooms → #side
+    app.handle_input(b"lllll");
     app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;
     wait_for_render_contains(&mut app, "@command-flow-viewer").await;

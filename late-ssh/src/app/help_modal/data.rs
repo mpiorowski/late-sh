@@ -200,7 +200,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
-    - Home's room rail also holds RSS, News, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
+    - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"N unread mentions\" counter in the top-right corner.\n\
     - In the Clubhouse: arrows/hjkl walk, i talks (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark.\n\
     - Pressing ? anywhere opens the full in-app guide, with a tab per topic.\n\
     - For anything past basic directions (commands, game rules, settings, IRC, account stuff) don't guess: tell the patron to go ask @bot, that's what he's for.\n"
@@ -571,7 +571,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  image modal        Enter/c copy image URL; Esc/q close; see Images",
         "",
         "Synthetic entries",
-        "  Home room rail also contains RSS, News, Voice, Mentions, and Discover.",
+        "  Home room rail also contains RSS, News, Cyberspace, Voice, Mentions, and Discover.",
         "  Directory page 6 contains Profiles, Projects, and Pinstar.",
     ]
     .into_iter()
@@ -672,6 +672,19 @@ fn social_help_lines() -> Vec<String> {
         "  d                 dismiss selected entry",
         "  r                 refresh RSS now",
         "  After sharing, the URL becomes a public News article and #lounge announcement.",
+        "",
+        "Cyberspace",
+        "  cyberspace.online is a small, human social network like ours; late.sh",
+        "  acts as your personal client for it. Everything happens as you, under",
+        "  your own linked account; what you read there stays on your screen only.",
+        "  Open it from the Home room rail entry, or /cs (alias /cyberspace).",
+        "  /cs link          link your cyberspace account (stores a token, never the password)",
+        "  /cs post          publish an entry (also announced in #lounge)",
+        "  /cs unlink        forget the link and token",
+        "  j / k or ↑ / ↓   navigate the feed",
+        "  Enter             open the selected entry with its replies",
+        "  r                 refresh (feed) / reply (open entry)",
+        "  p                 new entry, n notifications, b back",
         "",
         "Mentions",
         "  User-targeted notification feed for @user mentions.",
@@ -1000,7 +1013,7 @@ fn overview_lines() -> Vec<String> {
         "",
         "Jump search",
         "  Ctrl+/            open / close jump modal",
-        "  type              filter rooms, DMs, RSS, News, Voice, Mentions, Discover",
+        "  type              filter rooms, DMs, RSS, News, Cyberspace, Voice, Mentions, Discover",
         "  @query / #query   bias toward users or rooms",
         "  ↑/↓ or Ctrl+K/J   move selection",
         "  PageUp/PageDown   jump 8 rows",
@@ -1054,7 +1067,7 @@ fn architecture_lines() -> Vec<String> {
         "",
         "User-facing areas",
         "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub, including NetHack and CodeKeep), Artboard, Directory, and the persistent bonsai sidebar",
-        "  Home chat includes synthetic entries: RSS, News, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
+        "  Home chat includes synthetic entries: RSS, News, Cyberspace, Voice, Mentions, Discover; Directory owns Profiles, Projects, and Pinstar",
         "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
         "  House-table runtime state is process-local and can reset on SSH server restart",
         "",

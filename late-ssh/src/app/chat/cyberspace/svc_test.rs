@@ -3,7 +3,7 @@ use std::time::Duration;
 use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::test_utils::{create_test_user, test_db};
 
-use super::svc::{CsEvent, CyberspaceService};
+use crate::app::chat::cyberspace::svc::{CsEvent, CyberspaceService};
 
 /// A base URL nothing listens on: any code path that unexpectedly touches
 /// the network fails fast instead of calling the real cyberspace API.
