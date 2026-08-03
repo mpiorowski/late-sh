@@ -1314,3 +1314,50 @@ async fn clicking_the_mentions_hud_text_opens_mentions() {
     app.handle_input(format!("\x1b[<0;{};1M", mentions_col + 1).as_bytes());
     wait_for_render_contains(&mut app, "mentioned you in").await;
 }
+
+#[tokio::test]
+async fn forced_tour_gates_input_until_each_named_key() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-gate-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-gate-flow-it");
+
+    // Arm the tour the way a first-ever session does: land in the tavern
+    // with the walkthrough pending.
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Pending;
+    app.clubhouse.enter_screen();
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+
+    // The gate swallows everything but the named key: no page hopping, no
+    // Tab, no help modal, no reserved chords, no composer.
+    for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"i"] {
+        app.handle_input(bytes);
+    }
+    assert_eq!(app.screen, Screen::Clubhouse);
+    assert!(!app.show_help);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
+
+    // The named digits walk the route in order, nothing else moves it.
+    for (bytes, screen) in [
+        (&b"1"[..], Screen::Dashboard),
+        (b"2", Screen::Arcade),
+        (b"3", Screen::Games),
+        (b"4", Screen::Artboard),
+        (b"5", Screen::Pinstar),
+        (b"6", Screen::Leaderboard),
+        (b"0", Screen::Clubhouse),
+    ] {
+        app.handle_input(bytes);
+        assert_eq!(app.screen, screen);
+    }
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
+
+    // Enter settles in, and input is free again.
+    app.handle_input(b"\r");
+    assert_eq!(app.clubhouse.tutorial, Tutorial::Done);
+    app.handle_input(b"2");
+    assert_eq!(app.screen, Screen::Arcade);
+}

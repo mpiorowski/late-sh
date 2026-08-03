@@ -88,23 +88,22 @@ struct BannerEntry {
 }
 
 /// The first-visit tour. `Pending` arms it until the screen is first opened;
-/// the door box teaches walking, then the tour walks every top-level page in
-/// number order (each stop advances when the expected page is entered, so
-/// digits and Tab both work), ends back in the tavern, and `Done` is
-/// persisted once on the homecoming Enter. There is no Esc skip, so a stray
-/// keypress can't cut it short. The bartender is deliberately absent from
-/// the route: his comped welcome pour stays a hidden treasure for whoever
-/// walks up to the glowing bar (see [`State::welcome_pour_due`]).
+/// then the tour is FORCED: while it runs, the input gate in `app/input.rs`
+/// (`handle_tour_gate`) swallows everything except the single key the
+/// current box names (`State::tutorial_forced_step`) and the quit keys. The
+/// route walks every top-level page in number order, ends back in the
+/// tavern, and `Done` is persisted once on the homecoming Enter. The
+/// bartender is deliberately absent from the route: his comped welcome pour
+/// stays a hidden treasure for whoever walks up to the glowing bar after
+/// the send-off (see [`State::welcome_pour_due`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tutorial {
     /// Nothing to run (returning user).
     Off,
     /// Armed, fires on the first clubhouse entry this session.
     Pending,
-    /// Box over your head at the door: how to walk.
+    /// Centered box at the door: what late.sh is, then `1`.
     Welcome,
-    /// Stepped off the mat; a nudge points at `1` until they leave.
-    Wander,
     /// On Home: the chat pitch, then `2`.
     VisitChat,
     /// On The Arcade: dailies and high scores, then `3`.
@@ -117,9 +116,17 @@ pub enum Tutorial {
     VisitDirectory,
     /// On the Leaderboards: the last stop, then `0` home.
     VisitLeaderboard,
-    /// Back in the tavern: the send-off box, Enter settles in.
+    /// Back in the tavern: the send-off box, Enter sets them free.
     Homecoming,
     Done,
+}
+
+/// The one input the forced tour accepts right now: a page digit and the
+/// screen it leads to, or Enter on the homecoming box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourStep {
+    Page(u8, Screen),
+    Enter,
 }
 
 #[derive(Debug)]
@@ -372,7 +379,7 @@ impl State {
     }
 
     /// Try to walk one step; the first step frees your seat in the shared
-    /// lobby. Also advances the tutorial off the welcome box.
+    /// lobby.
     pub fn walk(&mut self, dx: i32, dy: i32) {
         if let Some(lobby) = &self.lobby {
             let (x, y) = lobby.walk(self.user_id, &self.username, dx, dy);
@@ -386,9 +393,6 @@ impl State {
                 self.player_x = nx;
                 self.player_y = ny;
             }
-        }
-        if self.tutorial == Tutorial::Welcome {
-            self.tutorial = Tutorial::Wander;
         }
     }
 
@@ -467,14 +471,13 @@ impl State {
     }
 
     /// Advance the page tour when a top-level screen is entered. Each stop
-    /// waits for exactly the page it points at, so a detour (a different
-    /// digit, a landmark Enter) never skips a stop: the nudge keeps naming
-    /// the expected key until it is pressed. Both digits and Tab land here
-    /// (`App::set_screen`), and Tab happens to walk the same order.
+    /// waits for exactly the page it points at; the input gate only lets the
+    /// matching digit through, but the state machine guards the order on its
+    /// own so a stray `set_screen` (a landmark Enter, a slash command) can
+    /// never skip a stop.
     pub fn tutorial_screen_entered(&mut self, screen: Screen) {
         self.tutorial = match (self.tutorial, screen) {
-            // A brave soul may leave the mat by digit without ever walking.
-            (Tutorial::Welcome | Tutorial::Wander, Screen::Dashboard) => Tutorial::VisitChat,
+            (Tutorial::Welcome, Screen::Dashboard) => Tutorial::VisitChat,
             (Tutorial::VisitChat, Screen::Arcade) => Tutorial::VisitArcade,
             (Tutorial::VisitArcade, Screen::Games) => Tutorial::VisitGames,
             (Tutorial::VisitGames, Screen::Artboard) => Tutorial::VisitArtboard,
@@ -485,10 +488,28 @@ impl State {
         };
     }
 
+    /// The single input the forced tour accepts right now, or `None` when
+    /// input is free (no tour, or the tour is done). The gate in
+    /// `app/input.rs` swallows everything else while this is `Some`.
+    pub fn tutorial_forced_step(&self) -> Option<TourStep> {
+        match self.tutorial {
+            Tutorial::Off | Tutorial::Pending | Tutorial::Done => None,
+            Tutorial::Welcome => Some(TourStep::Page(b'1', Screen::Dashboard)),
+            Tutorial::VisitChat => Some(TourStep::Page(b'2', Screen::Arcade)),
+            Tutorial::VisitArcade => Some(TourStep::Page(b'3', Screen::Games)),
+            Tutorial::VisitGames => Some(TourStep::Page(b'4', Screen::Artboard)),
+            Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Pinstar)),
+            Tutorial::VisitDirectory => Some(TourStep::Page(b'6', Screen::Leaderboard)),
+            Tutorial::VisitLeaderboard => Some(TourStep::Page(b'0', Screen::Clubhouse)),
+            Tutorial::Homecoming => Some(TourStep::Enter),
+        }
+    }
+
     /// The hidden treasure: the bartender comps a welcome pour the first
-    /// time the newcomer walks up to the counter, any time during or after
-    /// the tour. Returns true exactly once per session; the once-ever
-    /// guarantee is the DB insert behind the comp.
+    /// time the newcomer walks up to the counter. Walking only unlocks
+    /// after the homecoming Enter (the gate swallows movement mid-tour), so
+    /// in practice this fires after the send-off. Returns true exactly once
+    /// per session; the once-ever guarantee is the DB insert behind the comp.
     pub fn welcome_pour_due(&mut self) -> bool {
         if self.tutorial != Tutorial::Off
             && !self.welcome_pour_claimed
@@ -506,8 +527,8 @@ impl State {
         matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done) && !self.welcome_pour_claimed
     }
 
-    /// Advance past the homecoming popup (Enter). Returns true when the
-    /// tour just finished and should be persisted.
+    /// Advance past the homecoming popup (Enter, via the input gate).
+    /// Returns true when the tour just finished and should be persisted.
     pub fn tutorial_advance(&mut self) -> bool {
         match self.tutorial {
             Tutorial::Homecoming => {
@@ -516,11 +537,6 @@ impl State {
             }
             _ => false,
         }
-    }
-
-    /// True while a tutorial popup wants Enter before anything else.
-    pub fn tutorial_capturing_keys(&self) -> bool {
-        self.tutorial == Tutorial::Homecoming
     }
 }
 

@@ -807,12 +807,20 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_reserved_global_chord(app, &event) {
+    // The forced first-visit tour outranks even the reserved chords: a
+    // newcomer mid-route cannot open settings or the lobby, only follow the
+    // named key or quit. The quit-confirm modal stays above it so `y`/`n`
+    // keep working once quitting is on the table.
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_input(app, event);
         return;
     }
 
-    if app.show_quit_confirm {
-        quit_confirm::input::handle_input(app, event);
+    if handle_tour_gate(app, &event) {
+        return;
+    }
+
+    if handle_reserved_global_chord(app, &event) {
         return;
     }
 
@@ -3786,6 +3794,43 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
             app.running = false;
         }
     }
+}
+
+/// The forced first-visit tour: while a tour box names a key
+/// (`clubhouse::state::State::tutorial_forced_step`), that key and quitting
+/// are the only inputs that do anything. Everything else, mouse, arrows,
+/// and chords included, dies here so no modal, composer, or game can hijack
+/// a newcomer mid-route. Returns true when the event was consumed.
+fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
+    use crate::app::clubhouse::state::TourStep;
+
+    let Some(step) = app.clubhouse.tutorial_forced_step() else {
+        return false;
+    };
+    let byte = match event {
+        ParsedInput::Byte(byte) => *byte,
+        ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
+        // Arrows, mouse, pastes: swallowed while the tour runs.
+        _ => return true,
+    };
+    match step {
+        TourStep::Page(expected, screen) if byte == expected => {
+            // `set_screen` runs `tutorial_screen_entered`, which advances
+            // the tour to the next stop.
+            app.set_screen(screen);
+        }
+        TourStep::Enter if matches!(byte, b'\r' | b'\n') => {
+            if app.clubhouse.tutorial_advance() {
+                app.persist_clubhouse_tutorial_done();
+            }
+        }
+        TourStep::Page(..) | TourStep::Enter => match byte {
+            // The way out is always open.
+            b'q' | b'Q' => trigger_global_quit(app),
+            _ => {}
+        },
+    }
+    true
 }
 
 fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {

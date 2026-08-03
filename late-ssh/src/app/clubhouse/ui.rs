@@ -1215,23 +1215,27 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             " ☾ welcome to the late lounge ☽ ",
             vec![
                 Line::from(Span::styled(
-                    "you're on the welcome mat, the house is live.",
+                    "late.sh: a late-night clubhouse that lives in a terminal.",
                     text,
                 )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[arrows/hjkl] ", key),
-                    Span::styled("walk around", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("introduce yourself first", text),
-                ]),
+                Line::from(Span::styled(
+                    "one tavern and six pages: chat, games, a shared canvas,",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "the people, the scores. everyone you'll see here is real.",
+                    text,
+                )),
                 Line::default(),
                 Line::from(Span::styled(
-                    "take a step and we'll walk the house.",
+                    "you're on the welcome mat. let's take the tour.",
                     text,
                 )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[1] ", key),
+                    Span::styled("first stop: the chat", text),
+                ]),
             ],
         ),
         Tutorial::Homecoming => (
@@ -1247,6 +1251,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 )),
                 Line::default(),
                 Line::from(vec![
+                    Span::styled("[arrows/hjkl] ", key),
+                    Span::styled("walk around", text),
+                ]),
+                Line::from(vec![
                     Span::styled("[i] ", key),
                     Span::styled("say something, it floats over your head", text),
                 ]),
@@ -1259,11 +1267,20 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                     Span::styled("the lobby", text),
                 ]),
                 Line::from(vec![
+                    Span::styled("[Ctrl+O] ", key),
+                    Span::styled("introduce yourself · ", text),
                     Span::styled("[?] ", key),
-                    Span::styled("the full guide, any time", text),
+                    Span::styled("the full guide", text),
                 ]),
                 Line::default(),
-                Line::from(Span::styled("the bar glows late for new faces.", dim)),
+                Line::from(Span::styled(
+                    "psst: see the bar glowing, northwest? walk over.",
+                    dim,
+                )),
+                Line::from(Span::styled(
+                    "the bartender pours every new face their first drink.",
+                    dim,
+                )),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Enter] ", key),
@@ -1271,44 +1288,18 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 ]),
             ],
         ),
-        Tutorial::Wander => {
-            // A small nudge, pinned bottom-left, out of the walking path.
-            let lines = vec![Line::from(vec![
-                Span::styled("when you're ready, press ", text),
-                Span::styled("[1]", key),
-                Span::styled(": the chat", text),
-            ])];
-            let width = (38u16).min(inner.width.saturating_sub(2));
-            let height = 3u16.min(inner.height);
-            let rect = Rect {
-                x: inner.x + 1,
-                y: inner.y + inner.height.saturating_sub(height),
-                width,
-                height,
-            };
-            frame.render_widget(Clear, rect);
-            frame.render_widget(
-                Paragraph::new(lines).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(border)
-                        .title(Span::styled(" ✦ the tour ", border)),
-                ),
-                rect,
-            );
-            return false;
-        }
+        // Mid-loop stages never render in the tavern: the forced gate only
+        // lets the route's digits through, and `0` lands straight on
+        // Homecoming.
         Tutorial::VisitChat
         | Tutorial::VisitArcade
         | Tutorial::VisitGames
         | Tutorial::VisitArtboard
         | Tutorial::VisitDirectory
-        | Tutorial::VisitLeaderboard => {
-            // Wandered home mid-tour: the nudge keeps naming the next page.
-            draw_tour_overlay(frame, inner, view.state.tutorial, Screen::Clubhouse);
-            return false;
-        }
-        Tutorial::Off | Tutorial::Pending | Tutorial::Done => return false,
+        | Tutorial::VisitLeaderboard
+        | Tutorial::Off
+        | Tutorial::Pending
+        | Tutorial::Done => return false,
     };
 
     let width = (lines
@@ -1340,11 +1331,10 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
     true
 }
 
-/// The page stops of the first-visit tour. `render.rs` calls this on every
-/// non-clubhouse screen; the clubhouse calls it from [`draw_tutorial`] when
-/// a mid-tour player wanders home early. On the stop's own page the full
-/// pitch box pins top-right; on any other screen a one-line nudge keeps
-/// naming the key that resumes the route. Off-tour stages draw nothing.
+/// The page stops of the first-visit tour, drawn centered over the page
+/// they pitch (`render.rs` calls this on every non-clubhouse screen). The
+/// forced gate guarantees the current screen is the stop's own page, so a
+/// mismatch, like off-tour stages, draws nothing.
 pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen: Screen) {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
@@ -1362,13 +1352,26 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "every room, thread and DM on late.sh lives here.",
                         text,
                     )),
+                    Line::default(),
                     Line::from(vec![
                         Span::styled("[i] ", key),
                         Span::styled("write · ", text),
                         Span::styled("[Ctrl+/] ", key),
-                        Span::styled("switch rooms · ", text),
+                        Span::styled("jump anywhere, type ?query to search", text),
+                    ]),
+                    Line::from(vec![
                         Span::styled("[Ctrl+]] ", key),
-                        Span::styled("pick an icon", text),
+                        Span::styled("pick an icon to sign your messages", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[/dm @user] ", key),
+                        Span::styled("direct message · ", text),
+                        Span::styled("[/public #room] ", key),
+                        Span::styled("open a room", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[/private #room] ", key),
+                        Span::styled("invite-only · your Mentions wait in the rail", text),
                     ]),
                 ],
                 "2",
@@ -1383,7 +1386,38 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         text,
                     )),
                     Line::from(Span::styled(
-                        "daily puzzles pay chips; quests and streaks stack up top.",
+                        "daily puzzles pay Late Chips; quests and streaks stack up top.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("chips buy things. ", text),
+                        Span::styled("[/shop] ", key),
+                        Span::styled("badges, flags, 24h name effects,", text),
+                    ]),
+                    Line::from(Span::styled(
+                        "a pet companion to feed, an aquarium with real fish.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Ctrl+G] ", key),
+                        Span::styled("the lobby, the busiest room in the house:", text),
+                    ]),
+                    Line::from(Span::styled(
+                        "live tables: Poker, Blackjack, Asterion, Tron, Super Snake,",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "plus seven daily duels: chess, battleship, connect four,",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "reversi, checkers, backgammon, briscola. challenge someone,",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "walk away, play a move whenever; 24h on the clock per move.",
                         text,
                     )),
                 ],
@@ -1398,12 +1432,38 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "the big ones live behind this door:",
                         text,
                     )),
+                    Line::default(),
                     Line::from(Span::styled(
-                        "Lateania, our own MMO. NetHack, the real thing.",
+                        "Lateania: our own MMO. one shared world, bosses, mounts.",
                         text,
                     )),
                     Line::from(Span::styled(
-                        "DCSS, the most played roguelike alive. Green Dragon reborn.",
+                        "NetHack: the legend itself, decades deep. the DevTeam",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "thought of everything; an ascension here is earned.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "DCSS: the most played roguelike alive. pick a species,",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "pick a god, dive for the Orb.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "Brogue: the most beautiful dungeon ASCII ever drew.",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "Green Dragon: the legendary BBS door, reborn.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "and much more; your wins stick to your name.",
                         text,
                     )),
                 ],
@@ -1419,9 +1479,22 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         text,
                     )),
                     Line::from(Span::styled(
-                        "leave a mark, someone will draw beside it by morning.",
+                        "everything stays, and every glyph remembers who drew it.",
                         text,
                     )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[i] ", key),
+                        Span::styled("or a click starts drawing · ", text),
+                        Span::styled("[Ctrl+]] ", key),
+                        Span::styled("the glyph picker", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("[g] ", key),
+                        Span::styled("time-travel the snapshots · ", text),
+                        Span::styled("[?] ", key),
+                        Span::styled("the local guide, here and everywhere", text),
+                    ]),
                 ],
                 "5",
                 "the directory",
@@ -1431,13 +1504,18 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 " ✦ the tour · the directory ",
                 vec![
                     Line::from(Span::styled(
-                        "the people: profiles, projects, what everyone builds.",
+                        "the people: profiles, the projects they ship, pinned work.",
                         text,
                     )),
                     Line::from(Span::styled(
                         "your profile gets a public page on the web.",
                         text,
                     )),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[Ctrl+O] ", key),
+                        Span::styled("fill yours in: bio, links, what you're building.", text),
+                    ]),
                 ],
                 "6",
                 "the leaderboards",
@@ -1447,9 +1525,18 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 " ✦ the tour · the leaderboards ",
                 vec![
                     Line::from(Span::styled(
-                        "every game keeps score: chips, wins, streaks.",
+                        "every game keeps score: chips, wins, streaks, high scores,",
                         text,
                     )),
+                    Line::from(Span::styled(
+                        "monthly and all-time. each month's top three wear badges",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "beside their name in chat, for everyone to see.",
+                        text,
+                    )),
+                    Line::default(),
                     Line::from(Span::styled(
                         "your name lands here sooner than you think.",
                         text,
@@ -1461,26 +1548,24 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
             Tutorial::Off
             | Tutorial::Pending
             | Tutorial::Welcome
-            | Tutorial::Wander
             | Tutorial::Homecoming
             | Tutorial::Done => return,
         };
 
-    let lines: Vec<Line> = if screen == home {
-        let mut lines = pitch;
-        lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::styled(format!("[{next_key}] "), key),
-            Span::styled(format!("next: {next_label}"), text),
-        ]));
-        lines
-    } else {
-        vec![Line::from(vec![
-            Span::styled("the tour waits: ", text),
-            Span::styled(format!("[{next_key}] "), key),
-            Span::styled(next_label.to_string(), text),
-        ])]
-    };
+    if screen != home {
+        return;
+    }
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let mut lines = pitch;
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "take it in; everything above unlocks when the tour ends.",
+        dim,
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(format!("[{next_key}] "), key),
+        Span::styled(format!("next: {next_label}"), text),
+    ]));
 
     let width = (lines
         .iter()
@@ -1490,10 +1575,10 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
         .max(title.chars().count())
         + 4)
     .min(usize::from(area.width).saturating_sub(2)) as u16;
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(1));
     let rect = Rect {
-        x: area.x + area.width.saturating_sub(width + 1),
-        y: area.y + 1,
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 3,
         width,
         height,
     };

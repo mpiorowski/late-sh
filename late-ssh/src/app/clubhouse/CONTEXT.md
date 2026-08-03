@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-08-03 (first-visit tutorial became the page tour: the door box now leads into a forced walk of every top-level page in number order, ends back in the tavern, and the bartender's comped welcome pour moved out of the route to become the hidden treasure behind the pulsing bar sign; the comp is now guarded once-ever in the DB)
+- Last updated: 2026-08-03 (the first-visit page tour is now FORCED: while it runs, an input gate in `app/input.rs` swallows every input except the single key the current centered box names, plus quitting; the route walks pages 1-6 then 0 home, ends in the tavern, and the bartender's comped welcome pour stays the hidden treasure behind the pulsing bar sign, guarded once-ever in the DB)
 - Status: Active
 
 ## 1. Summary
@@ -111,31 +111,31 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
   (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
-  first clubhouse entry: spawns the player at the door (`Tutorial::Welcome`,
-  walk keys + Ctrl+O), first step moves to `Wander` (a pinned nudge naming
-  `1`), then the tour walks every top-level page in number order:
-  `VisitChat` (1) -> `VisitArcade` (2) -> `VisitGames` (3) ->
+  first clubhouse entry: a centered box at the door pitches what late.sh is
+  (`Tutorial::Welcome`), then the tour walks every top-level page in number
+  order: `VisitChat` (1) -> `VisitArcade` (2) -> `VisitGames` (3) ->
   `VisitArtboard` (4) -> `VisitDirectory` (5) -> `VisitLeaderboard` (6) ->
-  `Homecoming` (0, back in the tavern). Each stop advances only when its
-  page is entered (`State::tutorial_screen_entered`, hooked in
-  `App::set_screen`), so digits and Tab both work and a detour never skips
-  a stop; the pitch box for the current stop pins top-right on its own page
-  (`ui::draw_tour_overlay`, called from `render.rs` on non-clubhouse
-  screens and from the clubhouse's `draw_tutorial` when a mid-tour player
-  wanders home early), a one-line nudge names the expected key anywhere
-  else. `Homecoming`'s Enter finishes the tour in place: the player stays
-  in the tavern.
-- Enter only advances the homecoming popup (`tutorial_capturing_keys`);
-  there is no Esc skip. Completion persists once via
-  `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure
-  only logged: worst case the tour runs again next session).
+  `Homecoming` (0, back in the tavern). Each stop draws a centered pitch
+  box over the real page (`ui::draw_tour_overlay`, called from `render.rs`)
+  ending in the next key; `Homecoming`'s Enter finishes the tour in place
+  and frees input: the player stays in the tavern.
+- **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
+  `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
+  below the quit-confirm modal) swallows every input, mouse and chords
+  included, except the named digit (which runs `set_screen`; the stage
+  advances in `State::tutorial_screen_entered`, hooked there), the
+  homecoming Enter, and `q` (quitting always works; Esc's lone-byte path
+  can still arm the quit confirm). There is no skip. Completion persists
+  once via `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget,
+  failure only logged: worst case the tour runs again next session).
 - **The hidden treasure:** the bartender is deliberately absent from the
   route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
   banner only, never posted to #lounge) plus the comped welcome pour fire
-  the first time the newcomer walks up to the counter in the tour session
-  (`State::welcome_pour_due`), whenever that happens. After `Homecoming`
-  the bar sign pulses until the pour is claimed (`State::bar_glow`), the
-  only pointer at it. The once-ever guarantee is
+  the first time the newcomer walks up to the counter
+  (`State::welcome_pour_due`); since walking is gated until the homecoming
+  Enter, in practice that is after the send-off. The homecoming box ends
+  with a whispered pointer at it, and the bar sign pulses until the pour is
+  claimed (`State::bar_glow`). The once-ever guarantee is
   `UserDrinks::record_welcome_pour`, an insert-only comp that returns
   `None` for anyone who has ever drunk, so tour reruns after a mid-tour
   disconnect can't double-comp.

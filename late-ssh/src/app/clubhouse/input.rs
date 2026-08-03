@@ -27,17 +27,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         return handle_click(app, mouse);
     }
 
+    // The first-visit tour never reaches this handler: while it runs, the
+    // forced gate in `app/input.rs` (`handle_tour_gate`) owns all input,
+    // including the homecoming Enter.
     if let Some(byte) = event_byte(event) {
-        // The homecoming popup wants Enter before anything else. There is no
-        // Esc skip: the tour only ends back here, settling in. The player
-        // stays in the tavern; the glowing bar is theirs to find.
-        if matches!(byte, b'\r' | b'\n') && app.clubhouse.tutorial_capturing_keys() {
-            if app.clubhouse.tutorial_advance() {
-                app.persist_clubhouse_tutorial_done();
-            }
-            return true;
-        }
-
         match byte {
             b'i' | b'I' => {
                 if let Some(lounge_id) = app.chat.lounge_room_id() {
