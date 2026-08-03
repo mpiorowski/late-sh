@@ -1898,6 +1898,7 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
         crate::authz::Permissions::new(false, false),
         None,
         notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
     )
 }
 
@@ -2217,4 +2218,48 @@ fn parse_pomodoro_command_ignores_unrelated_input() {
     assert_eq!(parse_pomodoro_command("/pomodoros"), None);
     assert_eq!(parse_pomodoro_command("hello /pomodoro"), None);
     assert_eq!(parse_pomodoro_command("/poll"), None);
+}
+
+#[test]
+fn format_cooldown_rounds_minutes_up() {
+    assert_eq!(format_cooldown(Duration::from_secs(45)), "45s");
+    assert_eq!(format_cooldown(Duration::from_millis(200)), "1s");
+    assert_eq!(format_cooldown(Duration::from_secs(60)), "1 min");
+    assert_eq!(format_cooldown(Duration::from_secs(90)), "2 min");
+    assert_eq!(format_cooldown(Duration::from_secs(300)), "5 min");
+}
+
+#[tokio::test]
+async fn bot_cooldown_banner_warns_only_for_the_hot_bot_and_room() {
+    use crate::app::ai::ladder::LadderBot;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "ladder_banner_user").await;
+    let state = counter_test_state(&test_db, user.id);
+    let room = Uuid::now_v7();
+    let other_room = Uuid::now_v7();
+
+    // Nothing answered yet: a mention warns nobody.
+    assert!(state.bot_cooldown_banner(room, "@bot hello").is_none());
+
+    // The ghost loop answers once; the ladder is now hot in this room.
+    state.mention_ladders.check_and_step(LadderBot::Bot, user.id, room);
+
+    let banner = state
+        .bot_cooldown_banner(room, "hey @bot still there?")
+        .expect("hot ladder warns");
+    assert!(
+        banner.message.contains("@bot is cooling down"),
+        "unexpected banner text: {}",
+        banner.message
+    );
+
+    // A different bot, a plain message, and another room all stay quiet.
+    assert!(state.bot_cooldown_banner(room, "@bartender a pint").is_none());
+    assert!(state.bot_cooldown_banner(room, "no bots here").is_none());
+    assert!(
+        state
+            .bot_cooldown_banner(other_room, "@bot hello")
+            .is_none()
+    );
 }
