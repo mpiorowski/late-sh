@@ -1013,6 +1013,7 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            mention_ladders: self.state.mention_ladders.clone(),
             scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
@@ -1036,6 +1037,9 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
+            initial_interaction_mode: late_core::models::user::extract_interaction_mode(
+                &user.settings,
+            ),
             initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
             initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
             initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
@@ -1178,7 +1182,10 @@ impl russh::server::Handler for ClientHandler {
                 .await;
             }
 
-            let init = App::enter_alt_screen();
+            // Keyboard-only sessions never turn on mouse reporting, so the
+            // terminal keeps its own selection/copy.
+            let mouse_on = app.lock().await.interaction_mode.mouse_enabled();
+            let init = App::enter_alt_screen(mouse_on);
             let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;
 
             let app = Arc::clone(app);

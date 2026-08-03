@@ -87,7 +87,8 @@ impl Class {
     ];
 
     /// The hard level ceiling. Reaching it is the long game.
-    pub const MAX_LEVEL: i32 = 50;
+    // Wildbound raised the summit: fifty more levels past the old cap.
+    pub const MAX_LEVEL: i32 = 100;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -383,8 +384,8 @@ impl Class {
         }
     }
 
-    /// Full stat block at a given level. Linear-plus-curve growth keeps all five
-    /// classes climbing meaningfully to level 50.
+    /// Full stat block at a given level. Linear-plus-curve growth keeps every
+    /// class climbing meaningfully all the way to the Wildbound cap of 100.
     pub fn stats_at(self, level: i32) -> ClassStats {
         let lvl = level.clamp(1, Self::MAX_LEVEL);
         let l = lvl - 1; // levels gained past 1
@@ -567,12 +568,26 @@ impl Class {
     }
 }
 
+/// The knee of the xp curve: the pre-Wildbound level cap. The cubic in
+/// `xp_for_level` was tuned for a 50-level game; left running to a doubled
+/// cap it priced the 50->100 half at ~7x the whole original climb, stranding
+/// the capstone abilities behind it. Past the knee each summit level instead
+/// costs a flat sum, set just above the knee's own marginal cost (~72.6k) so
+/// the slope never dips at the seam.
+const XP_KNEE_LEVEL: i32 = 50;
+const XP_PER_SUMMIT_LEVEL: i64 = 75_000;
+
 /// Total experience required to reach a given level. Smoothly rising curve so
 /// early levels arrive quickly, then the climb past the first story bosses
-/// stretches into a longer campaign.
+/// stretches into a longer campaign; past the old cap (the knee) each summit
+/// level costs a flat 75k, landing the 50->100 half near 3x the 1->50 journey.
 pub fn xp_for_level(level: i32) -> i64 {
     if level <= 1 {
         return 0;
+    }
+    if level > XP_KNEE_LEVEL {
+        return xp_for_level(XP_KNEE_LEVEL)
+            + i64::from(level - XP_KNEE_LEVEL) * XP_PER_SUMMIT_LEVEL;
     }
     let l = level as i64;
     let d = l - 1;

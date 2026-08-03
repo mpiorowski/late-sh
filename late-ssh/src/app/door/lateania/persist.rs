@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 17;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -28,6 +28,7 @@ pub struct SavedCharacterInit {
     pub banked_gold: i64,
     pub hp: i32,
     pub room: RoomId,
+    pub waypoint: Option<RoomId>,
     pub visited: Vec<RoomId>,
     pub inventory: Vec<u32>,
     pub equipped: Vec<(String, u32)>,
@@ -42,12 +43,18 @@ pub struct SavedCharacterInit {
     pub archetype: Option<String>,
     pub pet: Option<String>,
     pub pet_loyalty: i64,
+    /// A won-over stray companion (Genesys): the WILDLIFE index.
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    pub stray_bond: Option<(u32, u32, u64)>,
     pub owned_plot: Option<u32>,
     pub house_furniture: Vec<(u32, String)>,
     pub appearance: Vec<u8>,
     pub skills: Vec<(String, i64)>,
     pub craft_skills: Vec<(String, i64)>,
     pub taming_xp: i64,
+    pub rpg_mode: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,6 +78,10 @@ pub struct SavedCharacter {
     /// Room the character logged out in; reloaded here if it still exists.
     #[serde(default = "start_room")]
     pub room: RoomId,
+    /// A personal waypoint the player has marked (see `svc::set_waypoint`);
+    /// None for pre-waypoint saves or characters who have never set one.
+    #[serde(default)]
+    pub waypoint: Option<RoomId>,
     /// Rooms the character has visited, for the overhead map. Empty for pre-v3
     /// saves, which simply start the map from wherever they reload.
     #[serde(default)]
@@ -116,6 +127,14 @@ pub struct SavedCharacter {
     /// The companion's accumulated loyalty (drives its level); 0 if no pet.
     #[serde(default)]
     pub pet_loyalty: i64,
+    /// A won-over stray companion (Genesys), by WILDLIFE index; None for
+    /// pre-Genesys saves or characters who haven't won one over yet.
+    #[serde(default)]
+    pub stray: Option<u32>,
+    /// In-progress courting of a wild critter: (WILDLIFE index, streak days,
+    /// last day fed as a Unix day number).
+    #[serde(default)]
+    pub stray_bond: Option<(u32, u32, u64)>,
     /// The housing plot (tier index) this character holds the deed to, if any.
     #[serde(default)]
     pub owned_plot: Option<u32>,
@@ -138,6 +157,10 @@ pub struct SavedCharacter {
     /// simply start the trade untrained at level 1.
     #[serde(default)]
     pub taming_xp: i64,
+    /// The live-map RPG view preference. Defaults on, so saves from before this
+    /// field come back with the map enabled.
+    #[serde(default = "enabled")]
+    pub rpg_mode: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -179,6 +202,10 @@ fn one() -> i32 {
     1
 }
 
+fn enabled() -> bool {
+    true
+}
+
 fn world_schema_version() -> u32 {
     WORLD_SCHEMA_VERSION
 }
@@ -198,6 +225,7 @@ impl SavedCharacter {
             banked_gold: init.banked_gold,
             hp: init.hp,
             room: init.room,
+            waypoint: init.waypoint,
             visited: init.visited,
             inventory: init.inventory,
             equipped: init.equipped,
@@ -212,12 +240,15 @@ impl SavedCharacter {
             archetype: init.archetype,
             pet: init.pet,
             pet_loyalty: init.pet_loyalty,
+            stray: init.stray,
+            stray_bond: init.stray_bond,
             owned_plot: init.owned_plot,
             house_furniture: init.house_furniture,
             appearance: init.appearance,
             skills: init.skills,
             craft_skills: init.craft_skills,
             taming_xp: init.taming_xp,
+            rpg_mode: init.rpg_mode,
         }
     }
 

@@ -152,8 +152,6 @@ impl Weather {
         }
     }
 }
-/// A player who sends no command for this long is dropped from the world.
-const PLAYER_IDLE_TIMEOUT_SECS: u64 = 10 * 60;
 /// How long a fallen player's spirit lingers by their corpse, waiting for a
 /// resurrection, before it is drawn back to the temple automatically. The
 /// player may also release early. (Was an 8s rest before the dead state.)
@@ -162,11 +160,18 @@ const CORPSE_LINGER_SECS: u64 = 90;
 const RESURRECT_HP_PCT: i32 = 40;
 /// Gold to feed (heal, revive, and raise the loyalty of) a companion.
 const PET_FEED_COST: i64 = 20;
+/// Consecutive days a wild adoptable critter must be fed to win it over as a
+/// stray companion (Genesys). Free (no gold cost) - the price is patience.
+const STRAY_ADOPTION_DAYS: u32 = 5;
 /// Fraction of a blow that splashes onto a fighting companion when its owner is
 /// struck (the pet wades in and shares the punishment).
 const PET_WOUND_PCT: i32 = 30;
 /// Resource a caster spends to perform the Resurrection rite.
 const RESURRECT_COST: i32 = 30;
+/// Gold to warp to a marked personal waypoint. Word of recall (to Embergate)
+/// stays free; a warp to your own chosen spot costs something, so a portable
+/// teleporter stays a real convenience rather than trivialising distance.
+const WAYPOINT_WARP_COST: i64 = 250;
 /// Monk "Iron Body": percent reduction to incoming physical blows.
 const IRON_BODY_PCT: i32 = 15;
 /// Beastlord "Pack Bond": percent bonus to a companion's attack (and, via the
@@ -292,8 +297,34 @@ pub enum LogKind {
     Loot,
 }
 
+/// How a room description came about, deciding the Travel line in the Recent
+/// feed. In field mode (rpg on) the moving `@` and the Here panel already tell
+/// the story of a step through known land, so only a discovery earns a line;
+/// classic mode keeps its per-step breadcrumb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Arrival {
+    /// Re-describing in place (a look around, an ambient refresh): no line.
+    Silent,
+    /// Travel into a room already on the player's map.
+    Revisit,
+    /// First footfall in this room.
+    Discovery,
+}
+
+/// Who hears a spoken line: the room (the default, unchanged), everyone in
+/// the same named zone, or every adventurer currently in Lateania. Chosen per
+/// message with a leading `/z`/`/zone` or `/w`/`/world` marker; see `say`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatScope {
+    Room,
+    Zone,
+    World,
+}
+
 #[derive(Clone, Debug)]
 pub struct MobView {
+    /// Spawn id, so a click on this foe's row can target this exact foe.
+    pub id: u32,
     pub name: String,
     pub hp: i32,
     pub max_hp: i32,
@@ -301,6 +332,8 @@ pub struct MobView {
     /// Rarity rank for colouring the name: common/uncommon/rare/epic/legendary.
     pub rank: String,
     pub boss: bool,
+    /// True when this is the foe you're currently locked onto.
+    pub targeted: bool,
 }
 
 /// One quest row in the journal.
@@ -321,6 +354,10 @@ pub struct WildlifeView {
     pub kind: String,
     /// Perk label for boons (e.g. "emboldened"); empty otherwise.
     pub perk: String,
+    /// Out of legend rather than the mundane world (Genesys).
+    pub mythical: bool,
+    /// Can be won over as a stray companion by feeding it daily (Genesys).
+    pub adoptable: bool,
 }
 
 /// One harvestable resource node in the room, for the Resources list.
@@ -694,6 +731,20 @@ pub struct PlayerView {
     pub safe: bool,
     pub exits: Vec<(Dir, String)>,
     pub mobs: Vec<MobView>,
+    /// Rooms near you that hold a living, revealed foe, so the live field can
+    /// mark where danger is without you having to step into it. Same-level and
+    /// within the field's reach only; fog still hides rooms you've never seen.
+    pub nearby_foes: Vec<RoomId>,
+    /// Rooms near you that hold another adventurer, so the field shows where
+    /// other players are. Same window as `nearby_foes`.
+    pub nearby_players: Vec<RoomId>,
+    /// The live-map RPG view preference, persisted with the character.
+    pub rpg_mode: bool,
+    /// What you're riding right now (Wildbound mounts), with its stride,
+    /// e.g. "Moonlit Unicorn (stride 4)". None on foot.
+    pub riding: Option<String>,
+    /// Whether a personal waypoint is set (see `set_waypoint`/`warp_to_waypoint`).
+    pub waypoint_set: bool,
     pub occupants: Vec<OccupantView>,
     /// The companion this player is auto-following, if any (for the UI tag).
     pub following: Option<Uuid>,
@@ -709,6 +760,9 @@ pub struct PlayerView {
     pub shop: Option<ShopView>,
     /// The player's live combat companion, if any.
     pub pet: Option<PetView>,
+    /// A won-over stray companion's name, if any (Genesys) - lives alongside
+    /// `pet` rather than replacing it.
+    pub stray: Option<String>,
     /// The companion vendor, present when standing at a capital Stable.
     pub stable: Option<StableView>,
     /// The Animal Taming panel, present when a tameable wild beast roams here.
@@ -796,6 +850,11 @@ impl PlayerView {
             safe: true,
             exits: Vec::new(),
             mobs: Vec::new(),
+            nearby_foes: Vec::new(),
+            nearby_players: Vec::new(),
+            rpg_mode: true,
+            riding: None,
+            waypoint_set: false,
             occupants: Vec::new(),
             following: None,
             wildlife: Vec::new(),
@@ -806,6 +865,7 @@ impl PlayerView {
             inventory: Vec::new(),
             shop: None,
             pet: None,
+            stray: None,
             stable: None,
             taming: None,
             housing: None,
@@ -956,7 +1016,6 @@ impl LateaniaService {
                 state.clear_frontier_descent_pending(user_id);
             }
             f(&mut state);
-            state.touch(user_id);
             svc.publish(&state);
         });
     }
@@ -1028,7 +1087,6 @@ impl LateaniaService {
                 // absorbs quick leave/rejoin ping-pong.
                 svc.activity.game_started_task(user_id, ActivityGame::Mud);
             }
-            state.touch(user_id);
             svc.publish(&state);
         });
     }
@@ -1367,7 +1425,7 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.buy_pet(user_id, &species_key));
     }
 
-    /// Feed and tend the player's companion at the room's Stable.
+    /// Feed and tend the player's companion, wherever they stand.
     pub fn feed_pet_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.feed_pet(user_id));
     }
@@ -1393,12 +1451,24 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.cycle_appearance(user_id, field, delta));
     }
 
+    pub fn toggle_mount_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.toggle_mount(user_id));
+    }
+
     pub fn move_task(&self, user_id: Uuid, dir: Dir) {
         self.mutate_preserving_frontier_warning(user_id, move |s| s.move_player(user_id, dir));
     }
 
     pub fn recall_task(&self, user_id: Uuid) {
         self.mutate(user_id, move |s| s.recall(user_id));
+    }
+
+    pub fn set_waypoint_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.set_waypoint(user_id));
+    }
+
+    pub fn warp_to_waypoint_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.warp_to_waypoint(user_id));
     }
 
     pub fn retreat_task(&self, user_id: Uuid) {
@@ -1450,6 +1520,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.engage(user_id));
     }
 
+    pub fn engage_mob_task(&self, user_id: Uuid, mob_id: u32) {
+        self.mutate(user_id, move |s| s.engage_mob(user_id, mob_id));
+    }
+
     pub fn ability_task(&self, user_id: Uuid, slot: u8) {
         self.mutate(user_id, move |s| s.use_ability(user_id, slot));
     }
@@ -1472,6 +1546,19 @@ impl LateaniaService {
 
     pub fn use_item_task(&self, user_id: Uuid, item_id: u32) {
         self.mutate(user_id, move |s| s.use_item(user_id, item_id));
+    }
+
+    pub fn quaff_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| s.quaff_best(user_id));
+    }
+
+    pub fn toggle_rpg_mode_task(&self, user_id: Uuid) {
+        self.mutate(user_id, move |s| {
+            if let Some(p) = s.players.get_mut(&user_id) {
+                p.rpg_mode = !p.rpg_mode;
+                s.dirty = true; // persist the preference
+            }
+        });
     }
 
     pub fn buy_task(&self, user_id: Uuid, item_id: u32) {
@@ -1521,14 +1608,6 @@ impl LateaniaService {
         });
     }
 
-    pub fn touch_activity_task(&self, user_id: Uuid) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            let mut state = svc.state.lock().await;
-            state.touch(user_id);
-        });
-    }
-
     fn start_tick_loop(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -1537,18 +1616,11 @@ impl LateaniaService {
                 ticker.tick().await;
                 let mut state = svc.state.lock().await;
                 let tick = state.tick();
-                let idle_saves = tick.idle_saves;
                 if state.dirty {
                     svc.publish(&state);
                     state.dirty = false;
                 }
                 drop(state);
-                for (user_id, saved) in idle_saves {
-                    svc.clear_sessions(user_id);
-                    if let Some(save) = svc.prepare_persist(user_id, saved) {
-                        svc.persist(save).await;
-                    }
-                }
                 for outcome in tick.kills {
                     svc.publish_kill_outcome(outcome);
                 }
@@ -1665,7 +1737,6 @@ struct KillOutcome {
 #[derive(Default)]
 struct TickOutput {
     kills: Vec<KillOutcome>,
-    idle_saves: Vec<(Uuid, SavedCharacter)>,
 }
 
 struct PendingSave {
@@ -1701,6 +1772,11 @@ struct PlayerState {
     room: RoomId,
     /// Previous room entered from, for the highlighted minimap trail.
     previous_room: Option<RoomId>,
+    /// A personal waypoint the player has marked (see `set_waypoint`), warped
+    /// to with `warp_to_waypoint` - the far run back from the Frontier's deep
+    /// levels to Embergate (and back again) for healing/resurrecting is a real
+    /// pain point without one. Persists across sessions.
+    waypoint: Option<RoomId>,
     /// Every room this character has stood in, for the overhead map. Shared
     /// with the published views (`Arc::make_mut` on entry), so a snapshot costs
     /// a refcount instead of a deep copy per player.
@@ -1747,6 +1823,13 @@ struct PlayerState {
     /// The combat companion bought from a Stable; travels with and fights for
     /// the player. At most one at a time.
     pet: Option<Pet>,
+    /// A stray companion won over by feeding it daily (Genesys) - lives on top
+    /// of the pet above rather than replacing it; a WILDLIFE index.
+    stray: Option<usize>,
+    /// In-progress courting of a wild adoptable critter: (WILDLIFE index,
+    /// consecutive days fed, the last day fed as a Unix day number). Reset if
+    /// a day is missed; promoted to `stray` once it reaches the streak needed.
+    stray_bond: Option<(usize, u32, u64)>,
     /// Chosen appearance/bio trait indices (see `appearance::FIELDS`).
     appearance: [u8; appearance::N_FIELDS],
     /// Gathering-skill xp, keyed by trade; the level is a pure function of xp.
@@ -1755,8 +1838,17 @@ struct PlayerState {
     /// Crafting-skill xp, keyed by trade (same shape and curve as `skills`).
     craft_skills: HashMap<CraftSkill, i64>,
     /// Total Animal Taming xp (the beastmaster trade). Its level is a pure
-    /// function of this, on the same 1..=50 curve. Persisted (schema v14).
+    /// function of this, on the same skill curve (1..=SKILL_MAX_LEVEL).
+    /// Persisted (schema v14).
     taming_xp: i64,
+    /// Whether the live walk-around field (RPG mode) is on for this character.
+    /// A rendering preference, but persisted so it survives across sessions.
+    rpg_mode: bool,
+    /// When this player last spoke on a zone/world scope, for the anti-spam
+    /// broadcast cooldown. Session-only.
+    last_broadcast: Option<Instant>,
+    /// Riding the companion (Wildbound mounts). Session-only.
+    mounted: bool,
     /// A weapon coated with poison: (damage per tick, strikes remaining). Each
     /// landed melee hit leaves a poison DoT and spends one charge. Transient.
     weapon_poison: Option<(i32, u8)>,
@@ -1767,7 +1859,6 @@ struct PlayerState {
     /// Veteran in-place resurrections: total this adventure and how many remain.
     resurrection_cap: u8,
     resurrections_left: u8,
-    last_activity: Instant,
     /// While dead, this is the deadline at which the corpse is auto-released to
     /// the temple if no one resurrects the player and they don't release first.
     respawn_at: Option<Instant>,
@@ -2321,6 +2412,10 @@ const GAME_RESPAWN: Duration = Duration::from_secs(40);
 const NODE_RESPAWN: Duration = Duration::from_secs(45);
 /// How long a beast stays spooked (and un-approachable) after a failed tame.
 const TAME_COOLDOWN: Duration = Duration::from_secs(30);
+/// Minimum gap between one player's zone/world broadcasts. Room speech is
+/// self-limiting (only co-located players hear it); a global channel needs a
+/// brake or one voice can flood every log in Lateania.
+const BROADCAST_COOLDOWN: Duration = Duration::from_secs(10);
 /// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
 const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
 /// Strikes a single weapon-coating lasts before the poison is spent.
@@ -2423,6 +2518,7 @@ impl WorldState {
             banked_gold: 0,
             room: start,
             previous_room: None,
+            waypoint: None,
             visited: Arc::new(HashSet::from([start])),
             target: None,
             following: None,
@@ -2447,16 +2543,20 @@ impl WorldState {
             quest_cooldowns: Vec::new(),
             archetype: None,
             pet: None,
+            stray: None,
+            stray_bond: None,
             appearance: [0; appearance::N_FIELDS],
             skills: HashMap::new(),
             craft_skills: HashMap::new(),
             taming_xp: 0,
+            rpg_mode: true,
+            last_broadcast: None,
+            mounted: false,
             weapon_poison: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
             resurrections_left: 0,
-            last_activity: Instant::now(),
             respawn_at: None,
             dead: false,
             log: Vec::new(),
@@ -2627,6 +2727,8 @@ impl WorldState {
             p.base_attack = stats.attack;
             p.room = room;
             p.previous_room = None;
+            // A stale waypoint (a room that no longer exists) is simply dropped.
+            p.waypoint = saved.waypoint.filter(|&r| self.world.room(r).is_some());
             p.visited = Arc::new(saved.visited.iter().copied().collect());
             Arc::make_mut(&mut p.visited).insert(room);
             p.inventory = saved
@@ -2668,6 +2770,7 @@ impl WorldState {
                 .collect();
             // Restore Animal Taming xp (0 for pre-taming saves).
             p.taming_xp = saved.taming_xp.max(0);
+            p.rpg_mode = saved.rpg_mode;
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
             p.archetype = saved
@@ -2686,6 +2789,16 @@ impl WorldState {
                 .as_deref()
                 .and_then(pet_species_by_key)
                 .map(|species| Pet::new(species, saved.pet_loyalty));
+            // Restore the stray companion and any in-progress courting (Genesys).
+            // A stale index (the world's critter roster shrank) is simply dropped.
+            p.stray = saved
+                .stray
+                .map(|i| i as usize)
+                .filter(|&i| i < super::world::WILDLIFE.len());
+            p.stray_bond = saved
+                .stray_bond
+                .map(|(i, streak, day)| (i as usize, streak, day))
+                .filter(|&(i, ..)| i < super::world::WILDLIFE.len());
             // Restore the appearance/bio choices (clamped to valid options).
             for i in 0..appearance::N_FIELDS {
                 let v = saved.appearance.get(i).copied().unwrap_or(0);
@@ -2736,6 +2849,7 @@ impl WorldState {
             banked_gold: p.banked_gold,
             hp: p.hp.max(1),
             room: p.room,
+            waypoint: p.waypoint,
             visited: {
                 let mut rooms: Vec<RoomId> = p.visited.iter().copied().collect();
                 rooms.sort_unstable();
@@ -2754,6 +2868,8 @@ impl WorldState {
             archetype: p.archetype.map(|a| a.key.to_string()),
             pet: p.pet.map(|pet| pet.species.key.to_string()),
             pet_loyalty: p.pet.map(|pet| pet.loyalty_xp).unwrap_or(0),
+            stray: p.stray.map(|i| i as u32),
+            stray_bond: p.stray_bond.map(|(i, streak, day)| (i as u32, streak, day)),
             owned_plot: self.owned_plot(user_id).map(|plot| plot as u32),
             house_furniture: self
                 .owned_plot(user_id)
@@ -2771,6 +2887,7 @@ impl WorldState {
                 .map(|(s, xp)| (s.key().to_string(), *xp))
                 .collect(),
             taming_xp: p.taming_xp,
+            rpg_mode: p.rpg_mode,
         }))
     }
 
@@ -2941,12 +3058,6 @@ impl WorldState {
         self.world_dirty = false;
     }
 
-    fn touch(&mut self, user_id: Uuid) {
-        if let Some(player) = self.players.get_mut(&user_id) {
-            player.last_activity = Instant::now();
-        }
-    }
-
     fn is_classed(&self, user_id: Uuid) -> bool {
         self.players
             .get(&user_id)
@@ -3031,15 +3142,129 @@ impl WorldState {
         } else if let Some(player) = self.players.get_mut(&user_id) {
             player.frontier_descent_pending = false;
         }
+        let mut first_visit = false;
         if let Some(player) = self.players.get_mut(&user_id) {
             player.frontier_descent_pending = false;
             player.previous_room = Some(from);
             player.room = dest;
-            Arc::make_mut(&mut player.visited).insert(dest);
+            first_visit = Arc::make_mut(&mut player.visited).insert(dest);
         }
-        self.describe_room(user_id);
+        let arrival = if first_visit {
+            Arrival::Discovery
+        } else {
+            Arrival::Revisit
+        };
+        self.describe_room_context(user_id, arrival);
         self.apply_critter_perks(user_id);
         self.move_followers(user_id, from, dest, dir);
+        self.continue_ride(user_id, dir);
+    }
+
+    /// Wildbound mounts: while riding, one keypress strides several rooms.
+    /// After a successful step, keep walking the same direction until the
+    /// mount's stride is spent, the way runs out, a fight starts, or a
+    /// gateway asks for its own confirmation (its early-return handles that).
+    fn continue_ride(&mut self, user_id: Uuid, dir: Dir) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if !player.mounted || player.target.is_some() {
+            return;
+        }
+        let stride = player
+            .pet
+            .as_ref()
+            .and_then(|pet| super::taming::mount_stride(pet.species.key))
+            .unwrap_or(1);
+        if stride <= 1 {
+            return;
+        }
+        for _ in 1..stride {
+            let Some(player) = self.players.get(&user_id) else {
+                return;
+            };
+            if player.target.is_some() || player.respawn_at.is_some() {
+                return;
+            }
+            let has_way = self
+                .world
+                .room(player.room)
+                .is_some_and(|room| room.exits.contains_key(&dir));
+            if !has_way {
+                return;
+            }
+            // Temporarily dismount for the inner step so it doesn't recurse
+            // into its own ride-continuation; remount after.
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            let before = self.players.get(&user_id).map(|p| p.room);
+            self.move_player(user_id, dir);
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = true;
+            }
+            // A gateway prompt or gate refusal leaves the room unchanged - stop.
+            if self.players.get(&user_id).map(|p| p.room) == before {
+                return;
+            }
+        }
+    }
+
+    /// Swing up onto the companion's back (or down off it). Needs a tamed
+    /// beast that can actually be ridden, and both feet out of combat.
+    fn toggle_mount(&mut self, user_id: Uuid) {
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "Not in the middle of a fight - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        if player.mounted {
+            let name = player
+                .pet
+                .as_ref()
+                .map(|p| p.species.name)
+                .unwrap_or("your mount");
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            self.log_to(user_id, LogKind::Normal, format!("You dismount {name}."));
+            return;
+        }
+        let Some(pet) = player.pet.as_ref() else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no companion to ride - tame one of the great beasts of Broceliande."
+                    .to_string(),
+            );
+            return;
+        };
+        let Some(stride) = super::taming::mount_stride(pet.species.key) else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!(
+                    "{} is no riding beast. The rideable kind roam the deep Greenwood.",
+                    pet.species.name
+                ),
+            );
+            return;
+        };
+        let name = pet.species.name;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.mounted = true;
+        }
+        self.log_to(
+            user_id,
+            LogKind::Normal,
+            format!("You swing up onto {name}'s back - each step now carries you {stride} rooms."),
+        );
     }
 
     fn is_frontier_gateway(&self, from: RoomId, dest: RoomId) -> bool {
@@ -3274,6 +3499,101 @@ impl WorldState {
             user_id,
             LogKind::Loot,
             "You speak the word of recall. The world folds soft as cloth, and the lanternlight of Embergate's Town Square rises around you."
+                .to_string(),
+        );
+        self.describe_room(user_id);
+        self.apply_critter_perks(user_id);
+        self.dirty = true;
+    }
+
+    /// Mark the current room as a personal waypoint, warped back to with
+    /// `warp_to_waypoint` - a portable answer to the far run between
+    /// Embergate and the Frontier's deep levels for healing and resurrecting.
+    /// Free to set; out of combat only, like recall.
+    fn set_waypoint(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't fix a waypoint in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let room = player.room;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.waypoint = Some(room);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You fix a waypoint here. You'll find your way back to this spot.".to_string(),
+        );
+        self.dirty = true;
+    }
+
+    /// Warp to the marked personal waypoint, from anywhere. Costs
+    /// `WAYPOINT_WARP_COST` gold and works only out of combat - recall (to
+    /// Embergate) stays free, so a warp to your own chosen spot costs
+    /// something instead of trivialising distance entirely.
+    fn warp_to_waypoint(&mut self, user_id: Uuid) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
+            return;
+        }
+        if player.target.is_some() {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You can't warp in the thick of combat - flee (z) first.".to_string(),
+            );
+            return;
+        }
+        let Some(dest) = player.waypoint else {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no waypoint set - fix one first.".to_string(),
+            );
+            return;
+        };
+        if player.room == dest {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                "You're already standing at your waypoint.".to_string(),
+            );
+            return;
+        }
+        if player.gold < WAYPOINT_WARP_COST {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Warping to your waypoint costs {WAYPOINT_WARP_COST} gold."),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.gold -= WAYPOINT_WARP_COST;
+            p.previous_room = Some(p.room);
+            p.room = dest;
+            Arc::make_mut(&mut p.visited).insert(dest);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            "You warp to your waypoint. The world folds soft as cloth, and it rises around you."
                 .to_string(),
         );
         self.describe_room(user_id);
@@ -3764,7 +4084,7 @@ impl WorldState {
     }
 
     fn look(&mut self, user_id: Uuid) {
-        self.describe_room_context(user_id, false);
+        self.describe_room_context(user_id, Arrival::Silent);
     }
 
     /// Reveal any Ambushers lurking in the player's room: they spring out and
@@ -3816,10 +4136,10 @@ impl WorldState {
     }
 
     fn describe_room(&mut self, user_id: Uuid) {
-        self.describe_room_context(user_id, true);
+        self.describe_room_context(user_id, Arrival::Revisit);
     }
 
-    fn describe_room_context(&mut self, user_id: Uuid, announce_travel: bool) {
+    fn describe_room_context(&mut self, user_id: Uuid, arrival: Arrival) {
         self.reveal_ambushers(user_id);
         if !matches!(self.players.get(&user_id), Some(p) if p.respawn_at.is_none()) {
             return;
@@ -3843,6 +4163,7 @@ impl WorldState {
         let Some(room) = self.world.room(room_id) else {
             return;
         };
+        let rpg_mode = player.rpg_mode;
         let name = room.name.to_string();
         let desc = room.desc.to_string();
         let mut exits: Vec<String> = room
@@ -3863,8 +4184,21 @@ impl WorldState {
             .map(|m| m.spawn.name.to_string())
             .collect();
         let shop = shop_at(room_id);
-        if announce_travel {
-            self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+        match arrival {
+            Arrival::Silent => {}
+            // A discovery in field mode carries the room's prose too: the
+            // field layout has no Now panel, so the feed is the one place a
+            // newly found room gets to describe itself.
+            Arrival::Discovery if rpg_mode => {
+                self.log_to(user_id, LogKind::Travel, format!("You find {name}."));
+                self.log_to(user_id, LogKind::Travel, desc.clone());
+            }
+            // Field-mode steps through known land say nothing: the @ moved and
+            // the Here panel names the room. Classic mode keeps its breadcrumb.
+            Arrival::Revisit if rpg_mode => {}
+            Arrival::Discovery | Arrival::Revisit => {
+                self.log_to(user_id, LogKind::Travel, format!("Arrived at {name}."));
+            }
         }
         self.log_to(user_id, LogKind::Room, format!("== {name} =="));
         self.log_to(user_id, LogKind::Room, desc);
@@ -3892,8 +4226,28 @@ impl WorldState {
         // Note lookable things without revealing them - you must look (o) to see
         // their description.
         let features = features_at(room_id);
-        if !features.is_empty() {
-            let names: Vec<&str> = features.iter().map(|f| f.name).collect();
+        let villagers: Vec<_> = features
+            .iter()
+            .filter(|f| f.kind == FeatureKind::Villager)
+            .collect();
+        let other: Vec<_> = features
+            .iter()
+            .filter(|f| f.kind != FeatureKind::Villager)
+            .collect();
+        // A villager is always announced up front, never hidden behind a menu -
+        // that's the whole point of standing there.
+        for v in &villagers {
+            self.log_to(
+                user_id,
+                LogKind::Room,
+                format!(
+                    "{} stands here, waiting for a question. Press o to ask.",
+                    v.name
+                ),
+            );
+        }
+        if !other.is_empty() {
+            let names: Vec<&str> = other.iter().map(|f| f.name).collect();
             self.log_to(
                 user_id,
                 LogKind::Room,
@@ -3917,6 +4271,20 @@ impl WorldState {
         let Some(feat) = features.get(idx) else {
             return;
         };
+        if feat.kind == FeatureKind::Villager {
+            self.log_to(
+                user_id,
+                LogKind::Normal,
+                format!("You ask {} for a moment.", feat.name),
+            );
+            self.log_to(
+                user_id,
+                LogKind::Room,
+                format!("{} says: \"{}\"", feat.name, feat.desc),
+            );
+            self.dirty = true;
+            return;
+        }
         self.log_to(
             user_id,
             LogKind::Normal,
@@ -4291,23 +4659,7 @@ impl WorldState {
             .find(|m| m.alive && m.revealed && m.current_room == room_id)
             .map(|m| m.spawn.id);
         match target {
-            Some(mob_id) => {
-                let mob_name = self
-                    .mobs
-                    .get(&mob_id)
-                    .map(|m| m.spawn.name.to_string())
-                    .unwrap_or_default();
-                if let Some(player) = self.players.get_mut(&user_id) {
-                    player.target = Some(mob_id);
-                    // Opportunist: the Rogue's first strike of a fight always crits.
-                    player.opening_strike = player.class == Some(Class::Rogue);
-                }
-                self.log_to(
-                    user_id,
-                    LogKind::Combat,
-                    format!("You close with {mob_name}!"),
-                );
-            }
+            Some(mob_id) => self.set_target(user_id, mob_id),
             None => {
                 // No foe: if there's small game about, hunt it instead.
                 if !self.try_hunt(user_id, room_id) {
@@ -4319,6 +4671,70 @@ impl WorldState {
                 }
             }
         }
+    }
+
+    /// Lock onto a specific foe (a click on its roster row), then let the combat
+    /// tick trade blows with it. Falls back to [`Self::engage`] if the clicked
+    /// foe is already gone - slain, fled, or a stale row - so a click never dead-
+    /// ends when there's still something else to fight.
+    fn engage_mob(&mut self, user_id: Uuid, mob_id: u32) {
+        if !self.is_classed(user_id) {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            return;
+        }
+        let room_id = player.room;
+        if self.world.room(room_id).is_some_and(|r| r.safe) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "This is a safe haven. No fighting here.".to_string(),
+            );
+            return;
+        }
+        let valid = self
+            .mobs
+            .get(&mob_id)
+            .is_some_and(|m| m.alive && m.revealed && m.current_room == room_id);
+        if valid {
+            self.set_target(user_id, mob_id);
+        } else {
+            self.engage(user_id);
+        }
+    }
+
+    /// Point the player at `mob_id` and announce it. Shared by the auto-target
+    /// [`Self::engage`] and the click-to-target [`Self::engage_mob`].
+    fn set_target(&mut self, user_id: Uuid, mob_id: u32) {
+        let mob_name = self
+            .mobs
+            .get(&mob_id)
+            .map(|m| m.spawn.name.to_string())
+            .unwrap_or_default();
+        if self.players.get(&user_id).is_some_and(|p| p.mounted) {
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.mounted = false;
+            }
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You slide from the saddle - this is foot work.".to_string(),
+            );
+        }
+        if let Some(player) = self.players.get_mut(&user_id) {
+            player.target = Some(mob_id);
+            // Opportunist: the Rogue's first strike of a fight always crits.
+            player.opening_strike = player.class == Some(Class::Rogue);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("You close with {mob_name}!"),
+        );
     }
 
     /// Cast/use the ability in the given action-bar slot (1-based).
@@ -4626,7 +5042,15 @@ impl WorldState {
             }
         }
         self.roll_loot(user_id, &mob_name, loot, boss);
-        self.grant_title(user_id, &mob_name, boss, mob_level);
+        // Titles used to mint one per distinct mob NAME on first kill - with 426
+        // distinct regular foes in the world, that buried the handful of titles
+        // that actually mean something under a wall of "Ratbane"/"Wolfbane"
+        // clutter. Only bosses (139 named encounters) grant a themed "Bane of..."
+        // title now; the Frontier zone "Champion of..." and final-boss lifetime
+        // achievements already sit alongside this and stay untouched.
+        if boss {
+            self.grant_title(user_id, &mob_name, boss, mob_level);
+        }
         // Bounty bounties: tick any accepted "slay N of X" board quest.
         self.bump_quests(user_id, |o| {
             u32::from(matches!(o, Objective::Bounty { name_contains, .. } if mob_name.contains(name_contains)))
@@ -4718,8 +5142,11 @@ impl WorldState {
         let Some((zname, _boss)) = super::world::frontier_zone_info(zone) else {
             return;
         };
-        let bonus_xp = (80 + boss_level * 24) as i64;
-        let bonus_gold = (35 + boss_level * 6) as i64;
+        // Wildbound only widened the level DISPLAYED over a foe's head; the
+        // bounty stays pinned to the old ceiling so that change pays nothing.
+        let reward_level = boss_level.min(super::world::LEVEL_KNEE);
+        let bonus_xp = (80 + reward_level * 24) as i64;
+        let bonus_gold = (35 + reward_level * 6) as i64;
         if let Some(p) = self.players.get_mut(&user_id) {
             p.completed_quests.push(zone);
             p.xp += bonus_xp;
@@ -4899,28 +5326,97 @@ impl WorldState {
         }
     }
 
+    /// Speak a line, scoped by an optional leading channel marker: `/z ` or
+    /// `/zone ` for everyone in the same named zone, `/w ` or `/world ` for
+    /// every adventurer currently in Lateania. No marker means the room, same
+    /// as it always has. Whichever scope, this is still world-local chat - it
+    /// never reaches late.sh's own global feed.
     fn say(&mut self, user_id: Uuid, message: &str) {
         let trimmed = message.trim();
         if trimmed.is_empty() {
             return;
         }
-        let room_id = match self.players.get(&user_id) {
-            Some(player) => player.room,
-            None => return,
+        // A marker only counts if it's the whole word ("/zone"/"/z" followed
+        // by whitespace or nothing) - "/zebra" or "/zealous" fall through as
+        // plain room speech instead of being mistaken for a scope marker.
+        let after_marker = |rest: &str| rest.is_empty() || rest.starts_with(char::is_whitespace);
+        let (scope, body) = if let Some(rest) = trimmed
+            .strip_prefix("/zone")
+            .or_else(|| trimmed.strip_prefix("/z"))
+            .filter(|rest| after_marker(rest))
+        {
+            (ChatScope::Zone, rest.trim())
+        } else if let Some(rest) = trimmed
+            .strip_prefix("/world")
+            .or_else(|| trimmed.strip_prefix("/w"))
+            .filter(|rest| after_marker(rest))
+        {
+            (ChatScope::World, rest.trim())
+        } else {
+            (ChatScope::Room, trimmed)
         };
-        let occupants: Vec<Uuid> = self
-            .players
-            .iter()
-            .filter(|(_, p)| p.room == room_id)
-            .map(|(id, _)| *id)
-            .collect();
-        for occupant in occupants {
-            let prefix = if occupant == user_id {
-                "You say".to_string()
+        if body.is_empty() {
+            return;
+        }
+        let Some(room_id) = self.players.get(&user_id).map(|p| p.room) else {
+            return;
+        };
+        // Zone/world scopes carry to players who never chose to stand near
+        // you; hold each voice to one broadcast per cooldown window.
+        if !matches!(scope, ChatScope::Room) {
+            let now = Instant::now();
+            let held = self
+                .players
+                .get(&user_id)
+                .and_then(|p| p.last_broadcast)
+                .is_some_and(|last| now.duration_since(last) < BROADCAST_COOLDOWN);
+            if held {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    "You've just called out - give the echo a breath before shouting again."
+                        .to_string(),
+                );
+                return;
+            }
+            if let Some(p) = self.players.get_mut(&user_id) {
+                p.last_broadcast = Some(now);
+            }
+        }
+        let recipients: Vec<Uuid> = match scope {
+            ChatScope::Room => self
+                .players
+                .iter()
+                .filter(|(_, p)| p.room == room_id)
+                .map(|(id, _)| *id)
+                .collect(),
+            ChatScope::Zone => {
+                let Some(zone) = self.world.room(room_id).map(|r| r.zone) else {
+                    return;
+                };
+                self.players
+                    .iter()
+                    .filter(|(_, p)| self.world.room(p.room).is_some_and(|r| r.zone == zone))
+                    .map(|(id, _)| *id)
+                    .collect()
+            }
+            ChatScope::World => self.players.keys().copied().collect(),
+        };
+        let (self_verb, other_verb) = match scope {
+            ChatScope::Room => ("You say", "Someone says"),
+            ChatScope::Zone => ("You say to the zone", "Someone says to the zone"),
+            ChatScope::World => (
+                "You say to all of Lateania",
+                "Someone says to all of Lateania",
+            ),
+        };
+        for recipient in recipients {
+            let prefix = if recipient == user_id {
+                self_verb
             } else {
-                "Someone says".to_string()
+                other_verb
             };
-            self.log_to(occupant, LogKind::Say, format!("{prefix}: {trimmed}"));
+            self.log_to(recipient, LogKind::Say, format!("{prefix}: {body}"));
         }
     }
 
@@ -4989,6 +5485,52 @@ impl WorldState {
             LogKind::Loot,
             format!("You take off {} ({}).", it.name, slot.label()),
         );
+    }
+
+    /// Drink the best healing potion in one keystroke, for use mid-fight. Picks
+    /// the *smallest* potion that still fills the health you're missing so a big
+    /// draught isn't wasted on a scratch; if none is large enough, drinks the
+    /// biggest you have. Only healing (heal > 0) consumables count - mana
+    /// draughts and poisons are left alone.
+    fn quaff_best(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
+        let missing = p.max_hp() - p.hp;
+        if missing <= 0 {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "You are already at full health.".to_string(),
+            );
+            return;
+        }
+        // Smallest heal that covers the gap, else the largest heal available.
+        let mut covering: Option<(u32, i32)> = None;
+        let mut biggest: Option<(u32, i32)> = None;
+        for &id in &p.inventory {
+            let Some(it) = item(id) else { continue };
+            let ItemKind::Consumable { heal, .. } = it.kind else {
+                continue;
+            };
+            if heal <= 0 {
+                continue;
+            }
+            if heal >= missing && covering.is_none_or(|(_, h)| heal < h) {
+                covering = Some((id, heal));
+            }
+            if biggest.is_none_or(|(_, h)| heal > h) {
+                biggest = Some((id, heal));
+            }
+        }
+        match covering.or(biggest) {
+            Some((id, _)) => self.use_item(user_id, id),
+            None => self.log_to(
+                user_id,
+                LogKind::System,
+                "You have no potion to drink.".to_string(),
+            ),
+        }
     }
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
@@ -5576,30 +6118,17 @@ impl WorldState {
             self.resolve_mob_behavior(user_id, mob_id);
         }
 
-        // Drop idle players.
-        let idle: Vec<Uuid> = self
-            .players
-            .iter()
-            .filter(|(_, p)| {
-                p.last_activity.elapsed() >= Duration::from_secs(PLAYER_IDLE_TIMEOUT_SECS)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let mut idle_saves = Vec::new();
-        for user_id in idle {
-            if let Some(saved) = self.export_saved(user_id) {
-                idle_saves.push((user_id, saved));
-            }
-            self.players.remove(&user_id);
-            self.dirty = true;
-        }
-
+        // No idle timeout: a player stays put in Lateania for as long as their
+        // session is actually open, however long they go without touching a
+        // key. Real disconnects/leaving the door are already handled by
+        // `leave_task`, which is the genuine cleanup path - an inactivity
+        // clock on top of that only ever punished someone reading a long room
+        // description or stepping away for a call.
         if self.dirty {
             self.generation = self.generation.wrapping_add(1);
         }
         TickOutput {
             kills: std::mem::take(&mut self.pending_kills),
-            idle_saves,
         }
     }
 
@@ -6272,20 +6801,104 @@ impl WorldState {
         self.dirty = true;
     }
 
-    /// Feed the player's companion at a Stable: revive, heal to full, and add
-    /// loyalty (which raises its level). Costs `PET_FEED_COST` gold.
+    /// Feed the player's companion, or a wild adoptable critter sharing the
+    /// room if one is here and no stray has been won over yet (Genesys) -
+    /// one key, whichever feeding actually matters right now. An owned pet
+    /// that's hurt or downed always comes first: courting a stray is a
+    /// patient side project, never a reason to leave a real emergency
+    /// unfed.
     fn feed_pet(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get(&user_id) else {
             return;
         };
-        if !self.room_has_stable(p.room) {
+        let room = p.room;
+        let pet_needs_care = p
+            .pet
+            .as_ref()
+            .is_some_and(|pet| pet.downed || pet.hp < pet.max_hp());
+        if !pet_needs_care && p.stray.is_none() && critters_at(room).iter().any(|c| c.adoptable) {
+            self.feed_wild_critter(user_id, room);
+            return;
+        }
+        self.feed_owned_pet(user_id);
+    }
+
+    /// Court a wild adoptable critter (Genesys): feed it once a day, several
+    /// days running, and it takes to you as a stray companion - on top of
+    /// whatever pet you already keep. Miss a day and it grows wary again.
+    fn feed_wild_critter(&mut self, user_id: Uuid, room: RoomId) {
+        let Some(critter) = critters_at(room).into_iter().find(|c| c.adoptable) else {
+            return;
+        };
+        let Some(idx) = critter_index(critter) else {
+            return;
+        };
+        let name = critter.name;
+        let today = now_unix_secs() / 86_400;
+        let bond = self.players.get(&user_id).and_then(|p| p.stray_bond);
+        let same_critter = matches!(bond, Some((bi, ..)) if bi == idx);
+        let already_today = matches!(bond, Some((bi, _, ld)) if bi == idx && ld == today);
+
+        if already_today {
             self.log_to(
                 user_id,
                 LogKind::System,
-                "Find a stable to feed and tend your companion.".to_string(),
+                format!("You've already fed {name} today. Come back tomorrow."),
             );
             return;
         }
+
+        let (new_bond, message, adopted) = match bond {
+            Some((_, streak, last_day)) if same_critter && last_day + 1 == today => {
+                let new_streak = streak + 1;
+                if new_streak >= STRAY_ADOPTION_DAYS {
+                    (
+                        None,
+                        format!(
+                            "{name} nuzzles up against you and follows without hesitation - after {STRAY_ADOPTION_DAYS} days of care, you've won it over. A new stray companion, alongside anything else you keep."
+                        ),
+                        true,
+                    )
+                } else {
+                    (
+                        Some((idx, new_streak, today)),
+                        format!(
+                            "You feed {name} again. It trusts you a little more. ({new_streak}/{STRAY_ADOPTION_DAYS} days)"
+                        ),
+                        false,
+                    )
+                }
+            }
+            Some(_) if same_critter => (
+                Some((idx, 1, today)),
+                format!(
+                    "{name} has grown wary again - you'll need to start over. (1/{STRAY_ADOPTION_DAYS} days)"
+                ),
+                false,
+            ),
+            _ => (
+                Some((idx, 1, today)),
+                format!(
+                    "You offer {name} something to eat. It watches you carefully, but doesn't run. (1/{STRAY_ADOPTION_DAYS} days)"
+                ),
+                false,
+            ),
+        };
+
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.stray_bond = new_bond;
+            if adopted {
+                p.stray = Some(idx);
+            }
+        }
+        self.log_to(user_id, LogKind::Loot, message);
+        self.dirty = true;
+    }
+
+    fn feed_owned_pet(&mut self, user_id: Uuid) {
+        let Some(p) = self.players.get(&user_id) else {
+            return;
+        };
         if p.pet.is_none() {
             self.log_to(
                 user_id,
@@ -6734,6 +7347,39 @@ impl WorldState {
         let mut players = HashMap::new();
         let time_of_day = self.time_of_day().label();
         let weather = self.weather().label();
+        // ONE pass over the world's mobs and players per snapshot, shared by
+        // every player's view below. Snapshots run on every publish inside the
+        // global lock, and the world holds thousands of spawns: sweeping them
+        // once per PLAYER made every keystroke O(players x mobs).
+        let coords = super::worldmap::world_coords();
+        let mut mobs_by_room: HashMap<RoomId, Vec<&MobInstance>> = HashMap::new();
+        let mut foe_rooms: Vec<(RoomId, super::worldmap::Coord)> = Vec::new();
+        for m in self.mobs.values() {
+            if !m.alive || !m.revealed {
+                continue;
+            }
+            let seen = mobs_by_room.entry(m.current_room).or_default();
+            if seen.is_empty()
+                && let Some(&c) = coords.get(&m.current_room)
+            {
+                foe_rooms.push((m.current_room, c));
+            }
+            seen.push(m);
+        }
+        // Rooms holding at least one adventurer. A viewer's own room is
+        // filtered out per player below, so "another adventurer" needs no
+        // identity here, only occupancy.
+        let mut occupied_rooms: Vec<(RoomId, super::worldmap::Coord)> = Vec::new();
+        {
+            let mut seen: HashSet<RoomId> = HashSet::new();
+            for other in self.players.values() {
+                if seen.insert(other.room)
+                    && let Some(&c) = coords.get(&other.room)
+                {
+                    occupied_rooms.push((other.room, c));
+                }
+            }
+        }
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
             let (room_name, room_desc, zone, safe, exits) = match room {
@@ -6760,19 +7406,47 @@ impl WorldState {
                     Vec::new(),
                 ),
             };
-            let mobs: Vec<MobView> = self
-                .mobs
-                .values()
-                .filter(|m| m.alive && m.revealed && m.current_room == player.room)
+            let mobs: Vec<MobView> = mobs_by_room
+                .get(&player.room)
+                .into_iter()
+                .flatten()
                 .map(|m| MobView {
+                    id: m.spawn.id,
                     name: m.spawn.name.to_string(),
                     hp: m.hp,
                     max_hp: m.spawn.max_hp,
                     level: m.spawn.level(),
                     rank: m.spawn.rank().to_string(),
                     boss: m.spawn.boss,
+                    targeted: player.target == Some(m.spawn.id),
                 })
                 .collect();
+            // Foes lairing in nearby rooms (not this one) and other adventurers
+            // in the same window, so the live field can mark where danger and
+            // company sit. Bounded to a window around the player on the same
+            // level; the field's own fog still hides rooms never seen. Only the
+            // field draws these, so a session without it pays nothing.
+            let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
+                match coords.get(&player.room) {
+                    Some(&pc) if player.rpg_mode => {
+                        let in_window = |c: &super::worldmap::Coord| {
+                            c.z == pc.z && (c.x - pc.x).abs() <= 16 && (c.y - pc.y).abs() <= 12
+                        };
+                        (
+                            foe_rooms
+                                .iter()
+                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .map(|(r, _)| *r)
+                                .collect(),
+                            occupied_rooms
+                                .iter()
+                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .map(|(r, _)| *r)
+                                .collect(),
+                        )
+                    }
+                    _ => (Vec::new(), Vec::new()),
+                };
             let occupants: Vec<OccupantView> = self
                 .players
                 .values()
@@ -6793,6 +7467,9 @@ impl WorldState {
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
             let now = Instant::now();
+            // Birds with a perch alternative toggle every few real minutes, so
+            // the same creature reads as aloft one visit and grounded the next.
+            let moment_bucket = now_unix_secs() / 300;
             let wildlife: Vec<WildlifeView> = critters_at(player.room)
                 .into_iter()
                 .filter(|c| match c.kind {
@@ -6806,7 +7483,7 @@ impl WorldState {
                 })
                 .map(|c| WildlifeView {
                     name: c.name.to_string(),
-                    note: c.note.to_string(),
+                    note: c.display_note(moment_bucket).to_string(),
                     kind: match c.kind {
                         CritterKind::Game => "huntable".to_string(),
                         CritterKind::Boon(_) => "boon".to_string(),
@@ -6816,6 +7493,8 @@ impl WorldState {
                         CritterKind::Boon(p) => p.label().to_string(),
                         _ => String::new(),
                     },
+                    mythical: c.mythical,
+                    adoptable: c.adoptable,
                 })
                 .collect();
             // Harvestable nodes in the room, each flagged with whether the player
@@ -7048,6 +7727,10 @@ impl WorldState {
                     .map(|s| (s.name.to_string(), s.level))
                     .collect(),
             });
+            let stray = player
+                .stray
+                .and_then(|idx| super::world::WILDLIFE.get(idx))
+                .map(|c| c.name.to_string());
             let stable = self.room_has_stable(player.room).then(|| StableView {
                 feed_cost: PET_FEED_COST,
                 entries: super::pets::PET_SPECIES
@@ -7258,6 +7941,18 @@ impl WorldState {
                     safe,
                     exits,
                     mobs,
+                    nearby_foes,
+                    nearby_players,
+                    rpg_mode: player.rpg_mode,
+                    riding: if player.mounted {
+                        player.pet.as_ref().and_then(|pet| {
+                            super::taming::mount_stride(pet.species.key)
+                                .map(|st| format!("{} (stride {st})", pet.species.name))
+                        })
+                    } else {
+                        None
+                    },
+                    waypoint_set: player.waypoint.is_some(),
                     occupants,
                     following: player.following,
                     wildlife,
@@ -7268,6 +7963,7 @@ impl WorldState {
                     inventory,
                     shop,
                     pet,
+                    stray,
                     stable,
                     taming,
                     housing,

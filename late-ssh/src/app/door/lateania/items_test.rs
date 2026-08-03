@@ -20,7 +20,7 @@ fn item_ids_are_unique() {
 
 #[test]
 fn materials_form_a_clean_sellable_catalog() {
-    assert_eq!(materials().len(), 25, "five skills x five tiers");
+    assert_eq!(materials().len(), 30, "five skills x six tiers");
     for m in materials() {
         assert!(
             m.id >= MATERIAL_BASE && m.id < MATERIAL_BASE + 100,
@@ -61,8 +61,8 @@ fn every_equippable_item_carries_real_stats() {
 fn crafted_goods_form_a_clean_catalog() {
     assert_eq!(
         crafted().len(),
-        52,
-        "ten crafted kinds x five tiers, plus two masterwork sinks"
+        62,
+        "ten crafted kinds x six tiers, plus two masterwork sinks"
     );
     for c in crafted() {
         assert!(
@@ -177,21 +177,42 @@ fn every_shop_sells_real_items() {
 }
 
 #[test]
-fn shops_offer_late_gold_sinks() {
-    let costly: Vec<_> = SHOPS
+fn shops_offer_gold_sinks_without_selling_legendary_gear() {
+    // Gold shops should still give a player somewhere to sink surplus gold
+    // (a pricey consumable, a handful of desirable Epic pieces) - but
+    // Legendary-tier EQUIPMENT was moved out of every shop entirely, because a
+    // plain gold purchase (Mythril Arming Sword, the Masterwork armor,
+    // Dragonbone Reliquary) used to outclass early Frontier drops, which made
+    // a "brutal" zone hand out a downgrade. Legendary consumables (a top-shelf
+    // potion) are unaffected - they're spent, not equipped, so they don't
+    // create the same power-creep problem.
+    let all_stock: Vec<_> = SHOPS
         .iter()
         .flat_map(|shop| shop.stock.iter().filter_map(|id| item(*id)))
-        .filter(|it| it.price >= 1_500)
         .collect();
+    let costly: Vec<_> = all_stock.iter().filter(|it| it.price >= 700).collect();
     assert!(
-        costly.len() >= 6,
-        "shops should offer enough expensive late-game stock"
+        costly.len() >= 4,
+        "shops should offer enough desirable expensive stock to sink gold into"
     );
     assert!(
         costly
             .iter()
             .any(|it| matches!(it.kind, ItemKind::Consumable { .. })),
         "shops should include a repeatable expensive consumable"
+    );
+    assert!(
+        all_stock
+            .iter()
+            .any(|it| matches!(it.kind, ItemKind::Consumable { .. }) && it.price >= 2_000),
+        "the top-end gold sink is a premium repeatable consumable (>= 2,000g), \
+         since Legendary equipment left the shops"
+    );
+    assert!(
+        all_stock
+            .iter()
+            .all(|it| !matches!(it.kind, ItemKind::Equipment(_)) || it.rarity != Rarity::Legendary),
+        "no shop should sell Legendary equipment - that tier is earned, not bought"
     );
 }
 
@@ -215,25 +236,30 @@ fn apothecary_consumables_scale_into_late_recovery() {
 }
 
 #[test]
-fn outfitter_sells_real_head_and_hand_upgrades() {
+fn outfitter_sells_real_upgrades_across_every_slot() {
+    // Legs and Feet used to have exactly one shop item each (the Common
+    // starter piece) and nothing past it - no upgrade path at all for those
+    // two slots. Every wearable slot should now have a real ladder.
     let outfitter = SHOPS
         .iter()
         .find(|shop| shop.shop_name == "The Outfitter's Stall")
         .expect("outfitter shop exists");
     let stock: Vec<_> = outfitter.stock.iter().filter_map(|id| item(*id)).collect();
 
-    assert!(
-        stock
-            .iter()
-            .any(|it| it.slot() == Some(Slot::Head) && it.price >= 2_000),
-        "outfitter should sell a late-game helm"
-    );
-    assert!(
-        stock
-            .iter()
-            .any(|it| it.slot() == Some(Slot::Hands) && it.price >= 2_000),
-        "outfitter should sell late-game gloves"
-    );
+    for slot in [Slot::Head, Slot::Chest, Slot::Legs, Slot::Hands, Slot::Feet] {
+        let in_slot: Vec<_> = stock.iter().filter(|it| it.slot() == Some(slot)).collect();
+        assert!(
+            in_slot.len() >= 4,
+            "{slot:?} should have a real upgrade ladder in the outfitter, got {}",
+            in_slot.len()
+        );
+        let cheapest = in_slot.iter().map(|it| it.power()).min().unwrap();
+        let priciest = in_slot.iter().map(|it| it.power()).max().unwrap();
+        assert!(
+            priciest > cheapest * 2,
+            "{slot:?}'s best shop piece should clearly outclass its starter piece ({cheapest} -> {priciest})"
+        );
+    }
 }
 
 #[test]
@@ -247,6 +273,205 @@ fn frontier_loot_includes_head_and_hands() {
         slots.contains(&Slot::Hands),
         "frontier should drop gauntlets"
     );
+}
+
+#[test]
+fn frontier_tier_one_beats_every_shop_slot() {
+    // The reported bug, pinned down: "the Frontier has worse loot than can be
+    // bought at a shop." A player braving the Frontier's very first zone
+    // should never come out with a downgrade over what plain gold already
+    // bought them in town, in any slot.
+    let shop_ceiling_power = |slot: Slot| -> i32 {
+        SHOPS
+            .iter()
+            .flat_map(|shop| shop.stock.iter().filter_map(|id| item(*id)))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .max()
+            .unwrap_or(0)
+    };
+    let tier1: Vec<&Item> = frontier_loot(0).iter().filter_map(|id| item(*id)).collect();
+    for slot in Slot::WEARABLE {
+        let piece = tier1
+            .iter()
+            .find(|it| it.slot() == Some(slot))
+            .unwrap_or_else(|| panic!("Frontier tier 1 must cover every wearable slot: {slot:?}"));
+        let ceiling = shop_ceiling_power(slot);
+        // Real headroom, not a squeak: a one-point win over a shop piece (or
+        // one that trades away armor) still reads as a sidegrade in the field.
+        assert!(
+            piece.power() >= ceiling + 5,
+            "Frontier tier-1 {slot:?} (power {}) should clear the shop ceiling (power {ceiling}) with headroom",
+            piece.power()
+        );
+    }
+}
+
+#[test]
+fn every_trinket_and_ring_carries_a_visible_bonus() {
+    // Reported bug: trinkets that show no bonus you can actually see. Every
+    // Trinket/Ring across every catalog - hand-authored, and the three
+    // generated realms - must carry a nonzero stat and a non-empty
+    // stat_summary(), so the inventory/shop panels always show something.
+    let all_catalogs: Vec<&Item> = ITEMS
+        .iter()
+        .chain(frontier_items().iter())
+        .chain(reaches_items().iter())
+        .chain(kaelmyr_items().iter())
+        .collect();
+    let mut checked = 0;
+    for it in all_catalogs {
+        if !matches!(it.slot(), Some(Slot::Trinket) | Some(Slot::Ring)) {
+            continue;
+        }
+        checked += 1;
+        assert!(
+            it.mods.attack != 0 || it.mods.max_hp != 0 || it.mods.armor != 0,
+            "{} ({:?}) has no visible stat bonus",
+            it.name,
+            it.slot()
+        );
+        assert!(
+            !it.stat_summary().is_empty(),
+            "{} has an empty stat summary",
+            it.name
+        );
+    }
+    assert!(
+        checked >= 20,
+        "expected a real body of trinkets/rings to check, got {checked}"
+    );
+}
+
+#[test]
+fn crafted_gear_climbs_every_tier_and_clears_the_shop_ceiling() {
+    // Every crafted weapon/armor line (smith sword, war-bow, plate, leather
+    // jerkin) should be a decent, strictly-improving upgrade tier over tier -
+    // no flat or backwards steps - and the top tier (skill 100, the trade's
+    // own endgame) should clear what plain gold can buy in the same slot.
+    type CraftLine = (fn(u32) -> u32, Slot);
+    let lines: [CraftLine; 4] = [
+        (smith_weapon_id, Slot::Weapon),
+        (wood_weapon_id, Slot::Weapon),
+        (smith_armor_id, Slot::Chest),
+        (leather_armor_id, Slot::Chest),
+    ];
+    for (id_fn, slot) in lines {
+        let mut prev = 0;
+        for tier in 0..6u32 {
+            let it = item(id_fn(tier)).unwrap_or_else(|| panic!("tier {tier} exists"));
+            assert!(
+                it.power() > prev,
+                "{} (tier {tier}) should beat the previous tier ({} -> {})",
+                it.name,
+                prev,
+                it.power()
+            );
+            prev = it.power();
+        }
+        let shop_ceiling = SHOPS
+            .iter()
+            .flat_map(|shop| shop.stock.iter().filter_map(|id| item(*id)))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            prev > shop_ceiling,
+            "the top crafted tier in {slot:?} (power {prev}) should clear the shop ceiling (power {shop_ceiling})"
+        );
+    }
+}
+
+#[test]
+fn wildbound_adds_108_regional_finds_with_unique_resolvable_ids() {
+    let finds = regional_finds();
+    assert_eq!(finds.len(), 108, "14+20+20 zones x 2 pieces each");
+    let mut ids: Vec<u32> = finds.iter().map(|it| it.id).collect();
+    ids.sort_unstable();
+    let n = ids.len();
+    ids.dedup();
+    assert_eq!(n, ids.len(), "duplicate regional-find id");
+    for it in finds {
+        assert!(
+            item(it.id).is_some(),
+            "{} should resolve through item()",
+            it.name
+        );
+        assert!(it.power() > 0, "{} has no visible bonus", it.name);
+        assert_ne!(
+            it.rarity,
+            Rarity::Common,
+            "a real find should never be Common"
+        );
+    }
+}
+
+#[test]
+fn sunderlakes_and_broceliande_finds_stay_under_the_frontier_ceiling() {
+    // Peaceful/moderate continents: their new finds should never outclass the
+    // Frontier's own top tier, so exploring them for gear stays a nice bonus
+    // rather than eclipsing the actual endgame.
+    let frontier_ceiling = |slot: Slot| -> i32 {
+        (0..super::super::items::FRONTIER_TIERS)
+            .flat_map(|t| frontier_loot(t).iter().filter_map(|id| item(*id)))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .max()
+            .unwrap_or(0)
+    };
+    for zone in 0..14 {
+        for id in sunderlakes_find_ids(zone) {
+            let it = item(id).expect("sunderlakes find resolves");
+            let Some(slot) = it.slot() else { continue };
+            assert!(
+                it.power() < frontier_ceiling(slot),
+                "{} (power {}) should stay under the Frontier's own ceiling",
+                it.name,
+                it.power()
+            );
+        }
+    }
+    for zone in 0..20 {
+        for id in broceliande_find_ids(zone) {
+            let it = item(id).expect("broceliande find resolves");
+            let Some(slot) = it.slot() else { continue };
+            assert!(
+                it.power() < frontier_ceiling(slot),
+                "{} (power {}) should stay under the Frontier's own ceiling",
+                it.name,
+                it.power()
+            );
+        }
+    }
+}
+
+#[test]
+fn archipelago_finds_outclass_kaelmyrs_deepest_tier() {
+    // The deadliest ground in the world should genuinely outclass even
+    // Kaelmyr's own top tier, not just tie it.
+    let kaelmyr_ceiling = |slot: Slot| -> i32 {
+        kaelmyr_loot(KAELMYR_TIERS - 1)
+            .iter()
+            .filter_map(|id| item(*id))
+            .filter(|it| it.slot() == Some(slot))
+            .map(Item::power)
+            .max()
+            .unwrap_or(0)
+    };
+    for isle in 0..20 {
+        for id in archipelago_find_ids(isle) {
+            let it = item(id).expect("archipelago find resolves");
+            let Some(slot) = it.slot() else { continue };
+            assert!(
+                it.power() > kaelmyr_ceiling(slot),
+                "{} (power {}) should outclass Kaelmyr's deepest tier (power {})",
+                it.name,
+                it.power(),
+                kaelmyr_ceiling(slot)
+            );
+        }
+    }
 }
 
 #[test]

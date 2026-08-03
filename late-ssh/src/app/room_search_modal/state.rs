@@ -31,6 +31,9 @@ pub(crate) struct RoomSearchModalState {
     /// The `(scope, text)` of the last fired search, so an unchanged query
     /// never refires.
     last_fired_key: Option<(Option<Uuid>, String)>,
+    /// Screen-y → item index for each result row drawn this frame, so a click
+    /// can select the room under the pointer. Interior-mutable (render has `&`).
+    item_rows: std::cell::RefCell<Vec<(u16, usize)>>,
 }
 
 impl RoomSearchModalState {
@@ -72,6 +75,29 @@ impl RoomSearchModalState {
 
     pub(crate) fn selected(&self) -> usize {
         self.selected
+    }
+
+    pub(crate) fn set_selected(&mut self, index: usize) {
+        self.selected = index;
+    }
+
+    /// Clear last frame's clickable rows (call before recording this frame's).
+    pub(crate) fn clear_item_rows(&self) {
+        self.item_rows.borrow_mut().clear();
+    }
+
+    /// Record that a result row for `index` is drawn at screen row `y`.
+    pub(crate) fn record_item_row(&self, y: u16, index: usize) {
+        self.item_rows.borrow_mut().push((y, index));
+    }
+
+    /// The item index drawn at screen row `y`, if a click landed on one.
+    pub(crate) fn item_at(&self, y: u16) -> Option<usize> {
+        self.item_rows
+            .borrow()
+            .iter()
+            .find(|(row_y, _)| *row_y == y)
+            .map(|(_, index)| *index)
     }
 
     pub(crate) fn push(&mut self, ch: char) {

@@ -84,6 +84,8 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ScratchpadState) {
         content_area,
     );
 
+    state.record_viewport(content_area, vscroll, hscroll);
+
     let cursor_row_in_view = cursor.row.saturating_sub(vscroll);
     let cursor_col_in_view = cursor.col.saturating_sub(hscroll);
     if cursor_row_in_view < visible_height && cursor_col_in_view < visible_width {

@@ -57,6 +57,11 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.sheet_modal_state.scroll_body(-3),
             MouseEventKind::ScrollDown => app.sheet_modal_state.scroll_body(3),
+            MouseEventKind::Down if mouse.button == Some(crate::app::input::MouseButton::Left) => {
+                if let Some(field) = app.sheet_modal_state.field_at(mouse.x, mouse.y) {
+                    app.sheet_modal_state.set_focus(field);
+                }
+            }
             _ => {}
         },
         _ => {}

@@ -422,9 +422,11 @@ fn the_sunderlakes_are_reachable_peaceful_and_full_of_fish() {
     );
     // The heart of the region: forty fish, caught at Fishing nodes across the
     // lakes, every node yielding a real fish gated by the Fishing skill.
+    // (The Wildbound tier-6 fishing springs also sit in the lakes but yield
+    // the tiered Abyss Eel material, not a catalog fish - exclude them here.)
     let fish_nodes: Vec<&ResourceNode> = NODES
         .iter()
-        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home))
+        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home) && nn.tier < 5)
         .collect();
     assert_eq!(
         fish_nodes.len(),
@@ -1454,4 +1456,307 @@ fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
         lakes_max < kaelmyr_min,
         "toughest Sunderlakes mob ({lakes_max} hp) should be weaker than the softest Kaelmyr mob ({kaelmyr_min} hp)"
     );
+}
+
+// Wildbound doubled the player cap to 100, so the endgame must present a real
+// difficulty gradient across the new band instead of pinning every foe to the
+// clamp (the old single-slope `level()` made the whole Frontier->Kaelmyr arc
+// read as identically max-level). Verify: the displayed level tracks raw power
+// monotonically, the endgame spans a wide band rather than a flat wall, entry
+// endgame sits comfortably below the cap, and the world's toughest foe reaches
+// it - all while the early/mid roster keeps its familiar sub-60 levels.
+#[test]
+fn the_endgame_levels_span_a_gradient_up_to_the_new_cap() {
+    let world = seed_world();
+    let is_endgame = |id: u32| (FRONTIER_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id);
+    let endgame: Vec<&MobSpawn> = world.spawns.iter().filter(|s| is_endgame(s.id)).collect();
+    assert!(
+        endgame.len() > 20,
+        "the endgame regions field a full roster"
+    );
+
+    // Monotonic in raw power: a tougher foe never reads as a lower level.
+    let mut ranked = endgame.clone();
+    ranked.sort_by_key(|s| s.max_hp + s.damage * 4);
+    for w in ranked.windows(2) {
+        assert!(
+            w[1].level() >= w[0].level(),
+            "level must not fall as raw power rises ({} L{} vs {} L{})",
+            w[0].name,
+            w[0].level(),
+            w[1].name,
+            w[1].level()
+        );
+    }
+
+    // A real spread, not a flat clamp: entry endgame well below the cap, the
+    // deepest content at it, and a wide gap between the two.
+    let min_lvl = endgame.iter().map(|s| s.level()).min().unwrap();
+    let max_lvl = endgame.iter().map(|s| s.level()).max().unwrap();
+    assert!(
+        (55..=78).contains(&min_lvl),
+        "entry endgame should read in the 55-78 band, not the cap (got L{min_lvl})"
+    );
+    assert_eq!(
+        max_lvl,
+        super::super::classes::Class::MAX_LEVEL,
+        "the world's toughest foe should read at the level cap"
+    );
+    assert!(
+        max_lvl - min_lvl >= 20,
+        "the endgame should span a wide gradient, got L{min_lvl}..L{max_lvl}"
+    );
+
+    // The early/mid world is untouched: below the knee, the displayed level is
+    // exactly the old single-slope formula, so every foe a sub-60 player meets
+    // keeps its familiar level to the number. Only power past the knee bends
+    // onto the gentler endgame slope.
+    for s in &world.spawns {
+        let power = s.max_hp + s.damage * 4;
+        if power <= 60 * 14 {
+            assert_eq!(
+                s.level(),
+                (power / 14).clamp(1, 60),
+                "{} (power {power}) should keep its pre-Wildbound level",
+                s.name
+            );
+        }
+    }
+}
+
+// The iron rule of the minimap: a drawn line means you can walk it. The old
+// renderer drew a connector for every exit BY DIRECTION, so when the world's
+// non-Euclidean folds laid the destination elsewhere, a phantom corridor
+// appeared joining two rooms with no exit between them ("You can't go north"
+// under a drawn |, as reported at the Cartographers' Loft on the Saltwind
+// Wharves). Sweep every room in the world as the map centre and verify every
+// connector joins rooms that really share an exit on that axis.
+#[test]
+fn every_minimap_line_is_walkable() {
+    use crate::app::door::lateania::world::MapCell;
+    let world = seed_world();
+    let visited: HashSet<RoomId> = world.rooms.keys().copied().collect();
+    let (hr, vr) = (3i32, 2i32);
+    let mut phantoms = 0usize;
+    let mut checked = 0usize;
+    for &current in world.rooms.keys() {
+        let coords = world.minimap_coords(current, &visited, hr, vr);
+        let map = world.minimap(current, None, &visited, hr, vr);
+        // Invert: grid cell -> room id.
+        let mut at: std::collections::HashMap<(usize, usize), RoomId> =
+            std::collections::HashMap::new();
+        for (&rid, &(x, y)) in &coords {
+            at.insert((((y + vr) * 2) as usize, ((x + hr) * 2) as usize), rid);
+        }
+        for (r, row) in map.grid.iter().enumerate() {
+            for (c, &cell) in row.iter().enumerate() {
+                let horizontal = match cell {
+                    MapCell::ConnH | MapCell::TrailH => true,
+                    MapCell::ConnV | MapCell::TrailV => false,
+                    _ => continue,
+                };
+                checked += 1;
+                let ((c1, c2), (d1, d2)) = if horizontal {
+                    (((r, c - 1), (r, c + 1)), (Dir::East, Dir::West))
+                } else {
+                    (((r - 1, c), (r + 1, c)), (Dir::South, Dir::North))
+                };
+                let linked = |from: RoomId, to: RoomId| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.values().any(|&d| d == to))
+                };
+                // `d1` walks from c1 toward c2; `d2` walks back.
+                let has_exit = |from: RoomId, dir: Dir| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.contains_key(&dir))
+                };
+                match (at.get(&c1).copied(), at.get(&c2).copied()) {
+                    // Both ends are drawn rooms: they must truly be linked.
+                    (Some(a), Some(b)) => {
+                        if !linked(a, b) && !linked(b, a) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A frontier corridor: truthful only if the drawn room
+                    // really has an exit running that way.
+                    (Some(a), None) => {
+                        if map.grid[c2.0][c2.1] != MapCell::Frontier || !has_exit(a, d1) {
+                            phantoms += 1;
+                        }
+                    }
+                    (None, Some(b)) => {
+                        if map.grid[c1.0][c1.1] != MapCell::Frontier || !has_exit(b, d2) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A line joining nothing to nothing.
+                    (None, None) => phantoms += 1,
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "the sweep drew no connectors at all");
+    assert_eq!(
+        phantoms, 0,
+        "{phantoms} phantom corridors drawn (of {checked} connectors): a map line must always be walkable"
+    );
+}
+
+#[test]
+fn regional_notables_carry_their_own_wildbound_finds() {
+    // Every zone/island's notable-loot table should genuinely include that
+    // zone's two new finds, not just the borrowed fallback catalog.
+    for zone in 0..14 {
+        let loot = lakes_notable_loot(zone);
+        for id in super::super::items::sunderlakes_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Sunderlakes zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for zone in 0..20 {
+        let loot = broceliande_notable_loot(zone);
+        for id in super::super::items::broceliande_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Broceliande zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for isle in 0..20 {
+        let loot = archipelago_boss_loot(isle);
+        for id in super::super::items::archipelago_find_ids(isle) {
+            assert!(
+                loot.contains(&id),
+                "Archipelago isle {isle}'s boss should carry find {id}"
+            );
+        }
+    }
+}
+
+// ---- Genesys: a living, breathing world - villagers ----------------------
+
+#[test]
+fn genesys_adds_at_least_a_hundred_villagers() {
+    assert!(
+        VILLAGERS.len() >= 100,
+        "expected at least 100 villagers, got {}",
+        VILLAGERS.len()
+    );
+}
+
+#[test]
+fn every_public_safe_room_has_a_villager() {
+    // Private home interiors (each tier's own hearth/back/upper rooms) are
+    // excluded on purpose - a villager standing inside your own house would
+    // be strange. Every genuinely public safe space gets one.
+    const HOME_INTERIORS: &[RoomId] = &[
+        9010, 9020, 9021, 9030, 9031, 9032, 9040, 9041, 9042, 9043, 9050, 9051, 9052, 9053, 9054,
+    ];
+    let world = seed_world();
+    let missing: Vec<RoomId> = world
+        .rooms
+        .values()
+        .filter(|r| r.safe && !HOME_INTERIORS.contains(&r.id))
+        .filter(|r| !VILLAGERS.iter().any(|v| v.room == r.id))
+        .map(|r| r.id)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these public safe rooms have no villager: {missing:?}"
+    );
+}
+
+#[test]
+fn every_villager_has_real_content_and_a_real_home() {
+    let world = seed_world();
+    let mut seen_rooms = std::collections::HashSet::new();
+    for v in VILLAGERS {
+        assert_eq!(v.kind, FeatureKind::Villager);
+        assert!(!v.name.is_empty());
+        assert!(
+            v.desc.len() >= 20,
+            "{} has a suspiciously short line: {:?}",
+            v.name,
+            v.desc
+        );
+        assert!(
+            world.rooms.contains_key(&v.room),
+            "villager {} references missing room {}",
+            v.name,
+            v.room
+        );
+        // Multiple villagers may share a room only if genuinely distinct people
+        // (never the exact same name twice in the same room).
+        assert!(
+            seen_rooms.insert((v.room, v.name)),
+            "duplicate villager {} in room {}",
+            v.name,
+            v.room
+        );
+    }
+}
+
+// ---- Genesys: birds, mythical creatures, and adoptable strays -------------
+
+#[test]
+fn genesys_adds_real_birds_and_adoptable_creatures() {
+    let birds_with_perch = WILDLIFE.iter().filter(|c| c.perch_note.is_some()).count();
+    let mythical = WILDLIFE.iter().filter(|c| c.mythical).count();
+    let adoptable = WILDLIFE.iter().filter(|c| c.adoptable).count();
+    assert!(
+        birds_with_perch >= 15,
+        "expected at least 15 birds with a perched alternative, got {birds_with_perch}"
+    );
+    assert!(
+        mythical >= 10,
+        "expected at least 10 mythical creatures, got {mythical}"
+    );
+    assert!(
+        adoptable >= 15,
+        "expected at least 15 adoptable strays, got {adoptable}"
+    );
+    // Every adoptable stray must have a real home and a real name; every
+    // perch note must actually differ from the flying note (no copy-paste).
+    let world = seed_world();
+    for c in WILDLIFE {
+        assert!(
+            world.rooms.contains_key(&c.home),
+            "{} has no real home",
+            c.name
+        );
+        if let Some(perch) = c.perch_note {
+            assert_ne!(
+                perch, c.note,
+                "{} - perch note should differ from the flying note",
+                c.name
+            );
+        }
+    }
+}
+
+#[test]
+fn display_note_toggles_between_flying_and_perched() {
+    let bird = WILDLIFE
+        .iter()
+        .find(|c| c.perch_note.is_some())
+        .expect("at least one bird has a perch alternative");
+    let flying = (0..30u64).find(|&t| bird.display_note(t) == bird.note);
+    let perched = (0..30u64).find(|&t| bird.display_note(t) == bird.perch_note.unwrap());
+    assert!(flying.is_some(), "should read as flying at some moment");
+    assert!(perched.is_some(), "should read as perched at some moment");
+}
+
+#[test]
+fn non_flying_critters_never_show_a_perch_note() {
+    for c in WILDLIFE {
+        if c.perch_note.is_none() {
+            for t in 0..10u64 {
+                assert_eq!(c.display_note(t), c.note);
+            }
+        }
+    }
 }

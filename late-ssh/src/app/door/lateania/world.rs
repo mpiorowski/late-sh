@@ -96,6 +96,12 @@ pub struct Room {
     pub safe: bool,
 }
 
+/// The pre-Wildbound level ceiling, and the knee of the two-slope display
+/// curve in `MobSpawn::level`. Reward math (the zone-boss bounty) stays
+/// pinned to it: display levels run past it to 100, but a payout derived
+/// from a level must never grow because the number over a foe's head did.
+pub const LEVEL_KNEE: i32 = 60;
+
 /// A mob template that spawns at a home room.
 #[derive(Clone, Debug)]
 pub struct MobSpawn {
@@ -119,8 +125,30 @@ pub struct MobSpawn {
 impl MobSpawn {
     /// A displayed level, derived from the mob's vitality and bite so it scales
     /// naturally across the whole roster without authoring a level per spawn.
+    ///
+    /// The curve is deliberately two-slope. The `/14` slope was calibrated for a
+    /// level-50 world, and it still governs everything up to the old ceiling so
+    /// the entire early/mid roster keeps its familiar levels untouched. But the
+    /// endgame regions (Frontier -> Reaches -> Kaelmyr) carry raw power far past
+    /// that ceiling - so on the old single slope every endgame foe pinned to the
+    /// clamp and the whole 60..=100 band looked identically max-level. Wildbound
+    /// doubled the player cap to 100, so past the knee we switch to a gentler
+    /// slope that spreads the endgame's real toughness across the new levels:
+    /// entry-Frontier foes read in the mid-60s and climb, tier by tier and deep
+    /// by deep, to the true hundreds of Yssgar and the Ashen Reach. No raw stat
+    /// changes - only what number the player sees over the foe's head.
     pub fn level(&self) -> i32 {
-        ((self.max_hp + self.damage * 4) / 14).clamp(1, 60)
+        let power = self.max_hp + self.damage * 4;
+        // The knee: the power at which the old slope reached the old ceiling.
+        const KNEE_POWER: i32 = LEVEL_KNEE * 14; // 840
+        let level = if power <= KNEE_POWER {
+            power / 14
+        } else {
+            // Spread the endgame's remaining power over the 60..=100 band. The
+            // toughest boss in the world (~6800 power) lands right at the cap.
+            LEVEL_KNEE + (power - KNEE_POWER) / 150
+        };
+        level.clamp(1, super::classes::Class::MAX_LEVEL)
     }
 
     /// A rarity rank (matching the item palette: common/uncommon/rare/epic/
@@ -330,19 +358,24 @@ impl World {
     /// an unvisited room one step from a drawn room becomes a faint frontier
     /// marker so the player can see where there is still to explore. Up/down
     /// exits can't be placed on a flat plane, so they're reported as flags.
-    pub fn minimap(
+    /// Lay visited rooms onto an integer grid by walking exits out from the
+    /// current room. BFS, so the shortest path to each room wins any clash
+    /// that the world's non-Euclidean geometry might otherwise create.
+    /// Exposed for the walkability-invariant test.
+    pub(crate) fn minimap_coords(
         &self,
         current: RoomId,
-        previous: Option<RoomId>,
         visited: &HashSet<RoomId>,
         hr: i32,
         vr: i32,
-    ) -> MiniMap {
-        // 1. Lay visited rooms onto an integer grid by walking exits out from the
-        //    current room. BFS, so the shortest path to each room wins any clash
-        //    that the world's non-Euclidean geometry might otherwise create.
+    ) -> HashMap<RoomId, (i32, i32)> {
         let mut coords: HashMap<RoomId, (i32, i32)> = HashMap::new();
+        // One room per cell: when the world's folds walk two rooms onto the
+        // same square, the first keeps it and the loser stays undrawn (its
+        // exits then read as frontier hints, never as another room's lines).
+        let mut taken: HashSet<(i32, i32)> = HashSet::new();
         coords.insert(current, (0, 0));
+        taken.insert((0, 0));
         let mut queue = VecDeque::from([current]);
         while let Some(rid) = queue.pop_front() {
             let (x, y) = coords[&rid];
@@ -355,13 +388,29 @@ impl World {
                 if nx.abs() > hr || ny.abs() > vr {
                     continue;
                 }
-                if !visited.contains(&dest) || coords.contains_key(&dest) {
+                if !visited.contains(&dest)
+                    || coords.contains_key(&dest)
+                    || taken.contains(&(nx, ny))
+                {
                     continue;
                 }
                 coords.insert(dest, (nx, ny));
+                taken.insert((nx, ny));
                 queue.push_back(dest);
             }
         }
+        coords
+    }
+
+    pub fn minimap(
+        &self,
+        current: RoomId,
+        previous: Option<RoomId>,
+        visited: &HashSet<RoomId>,
+        hr: i32,
+        vr: i32,
+    ) -> MiniMap {
+        let coords = self.minimap_coords(current, visited, hr, vr);
 
         // 2. Paint rooms, corridors, and frontier markers. The char grid
         //    interleaves room cells (even indices) with connector cells (odd),
@@ -394,10 +443,27 @@ impl World {
                     continue;
                 }
                 let (nr, nc) = to_cell(nx, ny);
-                draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
-                // A corridor leaving the visited set points at somewhere new.
-                if !coords.contains_key(&dest) && grid[nr][nc] == MapCell::Empty {
-                    grid[nr][nc] = MapCell::Frontier;
+                // The iron rule of the map: a drawn line means you can walk it.
+                match coords.get(&dest) {
+                    // The exit's destination really is the neighbouring cell:
+                    // a truthful corridor.
+                    Some(&(px, py)) if (px, py) == (nx, ny) => {
+                        draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
+                    }
+                    // The destination is visited but the world's non-Euclidean
+                    // folds laid it elsewhere. Drawing a line here would join
+                    // two rooms that are NOT linked (the "phantom corridor"
+                    // that walks you into "You can't go north") - draw nothing.
+                    Some(_) => {}
+                    // A corridor leaving the visited set points at somewhere
+                    // new - but only onto an empty cell, so it never appears
+                    // to join an unrelated room that happens to sit there.
+                    None => {
+                        if grid[nr][nc] == MapCell::Empty {
+                            draw_connector(&mut grid[(r + nr) / 2][(c + nc) / 2], dx, dy);
+                            grid[nr][nc] = MapCell::Frontier;
+                        }
+                    }
                 }
             }
         }
@@ -512,6 +578,9 @@ pub enum FeatureKind {
     /// A waystone portal: examine it to open the fast-travel network (villages
     /// and the isles of the Shattered Archipelago).
     Portal,
+    /// A talking villager (Genesys): examine it to ask them a question and
+    /// hear their one line back, sometimes plain color, sometimes a real clue.
+    Villager,
 }
 
 impl FeatureKind {
@@ -528,6 +597,7 @@ impl FeatureKind {
             Self::Housing => "clerk",
             Self::CraftStation(skill) => skill.station(),
             Self::Portal => "portal",
+            Self::Villager => "villager",
         }
     }
 }
@@ -790,12 +860,908 @@ pub const FEATURES: &[Feature] = &[
     ),
 ];
 
+/// Every named villager in the world, keyed to the room they stand in - the
+/// Genesys sub-expansion: a living, breathing world. Each carries one line of
+/// dialogue, sometimes plain color, sometimes a real clue about where
+/// something in the world can be found. Rendered as a `FeatureKind::Villager`
+/// so they slot into the existing Examine (`o`) mechanism, but always
+/// announced up front in the room description - a villager never hides.
+pub const VILLAGERS: &[Feature] = &[
+    feat(
+        1,
+        "a footsore town crier",
+        FeatureKind::Villager,
+        "New to Lateania? Market Row's south of here for the smithy and outfitter, and the temple keeps the Dawn's own healers on hand.",
+    ),
+    feat(
+        2,
+        "a barkeep wiping down the counter",
+        FeatureKind::Villager,
+        "The Gilded Flagon never waters its ale, whatever you've heard. Board's by the door if you're after coin work.",
+    ),
+    feat(
+        3,
+        "an apprentice smith, soot to the elbows",
+        FeatureKind::Villager,
+        "Bruna's Ember Forge is right through there. Ask nice and she'll tell you which blade suits your arm.",
+    ),
+    feat(
+        4,
+        "a novice of the Dawn",
+        FeatureKind::Villager,
+        "The Temple keeps the recall fountain lit day and night. Speak the word (r) and you'll always find your way home.",
+    ),
+    feat(
+        5,
+        "a gate-warden leaning on her spear",
+        FeatureKind::Villager,
+        "South Gate's the quiet way out of town. The Greatroad proper starts a few steps past the arch.",
+    ),
+    feat(
+        201,
+        "a tailor's boy with pins in his sleeve",
+        FeatureKind::Villager,
+        "Tomas keeps the Outfitter's Stall stocked past what you'd think - legs and boots too, these days, not just the usual.",
+    ),
+    feat(
+        202,
+        "an old woman grinding herbs",
+        FeatureKind::Villager,
+        "Mirela's Apothecary always has a Phoenix Tonic tucked away for adventurers who've gone in over their heads.",
+    ),
+    feat(
+        203,
+        "a sharp-eyed pickpocket, reformed (mostly)",
+        FeatureKind::Villager,
+        "Pell the Magpie's Curio Cart turns up rings and charms nobody else stocks. Mind your purse near him all the same.",
+    ),
+    feat(
+        204,
+        "a bank clerk counting coin",
+        FeatureKind::Villager,
+        "Bank your gold here before you go anywhere dangerous. Dying with a full purse is a special kind of foolish.",
+    ),
+    feat(
+        205,
+        "a watchman pacing the wall",
+        FeatureKind::Villager,
+        "From up here you can see clean out to the King's Road. Long way to the Frontier stair, longer back.",
+    ),
+    feat(
+        620,
+        "a harbor porter hauling crates",
+        FeatureKind::Villager,
+        "Ships in from three ports today. If you're hunting fish, the Sunderlakes treat a rod kinder than the open sea does.",
+    ),
+    feat(
+        621,
+        "a chandler weighing rope",
+        FeatureKind::Villager,
+        "The Saltwind Wharves are just down the way, if you want a proper look at the harbour district.",
+    ),
+    feat(
+        622,
+        "a fishwife crying the day's catch",
+        FeatureKind::Villager,
+        "Best bream in Tasmania, fresh off the boat. Mind the gulls, they've no manners at all.",
+    ),
+    feat(
+        623,
+        "a acolyte lighting storm-candles",
+        FeatureKind::Villager,
+        "The Cathedral keeps a candle burning for every sailor lost to the deep. Quiet a place as you'll find in this city.",
+    ),
+    feat(
+        624,
+        "a lighthouse-keeper's apprentice",
+        FeatureKind::Villager,
+        "Climb the stair some evening - on a clear night you can just make out the Sundered Reaches on the horizon.",
+    ),
+    feat(
+        625,
+        "a clerk with an armful of ledgers",
+        FeatureKind::Villager,
+        "The Governor's business is her own, but the Terrace view is free to anyone who climbs it.",
+    ),
+    feat(
+        626,
+        "a watch-captain scanning the bay",
+        FeatureKind::Villager,
+        "From the Watchtower Crown you can see every mast in harbour. Nothing gets in or out of Tasmania I don't know about.",
+    ),
+    feat(
+        660,
+        "a coppersmith's apprentice",
+        FeatureKind::Villager,
+        "Melvanala's high and cold, but the Lakeshore Square never freezes over. Something about the hot springs below.",
+    ),
+    feat(
+        661,
+        "a coppersmith hammering a kettle",
+        FeatureKind::Villager,
+        "The Coppersmith's Steps have been in my family three generations. Mind the wet stone in the rain.",
+    ),
+    feat(
+        662,
+        "a pilgrim resting on the stair",
+        FeatureKind::Villager,
+        "Long climb to the monastery. Worth it, they say, if you've a question only the quiet can answer.",
+    ),
+    feat(
+        663,
+        "a gardener pruning terrace vines",
+        FeatureKind::Villager,
+        "The Hanging Gardens bloom even in the frost. Nobody's quite explained how.",
+    ),
+    feat(
+        664,
+        "a monk sweeping the gate",
+        FeatureKind::Villager,
+        "The monastery takes in anyone who knocks, adventurer or not. Just leave your blade at the door.",
+    ),
+    feat(
+        665,
+        "a bell-ringer counting the hours",
+        FeatureKind::Villager,
+        "The Bell Tower rings the watches for the whole city. You get used to it. Eventually.",
+    ),
+    feat(
+        666,
+        "an old sky-priest at the ledge",
+        FeatureKind::Villager,
+        "The Sky-Burial Ledge is sacred ground. Melvanala sends its dead to the wind up here, not the earth.",
+    ),
+    feat(
+        720,
+        "a caravan guide counting camels",
+        FeatureKind::Villager,
+        "Matlatesh runs on the caravan trade. Miss the Oasis Square at dawn and you'll miss half the city's business.",
+    ),
+    feat(
+        721,
+        "a spice trader weighing saffron",
+        FeatureKind::Villager,
+        "The Spice Souk sells things you won't find anywhere else in Lateania. Ask about the frost-bloom, if you dare the price.",
+    ),
+    feat(
+        722,
+        "a caravanserai keeper",
+        FeatureKind::Villager,
+        "Beds and water for man and beast alike. The desert doesn't forgive travelers who skip a night here.",
+    ),
+    feat(
+        723,
+        "a young astronomer squinting at charts",
+        FeatureKind::Villager,
+        "The College maps the stars over Kaelmyr too, when the ash-clouds allow it. Strange skies out that way.",
+    ),
+    feat(
+        724,
+        "a gardener tending the water-garden",
+        FeatureKind::Villager,
+        "The Sultana's Garden is the coolest place in the city come midday. Even the guards linger here.",
+    ),
+    feat(
+        725,
+        "a potter shaping wet clay",
+        FeatureKind::Villager,
+        "Every jar in the Potter's Quarter is thrown by hand. Buy one before you head into the wastes; you'll want the water.",
+    ),
+    feat(
+        726,
+        "a muezzin descending the minaret",
+        FeatureKind::Villager,
+        "From the High Minaret you can see clear to the Ashen Wastes. Cold comfort, that view.",
+    ),
+    feat(
+        2000,
+        "a haggard veteran adventurer",
+        FeatureKind::Villager,
+        "The Frontier proper starts past this rise. Twenty zones deep and every one meaner than the last. Go in ready or don't go in at all.",
+    ),
+    feat(
+        3000,
+        "a lamplighter making his rounds",
+        FeatureKind::Villager,
+        "The Lamplit Quarter never really goes dark. Guildhall's just through there if you're after work.",
+    ),
+    feat(
+        3001,
+        "an off-duty guard soaking sore feet",
+        FeatureKind::Villager,
+        "The baths are the one place in Embergate nobody talks business. Come in swinging a sword and they'll throw you right back out.",
+    ),
+    feat(
+        3002,
+        "a scarred veteran nursing bad ale",
+        FeatureKind::Villager,
+        "Every company that's ever mattered started at that guildhall bar. Most of them didn't end well. Still worth a look at the boards.",
+    ),
+    feat(
+        3003,
+        "a tinker haggling over a broken lock",
+        FeatureKind::Villager,
+        "Tinker's Row will fix anything for the right coin, no questions asked about where it came from.",
+    ),
+    feat(
+        3004,
+        "a mourner tending the shrine garden",
+        FeatureKind::Villager,
+        "Folk come here to grieve or give thanks, adventurer or not. Even the noise of the square goes quiet at the gate.",
+    ),
+    feat(
+        3010,
+        "a net-mender squinting at torn twine",
+        FeatureKind::Villager,
+        "The Saltwind Wharves smell of brine and money changing hands. Mind the harbour cats, they run their own commerce down here.",
+    ),
+    feat(
+        3011,
+        "a fishmonger stacking crushed ice",
+        FeatureKind::Villager,
+        "Freshest catch in Tasmania, right here at the Fishmarket. Come early or come empty-handed.",
+    ),
+    feat(
+        3012,
+        "a cartographer inking a new coastline",
+        FeatureKind::Villager,
+        "Every chart in this loft is hand-drawn. Ask nicely and they might show you a corner of the map you haven't walked yet.",
+    ),
+    feat(
+        3013,
+        "a harbourmaster's clerk with tar on his hands",
+        FeatureKind::Villager,
+        "Nothing crosses this water the harbourmaster hasn't already written down. Best source in the city if you need to know a ship's business.",
+    ),
+    feat(
+        3014,
+        "a sailor lighting a candle before departure",
+        FeatureKind::Villager,
+        "The Storm-Chapel keeps a candle burning for every soul that goes down to the sea. Wind through that door sounds like a hymn some nights.",
+    ),
+    feat(
+        3020,
+        "a terrace gardener trimming frost-vines",
+        FeatureKind::Villager,
+        "The Hightarn Terraces catch the last of the sun before the mountain swallows it. Best view in Melvanala, and free.",
+    ),
+    feat(
+        3021,
+        "a lamplighter walking the Mirrorlake Walk",
+        FeatureKind::Villager,
+        "Water's so still up here it doubles the peaks. Whole terrace feels like it's floating between two skies at dusk.",
+    ),
+    feat(
+        3022,
+        "a stonecutter with dust in his beard",
+        FeatureKind::Villager,
+        "The Stonecutters' Court has been chipping away at that mountain for longer than the city's had a name. Watch your step, the ground's uneven with old spoil.",
+    ),
+    feat(
+        3023,
+        "a longhall regular, three drinks deep",
+        FeatureKind::Villager,
+        "Come in cold, leave as kin. That's the Alewife's rule, and she's never broken it once in forty years.",
+    ),
+    feat(
+        3024,
+        "a pilgrim filling a waterskin",
+        FeatureKind::Villager,
+        "The Snowmelt Spring never runs dry, not even in high summer. They say a sip carries off whatever's ailing you.",
+    ),
+    feat(
+        3030,
+        "a rug merchant calling out prices",
+        FeatureKind::Villager,
+        "The Sunbaked Bazaar never truly closes. Come at night if you want the honest prices, not the tourist ones.",
+    ),
+    feat(
+        3031,
+        "a spice-seller fanning away flies",
+        FeatureKind::Villager,
+        "Real frost-bloom, real saffron, real everything - the Spice Bazaar doesn't deal in the cheap stuff.",
+    ),
+    feat(
+        3032,
+        "a glassblower shaping molten sand",
+        FeatureKind::Villager,
+        "Every piece in the Glassblowers' Souk is one of a kind. Drop one and it's gone for good, so mind your elbows.",
+    ),
+    feat(
+        3033,
+        "a caravan master counting his camels twice",
+        FeatureKind::Villager,
+        "The desert doesn't forgive a caravan that leaves short a water-skin. Stock up here before you head anywhere past the walls.",
+    ),
+    feat(
+        3034,
+        "a botanist misting rare blooms",
+        FeatureKind::Villager,
+        "The Oasis Conservatory grows things that shouldn't survive this far from water. Nobody's quite explained how, same as the terraces up north.",
+    ),
+    feat(
+        5000,
+        "a grim-faced gravedigger",
+        FeatureKind::Villager,
+        "The Sunken Catacombs took my brother. Whatever's down there, it's not resting easy. Go in armed, and go in ready to leave family behind you.",
+    ),
+    feat(
+        5200,
+        "a woodcutter refusing to go further",
+        FeatureKind::Villager,
+        "Thornwood Hollows past this gate. My axe won't touch those brambles - they bleed something that isn't sap.",
+    ),
+    feat(
+        5416,
+        "a half-drowned fisherman, shivering",
+        FeatureKind::Villager,
+        "The Drowned Caverns pulled me under once and spat me back up. I don't go past the Tide Mouth anymore. You'd be wise to think twice yourself.",
+    ),
+    feat(
+        10000,
+        "a scarred sea-captain staring at the horizon",
+        FeatureKind::Villager,
+        "The Sundered Reaches lie past this shallows. Whatever's out there rides harder than the Frontier ever did. The King Who Was Promised Nothing was only the beginning.",
+    ),
+    feat(
+        12000,
+        "an ash-caked pilgrim at the gate",
+        FeatureKind::Villager,
+        "Kaelmyr keeps no towns past this shore, only ash and worse. If you're going in, go in remembering the way back out.",
+    ),
+    feat(
+        8000,
+        "a lamp-keeper trimming wicks",
+        FeatureKind::Villager,
+        "Lantern Cove's the quiet end of Hearthward Close. Good place to settle, if you've earned a home yet.",
+    ),
+    feat(
+        8001,
+        "a retired adventurer tending a garden",
+        FeatureKind::Villager,
+        "Emberfall Rest is where the old companies come to put their feet up. Nobody fights here. Nobody has to anymore.",
+    ),
+    feat(
+        8002,
+        "a mist-wrapped groundskeeper",
+        FeatureKind::Villager,
+        "Hollowmere's always a little foggy, even at noon. Folk say it's peaceful. I say it's just cold.",
+    ),
+    feat(
+        8003,
+        "a kite-flyer watching the wind",
+        FeatureKind::Villager,
+        "Best view in Hearthward Close from up here at Skyreach Landing. Worth the climb on a clear day.",
+    ),
+    feat(
+        9000,
+        "a housing clerk with a ledger under one arm",
+        FeatureKind::Villager,
+        "Buy a deed here whenever you're ready to plant roots - a wattle hut to start, a wizard's tower if you've the coin for it.",
+    ),
+    feat(
+        16000,
+        "a reed-cutter with wet hands",
+        FeatureKind::Villager,
+        "Forty species of fish swim these waters, if you've the patience for a rod and line.",
+    ),
+    feat(
+        16088,
+        "an old angler mending a net",
+        FeatureKind::Villager,
+        "The lakes are gentle water, not the wilds - good country to fish, rest, and not get yourself killed.",
+    ),
+    feat(
+        16176,
+        "a lantern-keeper at the dock",
+        FeatureKind::Villager,
+        "Every landing along these reed-mazes carries its own band of fish. Work your way through all fourteen and you'll have quite a collection.",
+    ),
+    feat(
+        16264,
+        "a heron-watcher, quiet as the water",
+        FeatureKind::Villager,
+        "Peaceful out here, compared to the Frontier. Nobody's come to any harm on these waters in longer than I can remember.",
+    ),
+    feat(
+        16352,
+        "a basket-weaver working reeds",
+        FeatureKind::Villager,
+        "The deep spring further in is said to hold something worth the effort of finding it. Bring more than a fishing rod.",
+    ),
+    feat(
+        16453,
+        "a ferry-hand poling a flat boat",
+        FeatureKind::Villager,
+        "Mind the fog on the caverns further along - easy to lose the path if you're not watching your step.",
+    ),
+    feat(
+        16528,
+        "a mist-wrapped hermit",
+        FeatureKind::Villager,
+        "A quiet trade, fishing. No monsters worth mentioning, just patience and good bait.",
+    ),
+    feat(
+        16616,
+        "a young net-mender",
+        FeatureKind::Villager,
+        "The lake-notables mostly keep to themselves. Leave them be and they'll do the same for you.",
+    ),
+    feat(
+        16704,
+        "a lake-warden counting boats",
+        FeatureKind::Villager,
+        "Forty species of fish swim these waters, if you've the patience for a rod and line.",
+    ),
+    feat(
+        16792,
+        "a duck-caller with a battered pipe",
+        FeatureKind::Villager,
+        "The lakes are gentle water, not the wilds - good country to fish, rest, and not get yourself killed.",
+    ),
+    feat(
+        16880,
+        "a water-witch reading ripples",
+        FeatureKind::Villager,
+        "Every landing along these reed-mazes carries its own band of fish. Work your way through all fourteen and you'll have quite a collection.",
+    ),
+    feat(
+        16982,
+        "a boat-builder planing wood",
+        FeatureKind::Villager,
+        "Peaceful out here, compared to the Frontier. Nobody's come to any harm on these waters in longer than I can remember.",
+    ),
+    feat(
+        17056,
+        "an eel-trapper checking his lines",
+        FeatureKind::Villager,
+        "The deep spring further in is said to hold something worth the effort of finding it. Bring more than a fishing rod.",
+    ),
+    feat(
+        17144,
+        "a still-water fisherman",
+        FeatureKind::Villager,
+        "Mind the fog on the caverns further along - easy to lose the path if you're not watching your step.",
+    ),
+    feat(
+        20000,
+        "a shipwrecked sailor, still shaking",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20050,
+        "a portal-warden clutching her waystone",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20100,
+        "a scavenger sorting driftwood",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20150,
+        "a marooned cartographer",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20200,
+        "a nervous lookout",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20250,
+        "a salt-crusted hermit",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20300,
+        "a survivor of the last landing party",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20350,
+        "a bone-collector",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20400,
+        "a tide-reader murmuring to herself",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20450,
+        "a lantern-keeper who won't say why she stays",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20500,
+        "a shipwrecked sailor, still shaking",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20550,
+        "a portal-warden clutching her waystone",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20600,
+        "a scavenger sorting driftwood",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20650,
+        "a marooned cartographer",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        20700,
+        "a nervous lookout",
+        FeatureKind::Villager,
+        "Every island's got its own boss, its own name, its own way of trying to kill you. Come prepared or come to grief.",
+    ),
+    feat(
+        20750,
+        "a salt-crusted hermit",
+        FeatureKind::Villager,
+        "I've seen adventurers turn back at this very landing more times than I can count. No shame in it.",
+    ),
+    feat(
+        20800,
+        "a survivor of the last landing party",
+        FeatureKind::Villager,
+        "The deadliest ground in Lateania, they call it. I believe them. I've not left this landing in months.",
+    ),
+    feat(
+        20850,
+        "a bone-collector",
+        FeatureKind::Villager,
+        "Whatever you find out on these isles, it'll be worth more than anything the Reaches or Kaelmyr ever offered. If you survive to carry it home.",
+    ),
+    feat(
+        20900,
+        "a tide-reader murmuring to herself",
+        FeatureKind::Villager,
+        "These isles ride the same cruel curve as Kaelmyr, or worse. Whatever you're hunting, it'll find you first out here.",
+    ),
+    feat(
+        20950,
+        "a lantern-keeper who won't say why she stays",
+        FeatureKind::Villager,
+        "The waystone network is the only safe thing about the Shattered Archipelago. Step off the landing at your own risk.",
+    ),
+    feat(
+        22000,
+        "a beast-tamer resting against a mossy stone",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        22099,
+        "a forester with a hound at heel",
+        FeatureKind::Villager,
+        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        22198,
+        "a druid tending a circle of stones",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        22297,
+        "a woodward marking trees for the season",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        22396,
+        "a ranger stringing a new bow",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        22495,
+        "a beekeeper smoking a wild hive",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        22594,
+        "an old huntress sharpening a knife",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        22693,
+        "a herbalist gathering dew",
+        FeatureKind::Villager,
+        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        22807,
+        "a stablehand leading a skittish colt",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        22891,
+        "a green-robed acolyte of the Greenwood",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        22990,
+        "a beast-tamer resting against a mossy stone",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        23103,
+        "a forester with a hound at heel",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        23188,
+        "a druid tending a circle of stones",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        23287,
+        "a woodward marking trees for the season",
+        FeatureKind::Villager,
+        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        23386,
+        "a ranger stringing a new bow",
+        FeatureKind::Villager,
+        "Sixty beasts call this Greenwood home, small and mythical alike. Spend a season here and you'll have met most of them.",
+    ),
+    feat(
+        23485,
+        "a beekeeper smoking a wild hive",
+        FeatureKind::Villager,
+        "The deeper you go, the harder the taming and the stranger the company. The World-Oak's crown holds the oldest of them all.",
+    ),
+    feat(
+        23584,
+        "an old huntress sharpening a knife",
+        FeatureKind::Villager,
+        "Broceliande's a moderate wood, not a brutal one - but don't mistake that for safe. Something in every zone can still put you on your back.",
+    ),
+    feat(
+        23707,
+        "a herbalist gathering dew",
+        FeatureKind::Villager,
+        "A tamed beast strong enough to ride will carry you leagues in a single stride, if you earn its trust.",
+    ),
+    feat(
+        23782,
+        "a stablehand leading a skittish colt",
+        FeatureKind::Villager,
+        "Every beast in Broceliande can be tamed, if you've the patience for it - from the humblest hare to beasts fit to ride.",
+    ),
+    feat(
+        23881,
+        "a green-robed acolyte of the Greenwood",
+        FeatureKind::Villager,
+        "The rideable mounts roam deep in this wood. Palfreys and elks near the eaves, the truly mythical things much further in.",
+    ),
+    feat(
+        600,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        601,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        602,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        603,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        604,
+        "a tired courier",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        605,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        606,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        607,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        608,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        640,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        641,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        642,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        643,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        644,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        645,
+        "a tired courier",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        646,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        647,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        648,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        649,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        650,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        680,
+        "a footsore pilgrim",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        681,
+        "a peddler with a heavy pack",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+    feat(
+        682,
+        "a shepherd counting his flock",
+        FeatureKind::Villager,
+        "The road's safe enough by daylight. Make camp before dark if you can help it.",
+    ),
+    feat(
+        683,
+        "a wandering minstrel",
+        FeatureKind::Villager,
+        "Every capital's got its own character. Tasmania smells of salt, Melvanala of cold stone, Matlatesh of spice and sand.",
+    ),
+    feat(
+        684,
+        "a tired courier",
+        FeatureKind::Villager,
+        "The King's Road runs true between the four capitals - lose your way and you've not been paying attention.",
+    ),
+    feat(
+        685,
+        "a farmer leading a cart",
+        FeatureKind::Villager,
+        "Watch for wandering game along the verges. A hunter with a keen eye eats well on this stretch.",
+    ),
+    feat(
+        686,
+        "a road-warden on patrol",
+        FeatureKind::Villager,
+        "The Sunderlakes lie off toward Melvanala's lake, if fishing's more your speed than fighting.",
+    ),
+    feat(
+        687,
+        "a tinker's apprentice",
+        FeatureKind::Villager,
+        "Broceliande hangs off the Verdant Highlands further along. Good country for taming, they say.",
+    ),
+    feat(
+        688,
+        "a traveling preacher",
+        FeatureKind::Villager,
+        "There's a sealed stair somewhere past Embergate that leads into the Frontier proper. I've never had the nerve to take it.",
+    ),
+    feat(
+        689,
+        "a lost-looking merchant's clerk",
+        FeatureKind::Villager,
+        "Bandits used to work this road. Haven't seen one in an age - whatever's scaring them off, I don't want to meet it either.",
+    ),
+];
+
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
-    FEATURES
-        .iter()
-        .chain(waystone_features().iter())
-        .filter(|f| f.room == room)
-        .collect()
+    // Indexed once: this is called per map cell per frame (via the field's
+    // service glyph) and per snapshot, and a linear scan of FEATURES plus 146
+    // villagers plus the waystones was the hottest part of both.
+    static BY_ROOM: OnceLock<HashMap<RoomId, Vec<&'static Feature>>> = OnceLock::new();
+    let by_room = BY_ROOM.get_or_init(|| {
+        let mut by_room: HashMap<RoomId, Vec<&'static Feature>> = HashMap::new();
+        for f in FEATURES
+            .iter()
+            .chain(VILLAGERS.iter())
+            .chain(waystone_features().iter())
+        {
+            by_room.entry(f.room).or_default().push(f);
+        }
+        by_room
+    });
+    by_room.get(&room).cloned().unwrap_or_default()
 }
 
 const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
@@ -938,6 +1904,30 @@ pub struct CritterSpawn {
     pub note: &'static str,
     /// Reward for hunting, for `Game` critters.
     pub xp: i32,
+    /// An alternate line for when the creature is grounded instead of aloft
+    /// (Genesys): a bird mostly wheels overhead, but sometimes it's perched
+    /// nearby instead. `None` for critters that don't fly.
+    pub perch_note: Option<&'static str>,
+    /// A creature out of legend rather than the mundane world (Genesys):
+    /// shown with its own colour in the Wildlife list.
+    pub mythical: bool,
+    /// Can be won over as a stray companion (Genesys) - fed and looked after
+    /// over several consecutive days, it joins you on top of any other
+    /// companion you already keep. See `svc::feed_wild_critter`.
+    pub adoptable: bool,
+}
+
+impl CritterSpawn {
+    /// The line to show right now: a bird with a `perch_note` alternates
+    /// between wheeling overhead and perched nearby, toggling every few
+    /// minutes (real time, bucketed) so it isn't the same read every visit.
+    /// Everything else always shows its one `note`.
+    pub fn display_note(&self, moment_bucket: u64) -> &'static str {
+        match self.perch_note {
+            Some(perched) if (moment_bucket ^ self.home as u64).is_multiple_of(3) => perched,
+            _ => self.note,
+        }
+    }
 }
 
 const fn critter(
@@ -953,6 +1943,35 @@ const fn critter(
         kind,
         note,
         xp,
+        perch_note: None,
+        mythical: false,
+        adoptable: false,
+    }
+}
+
+/// A Genesys wildlife entry: same shape as `critter`, plus a perch/mythical/
+/// adoptable trio. `perch_note` is `Some` for birds that are sometimes seen
+/// grounded instead of aloft.
+#[allow(clippy::too_many_arguments)]
+const fn genesys_critter(
+    home: RoomId,
+    name: &'static str,
+    kind: CritterKind,
+    note: &'static str,
+    xp: i32,
+    perch_note: Option<&'static str>,
+    mythical: bool,
+    adoptable: bool,
+) -> CritterSpawn {
+    CritterSpawn {
+        home,
+        name,
+        kind,
+        note,
+        xp,
+        perch_note,
+        mythical,
+        adoptable,
     }
 }
 
@@ -1073,6 +2092,407 @@ pub const WILDLIFE: &[CritterSpawn] = &[
         CritterKind::Skittish,
         "trotting the hedgerow",
         0,
+    ),
+    // ---- Genesys: birds aloft/perched, and adoptable strays --------------
+    genesys_critter(
+        1,
+        "a flock of starlings",
+        CritterKind::Skittish,
+        "wheeling in tight loops over the well",
+        0,
+        Some("lined up along the guildhall eaves"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3,
+        "a kestrel",
+        CritterKind::Skittish,
+        "hanging on the wind above the forge chimney",
+        0,
+        Some("gripping the smithy's weathervane, dead still"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        5,
+        "a pair of ravens",
+        CritterKind::Skittish,
+        "circling South Gate, croaking to each other",
+        0,
+        Some("hunched together on the gatehouse rail"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        620,
+        "a wheeling albatross",
+        CritterKind::Skittish,
+        "riding the harbour thermals on locked wings",
+        0,
+        Some("resting on the lighthouse rail, folded and huge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        624,
+        "a cormorant",
+        CritterKind::Skittish,
+        "skimming low over the harbour swell",
+        0,
+        Some("drying its wings on the lighthouse stair"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        660,
+        "a golden eagle",
+        CritterKind::Skittish,
+        "circling the high crags on a rising thermal",
+        0,
+        Some("perched on the bell tower's very peak"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        665,
+        "a flock of mountain doves",
+        CritterKind::Skittish,
+        "wheeling white against the grey stone",
+        0,
+        Some("crowded along the bell tower's ledge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        720,
+        "a desert falcon",
+        CritterKind::Skittish,
+        "hunting the thermals over the dunes",
+        0,
+        Some("hooded and still on the minaret's shoulder"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        600,
+        "a barn swallow",
+        CritterKind::Skittish,
+        "cutting low arcs over the roadside grass",
+        0,
+        Some("lined up with its kin along a fence rail"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        601,
+        "a flock of starlings",
+        CritterKind::Skittish,
+        "turning as one dark cloud over the verge",
+        0,
+        Some("settled thick in a roadside hedge"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3010,
+        "a wheeling gull",
+        CritterKind::Skittish,
+        "screaming over the Saltwind masts",
+        0,
+        Some("standing one-legged on a mooring post"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        3030,
+        "a desert lark",
+        CritterKind::Skittish,
+        "singing high over the Sunbaked Bazaar",
+        0,
+        Some("hopping between the rug-stalls, unbothered"),
+        false,
+        false,
+    ),
+    genesys_critter(
+        2000,
+        "a storm-hawk",
+        CritterKind::Skittish,
+        "riding the Frontier's own bad weather like it was nothing",
+        0,
+        Some("gripping a dead tree at the rise, feathers crackling faintly with static"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5000,
+        "an ash-wraith crow",
+        CritterKind::Skittish,
+        "circling the Catacombs' mouth in dead silence, no wingbeat at all",
+        0,
+        Some("sitting on a headstone, watching you with eyes like coals"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5200,
+        "a bramble-owl",
+        CritterKind::Skittish,
+        "gliding silent between the Thornwood's black branches",
+        0,
+        Some("perched low in the bramble gate, feathers grown through with thorn"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        5416,
+        "a tide-wraith gull",
+        CritterKind::Skittish,
+        "wheeling over the Tide Mouth, crying with a human voice",
+        0,
+        Some("standing dead still on the waterline, not a feather wet"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        10000,
+        "a storm-petrel of the Reaches",
+        CritterKind::Skittish,
+        "skimming the shallows just ahead of a squall that isn't there yet",
+        0,
+        Some("riding a half-sunk piling, utterly unbothered by the swell"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        12000,
+        "a cinder-swift",
+        CritterKind::Skittish,
+        "cutting through the ash-fall too fast to properly see",
+        0,
+        Some("resting on a scorched stone, wings smouldering faintly at the tips"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        16000,
+        "a moon-heron",
+        CritterKind::Skittish,
+        "gliding low over the reed-maze in dead silence",
+        0,
+        Some("standing one-legged in the shallows, feathers faintly silvered"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        22000,
+        "a fae-wren",
+        CritterKind::Skittish,
+        "flitting between the eaves faster than the eye follows",
+        0,
+        Some("perched on a low branch, glowing faintly green at the throat"),
+        true,
+        false,
+    ),
+    genesys_critter(
+        1,
+        "a scruffy stray dog",
+        CritterKind::Skittish,
+        "trotting hopeful circles around anyone eating lunch by the well",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        2,
+        "a one-eyed tavern cat",
+        CritterKind::Skittish,
+        "sprawled across the warmest flagstone by the Gilded Flagon's hearth",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3,
+        "a soot-streaked forge cat",
+        CritterKind::Skittish,
+        "dozing on a pile of scrap iron, utterly unbothered by the hammering",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        4,
+        "a temple hound",
+        CritterKind::Skittish,
+        "lying at the Dawn's threshold, head on its paws, watching everyone who passes",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        5,
+        "a gate-watch mutt",
+        CritterKind::Skittish,
+        "trotting the wall with the guards like it's on shift too",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        620,
+        "a salt-crusted wharf dog",
+        CritterKind::Skittish,
+        "nosing through the fish-crates, hoping nobody's watching",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        660,
+        "a shaggy mountain dog",
+        CritterKind::Skittish,
+        "curled against the cold stone of the Lakeshore Square",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        720,
+        "a lean desert cat",
+        CritterKind::Skittish,
+        "stretched in a strip of shade, tail flicking at the flies",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3000,
+        "a guildhall cat",
+        CritterKind::Skittish,
+        "asleep on the noticeboard, using an old bounty notice as a pillow",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3010,
+        "a fishmonger's cat",
+        CritterKind::Skittish,
+        "working the Fishmarket stalls like it owns every one of them",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3020,
+        "a terrace-garden cat",
+        CritterKind::Skittish,
+        "stalking something invisible through the frost-vines",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        3030,
+        "a bazaar puppy",
+        CritterKind::Skittish,
+        "tangled in a rug merchant's spare cloth, tail going nonstop",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        8000,
+        "an old lantern-dog",
+        CritterKind::Skittish,
+        "keeping the lamp-keeper company on his slow rounds of Lantern Cove",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        9000,
+        "a hearthward tabby",
+        CritterKind::Skittish,
+        "sunning itself on the clerk's windowsill, ledger be damned",
+        0,
+        None,
+        false,
+        true,
+    ),
+    genesys_critter(
+        2000,
+        "a scarred ash-wolf pup",
+        CritterKind::Skittish,
+        "watching the Frontier stair with eyes too old for its size",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        22000,
+        "a moon-hound kit",
+        CritterKind::Skittish,
+        "padding silent circles at the forest gate, coat like poured moonlight",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        16000,
+        "a reed-cat",
+        CritterKind::Skittish,
+        "crouched in the shallows, dry as a bone despite the water",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        10000,
+        "a storm-touched sea-pup",
+        CritterKind::Skittish,
+        "shaking off spray that never quite lands on it",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        12000,
+        "a cinder-kit",
+        CritterKind::Skittish,
+        "curled on warm ash, smoke curling harmlessly off its whiskers",
+        0,
+        None,
+        true,
+        true,
+    ),
+    genesys_critter(
+        5416,
+        "a barrow-hound",
+        CritterKind::Skittish,
+        "sitting patient at the Tide Mouth, exactly where the light doesn't reach",
+        0,
+        None,
+        true,
+        true,
     ),
 ];
 
@@ -1808,6 +3228,97 @@ pub const NODES: &[ResourceNode] = &[
         49,
         4639,
         132,
+    ),
+    // ---- Wildbound (tier 6): the trades' summit, out in the far lands ----
+    node(
+        BROCELIANDE_BASE + 3,
+        GatherSkill::Woodcutting,
+        "a worldtree sapling",
+        "impossibly old for a sapling; the grain hums under a hand",
+        5,
+        55,
+        600,
+    ),
+    node(
+        BROCELIANDE_BASE + 41,
+        GatherSkill::Woodcutting,
+        "a fallen worldtree bough",
+        "a limb the storms brought down whole",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 5,
+        GatherSkill::Mining,
+        "a starmetal seam",
+        "ore that fell burning from the sky, long ago",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 52,
+        GatherSkill::Mining,
+        "a sky-iron crater",
+        "the walls still glitter where the star broke",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 7,
+        GatherSkill::Fishing,
+        "an abyssal spring",
+        "the water goes down further than light does",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 44,
+        GatherSkill::Fishing,
+        "a drowned sinkhole",
+        "something vast keeps the eels fat down there",
+        5,
+        55,
+        600,
+    ),
+    node(
+        BROCELIANDE_BASE + 77,
+        GatherSkill::Foraging,
+        "a dreamlotus pool",
+        "the blooms only open for those patient enough to watch",
+        5,
+        55,
+        600,
+    ),
+    node(
+        LAKES_BASE + 91,
+        GatherSkill::Foraging,
+        "a dreamlotus shallows",
+        "petals drift on water that never ripples",
+        5,
+        55,
+        600,
+    ),
+    node(
+        REACHES_BASE + 9,
+        GatherSkill::Skinning,
+        "a wyrm kill-site",
+        "whatever brought it down did not stay to feed",
+        5,
+        55,
+        600,
+    ),
+    node(
+        KAELMYR_BASE + 88,
+        GatherSkill::Skinning,
+        "a wyrm moulting-ground",
+        "shed scale and hide, acres of it",
+        5,
+        55,
+        600,
     ),
 ];
 
@@ -3691,6 +5202,23 @@ fn extend_villages(rooms: &mut HashMap<RoomId, Room>) {
 /// Reaches' actual ids.
 const ARCH_SPAWN_ID_START: u32 = 970_000;
 
+/// An island boss's loot: the Reaches table it always drew from, plus the
+/// island's own two Wildbound finds - a real step past even Kaelmyr, since
+/// the Archipelago rides the same endgame curve one continent further.
+fn archipelago_boss_loot(isle: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..super::archipelago::ISLAND_COUNT)
+            .map(|i| {
+                let mut v = super::items::reaches_loot(i).to_vec();
+                v.extend(super::items::archipelago_find_ids(i));
+                v
+            })
+            .collect()
+    });
+    tables[isle.min(super::archipelago::ISLAND_COUNT - 1)].as_slice()
+}
+
 #[allow(clippy::needless_range_loop, clippy::type_complexity)]
 fn extend_archipelago(
     rooms: &mut HashMap<RoomId, Room>,
@@ -3881,7 +5409,11 @@ fn extend_archipelago(
                     210 + tier * 40 + depth * 5
                 },
                 respawn_secs: if boss_mob { 600 } else { 90 },
-                loot: super::items::reaches_loot(isle),
+                loot: if boss_mob {
+                    archipelago_boss_loot(isle)
+                } else {
+                    super::items::reaches_loot(isle)
+                },
                 boss: boss_mob,
                 profile,
             });
@@ -6819,10 +8351,13 @@ fn extend_lakes(
                     28 + tier * 8 + depth * 2
                 },
                 respawn_secs: if boss_mob { 240 } else { 60 },
-                // The Sunderlakes have no generated gear catalog of their own -
-                // the reward here is the fishing. A slain notable/mob may drop a
-                // fish from the zone's band, which resolves through `item`.
-                loot: lakes_loot(z),
+                // Regular mobs drop from the zone's fish band; the zone's
+                // notable also carries a shot at its own two Wildbound finds.
+                loot: if boss_mob {
+                    lakes_notable_loot(z)
+                } else {
+                    lakes_loot(z)
+                },
                 boss: boss_mob,
                 profile,
             });
@@ -6873,6 +8408,23 @@ fn lakes_loot(z: usize) -> &'static [u32] {
             .map(|zone| {
                 // Each zone's fish band (see `lakes_fish_for_zone`).
                 lakes_fish_for_zone(zone).to_vec()
+            })
+            .collect()
+    });
+    tables[z.min(LAKES_ZONES - 1)].as_slice()
+}
+
+/// A Sunderlakes notable's loot: the zone's fish band plus its own two unique
+/// Wildbound finds, so the zone's guardian has a real shot at gear a fish
+/// stall would never sell.
+fn lakes_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..LAKES_ZONES)
+            .map(|zone| {
+                let mut v = lakes_fish_for_zone(zone);
+                v.extend(super::items::sunderlakes_find_ids(zone));
+                v
             })
             .collect()
     });
@@ -7436,6 +8988,23 @@ fn broceliande_loot(z: usize) -> &'static [u32] {
     super::items::frontier_loot(tier)
 }
 
+/// A Greenwood notable's loot: the borrowed Frontier tier plus Broceliande's
+/// own two uniquely named Wildbound finds for that zone.
+fn broceliande_notable_loot(z: usize) -> &'static [u32] {
+    static TABLES: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
+    let tables = TABLES.get_or_init(|| {
+        (0..BROCELIANDE_ZONES)
+            .map(|zone| {
+                let tier = (zone / 2).min(super::items::FRONTIER_TIERS - 1);
+                let mut v = super::items::frontier_loot(tier).to_vec();
+                v.extend(super::items::broceliande_find_ids(zone));
+                v
+            })
+            .collect()
+    });
+    tables[z.min(BROCELIANDE_ZONES - 1)].as_slice()
+}
+
 /// Build Broceliande: twenty zones of braided briar-mazes and organic
 /// fern-caverns (rooms 22000+), each carved (never a grid), chained
 /// deepest-room -> next-entrance, and hung off the Verdant Highlands (the Faerie
@@ -7642,7 +9211,11 @@ fn extend_broceliande(
                     36 + tier * 9 + depth * 2
                 },
                 respawn_secs: if boss_mob { 260 } else { 62 },
-                loot: broceliande_loot(z),
+                loot: if boss_mob {
+                    broceliande_notable_loot(z)
+                } else {
+                    broceliande_loot(z)
+                },
                 boss: boss_mob,
                 profile,
             });

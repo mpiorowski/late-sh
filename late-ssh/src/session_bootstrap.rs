@@ -490,6 +490,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
+        mention_ladders: state.mention_ladders.clone(),
         scratchpad_registry: Some(state.scratchpad_registry.clone()),
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
             &user.settings,
@@ -510,6 +511,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        initial_interaction_mode: late_core::models::user::extract_interaction_mode(&user.settings),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
         initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),

@@ -1,7 +1,7 @@
 // Gathering skills for Lateania: the first pillar of the crafting economy.
 //
 // Five gathering trades - Woodcutting, Mining, Fishing, Foraging, Skinning -
-// each levelled 1..=50 on its own XP curve that steepens every tier, so the
+// each levelled 1..=SKILL_MAX_LEVEL on an XP curve that steepens every tier, so the
 // late materials are a genuine grind. A player's skill xp lives on PlayerState
 // (a map of skill -> total xp) and persists; the level is a pure function of xp.
 //
@@ -90,7 +90,7 @@ impl fmt::Display for GatherSkill {
 
 /// A crafting trade - the maker's side of the economy. Each turns gathered raw
 /// materials (and refined intermediates) into usable, sellable goods, and levels
-/// 1..=50 on the very same curve as the gathering skills.
+/// 1..=SKILL_MAX_LEVEL on the very same curve as the gathering skills.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CraftSkill {
     Smithing,
@@ -176,8 +176,8 @@ impl fmt::Display for CraftSkill {
 
 /// The **Animal Taming** trade: the beastmaster's skill. Unlike the gathering
 /// and crafting trades it has no station or node - it is trained by taming wild
-/// beasts of Broceliande into companions (see `taming.rs`). It levels 1..=50 on
-/// the very same shared curve, and its xp lives as a single value on
+/// beasts of Broceliande into companions (see `taming.rs`). It levels
+/// 1..=SKILL_MAX_LEVEL on the very same shared curve, and its xp lives as a single value on
 /// `PlayerState` (there is only one taming trade, so no enum of variants is
 /// needed). This zero-sized marker just carries the stable key/label so the
 /// Trades block and persistence read consistently with the other trades.
@@ -198,14 +198,27 @@ impl TamingSkill {
 
 /// Skill level cap - the same 50 the class levels use, so "level 1 to 50" reads
 /// consistently across the game.
-pub const SKILL_MAX_LEVEL: i32 = 50;
+// Wildbound: the trades climb with the classes - the cap doubles to 100.
+pub const SKILL_MAX_LEVEL: i32 = 100;
+
+/// The knee of the trade xp curve: the pre-Wildbound skill cap. Same story as
+/// the class curve's knee: the cubic was tuned for 50 levels, and run to 100
+/// it priced skill 100 at ~7.58M xp. Past the knee each level costs a flat
+/// sum, just above the knee's own marginal cost (~49.7k) so there is no dip.
+const SKILL_XP_KNEE_LEVEL: i32 = 50;
+const SKILL_XP_PER_SUMMIT_LEVEL: i64 = 50_000;
 
 /// Total xp required to *reach* a given skill level. Level 1 is free; each tier
 /// costs more than the last, and a cubic term that only bites past level 10
-/// makes the back half of every trade the real work (harder and harder).
+/// makes the back half of every trade the real work (harder and harder). Past
+/// the old cap (the knee) each level costs a flat 50k instead.
 pub fn xp_for_skill_level(level: i32) -> i64 {
     if level <= 1 {
         return 0;
+    }
+    if level > SKILL_XP_KNEE_LEVEL {
+        return xp_for_skill_level(SKILL_XP_KNEE_LEVEL)
+            + i64::from(level - SKILL_XP_KNEE_LEVEL) * SKILL_XP_PER_SUMMIT_LEVEL;
     }
     let d = (level - 1) as i64;
     let base = 30 * d * d;

@@ -151,6 +151,9 @@ pub struct State {
     pub active_users: ActiveUsers,
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
+    /// Process-global ghost-bot mention cooldown ladders: ghost responder
+    /// loops step them, sessions peek for the composer cooldown banner.
+    pub mention_ladders: crate::app::ai::ladder::MentionLadders,
     /// Process-global `/pair` intents and shared scratchpad buffers.
     pub scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry,
     pub afk_users: AfkUsers,

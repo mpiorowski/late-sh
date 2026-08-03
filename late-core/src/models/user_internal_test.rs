@@ -245,3 +245,29 @@ fn truncate_to_boundary_respects_char_boundaries() {
     assert_eq!(truncate_to_boundary("abcdef", 4), "abcd");
     assert_eq!(truncate_to_boundary("żółw", 3), "żół");
 }
+
+#[test]
+fn interaction_mode_absent_signals_first_run() {
+    // No key = never chosen = show the onboarding prompt.
+    assert_eq!(extract_interaction_mode(&json!({})), None);
+}
+
+#[test]
+fn interaction_mode_round_trips_and_gates_the_mouse() {
+    for (stored, mode, mouse) in [
+        ("keyboard", InteractionMode::Keyboard, false),
+        ("mouse", InteractionMode::Mouse, true),
+        ("hybrid", InteractionMode::Hybrid, true),
+    ] {
+        let settings = json!({ "interaction_mode": stored });
+        assert_eq!(extract_interaction_mode(&settings), Some(mode));
+        assert_eq!(mode.as_str(), stored);
+        assert_eq!(mode.mouse_enabled(), mouse, "mouse gate for {stored}");
+    }
+    // Unknown / garbage falls back to the safe both-work default.
+    assert_eq!(
+        extract_interaction_mode(&json!({ "interaction_mode": "wat" })),
+        Some(InteractionMode::Hybrid)
+    );
+    assert!(InteractionMode::default().mouse_enabled());
+}

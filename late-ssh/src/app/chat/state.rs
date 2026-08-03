@@ -28,6 +28,7 @@ use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
+use crate::app::ai::ladder::MentionLadders;
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
 
@@ -410,6 +411,9 @@ pub struct ChatState {
     is_admin: bool,
     is_moderator: bool,
     active_users: Option<ActiveUsers>,
+    /// Process-global ghost-bot cooldown ladders, peeked at submit time for
+    /// the "bot is cooling down" banner. The ghost loops own stepping it.
+    mention_ladders: MentionLadders,
     snapshot_rx: watch::Receiver<ChatSnapshot>,
     /// Single-recipient events (tail loads, search results, discover lists)
     /// delivered point-to-point by the service instead of over the global
@@ -633,6 +637,7 @@ impl ChatState {
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
+        mention_ladders: MentionLadders,
     ) -> Self {
         let ChatServices {
             chat: service,
@@ -658,6 +663,7 @@ impl ChatState {
             is_admin: permissions.is_admin(),
             is_moderator: permissions.is_moderator(),
             active_users,
+            mention_ladders,
             snapshot_rx,
             targeted_event_rx,
             event_rx,
@@ -2764,11 +2770,18 @@ impl ChatState {
             return Some(Banner::error(&format!("Unknown command: {command}")));
         }
 
+        let mut cooldown_banner = None;
         if let Some(room_id) = self.composer_room_id
             && !body.is_empty()
         {
             let request_id = Uuid::now_v7();
             let reply_to_message_id = self.reply_target.as_ref().map(|reply| reply.message_id);
+            // Peek the ghost-bot ladders on the typed body, before the reply
+            // quote is prepended, matching what the responders react to
+            // (quoted lines never count as mentions on their side either).
+            if self.edited_message_id.is_none() {
+                cooldown_banner = self.bot_cooldown_banner(room_id, &body);
+            }
             let body = if let Some(reply) = &self.reply_target {
                 format!("> @{}: {}\n{}", reply.author, reply.preview, body)
             } else {
@@ -2801,6 +2814,25 @@ impl ChatState {
             self.clear_composer_after_send();
         } else {
             self.clear_composer_after_submit();
+        }
+        cooldown_banner
+    }
+
+    /// A submit-time heads-up that a mentioned ghost bot is still cooling
+    /// down for this user in this room. The message still sends; the banner
+    /// only says no reply is coming yet and when to retry.
+    fn bot_cooldown_banner(&self, room_id: Uuid, body: &str) -> Option<Banner> {
+        let mentioned = crate::app::common::mentions::extract_mentions(body);
+        for bot in MentionLadders::ALL_BOTS {
+            if mentioned.iter().any(|name| name == bot.handle())
+                && let Some(remaining) = self.mention_ladders.remaining(bot, self.user_id, room_id)
+            {
+                return Some(Banner::info(&format!(
+                    "@{} is cooling down, try again in {}",
+                    bot.handle(),
+                    format_cooldown(remaining)
+                )));
+            }
         }
         None
     }
@@ -6131,6 +6163,17 @@ fn sentence_case(text: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+/// Compact retry hint for the bot cooldown banner. Minutes round up so the
+/// banner never promises an earlier retry than the ladder allows.
+fn format_cooldown(remaining: Duration) -> String {
+    let secs = remaining.as_secs().max(1);
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{} min", secs.div_ceil(60))
     }
 }
 

@@ -93,6 +93,25 @@ fn generated_zones_are_collision_free_and_the_core_stays_tight() {
 }
 
 #[test]
+fn housing_interiors_never_share_a_cell_with_the_town() {
+    use crate::app::door::lateania::housing::{HOUSING_BASE, is_housing_room};
+
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    for (c, ids) in &clashes {
+        let interior = ids
+            .iter()
+            .any(|&id| id != HOUSING_BASE && is_housing_room(id));
+        assert!(
+            !interior,
+            "house interior collided with the world at {c:?}: rooms {ids:?} - the \
+             field would draw another room's paths around a player standing inside",
+        );
+    }
+}
+
+#[test]
 fn dump_level_draws_the_neighbourhood_around_the_player() {
     let world = seed_world();
     let coords = derive_coords(&world);
@@ -564,5 +583,86 @@ fn poi_arrows_point_off_screen_pois_to_the_border() {
         assert!(
             "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(a.glyph)
         );
+    }
+}
+
+// A discovered room whose neighbours are all still fog must not read as a
+// stranded island: each exit into the unknown gets a faint half-stub of path
+// so the player can see a trail continues that way (direction only, no
+// spoiler, and never an arrow - arrows read as controls).
+#[test]
+fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
+    use super::Tile;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+
+    // Find a room with at least one flat (N/S/E/W) exit whose neighbour sits in
+    // the adjacent cell, so the hint has an empty cell to land in.
+    let (&anchor, _) = world
+        .rooms
+        .iter()
+        .find(|(id, room)| {
+            let c = coords[*id];
+            room.exits.iter().any(|(_dir, dst)| {
+                coords
+                    .get(dst)
+                    .is_some_and(|dc| dc.z == c.z && (dc.x - c.x).abs() + (dc.y - c.y).abs() == 1)
+            })
+        })
+        .expect("world has a room with a unit-adjacent flat exit");
+
+    // Only the anchor is explored - every neighbour is fog.
+    let visited: std::collections::HashSet<_> = std::iter::once(anchor).collect();
+    let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
+
+    let hints = canvas
+        .iter()
+        .flatten()
+        .filter(|t| matches!(t, Tile::Hint(_)))
+        .count();
+    assert!(
+        hints > 0,
+        "a discovered room surrounded by fog must sprout at least one exit hint"
+    );
+    // Hints are path stubs (the corridor glyphs), never arrows.
+    for row in &canvas {
+        for tile in row {
+            if let Tile::Hint(g) = tile {
+                assert!(
+                    "\u{2500}\u{2502}".contains(*g),
+                    "hint glyph {g:?} is not a path stub"
+                );
+            }
+        }
+    }
+}
+
+// The POI index carries every marker kind the map draws, and the "notable foe"
+// marker stays rare: one regional champion per land, never a per-room carpet
+// (the endgame is wall-to-wall max-level mobs, so a level threshold would flood).
+#[test]
+fn poi_index_has_every_marker_kind_and_elite_stays_rare() {
+    let p = super::pois();
+    let has = |f: fn(&super::Poi) -> bool| p.values().filter(|x| f(x)).count();
+    assert!(has(|x| x.boss.is_some()) > 0, "bosses indexed");
+    assert!(has(|x| x.tameable.is_some()) > 0, "tameable beasts indexed");
+    assert!(has(|x| x.gather.is_some()) > 0, "gather nodes indexed");
+
+    let elite = has(|x| x.elite_foe.is_some());
+    assert!(elite > 0, "at least one regional champion");
+    // One apex per region: comfortably under any per-region-count ceiling and
+    // nowhere near the thousands a raw level threshold would mark.
+    assert!(
+        elite < 40,
+        "elite foe markers must stay rare (one per land), got {elite}"
+    );
+    // A champion room is never also a boss room (bosses take precedence).
+    for poi in p.values() {
+        if poi.elite_foe.is_some() {
+            assert!(
+                poi.boss.is_none(),
+                "a champion room must not also be a boss"
+            );
+        }
     }
 }

@@ -481,10 +481,125 @@ pub const TAMEABLE: &[PetSpecies] = &[
         34,
         "a living scion of the World-Oak, oldest and mightiest of all beasts",
     ),
+    // ---- Wildbound: the rideable beasts (five wild, five mythical) -------
+    beast(
+        "wb_palfrey",
+        "Duskmane Palfrey",
+        "\u{1F40E}",
+        55,
+        420,
+        22,
+        "a calm-eyed forest horse, dusk-grey down the mane; steady under a saddle",
+    ),
+    beast(
+        "wb_elk",
+        "Greatantler Elk",
+        "\u{1F98C}",
+        60,
+        460,
+        26,
+        "a bull elk whose antlers scrape the low boughs; strong enough to carry two",
+    ),
+    beast(
+        "wb_ram",
+        "Snowcrest Ram",
+        "\u{1F411}",
+        65,
+        500,
+        28,
+        "a mountain ram, sure-footed on ledges no horse would dare",
+    ),
+    beast(
+        "wb_strider",
+        "Fenland Strider",
+        "\u{1F9B6}",
+        70,
+        540,
+        30,
+        "a long-legged marsh runner that skims the soft ground like a skipped stone",
+    ),
+    beast(
+        "wb_direstag",
+        "Direhorn Stag",
+        "\u{1F98C}",
+        75,
+        600,
+        34,
+        "a stag grown vast and wary in the deep wood; it suffers only a worthy rider",
+    ),
+    beast(
+        "wb_unicorn",
+        "Moonlit Unicorn",
+        "\u{1F984}",
+        80,
+        680,
+        38,
+        "a unicorn seen only where moonlight pools; its stride bends the miles",
+    ),
+    beast(
+        "wb_hippogriff",
+        "Stormfeather Hippogriff",
+        "\u{1F985}",
+        85,
+        740,
+        42,
+        "half hawk, half horse, all weather; it lands where the storm was heading",
+    ),
+    beast(
+        "wb_griffin",
+        "Emberwing Griffin",
+        "\u{1F981}",
+        90,
+        800,
+        46,
+        "a griffin whose wingbeats shed sparks; the sky shortens beneath it",
+    ),
+    beast(
+        "wb_wyvern",
+        "Verdant Wyvern",
+        "\u{1F409}",
+        95,
+        880,
+        50,
+        "a green-scaled wyvern of the canopy roads; it knows every gap in the world",
+    ),
+    beast(
+        "wb_worldserpent",
+        "Aurora Worldserpent",
+        "\u{1F30C}",
+        100,
+        1000,
+        56,
+        "the horizon-swimmer of the old sagas; to ride it is to arrive before you left",
+    ),
 ];
 
 /// Number of tameable beasts (the design target is fifty).
 pub const TAMEABLE_COUNT: usize = TAMEABLE.len();
+
+/// The rideable species and how far they carry you: one keypress while mounted
+/// strides this many rooms. The wild mounts walk 2-3; the mythicals at the top
+/// of the taming ladder stride 4, and the very best skip 5 rooms at a time.
+pub const RIDEABLE: &[(&str, u8)] = &[
+    ("wb_palfrey", 2),
+    ("wb_elk", 2),
+    ("wb_ram", 3),
+    ("wb_strider", 3),
+    ("wb_direstag", 3),
+    ("wb_unicorn", 4),
+    ("wb_hippogriff", 4),
+    ("wb_griffin", 4),
+    ("wb_wyvern", 5),
+    ("wb_worldserpent", 5),
+];
+
+/// How many rooms one mounted step covers for a species, if it can be ridden.
+pub fn mount_stride(species_key: &str) -> Option<u8> {
+    RIDEABLE
+        .iter()
+        .find(|(key, _)| *key == species_key)
+        .map(|&(_, stride)| stride)
+}
 
 /// A `const` constructor for a tameable species (keeps the table readable).
 const fn beast(
@@ -574,8 +689,8 @@ pub fn tame_chance(taming_xp: i64, beast: &PetSpecies) -> u32 {
 
 /// Xp awarded for a *successful* tame: scales with the beast's difficulty, so
 /// taming a great wyrm is worth far more than a hare. Kept generous enough that
-/// working up the fifty beasts is a real, rewarding progression on the shared
-/// 1..=50 curve.
+/// working up the beasts is a real, rewarding progression on the shared
+/// skill curve.
 pub fn tame_xp(beast: &PetSpecies) -> i32 {
     30 + beast.tame_level * beast.tame_level / 2
 }

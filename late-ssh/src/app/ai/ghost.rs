@@ -52,6 +52,7 @@ use uuid::Uuid;
 
 use crate::{
     app::activity::event::ActivityEvent,
+    app::ai::ladder::{Decision, LadderBot, MentionLadders},
     app::ai::svc::AiService,
     app::chat::svc::{ChatEvent, ChatService},
     app::clubhouse::lobby::SharedLobby,
@@ -70,6 +71,7 @@ pub struct GhostService {
     username_directory: crate::usernames::UsernameDirectory,
     chip_service: ChipService,
     clubhouse_lobby: SharedLobby,
+    mention_ladders: MentionLadders,
 }
 
 #[derive(Clone)]
@@ -79,8 +81,7 @@ struct BotUser {
 }
 
 const BOT_FINGERPRINT: &str = "bot-fp-000";
-const BOT_USERNAME: &str = "bot";
-const BOT_COOLDOWN: Duration = Duration::from_secs(30);
+const BOT_USERNAME: &str = LadderBot::Bot.handle();
 const GHOST_MENTION_HISTORY_SIZE: i64 = 40;
 const BOT_MENTION_REPLY_MAX_LINES: usize = 4;
 const GHOST_REPLY_DEFAULT_MAX_LINES: usize = 2;
@@ -132,8 +133,7 @@ const GRAYBEARD_PERSONA: &str = "You are a burned-out senior developer, deeply n
     Never be cruel, never go after a real person's identity. The complaint is the tooling, not the human.";
 pub const GRAYBEARD_MENTION_COOLDOWN: Duration = Duration::from_secs(60); // 1 min
 const BARTENDER_FINGERPRINT: &str = "bartender-fp-000";
-const BARTENDER_USERNAME: &str = "bartender";
-const BARTENDER_MENTION_COOLDOWN: Duration = Duration::from_secs(15);
+const BARTENDER_USERNAME: &str = LadderBot::Bartender.handle();
 const BARTENDER_REPLY_MAX_LINES: usize = 3;
 /// Hardcoded per-call rather than sourced from `AiService::model()`: kept as
 /// its own const so the bartender's order decision can move to a different
@@ -178,6 +178,7 @@ impl GhostService {
         username_directory: crate::usernames::UsernameDirectory,
         chip_service: ChipService,
         clubhouse_lobby: SharedLobby,
+        mention_ladders: MentionLadders,
     ) -> Self {
         Self {
             db,
@@ -188,6 +189,7 @@ impl GhostService {
             username_directory,
             chip_service,
             clubhouse_lobby,
+            mention_ladders,
         }
     }
 
@@ -309,7 +311,6 @@ impl GhostService {
         shutdown: late_core::shutdown::CancellationToken,
     ) {
         let mut events = self.chat_service.subscribe_events();
-        let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
         tracing::info!("@bot mention responder started");
 
         loop {
@@ -332,13 +333,18 @@ impl GhostService {
                             ) {
                                 continue;
                             }
-                            if let Some(last) = last_reply.get(&message.user_id)
-                                && last.elapsed() < BOT_COOLDOWN
+                            // Read-only pre-filter so a hammering patron costs
+                            // a map lookup here instead of a pooled connection
+                            // and two queries inside the task. Rooms he never
+                            // answers in hold no ladder state, so this reads
+                            // `None` there and the real gates still decide.
+                            if self
+                                .mention_ladders
+                                .remaining(LadderBot::Bot, message.user_id, message.room_id)
+                                .is_some()
                             {
                                 continue;
                             }
-
-                            last_reply.insert(message.user_id, Instant::now());
                             let svc = self.clone();
                             let bot = bot.clone();
                             tokio::spawn(async move {
@@ -371,6 +377,19 @@ impl GhostService {
                 "skipping @bot mention in dm room"
             );
             return Ok(());
+        }
+
+        // Ladder check sits after the DM skip so rooms he never answers in
+        // never accrue ladder state (the composer banner reads that state).
+        // The loop's pre-filter is only a fast path; this is the step that
+        // counts, since tasks race each other past it.
+        match self.mention_ladders.check_and_step(
+            LadderBot::Bot,
+            trigger_message.user_id,
+            trigger_message.room_id,
+        ) {
+            Decision::Answer => {}
+            Decision::Throttled { .. } => return Ok(()),
         }
 
         if !ChatRoomMember::is_member(&client, trigger_message.room_id, bot.id).await? {
@@ -605,7 +624,6 @@ impl GhostService {
         shutdown: late_core::shutdown::CancellationToken,
     ) {
         let mut events = self.chat_service.subscribe_events();
-        let mut last_reply: HashMap<Uuid, Instant> = HashMap::new();
 
         tracing::info!(username = %bartender.username, "bartender mention responder started");
 
@@ -629,13 +647,16 @@ impl GhostService {
                             if !contains_mention(&message.body, &bartender.username) {
                                 continue;
                             }
-                            if let Some(last) = last_reply.get(&message.user_id)
-                                && last.elapsed() < BARTENDER_MENTION_COOLDOWN
+                            // Read-only pre-filter, same reasoning as @bot's:
+                            // throttled mentions never reach the DB, and rooms
+                            // he is not in hold no state for this to read.
+                            if self
+                                .mention_ladders
+                                .remaining(LadderBot::Bartender, message.user_id, message.room_id)
+                                .is_some()
                             {
                                 continue;
                             }
-
-                            last_reply.insert(message.user_id, Instant::now());
                             let svc = self.clone();
                             let bartender = bartender.clone();
                             tokio::spawn(async move {
@@ -667,6 +688,19 @@ impl GhostService {
             if !ChatRoomMember::is_member(&client, trigger_message.room_id, bartender.id).await? {
                 return Ok(());
             }
+        }
+
+        // Ladder check sits after the membership gate so rooms he never
+        // answers in never accrue ladder state (the composer banner reads
+        // that state). The loop's pre-filter is only a fast path; this is
+        // the step that counts, since tasks race each other past it.
+        match self.mention_ladders.check_and_step(
+            LadderBot::Bartender,
+            trigger_message.user_id,
+            trigger_message.room_id,
+        ) {
+            Decision::Answer => {}
+            Decision::Throttled { .. } => return Ok(()),
         }
 
         let (messages, balance, drunk_level) = {

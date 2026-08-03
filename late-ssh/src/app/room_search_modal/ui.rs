@@ -144,7 +144,8 @@ fn draw_results(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let rows = result_rows(&items);
     let start = result_view_start(&rows, selected, height);
-    for row in rows.iter().skip(start).take(height) {
+    state.clear_item_rows();
+    for (offset, row) in rows.iter().skip(start).take(height).enumerate() {
         match *row {
             ResultRow::Header(favorite) => {
                 let label = if favorite { "favorites" } else { "rooms" };
@@ -156,6 +157,7 @@ fn draw_results(
                 )));
             }
             ResultRow::Item(index) => {
+                state.record_item_row(area.y + offset as u16, index);
                 lines.push(result_item_line(&items[index], index == selected, width));
             }
         }

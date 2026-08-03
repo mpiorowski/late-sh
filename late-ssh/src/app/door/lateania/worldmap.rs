@@ -152,6 +152,9 @@ pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
                 if rel.contains_key(&dest)
                     || coords.contains_key(&dest)
                     || region_layout(dest).is_some()
+                    // A home's doorway: never walked, so each plot's interior
+                    // seeds later as its own island clear of the town grid.
+                    || super::housing::crosses_threshold(rid, dest)
                 {
                     continue;
                 }
@@ -410,8 +413,13 @@ pub struct Poi {
     pub reward: Vec<&'static str>,
     /// Names of the mobs that spawn (can be slain) here.
     pub monsters: Vec<&'static str>,
+    /// A notable non-boss foe lairing here (epic/legendary rank), if any - the
+    /// hunt-worthy targets, distinct from trash spawns.
+    pub elite_foe: Option<&'static str>,
     /// A tameable wild beast roaming here, if any.
     pub tameable: Option<&'static str>,
+    /// A harvestable resource here (the gather trade worked at it), if any.
+    pub gather: Option<&'static str>,
 }
 
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
@@ -431,9 +439,36 @@ fn build_pois() -> HashMap<RoomId, Poi> {
             }
         }
     }
+    // Regional champions: the single toughest non-boss foe in each land. The
+    // endgame is wall-to-wall max-level mobs, so a per-room "elite" marker would
+    // carpet the map; one apex hunt per region stays rare and worth flagging.
+    let mut champ: HashMap<&'static str, (RoomId, &'static str, i32)> = HashMap::new();
+    for spawn in &world.spawns {
+        if spawn.boss {
+            continue;
+        }
+        let Some((region, _)) = super::world::region_atlas_entry(spawn.home) else {
+            continue;
+        };
+        let lvl = spawn.level();
+        champ
+            .entry(region)
+            .and_modify(|best| {
+                if lvl > best.2 {
+                    *best = (spawn.home, spawn.name, lvl);
+                }
+            })
+            .or_insert((spawn.home, spawn.name, lvl));
+    }
+    for (_region, (home, name, _)) in champ {
+        map.entry(home).or_default().elite_foe = Some(name);
+    }
     for beast in super::taming::wild_beasts() {
         map.entry(beast.home).or_default().tameable =
             Some(super::taming::TAMEABLE[beast.species].name);
+    }
+    for n in super::world::NODES {
+        map.entry(n.home).or_default().gather = Some(n.skill.key());
     }
     map
 }
@@ -460,6 +495,12 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
+    /// A path-continuation hint: a faint half-stub of corridor showing that an
+    /// exit runs on (into fog, or toward a visited room the map can't draw
+    /// right beside it - the hand-authored core doesn't lay perfectly flat).
+    /// Always a `─`/`│` stub, never an arrow: on the field a line means
+    /// "walkable path" and nothing else.
+    Hint(char),
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
@@ -514,6 +555,26 @@ pub fn map_canvas(
         };
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
+                // An exit into the fog: a faint half-stub of path trailing off
+                // into the unknown, so a discovered room never reads as
+                // stranded. A stub, not an arrow - on the field a line means
+                // "walkable path" and nothing else, and arrows read as
+                // controls. No spoiler of what waits at the far end.
+                let (dx, dy) = match dir {
+                    Dir::East => (1, 0),
+                    Dir::West => (-1, 0),
+                    Dir::North => (0, -1),
+                    Dir::South => (0, 1),
+                    _ => continue, // up/down: no flat direction to point
+                };
+                let (hx, hy) = (sc + dx, sr + dy);
+                if (0..cols).contains(&hx)
+                    && (0..rows).contains(&hy)
+                    && canvas[hy as usize][hx as usize] == Tile::Empty
+                {
+                    let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
+                    canvas[hy as usize][hx as usize] = Tile::Hint(stub);
+                }
                 continue;
             }
             let Some(&dc) = coords.get(dest) else {
@@ -527,7 +588,26 @@ pub fn map_canvas(
                 (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
                 (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
-                _ => {} // linked but not spatially adjacent (cross-region seam)
+                _ if dc.z == c.z => {
+                    // Linked on the same level but not in the adjacent cell (the
+                    // hand-authored core scatters some branches). A half-stub
+                    // toward the neighbour on the dominant axis, into an empty
+                    // cell only, so no reachable room reads as a stranded island.
+                    let horizontal = (dc.x - c.x).abs() >= (dc.y - c.y).abs();
+                    let (hx, hy) = if horizontal {
+                        (sc + (dc.x - c.x).signum(), sr)
+                    } else {
+                        (sc, sr + (dc.y - c.y).signum())
+                    };
+                    if (0..cols).contains(&hx)
+                        && (0..rows).contains(&hy)
+                        && canvas[hy as usize][hx as usize] == Tile::Empty
+                    {
+                        let stub = if horizontal { '\u{2500}' } else { '\u{2502}' };
+                        canvas[hy as usize][hx as usize] = Tile::Hint(stub);
+                    }
+                }
+                _ => {} // stairs (up/down): not drawn on a flat level
             }
         }
     }

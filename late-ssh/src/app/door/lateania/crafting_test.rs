@@ -41,8 +41,9 @@ fn every_craft_skill_has_recipes_and_indices_are_stable() {
             );
         }
     }
-    // 10 recipes per tier x 5 tiers, plus two masterwork sinks.
-    assert_eq!(recipes().len(), 52);
+    // 10 recipes per tier x 6 tiers (Wildbound added the sixth), plus two
+    // masterwork sinks.
+    assert_eq!(recipes().len(), 62);
 }
 
 #[test]
@@ -76,4 +77,37 @@ fn chains_link_up_ore_becomes_ingot_becomes_weapon() {
         recipes().iter().any(|r| r.output == ingot_id(0)),
         "the ingot is itself craftable from ore"
     );
+}
+
+// Wildbound trades: a sixth tier of everything, gated past the old skill cap,
+// each recipe resolving to real catalog items.
+#[test]
+fn wildbound_adds_a_sixth_trade_tier_end_to_end() {
+    use super::super::items;
+    assert_eq!(items::MATERIAL_TIERS, 6);
+    assert_eq!(super::super::skills::SKILL_MAX_LEVEL, 100);
+    let top: Vec<_> = recipes().iter().filter(|r| r.level_req >= 55).collect();
+    assert!(
+        top.len() >= 8,
+        "expected a full slate of tier-6 recipes, got {}",
+        top.len()
+    );
+    for r in &top {
+        assert!(
+            items::item(r.output).is_some(),
+            "tier-6 recipe output {} is not a real item",
+            r.output
+        );
+        for ing in &r.inputs {
+            assert!(
+                items::item(ing.item).is_some(),
+                "tier-6 ingredient {} is not a real item",
+                ing.item
+            );
+        }
+    }
+    // The summit gear genuinely out-stats the old top end.
+    let old = items::item(items::smith_weapon_id(4)).unwrap();
+    let new = items::item(items::smith_weapon_id(5)).unwrap();
+    assert!(new.mods.attack > old.mods.attack, "tier 6 must beat tier 5");
 }

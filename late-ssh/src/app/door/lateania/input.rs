@@ -5,11 +5,28 @@
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
-//     slot 10; deeper rosters cast from the Abilities panel); z flee.
+//     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
+//     healing potion without leaving the view; z flee.
+//   - Mounts: G mounts/dismounts a rideable companion (one step then strides
+//     several rooms; the best beasts skip 5). Combat puts you back on foot.
+//   - Companion care: ~ feeds and tends your companion from anywhere, no
+//     stable needed - reviving one that went down mid-fight. If a wild
+//     adoptable creature shares the room and your own pet doesn't need
+//     tending, ~ feeds it instead (Genesys) - five days running wins it
+//     over as a stray, kept on top of any pet you already have.
+//   - Villagers (Genesys): press o to talk to one and hear their line back
+//     (sometimes plain colour, sometimes a real clue). Always announced up
+//     front in the room description, never hidden behind a menu.
+//   - Travel: r speaks the word of recall (free, warps to Embergate);
+//     : fixes a personal waypoint here; / warps to it from anywhere (a gold
+//     cost) - the far run back from the Frontier's deep levels doesn't have
+//     to be walked every time.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
+//   - Map: m overview atlas (pan around); M toggles RPG mode (the live
+//     walk-around field beside the room) on/off - off is a plain text MUD.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
@@ -19,6 +36,10 @@
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
+//   - Chat: ' opens the say line, sent to the room by default. Lead the
+//     message with "/z " (or "/zone ") for everyone in the same named zone,
+//     or "/w " (or "/world ") for every adventurer in Lateania right now.
+//     Always world-local - none of it reaches late.sh's own chat.
 //   - Esc leaves the world for the Games hub.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
@@ -34,6 +55,17 @@ pub enum InputAction {
     Ignored,
     Handled,
     Leave,
+}
+
+/// Route a mouse event to the combat action bar. A left click on a chip runs the
+/// same action its key would; everything else (other buttons, scroll, clicks off
+/// a chip) is ignored so the keyboard-driven view is untouched.
+pub fn handle_mouse(state: &mut State, mouse: crate::app::input::MouseEvent) -> bool {
+    use crate::app::input::{MouseButton, MouseEventKind};
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    state.click_combat(mouse.x, mouse.y)
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
@@ -243,11 +275,25 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'q' | b'Q' => {
+        b'q' => {
             // The Animal Taming panel opens where a tameable wild beast roams.
             if view.taming.is_some() {
                 state.open_taming();
             }
+            InputAction::Handled
+        }
+        b'Q' => {
+            // Quaff the best healing potion in one keystroke - meant for combat,
+            // so you never leave the view (and lose sight of the health bars)
+            // just to drink. Works anywhere; a beast-taming room still tames on
+            // lowercase `q`.
+            state.quaff();
+            InputAction::Handled
+        }
+        b'~' => {
+            // Feed and tend your companion, wherever you stand - no more
+            // walking a downed pet all the way back to a capital's Stable.
+            state.feed_pet();
             InputAction::Handled
         }
         b'i' | b'I' => {
@@ -258,9 +304,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'm' | b'M' => {
-            // Toggle the whole-world atlas.
+        b'm' => {
+            // Toggle the whole-world overview atlas (pan-around map).
             state.toggle_panel(Panel::Map);
+            InputAction::Handled
+        }
+        b'M' => {
+            // Toggle RPG mode: the live walk-around field beside the room, or a
+            // plain text MUD when off.
+            state.toggle_rpg_mode();
             InputAction::Handled
         }
         b'o' | b'O' => {
@@ -291,14 +343,32 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.recall();
             InputAction::Handled
         }
+        b':' => {
+            // Fix a personal waypoint here - the far run between Embergate and
+            // the Frontier's deep levels for healing/resurrecting shouldn't be
+            // a full re-walk every time.
+            state.set_waypoint();
+            InputAction::Handled
+        }
+        b'/' => {
+            // Warp to the marked waypoint, from anywhere (a gold cost, unlike
+            // the free word of recall).
+            state.warp_to_waypoint();
+            InputAction::Handled
+        }
         b'f' | b'F' => {
             // Toggle auto-following another adventurer in the room.
             state.follow();
             InputAction::Handled
         }
-        b'g' | b'G' => {
+        b'g' => {
             // Resurrection rite: revive the nearest fallen adventurer here.
             state.resurrect();
+            InputAction::Handled
+        }
+        b'G' => {
+            // Giddy-up: mount or dismount a rideable companion (Wildbound).
+            state.toggle_mount();
             InputAction::Handled
         }
         b'e' | b'E' => {
@@ -319,8 +389,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'\'' => {
-            // Open the local chat line (say to the room). World-local; does not
-            // leak into late.sh.
+            // Open the chat line: says to the room by default; lead with
+            // "/z " (zone) or "/w " (world) to reach further. World-local
+            // either way; never leaks into late.sh.
             state.open_chat();
             InputAction::Handled
         }
