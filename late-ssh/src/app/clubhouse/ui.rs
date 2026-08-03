@@ -1214,10 +1214,15 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         Tutorial::Welcome => (
             " ☾ welcome to the late lounge ☽ ",
             vec![
-                Line::from(Span::styled(
-                    "late.sh: a late-night clubhouse that lives in a terminal.",
-                    text,
-                )),
+                Line::from(vec![
+                    Span::styled(
+                        "late.sh",
+                        Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(": a late-night clubhouse that lives in a terminal.", text),
+                ]),
                 Line::from(Span::styled(
                     "one tavern and six pages: chat, games, a shared canvas,",
                     text,
@@ -1340,6 +1345,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
+    // Proper nouns (game names, late.sh, Late Chips) pop out of the prose so
+    // a skimming eye still catches the roster.
+    let name = Style::default()
+        .fg(theme::TEXT_BRIGHT())
+        .add_modifier(Modifier::BOLD);
     let border = Style::default().fg(theme::AMBER());
 
     let (home, title, pitch, next_key, next_label): (Screen, &str, Vec<Line>, &str, &str) =
@@ -1348,10 +1358,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 Screen::Dashboard,
                 " ✦ the tour · home ",
                 vec![
-                    Line::from(Span::styled(
-                        "every room, thread and DM on late.sh lives here.",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("every room, thread and DM on ", text),
+                        Span::styled("late.sh", name),
+                        Span::styled(" lives here.", text),
+                    ]),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[i] ", key),
@@ -1371,7 +1382,9 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     ]),
                     Line::from(vec![
                         Span::styled("[/private #room] ", key),
-                        Span::styled("invite-only · your Mentions wait in the rail", text),
+                        Span::styled("invite-only · your ", text),
+                        Span::styled("Mentions", name),
+                        Span::styled(" wait in the rail", text),
                     ]),
                 ],
                 "2",
@@ -1381,14 +1394,16 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 Screen::Arcade,
                 " ✦ the tour · the arcade ",
                 vec![
-                    Line::from(Span::styled(
-                        "solo games: Lateris, Snake, 2048, Sudoku, Solitaire...",
-                        text,
-                    )),
-                    Line::from(Span::styled(
-                        "daily puzzles pay Late Chips; quests and streaks stack up top.",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("solo games: ", text),
+                        Span::styled("Lateris, Snake, 2048, Sudoku, Solitaire", name),
+                        Span::styled("...", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("daily puzzles pay ", text),
+                        Span::styled("Late Chips", name),
+                        Span::styled("; quests and streaks stack up top.", text),
+                    ]),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("chips buy things. ", text),
@@ -1404,18 +1419,19 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled("[Ctrl+G] ", key),
                         Span::styled("the lobby, the busiest room in the house:", text),
                     ]),
-                    Line::from(Span::styled(
-                        "live tables: Poker, Blackjack, Asterion, Tron, Super Snake,",
-                        text,
-                    )),
-                    Line::from(Span::styled(
-                        "plus seven daily duels: chess, battleship, connect four,",
-                        text,
-                    )),
-                    Line::from(Span::styled(
-                        "reversi, checkers, backgammon, briscola. challenge someone,",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("live tables: ", text),
+                        Span::styled("Poker, Blackjack, Asterion, Tron, Super Snake", name),
+                        Span::styled(",", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("plus seven daily duels: ", text),
+                        Span::styled("chess, battleship, connect four,", name),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("reversi, checkers, backgammon, briscola", name),
+                        Span::styled(". challenge someone,", text),
+                    ]),
                     Line::from(Span::styled(
                         "walk away, play a move whenever; 24h on the clock per move.",
                         text,
@@ -1433,34 +1449,34 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         text,
                     )),
                     Line::default(),
-                    Line::from(Span::styled(
-                        "Lateania: our own MMO. one shared world, bosses, mounts.",
-                        text,
-                    )),
-                    Line::from(Span::styled(
-                        "NetHack: the legend itself, decades deep. the DevTeam",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("Lateania", name),
+                        Span::styled(": our own MMO. one shared world, bosses, mounts.", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("NetHack", name),
+                        Span::styled(": the legend itself, decades deep. the DevTeam", text),
+                    ]),
                     Line::from(Span::styled(
                         "thought of everything; an ascension here is earned.",
                         text,
                     )),
-                    Line::from(Span::styled(
-                        "DCSS: the most played roguelike alive. pick a species,",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("DCSS", name),
+                        Span::styled(": the most played roguelike alive. pick a species,", text),
+                    ]),
                     Line::from(Span::styled(
                         "pick a god, dive for the Orb.",
                         text,
                     )),
-                    Line::from(Span::styled(
-                        "Brogue: the most beautiful dungeon ASCII ever drew.",
-                        text,
-                    )),
-                    Line::from(Span::styled(
-                        "Green Dragon: the legendary BBS door, reborn.",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("Brogue", name),
+                        Span::styled(": the most beautiful dungeon ASCII ever drew.", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Green Dragon", name),
+                        Span::styled(": the legendary BBS door, reborn.", text),
+                    ]),
                     Line::default(),
                     Line::from(Span::styled(
                         "and much more; your wins stick to your name.",
