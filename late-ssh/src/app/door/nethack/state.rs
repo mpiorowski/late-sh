@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -23,6 +24,12 @@ pub enum Mode {
 /// nethack's end-of-game `--More--`/disclosure prompts) so a stray `q` cannot
 /// reach the launcher's global quit and drop the whole SSH session.
 const EXIT_GRACE_TICKS: u8 = 10;
+
+/// Close a running game after this long without a single forwarded keystroke.
+/// Detached games (the player stepped out with ` and never came back) would
+/// otherwise hold a host child forever; the close is a clean SIGHUP-save on
+/// the host, so the run resumes on the next launch.
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
 
 /// Post a "descended" feed event only when the deepest level crosses into a new
 /// band of this many dungeon levels. The Amulet sits ~25-30 levels down, so a
@@ -74,6 +81,10 @@ pub struct State {
     last_dlvl: Option<i32>,
     /// Once-per-session debounce for the death activity event.
     death_noted: bool,
+    /// When the last keystroke was forwarded to the game. A running game idle
+    /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
+    /// is staring at it or has detached to another screen.
+    last_input: Instant,
     /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
     /// intent); the claimed handle becomes NetHack's `-u` playname.
     handle: HandleFlow,
@@ -117,6 +128,7 @@ impl State {
             deepest_dlvl: None,
             last_dlvl: None,
             death_noted: false,
+            last_input: Instant::now(),
         }
     }
 
@@ -165,6 +177,7 @@ impl State {
         }));
         self.mode = Mode::Running;
         self.exit_grace = 0;
+        self.last_input = Instant::now();
         // Fresh launch: re-arm the per-session milestone/event debounce so a new
         // game/character can earn the (account-gated) awards again and re-post
         // session events. Account-level dedup still prevents a second payout.
@@ -194,6 +207,12 @@ impl State {
                 // nethack's end-of-game prompts, and those trailing keys must
                 // not reach the launcher's global `q` = quit-the-app handler.
                 self.exit_grace = EXIT_GRACE_TICKS;
+            } else if self.last_input.elapsed() >= IDLE_SHUTDOWN {
+                // Idle too long (typically a detached game the player forgot):
+                // drop the proxy so the host SIGHUP-saves the run. No exit
+                // grace; an idle player has no trailing keystrokes in flight.
+                self.proxy = None;
+                self.mode = Mode::Launcher;
             } else {
                 // Still in-game: watch the screen for achievement milestones
                 // (Amulet pickup, ascension) plus feed events (descent, death).
@@ -338,6 +357,24 @@ impl State {
         self.proxy.as_ref()
     }
 
+    /// Test-only: fabricate a Running state around a proxy pointed at a dead
+    /// address, so detach/idle paths can be exercised without a live host.
+    /// Needs a Tokio runtime (the proxy spawns its bridge task).
+    #[cfg(test)]
+    pub fn force_running_for_test(&mut self) {
+        self.proxy = Some(NethackProcess::spawn(ProcessConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            secret: "test-secret".into(),
+            playname: "tester".into(),
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+            repaint: None,
+        }));
+        self.mode = Mode::Running;
+    }
+
     /// Intercept the F1 key before it reaches nethack. Returns true when the
     /// input was consumed and must NOT be forwarded as-is.
     ///
@@ -345,7 +382,7 @@ impl State {
     /// help key, and intercepting it also stops the raw F1 escape (`ESC O P`)
     /// from leaking into the game as stray commands. late.sh keeps no help UI
     /// of its own; `?` and F1 both open NetHack's in-game help.
-    pub fn intercept_input(&self, data: &[u8]) -> bool {
+    pub fn intercept_input(&mut self, data: &[u8]) -> bool {
         if is_f1(data) {
             self.forward_input(b"?");
             return true;
@@ -358,10 +395,11 @@ impl State {
     /// tracking (`?1003h`) on for its own UI, so the client streams motion
     /// reports whose leading `ESC` cancels every nethack menu (notably `?`).
     /// Stripping them is what makes in-game `?` actually work.
-    pub fn forward_input(&self, data: &[u8]) {
+    pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
             let filtered = strip_input_noise(data);
             if !filtered.is_empty() {
+                self.last_input = Instant::now();
                 proxy.send_input(filtered);
             }
         }

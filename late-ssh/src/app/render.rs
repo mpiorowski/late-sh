@@ -1333,6 +1333,18 @@ impl App {
                         dopewars_enabled: ctx.dopewars_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
+                        nethack_live: ctx
+                            .nethack_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        dcss_live: ctx
+                            .dcss_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        brogue_live: ctx
+                            .brogue_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
                     },
                 );
             }
@@ -1876,7 +1888,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-C quit ",
+                "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1896,7 +1908,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-Q abandon ",
+                "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1916,7 +1928,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "\u{b7} ? help \u{b7} S save \u{b7} Q abandon ",
+                "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

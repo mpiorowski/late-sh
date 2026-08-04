@@ -75,6 +75,59 @@ async fn quit_routes_open_confirm_without_persisting_exit_command() {
 }
 
 #[tokio::test]
+async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "door-detach-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "door-detach-flow-it");
+
+    // Fabricate a running NetHack game on its screen, as if launched from the
+    // hub. All assertions until the final section run without awaits, so the
+    // fabricated proxy's bridge task never gets polled and the status stays
+    // Connecting (not Closed).
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    app.nethack_state
+        .as_mut()
+        .expect("nethack state")
+        .force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Ordinary keys are forwarded raw to the game, not interpreted.
+    app.handle_input(b"j");
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Backtick detaches: with no other workspace stops the cycle wraps to
+    // Home chat, and the running state survives for resume.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(
+        app.nethack_state
+            .as_ref()
+            .is_some_and(|state| state.is_running()),
+        "expected the detached game to stay alive"
+    );
+
+    // From Home, the same backtick hops back into the live dungeon.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Detach again, then let the fabricated proxy die (its bridge task fails
+    // to connect once polled): the next tick reaps the dead detached state so
+    // the hub card stops advertising a live game.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    app.tick();
+    assert!(
+        app.nethack_state.is_none(),
+        "expected the dead detached game to be dropped"
+    );
+}
+
+#[tokio::test]
 async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "account-delete-flow").await;

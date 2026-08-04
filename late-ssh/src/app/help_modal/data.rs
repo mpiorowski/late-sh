@@ -171,6 +171,7 @@ pub(crate) fn bot_app_context() -> String {
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
+        - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
         - Directory page 5 owns Profiles, Projects, and Pinstar tabs. Artboard and Pinstar have detailed page-local editing keybinds.\n\
         - Leaderboards page 6 holds every board: Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
     );
@@ -806,7 +807,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  j / k or ↑ / ↓   browse games",
         "  Enter             play selected game",
         "  Esc / q           leave current game",
-        "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies)",
+        "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
         "",
         "Notes",
         "  Game-specific controls appear inside the Arcade page.",
@@ -849,7 +850,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  c / C             post an open or directed chess, battleship, connect4, reversi, checkers, backgammon, or briscola challenge",
         "  24h per move; boards live outside the Tab cycle, Esc returns to the Lobby",
         "  briscola holds a hand: yours is drawn face up, theirs never is, and spectators see neither",
-        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies",
+        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies, live roguelike dungeons (inside one, ` detaches and hops onward; the game keeps running)",
         "",
         "House tables",
         "  Poker, Blackjack, Asterion, Tron, and Super Snake: one fixed table each, no setup forms",

@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::state::HubGame;
+use super::state::{HubGame, HubGroup};
 use crate::app::common::{primitives::hint_line, theme};
 
 /// View data the renderer needs for one frame of the Games hub.
@@ -22,6 +22,29 @@ pub struct HubView {
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
+    /// Roguelike doors with a live detached game this session: the sidebar
+    /// marks them and their landing offers resume instead of launch.
+    pub nethack_live: bool,
+    pub dcss_live: bool,
+    pub brogue_live: bool,
+}
+
+impl HubView {
+    /// Whether this game has a live (detached) session to resume.
+    fn is_live(&self, game: HubGame) -> bool {
+        match game {
+            HubGame::Nethack => self.nethack_live,
+            HubGame::Dcss => self.dcss_live,
+            HubGame::Brogue => self.brogue_live,
+            HubGame::Lateania
+            | HubGame::Rebels
+            | HubGame::Usurper
+            | HubGame::GreenDragon
+            | HubGame::Dopewars
+            | HubGame::Darkroom
+            | HubGame::Codekeep => false,
+        }
+    }
 }
 
 /// The sidebar column width, including its right rule column. Sized to the
@@ -34,17 +57,20 @@ const MIN_WIDTH: u16 = 60;
 const MIN_HEIGHT: u16 = 6;
 
 /// One row of the sidebar: a muted group header, a selectable game (index
-/// into [`HubGame::ALL`]), or a blank separator between groups.
+/// into [`HubGame::ALL`]), a blank separator between groups, or the faint
+/// always-on backtick hint under the roguelikes (they detach and hop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarRow {
     Header(&'static str),
     Game(usize),
     Blank,
+    HopHint,
 }
 
 /// The sidebar rows in display order: each group opens with its header,
-/// groups separated by a blank row. Shared by the renderer and the click hit
-/// test so they cannot drift.
+/// groups separated by a blank row, and the ` hop hint sits directly under
+/// the roguelike games. Shared by the renderer and the click hit test so
+/// they cannot drift.
 fn sidebar_rows() -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut current_group = None;
@@ -58,6 +84,13 @@ fn sidebar_rows() -> Vec<SidebarRow> {
             current_group = Some(group);
         }
         rows.push(SidebarRow::Game(i));
+    }
+    let last_roguelike = rows.iter().rposition(|row| {
+        matches!(row, SidebarRow::Game(i)
+            if HubGame::ALL[*i].group() == HubGroup::Roguelikes)
+    });
+    if let Some(idx) = last_roguelike {
+        rows.insert(idx + 1, SidebarRow::HopHint);
     }
     rows
 }
@@ -102,7 +135,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
         .split(layout[1]);
 
     let selected = view.selected.min(HubGame::ALL.len() - 1);
-    draw_sidebar(frame, body[0], selected);
+    draw_sidebar(frame, body[0], selected, view);
 
     // The selected game owns the pane beside the sidebar, rendered with its
     // real landing (logo, stats, actions).
@@ -117,13 +150,28 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
             crate::app::door::rebels::render::draw_landing(frame, body[1], view.rebels_enabled);
         }
         HubGame::Nethack => {
-            crate::app::door::nethack::render::draw_landing(frame, body[1], view.nethack_enabled);
+            crate::app::door::nethack::render::draw_landing(
+                frame,
+                body[1],
+                view.nethack_enabled,
+                view.nethack_live,
+            );
         }
         HubGame::Dcss => {
-            crate::app::door::dcss::render::draw_landing(frame, body[1], view.dcss_enabled);
+            crate::app::door::dcss::render::draw_landing(
+                frame,
+                body[1],
+                view.dcss_enabled,
+                view.dcss_live,
+            );
         }
         HubGame::Brogue => {
-            crate::app::door::brogue::render::draw_landing(frame, body[1], view.brogue_enabled);
+            crate::app::door::brogue::render::draw_landing(
+                frame,
+                body[1],
+                view.brogue_enabled,
+                view.brogue_live,
+            );
         }
         HubGame::Usurper => {
             crate::app::door::usurper::render::draw_landing(frame, body[1], view.usurper_enabled);
@@ -149,7 +197,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
     draw_footer(frame, layout[2]);
 }
 
-fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize) {
+fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) {
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -178,8 +226,26 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize) {
                     Style::default().fg(theme::TEXT_DIM())
                 };
                 let label = HubGame::ALL[*i].label();
-                Line::from(Span::styled(format!("  {label:<pad$}"), style))
+                if view.is_live(HubGame::ALL[*i]) {
+                    // A detached game in progress: a green pip after the name,
+                    // on both the selected and unselected row styles.
+                    let livepad = pad.saturating_sub(label.len() + 2);
+                    Line::from(vec![
+                        Span::styled(format!("  {label} "), style),
+                        Span::styled("\u{25cf}", style.fg(theme::SUCCESS())),
+                        Span::styled(format!("{:<livepad$}", ""), style),
+                    ])
+                } else {
+                    Line::from(Span::styled(format!("  {label:<pad$}"), style))
+                }
             }
+            // The standing invitation under the roguelikes: they detach on `
+            // and hop between each other and chat. Faint on purpose; the
+            // green pip carries the "live right now" signal.
+            SidebarRow::HopHint => Line::from(Span::styled(
+                "  ` hop in & out",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )),
             SidebarRow::Blank => Line::default(),
         })
         .collect();
@@ -215,6 +281,6 @@ pub fn sidebar_hit_test(area: Rect, selected: usize, x: u16, y: u16) -> Option<u
     let scroll = sidebar_scroll(&rows, selected, usize::from(inner.height));
     match rows.get(scroll + usize::from(y - inner.y)) {
         Some(SidebarRow::Game(i)) => Some(*i),
-        Some(SidebarRow::Header(_) | SidebarRow::Blank) | None => None,
+        Some(SidebarRow::Header(_) | SidebarRow::Blank | SidebarRow::HopHint) | None => None,
     }
 }

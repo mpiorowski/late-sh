@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -20,6 +21,12 @@ pub enum Mode {
 /// brogue's death recap / high-score screens) so a stray `q` cannot reach the
 /// launcher's global quit and drop the whole SSH session.
 const EXIT_GRACE_TICKS: u8 = 10;
+
+/// Close a running game after this long without a single forwarded keystroke.
+/// Detached games (the player stepped out with ` and never came back) would
+/// otherwise hold a host child forever; the close is a clean SIGHUP-save on
+/// the host, so the run resumes on the next launch.
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
 
 /// Everything a fresh per-session Brogue door state needs. One struct instead
 /// of a long positional constructor, so every call site names what it passes.
@@ -61,6 +68,10 @@ pub struct State {
     /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
     /// intent); the claimed handle becomes the per-player save directory name.
     handle: HandleFlow,
+    /// When the last keystroke was forwarded to the game. A running game idle
+    /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
+    /// is staring at it or has detached to another screen.
+    last_input: Instant,
 }
 
 impl State {
@@ -82,6 +93,7 @@ impl State {
             ),
             repaint: cfg.repaint,
             exit_grace: 0,
+            last_input: Instant::now(),
         }
     }
 
@@ -130,6 +142,7 @@ impl State {
         }));
         self.mode = Mode::Running;
         self.exit_grace = 0;
+        self.last_input = Instant::now();
     }
 
     /// Called every app tick: if the process closed (clean save, death, quit, or
@@ -149,6 +162,12 @@ impl State {
                 // keys must not reach the launcher's global `q` = quit-the-app
                 // handler.
                 self.exit_grace = EXIT_GRACE_TICKS;
+            } else if self.last_input.elapsed() >= IDLE_SHUTDOWN {
+                // Idle too long (typically a detached game the player forgot):
+                // drop the proxy so the host SIGHUP-saves the run. No exit
+                // grace; an idle player has no trailing keystrokes in flight.
+                self.proxy = None;
+                self.mode = Mode::Launcher;
             }
             return;
         }
@@ -224,7 +243,7 @@ impl State {
     /// from leaking into the game as stray commands (a leading ESC would close
     /// brogue's menus). late.sh keeps no help UI of its own; `?` and F1 both
     /// open brogue's in-game commands list.
-    pub fn intercept_input(&self, data: &[u8]) -> bool {
+    pub fn intercept_input(&mut self, data: &[u8]) -> bool {
         if is_f1(data) {
             self.forward_input(b"?");
             return true;
@@ -238,13 +257,32 @@ impl State {
     /// tracking (`?1003h`) on for its own UI, so the client streams raw motion
     /// reports whose leading `ESC` would cancel brogue's menus and prompts.
     /// The game stays keyboard-driven here, like the other roguelike doors.
-    pub fn forward_input(&self, data: &[u8]) {
+    pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
             let filtered = strip_input_noise(data);
             if !filtered.is_empty() {
+                self.last_input = Instant::now();
                 proxy.send_input(filtered);
             }
         }
+    }
+
+    /// Test-only: fabricate a Running state around a proxy pointed at a dead
+    /// address, so detach/idle paths can be exercised without a live host.
+    /// Needs a Tokio runtime (the proxy spawns its bridge task).
+    #[cfg(test)]
+    pub fn force_running_for_test(&mut self) {
+        self.proxy = Some(BrogueProcess::spawn(ProcessConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            secret: "test-secret".into(),
+            playname: "tester".into(),
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+            repaint: None,
+        }));
+        self.mode = Mode::Running;
     }
 }
 

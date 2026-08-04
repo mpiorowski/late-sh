@@ -15,8 +15,11 @@ fn clicks_select_games_and_ignore_chrome() {
     assert_eq!(sidebar_hit_test(body, 0, 5, 2), Some(0));
     assert_eq!(sidebar_hit_test(body, 0, 5, 3), None);
     assert_eq!(sidebar_hit_test(body, 0, 5, 5), Some(1));
-    // Last game (CodeKeep) sits at y=17.
-    assert_eq!(sidebar_hit_test(body, 0, 5, 17), Some(9));
+    // The ` hop hint under the roguelikes (y=8) is not selectable.
+    assert_eq!(sidebar_hit_test(body, 0, 5, 8), None);
+    // Last game (CodeKeep) sits at y=18, one past the hint row.
+    assert_eq!(sidebar_hit_test(body, 0, 5, 17), Some(8));
+    assert_eq!(sidebar_hit_test(body, 0, 5, 18), Some(9));
     // The rule column and the landing pane are not selectable.
     assert_eq!(sidebar_hit_test(body, 0, 18, 5), None);
     assert_eq!(sidebar_hit_test(body, 0, 40, 5), None);

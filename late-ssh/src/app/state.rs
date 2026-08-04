@@ -1578,8 +1578,9 @@ impl App {
         ));
     }
 
-    fn leave_nethack(&mut self) {
-        // Dropping the State drops the process, which kills the child nethack.
+    pub(crate) fn leave_nethack(&mut self) {
+        // Dropping the State drops the process; the host then SIGHUP-saves any
+        // live child nethack so the run resumes next launch.
         self.nethack_state = None;
     }
 
@@ -1599,7 +1600,7 @@ impl App {
         ));
     }
 
-    fn leave_dcss(&mut self) {
+    pub(crate) fn leave_dcss(&mut self) {
         // Dropping the State drops the process; the host then SIGHUP-saves the
         // child crawl so the run resumes next launch.
         self.dcss_state = None;
@@ -1623,7 +1624,7 @@ impl App {
         ));
     }
 
-    fn leave_brogue(&mut self) {
+    pub(crate) fn leave_brogue(&mut self) {
         // Dropping the State drops the process; the host then SIGHUP-saves the
         // child brogue so the run resumes next launch.
         self.brogue_state = None;
@@ -1879,6 +1880,16 @@ impl App {
         self.artboard_ban_expires_at = None;
     }
 
+    /// Detach from the running roguelike under the cursor: hop to the next
+    /// stop on the backtick workspace cycle (another live dungeon, a waiting
+    /// board or seat, or Home chat) while `set_screen` keeps the running door
+    /// state alive. Falls back to the Games hub if the cycle has no opinion.
+    fn detach_door_game(&mut self) {
+        if !crate::app::lobby::workspace::cycle_game_workspace(self) {
+            self.set_screen(Screen::Games);
+        }
+    }
+
     pub(crate) fn set_screen(&mut self, screen: Screen) {
         if self.screen == screen {
             if screen == Screen::Rebels {
@@ -1926,18 +1937,45 @@ impl App {
             self.force_full_repaint();
         }
 
-        if self.screen == Screen::Nethack {
+        // The three roguelike doors detach instead of tearing down: a running
+        // game keeps its state (and its SSH connection to the door host, which
+        // the host would otherwise SIGHUP-save) while the player is elsewhere,
+        // and resumes instantly from the hub card or the backtick cycle. A
+        // non-running state (launcher, claim prompt) still drops as before;
+        // the idle shutdown in each door's `tick` reaps forgotten games.
+        if self.screen == Screen::Nethack
+            && !self
+                .nethack_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+        {
             self.leave_nethack();
+        }
+        if self.screen == Screen::Nethack {
             self.force_full_repaint();
         }
 
-        if self.screen == Screen::Dcss {
+        if self.screen == Screen::Dcss
+            && !self
+                .dcss_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+        {
             self.leave_dcss();
+        }
+        if self.screen == Screen::Dcss {
             self.force_full_repaint();
         }
 
-        if self.screen == Screen::Brogue {
+        if self.screen == Screen::Brogue
+            && !self
+                .brogue_state
+                .as_ref()
+                .is_some_and(|state| state.is_running())
+        {
             self.leave_brogue();
+        }
+        if self.screen == Screen::Brogue {
             self.force_full_repaint();
         }
 
@@ -2147,6 +2185,11 @@ impl App {
         if !data.is_empty() {
             self.last_input_at = Instant::now();
         }
+        /// Backtick, the workspace-cycle key, matched as a whole input chunk
+        /// (like the doors' F1 remap): inside a running roguelike it detaches
+        /// instead of reaching the game. DCSS's own ` (repeat previous
+        /// command) is the accepted casualty.
+        const DOOR_DETACH_KEY: &[u8] = b"`";
         // While the proxied rebels game is running, every byte (keys + mouse)
         // goes straight to the remote; late.sh parses nothing. Exit is by
         // quitting rebels itself (Esc/Ctrl-C), which closes the channel.
@@ -2159,12 +2202,16 @@ impl App {
         }
         // Same passthrough for the locally-hosted nethack process, except F1,
         // which late.sh remaps to nethack's own `?` help (so the raw F1 escape
-        // never leaks into the game as stray commands).
+        // never leaks into the game as stray commands), and `, which detaches:
+        // the game keeps running while the backtick workspace cycle hops to
+        // the next live dungeon or back to chat.
         if self.screen == crate::app::common::primitives::Screen::Nethack
             && let Some(state) = self.nethack_state.as_mut()
             && state.is_running()
         {
-            if !state.intercept_input(data) {
+            if data == DOOR_DETACH_KEY {
+                self.detach_door_game();
+            } else if !state.intercept_input(data) {
                 state.forward_input(data);
             }
             return;
@@ -2179,13 +2226,17 @@ impl App {
         {
             return;
         }
-        // DCSS: same raw passthrough + F1->`?` remap as nethack (both are
-        // roguelikes hosted the same way), and the same post-exit input grace.
+        // DCSS: same raw passthrough + F1->`?` remap + ` detach as nethack
+        // (both are roguelikes hosted the same way), and the same post-exit
+        // input grace. Note ` costs crawl its own repeat-previous-command
+        // binding; players can macro another key to it in-game.
         if self.screen == crate::app::common::primitives::Screen::Dcss
             && let Some(state) = self.dcss_state.as_mut()
             && state.is_running()
         {
-            if !state.intercept_input(data) {
+            if data == DOOR_DETACH_KEY {
+                self.detach_door_game();
+            } else if !state.intercept_input(data) {
                 state.forward_input(data);
             }
             return;
@@ -2196,13 +2247,16 @@ impl App {
         {
             return;
         }
-        // Brogue: same raw passthrough + F1->`?` remap as dcss (both are
-        // roguelikes hosted the same way), and the same post-exit input grace.
+        // Brogue: same raw passthrough + F1->`?` remap + ` detach as dcss
+        // (both are roguelikes hosted the same way), and the same post-exit
+        // input grace.
         if self.screen == crate::app::common::primitives::Screen::Brogue
             && let Some(state) = self.brogue_state.as_mut()
             && state.is_running()
         {
-            if !state.intercept_input(data) {
+            if data == DOOR_DETACH_KEY {
+                self.detach_door_game();
+            } else if !state.intercept_input(data) {
                 state.forward_input(data);
             }
             return;
