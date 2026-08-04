@@ -245,6 +245,16 @@ pub const BAR_COUNTER: Zone = Zone {
     x1: 56,
     y1: 10,
 };
+/// The bartender's reach: the counter plus three rows of open floor below,
+/// so walking toward the bar surfaces the popover (and the welcome pour)
+/// before the player hugs the counter. In the overlap band it wins over
+/// the fireplace popover; the bar is the louder landmark there.
+pub const BAR_APPROACH: Zone = Zone {
+    x0: 1,
+    y0: 9,
+    x1: 56,
+    y1: 13,
+};
 /// The back-bar shelf (bottles and hanging glasses), for the liquor glow.
 pub const BACK_BAR: Zone = Zone {
     x0: 1,
@@ -400,7 +410,7 @@ pub enum Interactive {
 /// The prop the player is close enough to interact with, if any. The dog
 /// wanders (lobby state), so its current body-center cell is passed in.
 pub fn nearest_interactive(x: u16, y: u16, dog: (u16, u16)) -> Option<Interactive> {
-    if BAR_COUNTER.distance(x, y) <= 2 {
+    if BAR_APPROACH.distance(x, y) <= 2 {
         return Some(Interactive::Bartender);
     }
     if JUKEBOX.distance(x, y) <= 2 {

@@ -143,9 +143,10 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     // Done, pour unclaimed: the glow keeps pointing at the treasure.
     assert!(state.bar_glow());
 
-    // Teleport next to the counter (test-only shortcut via the lobby).
+    // Teleport to the edge of the bar's approach apron (test-only
+    // shortcut): three rows off the counter is close enough to pour.
     state.player_x = 28;
-    state.player_y = 12;
+    state.player_y = 15;
     assert!(state.welcome_pour_due());
     // Only fires once per session, and claiming kills the glow.
     assert!(!state.welcome_pour_due());

@@ -1,8 +1,9 @@
 //! Games hub: the dedicated landing screen for the immersive door games
-//! (Lateania, NetHack, Green Dragon, Rebels). It is a selector — a tab row of games with the
-//! selected game's full landing page rendered below it — not a scroll. Left/right
-//! (or h/l) change the selection; Enter launches the selected game. Adding a
-//! future door game is a new `HubGame` entry plus a `draw_landing` for it, not a
+//! (Lateania, DCSS, NetHack, Green Dragon, ...). It is a selector — a grouped
+//! sidebar of games on the left with the selected game's full landing page
+//! rendered beside it — not a scroll. Up/down (or j/k, h/l) change the
+//! selection; Enter launches the selected game. Adding a future door game is a
+//! new `HubGame` entry with a `group()` arm plus a `draw_landing` for it, not a
 //! new top-level screen.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -19,18 +20,41 @@ pub enum HubGame {
     Darkroom,
 }
 
+/// Sidebar groups, in display order. Every game maps to exactly one, and
+/// `HubGame::ALL` keeps each group's games adjacent so a group's header
+/// renders once (asserted in `state_test.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HubGroup {
+    House,
+    Roguelikes,
+    Doors,
+    BackRoom,
+}
+
+impl HubGroup {
+    pub fn label(self) -> &'static str {
+        match self {
+            HubGroup::House => "the house",
+            HubGroup::Roguelikes => "roguelikes",
+            HubGroup::Doors => "bbs doors",
+            HubGroup::BackRoom => "the back room",
+        }
+    }
+}
+
 impl HubGame {
-    /// Selector order, left to right.
+    /// Selector order, top to bottom: the house game first, the roguelikes by
+    /// stature, the BBS doors led by Green Dragon, then the back room.
     pub const ALL: [HubGame; 10] = [
         HubGame::Lateania,
-        HubGame::Nethack,
         HubGame::Dcss,
+        HubGame::Nethack,
         HubGame::Brogue,
-        HubGame::Usurper,
         HubGame::GreenDragon,
+        HubGame::Usurper,
+        HubGame::Dopewars,
         HubGame::Darkroom,
         HubGame::Rebels,
-        HubGame::Dopewars,
         HubGame::Codekeep,
     ];
 
@@ -46,6 +70,15 @@ impl HubGame {
             HubGame::Dopewars => "dopewars",
             HubGame::Codekeep => "CodeKeep",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
+        }
+    }
+
+    pub fn group(self) -> HubGroup {
+        match self {
+            HubGame::Lateania => HubGroup::House,
+            HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
+            HubGame::GreenDragon | HubGame::Usurper | HubGame::Dopewars => HubGroup::Doors,
+            HubGame::Darkroom | HubGame::Rebels | HubGame::Codekeep => HubGroup::BackRoom,
         }
     }
 }
@@ -65,13 +98,13 @@ impl State {
         HubGame::ALL[self.selected()]
     }
 
-    /// Move the selection one card right, clamped at the last game.
+    /// Move the selection one game down the sidebar, clamped at the last game.
     pub fn select_next(&mut self) {
         let last = HubGame::ALL.len() - 1;
         self.selected = self.selected().saturating_add(1).min(last);
     }
 
-    /// Move the selection one card left, clamped at the first game.
+    /// Move the selection one game up the sidebar, clamped at the first game.
     pub fn select_prev(&mut self) {
         self.selected = self.selected().saturating_sub(1);
     }

@@ -1328,10 +1328,10 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Games hub keys. Left/right (or h/l) switch the selected game card; Enter
-/// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
-/// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
-/// fall through to the global handlers.
+/// Games hub keys. Up/down (or j/k, h/l) move the selection in the grouped
+/// sidebar; Enter launches it; `d` opens the reset prompt for the saved-
+/// character doors. Returns `false` for keys it does not own (digit/Tab nav,
+/// `q`, `?`) so they fall through to the global handlers.
 /// The key byte a door launcher should see, if the event carries one. The vt
 /// parser emits printables as `Char` and control bytes (Enter, backspace) as
 /// `Byte`; the arcade-name claim prompt needs both.
@@ -1348,15 +1348,16 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
-    // Click on a selector chip jumps to that game. The selector row is the second
-    // line of the hub body (one spacer row sits under the top bar).
+    // Click on a sidebar row jumps to that game; the hit test mirrors the
+    // hub's own layout against the same content area the renderer gets.
     if let ParsedInput::Mouse(mouse) = event
         && matches!(mouse.kind, MouseEventKind::Down)
         && matches!(mouse.button, Some(MouseButton::Left))
     {
         let body = app_content_area(app);
-        if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
-            ratatui::layout::Rect::new(body.x, body.y.saturating_add(1), body.width, 1),
+        if let Some(idx) = crate::app::door::hub::ui::sidebar_hit_test(
+            body,
+            app.games_hub_state.selected(),
             mouse.x.saturating_sub(1),
             mouse.y.saturating_sub(1),
         ) {

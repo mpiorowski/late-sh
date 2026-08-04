@@ -1417,25 +1417,25 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[Ctrl+G] ", key),
-                        Span::styled("the lobby, the busiest room in the house:", text),
+                        Span::styled("the lobby, where most of the house's games are played:", text),
                     ]),
                     Line::from(vec![
-                        Span::styled("live tables: ", text),
-                        Span::styled("Poker, Blackjack, Asterion, Tron, Super Snake", name),
-                        Span::styled(",", text),
+                        Span::styled("seven daily duels: ", text),
+                        Span::styled("chess, backgammon, battleship,", name),
                     ]),
                     Line::from(vec![
-                        Span::styled("plus seven daily duels: ", text),
-                        Span::styled("chess, battleship, connect four,", name),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("reversi, checkers, backgammon, briscola", name),
-                        Span::styled(". challenge someone,", text),
+                        Span::styled("connect four, reversi, checkers, briscola", name),
+                        Span::styled(". challenge anyone,", text),
                     ]),
                     Line::from(Span::styled(
                         "walk away, play a move whenever; 24h on the clock per move.",
                         text,
                     )),
+                    Line::from(vec![
+                        Span::styled("plus live tables: ", text),
+                        Span::styled("Poker, Blackjack, Asterion, Tron, Super Snake", name),
+                        Span::styled(".", text),
+                    ]),
                 ],
                 "3",
                 "the heavy door",
@@ -1451,18 +1451,24 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled(": our own MMO. one shared world, bosses, mounts.", text),
                     ]),
                     Line::from(vec![
-                        Span::styled("NetHack", name),
-                        Span::styled(": the legend itself, decades deep. the DevTeam", text),
+                        Span::styled("DCSS", name),
+                        Span::styled(": the most played roguelike alive, for good reason.", text),
                     ]),
                     Line::from(Span::styled(
-                        "thought of everything; an ascension here is earned.",
+                        "pick a species, pledge a god, dive for the Orb of Zot;",
+                        text,
+                    )),
+                    Line::from(Span::styled(
+                        "easy to start, years to master, no two runs alike.",
                         text,
                     )),
                     Line::from(vec![
-                        Span::styled("DCSS", name),
-                        Span::styled(": the most played roguelike alive. pick a species,", text),
+                        Span::styled("NetHack", name),
+                        Span::styled(
+                            ": the legend itself; the DevTeam thought of everything.",
+                            text,
+                        ),
                     ]),
-                    Line::from(Span::styled("pick a god, dive for the Orb.", text)),
                     Line::from(vec![
                         Span::styled("Brogue", name),
                         Span::styled(": the most beautiful dungeon ASCII ever drew.", text),
@@ -1492,6 +1498,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "everything stays, and every glyph remembers who drew it.",
                         text,
                     )),
+                    Line::from(vec![
+                        Span::styled("the whole board hangs public at ", text),
+                        Span::styled("late.sh/gallery", name),
+                        Span::styled(".", text),
+                    ]),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[i] ", key),
@@ -1517,10 +1528,11 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "the people: profiles, the projects they ship, pinned work.",
                         text,
                     )),
-                    Line::from(Span::styled(
-                        "your profile gets a public page on the web.",
-                        text,
-                    )),
+                    Line::from(vec![
+                        Span::styled("your profile gets a public page at ", text),
+                        Span::styled("late.sh/profiles", name),
+                        Span::styled(".", text),
+                    ]),
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[Ctrl+O] ", key),
