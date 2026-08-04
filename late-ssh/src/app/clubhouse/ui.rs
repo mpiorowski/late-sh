@@ -1417,7 +1417,10 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     Line::default(),
                     Line::from(vec![
                         Span::styled("[Ctrl+G] ", key),
-                        Span::styled("the lobby, where most of the house's games are played:", text),
+                        Span::styled(
+                            "the lobby, where most of the house's games are played:",
+                            text,
+                        ),
                     ]),
                     Line::from(vec![
                         Span::styled("seven daily duels: ", text),
