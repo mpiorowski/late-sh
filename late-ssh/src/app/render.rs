@@ -671,6 +671,7 @@ impl App {
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
             ignored_user_ids: self.chat.ignored_user_ids(),
+            sticky_unread_dm: self.chat.sticky_unread_dm,
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             room_unread_markers: &self.chat.room_unread_markers,
@@ -1551,6 +1552,18 @@ impl App {
 
         if foreground_overlay_open {
             terminal_images.clear();
+        }
+
+        // The first-visit tour's page-stop box (top-right). The clubhouse
+        // draws its own tutorial overlays; toasts draw after, so they win
+        // the corner while they last.
+        if screen != Screen::Clubhouse {
+            crate::app::clubhouse::ui::draw_tour_overlay(
+                frame,
+                inner,
+                ctx.clubhouse_state.tutorial,
+                screen,
+            );
         }
 
         // Toast banner overlay at top of content area

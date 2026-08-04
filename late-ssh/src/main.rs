@@ -298,6 +298,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
+    let mention_ladders = late_ssh::app::ai::ladder::MentionLadders::new();
     let ghost_service = GhostService::new(
         db.clone(),
         chat_service.clone(),
@@ -307,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         chip_service.clone(),
         clubhouse_lobby.clone(),
+        mention_ladders.clone(),
     );
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
@@ -365,6 +367,7 @@ async fn main() -> anyhow::Result<()> {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
+        mention_ladders,
         scratchpad_registry,
         afk_users,
         username_directory: username_directory.clone(),

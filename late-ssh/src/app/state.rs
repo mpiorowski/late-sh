@@ -283,6 +283,9 @@ pub struct SessionConfig {
     /// Process-global clubhouse presence (seats, walkers, emotes). `None`
     /// on headless/test paths, which keeps the room session-local.
     pub clubhouse_lobby: Option<crate::app::clubhouse::lobby::SharedLobby>,
+    /// Process-global ghost-bot mention cooldown ladders, peeked at composer
+    /// submit for the cooldown banner. Tests pass a fresh instance.
+    pub mention_ladders: crate::app::ai::ladder::MentionLadders,
     /// Process-global `/pair` intents and shared scratchpad buffers. `None`
     /// on headless/test paths, which disables `/pair`.
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
@@ -1267,6 +1270,7 @@ impl App {
                 config.permissions,
                 active_users.clone(),
                 notifier.clone(),
+                config.mention_ladders.clone(),
             ),
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -2016,6 +2020,9 @@ impl App {
         if self.screen == Screen::Clubhouse {
             self.clubhouse.enter_screen();
         }
+        // The first-visit tour advances on page entry, so digits and Tab
+        // both move it along.
+        self.clubhouse.tutorial_screen_entered(screen);
         self.sync_visible_chat_room();
     }
 
@@ -2346,14 +2353,14 @@ impl App {
         self.show_profile_modal = true;
     }
 
-    /// The tutorial's @bartender welcome: a scripted line pinned in the
-    /// newcomer's own bartender banner (see `ghost::bartender_tutorial_greeting`).
-    /// It stays on this client, so #lounge is not made to watch every
-    /// first-timer collect their comped pour.
+    /// The hidden treasure at the end of the tour: a scripted @bartender
+    /// welcome pinned in the newcomer's own bartender banner (see
+    /// `ghost::bartender_tutorial_greeting`) plus the comped first pour. It
+    /// stays on this client, so #lounge is not made to watch every
+    /// first-timer collect their free drink. Fires on the first walk up to
+    /// the counter in the tour session (`State::welcome_pour_due`); the
+    /// once-ever guarantee is the DB insert behind the comp.
     pub(crate) fn show_clubhouse_bartender_welcome(&mut self) {
-        // Reaching the bar is the tutorial's finish line: the welcome round is
-        // on the house, so lock the walkthrough in as done and comp the pour.
-        self.persist_clubhouse_tutorial_done();
         let username = self.profile_state.profile().username.clone();
         self.clubhouse.show_local_bartender_line(
             crate::app::ai::ghost::bartender_tutorial_greeting(&username),
@@ -2369,11 +2376,14 @@ impl App {
                 .grant_free_drink(target, late_core::models::drinks::WELCOME_DRINK_POINTS)
                 .await
             {
-                Ok(drinks) => {
+                Ok(Some(drinks)) => {
                     if let Some(lobby) = lobby {
                         lobby.record_drink(target, drinks.drunk_points, drinks.last_drink_at);
                     }
                 }
+                // They have drunk before (a tour rerun after a mid-tour
+                // disconnect): the line is just flavor, nothing to glow.
+                Ok(None) => {}
                 Err(err) => {
                     tracing::warn!(error = ?err, user_id = %target, "welcome drink comp failed");
                 }

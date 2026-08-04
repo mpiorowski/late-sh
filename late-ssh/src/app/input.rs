@@ -807,12 +807,20 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if handle_reserved_global_chord(app, &event) {
+    // The forced first-visit tour outranks even the reserved chords: a
+    // newcomer mid-route cannot open settings or the lobby, only follow the
+    // named key or quit. The quit-confirm modal stays above it so `y`/`n`
+    // keep working once quitting is on the table.
+    if app.show_quit_confirm {
+        quit_confirm::input::handle_input(app, event);
         return;
     }
 
-    if app.show_quit_confirm {
-        quit_confirm::input::handle_input(app, event);
+    if handle_tour_gate(app, &event) {
+        return;
+    }
+
+    if handle_reserved_global_chord(app, &event) {
         return;
     }
 
@@ -1325,10 +1333,10 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Games hub keys. Left/right (or h/l) switch the selected game card; Enter
-/// launches it; `d` opens the Lateania reset prompt when Lateania is selected.
-/// Returns `false` for keys it does not own (digit/Tab nav, `q`, `?`) so they
-/// fall through to the global handlers.
+/// Games hub keys. Up/down (or j/k, h/l) move the selection in the grouped
+/// sidebar; Enter launches it; `d` opens the reset prompt for the saved-
+/// character doors. Returns `false` for keys it does not own (digit/Tab nav,
+/// `q`, `?`) so they fall through to the global handlers.
 /// The key byte a door launcher should see, if the event carries one. The vt
 /// parser emits printables as `Char` and control bytes (Enter, backspace) as
 /// `Byte`; the arcade-name claim prompt needs both.
@@ -1345,15 +1353,16 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
-    // Click on a selector chip jumps to that game. The selector row is the second
-    // line of the hub body (one spacer row sits under the top bar).
+    // Click on a sidebar row jumps to that game; the hit test mirrors the
+    // hub's own layout against the same content area the renderer gets.
     if let ParsedInput::Mouse(mouse) = event
         && matches!(mouse.kind, MouseEventKind::Down)
         && matches!(mouse.button, Some(MouseButton::Left))
     {
         let body = app_content_area(app);
-        if let Some(idx) = crate::app::door::hub::ui::selector_hit_test(
-            ratatui::layout::Rect::new(body.x, body.y.saturating_add(1), body.width, 1),
+        if let Some(idx) = crate::app::door::hub::ui::sidebar_hit_test(
+            body,
+            app.games_hub_state.selected(),
             mouse.x.saturating_sub(1),
             mouse.y.saturating_sub(1),
         ) {
@@ -2898,6 +2907,7 @@ fn chat_room_list_view<'a>(
         room_section_prefix_armed: app.room_section_prefix_armed,
         current_user_id: app.user_id,
         ignored_user_ids: app.chat.ignored_user_ids(),
+        sticky_unread_dm: app.chat.sticky_unread_dm,
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
@@ -3783,7 +3793,6 @@ fn room_section_suffix(byte: u8) -> Option<RoomSection> {
         b'f' | b'F' => Some(RoomSection::Favorites),
         b'o' | b'O' => Some(RoomSection::Core),
         b'c' | b'C' => Some(RoomSection::Channels),
-        b'u' | b'U' => Some(RoomSection::Updates),
         b'd' | b'D' => Some(RoomSection::Dms),
         _ => None,
     }
@@ -3798,6 +3807,43 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
             app.running = false;
         }
     }
+}
+
+/// The forced first-visit tour: while a tour box names a key
+/// (`clubhouse::state::State::tutorial_forced_step`), that key and quitting
+/// are the only inputs that do anything. Everything else, mouse, arrows,
+/// and chords included, dies here so no modal, composer, or game can hijack
+/// a newcomer mid-route. Returns true when the event was consumed.
+fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
+    use crate::app::clubhouse::state::TourStep;
+
+    let Some(step) = app.clubhouse.tutorial_forced_step() else {
+        return false;
+    };
+    let byte = match event {
+        ParsedInput::Byte(byte) => *byte,
+        ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
+        // Arrows, mouse, pastes: swallowed while the tour runs.
+        _ => return true,
+    };
+    match step {
+        TourStep::Page(expected, screen) if byte == expected => {
+            // `set_screen` runs `tutorial_screen_entered`, which advances
+            // the tour to the next stop.
+            app.set_screen(screen);
+        }
+        TourStep::Enter if matches!(byte, b'\r' | b'\n') => {
+            if app.clubhouse.tutorial_advance() {
+                app.persist_clubhouse_tutorial_done();
+            }
+        }
+        TourStep::Page(..) | TourStep::Enter => match byte {
+            // The way out is always open.
+            b'q' | b'Q' => trigger_global_quit(app),
+            _ => {}
+        },
+    }
+    true
 }
 
 fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {

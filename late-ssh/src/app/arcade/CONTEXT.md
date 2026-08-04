@@ -133,8 +133,8 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 ## Rendering
 
-- `arcade/ui.rs` renders the lobby header/list and delegates active games to their `ui.rs`.
-- The lobby hides the ASCII header when the terminal is short and auto-scrolls the selected entry near the top third of the viewport.
+- `arcade/ui.rs` renders the lobby game list and delegates active games to their `ui.rs`.
+- The lobby has no ASCII banner (dropped 2026-08: with the quest strip on top, small terminals had no headroom left) and auto-scrolls the selected entry near the top third of the viewport.
 - `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
 - Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values render red only when they duplicate the same number in their row, column, or 3x3 box; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible, with the active row/column emphasized through clue text only; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
 - The old profile-controlled Arcade sidebar preference has been removed. Arcade game bottom status/key bars render unconditionally. Room-game sidebar helpers live in `rooms/game_ui.rs`.
