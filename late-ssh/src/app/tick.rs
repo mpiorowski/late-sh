@@ -442,6 +442,40 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
+        // A detached roguelike whose game has ended (death, save, idle
+        // shutdown, network drop) has nothing left to resume: drop the state
+        // so the hub card and backtick cycle stop advertising a live game.
+        // On the door's own screen the launcher/exit-grace flow owns this.
+        // A reap dirties the frame: the Games hub has no animation of its own,
+        // so without this the sidebar pip and resume line would linger until
+        // some unrelated repaint.
+        if self.screen != Screen::Nethack
+            && self
+                .nethack_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_nethack();
+            changed = true;
+        }
+        if self.screen != Screen::Dcss
+            && self
+                .dcss_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_dcss();
+            changed = true;
+        }
+        if self.screen != Screen::Brogue
+            && self
+                .brogue_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_brogue();
+            changed = true;
+        }
         if let Some(state) = self.usurper_state.as_mut() {
             state.tick();
         }

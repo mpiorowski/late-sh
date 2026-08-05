@@ -75,6 +75,152 @@ async fn quit_routes_open_confirm_without_persisting_exit_command() {
 }
 
 #[tokio::test]
+async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "door-detach-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "door-detach-flow-it");
+
+    // Fabricate a running NetHack game on its screen, as if launched from the
+    // hub. All assertions until the final section run without awaits, so the
+    // fabricated proxy's bridge task never gets polled and the status stays
+    // Connecting (not Closed).
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    app.nethack_state
+        .as_mut()
+        .expect("nethack state")
+        .force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Ordinary keys are forwarded raw to the game, not interpreted.
+    app.handle_input(b"j");
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Backtick detaches: with no other workspace stops the cycle wraps to
+    // Home chat, and the running state survives for resume.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(
+        app.nethack_state
+            .as_ref()
+            .is_some_and(|state| state.is_running()),
+        "expected the detached game to stay alive"
+    );
+
+    // From Home, the same backtick hops back into the live dungeon.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Nethack);
+
+    // Detach again, then let the fabricated proxy die (its bridge task fails
+    // to connect once polled): the next tick reaps the dead detached state so
+    // the hub card stops advertising a live game.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        app.tick(),
+        "expected the reaping tick to dirty the frame so the hub pip clears"
+    );
+    assert!(
+        app.nethack_state.is_none(),
+        "expected the dead detached game to be dropped"
+    );
+}
+
+#[tokio::test]
+async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
+    use crate::app::common::primitives::Screen;
+    use late_core::models::door_rc::{DoorRc, DoorRcGame};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "door-rc-flow").await;
+    let client = test_db.db.get().await.expect("db client");
+    let mut app = make_app(test_db.db.clone(), user.id, "door-rc-flow-it");
+
+    // Walk the hub sidebar to NetHack (Lateania, DCSS, NetHack) and open the
+    // config box.
+    app.set_screen(Screen::Games);
+    app.handle_input(b"jj");
+    app.handle_input(b"c");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal title; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("No custom config yet"),
+        "expected the empty state before any paste; frame={frame:?}"
+    );
+
+    // A bracketed paste replaces the whole file: preview updates at once, the
+    // DB row lands via the fire-and-forget save.
+    app.handle_input(b"\x1b[200~OPTIONS=autopickup\nOPTIONS=color\x1b[201~");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("OPTIONS=autopickup"),
+        "expected the pasted config in the preview; frame={frame:?}"
+    );
+    assert!(
+        frame.contains(".nethackrc saved (2 lines)"),
+        "expected the save banner; frame={frame:?}"
+    );
+    wait_until(
+        || async {
+            DoorRc::get(&client, user.id, DoorRcGame::Nethack)
+                .await
+                .expect("get door rc")
+                .as_deref()
+                == Some("OPTIONS=autopickup\nOPTIONS=color")
+        },
+        "nethack rc row saved",
+    )
+    .await;
+
+    // `x` clears: back to the empty state, row deleted.
+    app.handle_input(b"x");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("No custom config yet"),
+        "expected the empty state after clearing; frame={frame:?}"
+    );
+    wait_until(
+        || async {
+            DoorRc::get(&client, user.id, DoorRcGame::Nethack)
+                .await
+                .expect("get door rc")
+                .is_none()
+        },
+        "nethack rc row cleared",
+    )
+    .await;
+
+    // Esc closes the modal and stays on the hub. The lone ESC is held for
+    // escape-sequence disambiguation, so give it a moment to dispatch.
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(app.screen, Screen::Games);
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal to close on Esc; frame={frame:?}"
+    );
+
+    // A screen switch that bypasses Esc (e.g. a reserved chord into a lobby
+    // game) must not leave the modal armed to reappear on the next hub visit.
+    app.handle_input(b"c");
+    app.set_screen(Screen::Dashboard);
+    app.set_screen(Screen::Games);
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal to be dropped when leaving the hub; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "account-delete-flow").await;

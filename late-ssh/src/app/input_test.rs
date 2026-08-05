@@ -57,6 +57,7 @@ fn blocks_arrow_when_chat_is_composing_on_dashboard() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());
@@ -72,6 +73,7 @@ fn blocks_arrow_when_chat_is_composing_on_chat_screen() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());
@@ -87,6 +89,7 @@ fn allows_arrow_when_idle() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert!(!ctx.blocks_arrow_sequence());
@@ -317,6 +320,7 @@ fn paste_target_prefers_chat_composer() {
         news_composing: true,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
@@ -332,6 +336,7 @@ fn paste_target_routes_to_news_composer() {
         news_composing: true,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
@@ -347,6 +352,7 @@ fn paste_target_routes_to_showcase_composer() {
         news_composing: false,
         showcase_composing: true,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
@@ -680,6 +686,7 @@ fn allows_arrow_when_autocomplete_active() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert!(!ctx.blocks_arrow_sequence());
@@ -695,6 +702,7 @@ fn blocks_arrow_when_composing_without_autocomplete() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
+        door_rc_modal: false,
         directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());

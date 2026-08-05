@@ -1,16 +1,24 @@
+use late_core::models::door_rc::DoorRcGame;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::state::HubGame;
+use super::state::{HubGame, HubGroup};
 use crate::app::common::{primitives::hint_line, theme};
 
+/// The rc config modal, when open: which game's file plus the stored content.
+pub struct RcModalView<'a> {
+    pub game: DoorRcGame,
+    /// The account's stored config; `None` when it has never been set.
+    pub content: Option<&'a str>,
+}
+
 /// View data the renderer needs for one frame of the Games hub.
-pub struct HubView {
+pub struct HubView<'a> {
     pub selected: usize,
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
@@ -22,6 +30,31 @@ pub struct HubView {
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
+    /// Roguelike doors with a live detached game this session: the sidebar
+    /// marks them and their landing offers resume instead of launch.
+    pub nethack_live: bool,
+    pub dcss_live: bool,
+    pub brogue_live: bool,
+    /// The rc config modal, drawn over the hub while open.
+    pub rc_modal: Option<RcModalView<'a>>,
+}
+
+impl HubView<'_> {
+    /// Whether this game has a live (detached) session to resume.
+    fn is_live(&self, game: HubGame) -> bool {
+        match game {
+            HubGame::Nethack => self.nethack_live,
+            HubGame::Dcss => self.dcss_live,
+            HubGame::Brogue => self.brogue_live,
+            HubGame::Lateania
+            | HubGame::Rebels
+            | HubGame::Usurper
+            | HubGame::GreenDragon
+            | HubGame::Dopewars
+            | HubGame::Darkroom
+            | HubGame::Codekeep => false,
+        }
+    }
 }
 
 /// The sidebar column width, including its right rule column. Sized to the
@@ -34,17 +67,20 @@ const MIN_WIDTH: u16 = 60;
 const MIN_HEIGHT: u16 = 6;
 
 /// One row of the sidebar: a muted group header, a selectable game (index
-/// into [`HubGame::ALL`]), or a blank separator between groups.
+/// into [`HubGame::ALL`]), a blank separator between groups, or the faint
+/// always-on backtick hint under the roguelikes (they detach and hop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarRow {
     Header(&'static str),
     Game(usize),
     Blank,
+    HopHint,
 }
 
 /// The sidebar rows in display order: each group opens with its header,
-/// groups separated by a blank row. Shared by the renderer and the click hit
-/// test so they cannot drift.
+/// groups separated by a blank row, and the ` hop hint sits directly under
+/// the roguelike games. Shared by the renderer and the click hit test so
+/// they cannot drift.
 fn sidebar_rows() -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut current_group = None;
@@ -58,6 +94,13 @@ fn sidebar_rows() -> Vec<SidebarRow> {
             current_group = Some(group);
         }
         rows.push(SidebarRow::Game(i));
+    }
+    let last_roguelike = rows.iter().rposition(|row| {
+        matches!(row, SidebarRow::Game(i)
+            if HubGame::ALL[*i].group() == HubGroup::Roguelikes)
+    });
+    if let Some(idx) = last_roguelike {
+        rows.insert(idx + 1, SidebarRow::HopHint);
     }
     rows
 }
@@ -77,7 +120,7 @@ fn sidebar_scroll(rows: &[SidebarRow], selected: usize, height: usize) -> usize 
     selected_row.saturating_sub(height / 2).min(max_scroll)
 }
 
-pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
+pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         frame.render_widget(
             Paragraph::new("Terminal too small for Games")
@@ -102,7 +145,7 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
         .split(layout[1]);
 
     let selected = view.selected.min(HubGame::ALL.len() - 1);
-    draw_sidebar(frame, body[0], selected);
+    draw_sidebar(frame, body[0], selected, view);
 
     // The selected game owns the pane beside the sidebar, rendered with its
     // real landing (logo, stats, actions).
@@ -117,13 +160,28 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
             crate::app::door::rebels::render::draw_landing(frame, body[1], view.rebels_enabled);
         }
         HubGame::Nethack => {
-            crate::app::door::nethack::render::draw_landing(frame, body[1], view.nethack_enabled);
+            crate::app::door::nethack::render::draw_landing(
+                frame,
+                body[1],
+                view.nethack_enabled,
+                view.nethack_live,
+            );
         }
         HubGame::Dcss => {
-            crate::app::door::dcss::render::draw_landing(frame, body[1], view.dcss_enabled);
+            crate::app::door::dcss::render::draw_landing(
+                frame,
+                body[1],
+                view.dcss_enabled,
+                view.dcss_live,
+            );
         }
         HubGame::Brogue => {
-            crate::app::door::brogue::render::draw_landing(frame, body[1], view.brogue_enabled);
+            crate::app::door::brogue::render::draw_landing(
+                frame,
+                body[1],
+                view.brogue_enabled,
+                view.brogue_live,
+            );
         }
         HubGame::Usurper => {
             crate::app::door::usurper::render::draw_landing(frame, body[1], view.usurper_enabled);
@@ -147,9 +205,113 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
     }
 
     draw_footer(frame, layout[2]);
+
+    if let Some(modal) = &view.rc_modal {
+        draw_rc_modal(frame, area, modal);
+    }
 }
 
-fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize) {
+/// How many config lines the modal previews before eliding the rest.
+const RC_PREVIEW_LINES: usize = 10;
+
+fn draw_rc_modal(frame: &mut Frame, area: Rect, modal: &RcModalView<'_>) {
+    let game_name = match modal.game {
+        DoorRcGame::Nethack => "NetHack",
+        DoorRcGame::Dcss => "DCSS",
+    };
+    let popup = centered_rect(area, 64, 19);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(format!(
+            " {game_name} config ({}) ",
+            modal.game.file_label()
+        ))
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // breathing room
+            Constraint::Length(2), // explainer
+            Constraint::Length(1), // gap
+            Constraint::Min(1),    // stored config preview
+            Constraint::Length(1), // footer hints
+        ])
+        .split(inner);
+
+    let explainer = vec![
+        Line::from(Span::styled(
+            " Paste into this window to replace the whole file.",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        )),
+        Line::from(Span::styled(
+            " Saved to your account and applied at every launch.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(explainer), layout[1]);
+
+    let preview: Vec<Line> = match modal.content {
+        Some(content) => {
+            let total_lines = content.lines().count();
+            let visible = usize::from(layout[3].height)
+                .saturating_sub(2)
+                .min(RC_PREVIEW_LINES);
+            let mut lines: Vec<Line> = content
+                .lines()
+                .take(visible)
+                .map(|line| {
+                    Line::from(Span::styled(
+                        format!(" {line}"),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ))
+                })
+                .collect();
+            if total_lines > visible {
+                lines.push(Line::from(Span::styled(
+                    format!(" ... {} more lines", total_lines - visible),
+                    Style::default().fg(theme::TEXT_MUTED()),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(" {} bytes, {} lines", content.len(), total_lines),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+            lines
+        }
+        None => vec![Line::from(Span::styled(
+            " No custom config yet. House defaults apply.",
+            Style::default().fg(theme::TEXT_MUTED()),
+        ))],
+    };
+    frame.render_widget(Paragraph::new(preview), layout[3]);
+
+    let hints: &[(&str, &str)] = &[("paste", "replace"), ("x", "clear"), ("Esc", "close")];
+    frame.render_widget(Paragraph::new(hint_line(hints)), layout[4]);
+}
+
+/// A centred rectangle of the given size, clamped to `area`.
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) {
     let block = Block::default()
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -178,8 +340,26 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize) {
                     Style::default().fg(theme::TEXT_DIM())
                 };
                 let label = HubGame::ALL[*i].label();
-                Line::from(Span::styled(format!("  {label:<pad$}"), style))
+                if view.is_live(HubGame::ALL[*i]) {
+                    // A detached game in progress: a green pip after the name,
+                    // on both the selected and unselected row styles.
+                    let livepad = pad.saturating_sub(label.len() + 2);
+                    Line::from(vec![
+                        Span::styled(format!("  {label} "), style),
+                        Span::styled("\u{25cf}", style.fg(theme::SUCCESS())),
+                        Span::styled(format!("{:<livepad$}", ""), style),
+                    ])
+                } else {
+                    Line::from(Span::styled(format!("  {label:<pad$}"), style))
+                }
             }
+            // The standing invitation under the roguelikes: they detach on `
+            // and hop between each other and chat. Faint on purpose; the
+            // green pip carries the "live right now" signal.
+            SidebarRow::HopHint => Line::from(Span::styled(
+                "  ` hop in & out",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )),
             SidebarRow::Blank => Line::default(),
         })
         .collect();
@@ -215,6 +395,6 @@ pub fn sidebar_hit_test(area: Rect, selected: usize, x: u16, y: u16) -> Option<u
     let scroll = sidebar_scroll(&rows, selected, usize::from(inner.height));
     match rows.get(scroll + usize::from(y - inner.y)) {
         Some(SidebarRow::Game(i)) => Some(*i),
-        Some(SidebarRow::Header(_) | SidebarRow::Blank) | None => None,
+        Some(SidebarRow::Header(_) | SidebarRow::Blank | SidebarRow::HopHint) | None => None,
     }
 }

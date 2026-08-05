@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false);
+        draw_landing(frame, area, false, false);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -35,9 +35,17 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 /// NetHack landing copy with the classic one-line Launch block, used by the
-/// Games hub when NetHack is selected (the hub has no per-session door state).
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    let action_line = if enabled {
+/// Games hub when NetHack is selected. `live` marks a detached game in
+/// progress this session, which turns the launch line into a resume line.
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool) {
+    let action_line = if live {
+        landing::action(
+            ">",
+            "Enter",
+            "resume your game in progress",
+            theme::SUCCESS(),
+        )
+    } else if enabled {
         landing::action(">", "Enter", "descend into the dungeon", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
@@ -108,10 +116,12 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
     ]);
     lines.extend(launch);
     lines.extend([
+        landing::hint("c", "customize your .nethackrc (paste box)", 8),
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "NetHack's own in-game help menu", 8),
         landing::hint("S", "save and continue another night", 8),
+        landing::hint("`", "step out to chat; the game keeps running", 8),
         landing::hint("Ctrl-C", "quit back to the Games hub", 8),
         Line::from(""),
         Line::from(Span::styled(

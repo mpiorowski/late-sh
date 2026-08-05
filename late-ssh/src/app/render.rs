@@ -153,6 +153,8 @@ struct DrawContext<'a> {
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     games_hub_selected: usize,
+    /// The open rc config modal (game plus stored content), if any.
+    door_rc_modal: Option<(late_core::models::door_rc::DoorRcGame, Option<&'a str>)>,
     rebels_enabled: bool,
     nethack_enabled: bool,
     dcss_enabled: bool,
@@ -971,6 +973,9 @@ impl App {
                         house: &self.house,
                         house_chat_view,
                         games_hub_selected: self.games_hub_state.selected(),
+                        door_rc_modal: self
+                            .door_rc_modal
+                            .map(|game| (game, self.door_rcs.get(&game).map(String::as_str))),
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         dcss_enabled: self.dcss_enabled,
@@ -1341,6 +1346,21 @@ impl App {
                         dopewars_enabled: ctx.dopewars_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
+                        nethack_live: ctx
+                            .nethack_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        dcss_live: ctx
+                            .dcss_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        brogue_live: ctx
+                            .brogue_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        rc_modal: ctx.door_rc_modal.map(|(game, content)| {
+                            crate::app::door::hub::ui::RcModalView { game, content }
+                        }),
                     },
                 );
             }
@@ -1889,7 +1909,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-C quit ",
+                "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1909,7 +1929,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-Q abandon ",
+                "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1929,7 +1949,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "\u{b7} ? help \u{b7} S save \u{b7} Q abandon ",
+                "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

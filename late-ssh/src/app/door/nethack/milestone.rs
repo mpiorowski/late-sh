@@ -6,19 +6,27 @@
 //! the rendered screen contents; the once-per-session debounce and the actual
 //! chip/badge grant live in `state.rs` / `award.rs`.
 //!
-//! ANTI-SPOOF (best effort, not bulletproof): the milestone markers are matched
-//! only at the START of the top message line (row 0), where NetHack prints its
-//! plines. Player-authored text doesn't land there: engravings read back as
-//! `You read in the dust: …` (prefixed), named/called monsters and objects show
-//! up embedded mid-sentence, and inventory/map/menu/scrollback aren't on the
-//! message line at all. So the easy spoofs (engrave/name the marker, then look)
-//! no longer pay out.
+//! ANTI-SPOOF (best effort, not bulletproof): a milestone marker must be the
+//! ENTIRE pline leading the top message line (row 0). Two rules compose:
 //!
-//! ACCEPTED RESIDUAL RISK: a determined player who engineers a pline that
-//! literally *begins* with a marker could still spoof a payout. We knowingly
-//! accept that — these are cosmetic flair rewards, not a competitive economy,
-//! and the only fully spoof-proof source (NetHack's host-side xlog/logfile)
-//! would need a cross-crate signal we've decided isn't worth it.
+//! 1. The marker must start the line. Engravings read back as `You read in the
+//!    dust: …` (prefixed), named/called objects show up embedded mid-sentence,
+//!    and inventory/map/menu/scrollback aren't on the message line at all.
+//! 2. Whatever follows the marker must be how NetHack itself ends a topline:
+//!    nothing, the terminal `--More--`, or a TWO-space gap before the next
+//!    queued message (win/tty/topl.c concatenates with two spaces). This kills
+//!    the one spoof rule 1 left open: a pet named after a marker (in-game
+//!    C-call, or `DOGNAME=`/`CATNAME=` in a pushed rc) LEADS its own plines,
+//!    but continues them after a single space (`<marker> bites the newt!`),
+//!    and NetHack's name munging collapses interior double spaces, so a name
+//!    can't fabricate the two-space form.
+//!
+//! ACCEPTED RESIDUAL RISK: anything that gets a pline printed whose entire
+//! sentence *is* a marker would still pay out; we know of no remaining
+//! in-game text channel that yields one. These are cosmetic flair rewards,
+//! not a competitive economy, and the only fully spoof-proof source
+//! (NetHack's host-side xlog/logfile) would need a cross-crate signal we've
+//! decided isn't worth it.
 //!
 //! Strings verified against NetHack 5.0.0 source (the pinned build):
 //! - Amulet pickup: `urgent_pline("The Amulet is bestowing a wish upon you!")`
@@ -40,11 +48,14 @@ pub enum Milestone {
 
 /// `urgent_pline` shown the instant the real Amulet of Yendor is first carried.
 const AMULET_MARK: &str = "The Amulet is bestowing a wish upon you!";
-/// First line of the ascension sequence (a plain `pline`, so it leads row 0).
-const CHOIR_MARK: &str = "An invisible choir sings";
-/// The winning line. `You(...)` prepends "You "; the marker stops before the
-/// gender suffix so it matches both "Demigod..." and "Demigoddess...".
-const ASCEND_MARK: &str = "You ascend to the status of Demigod";
+/// The full ascension-prelude pline from `src/pray.c` (Moloch's dark twin says
+/// "chants, and you are bathed in darkness", so the full sentence is required).
+const CHOIR_MARK: &str = "An invisible choir sings, and you are bathed in radiance...";
+/// The winning line, both genders (`You("ascend to the status of Demigod%s...")`).
+const ASCEND_MARKS: [&str; 2] = [
+    "You ascend to the status of Demigod...",
+    "You ascend to the status of Demigoddess...",
+];
 
 /// The top message line (row 0), where NetHack prints plines, leading
 /// whitespace stripped. This is the only place we trust milestone markers — see
@@ -53,22 +64,38 @@ fn message_line(screen_text: &str) -> &str {
     screen_text.lines().next().unwrap_or("").trim_start()
 }
 
+/// True when `marker` is the whole pline leading the message line: the marker
+/// starts the line, and what follows is one of NetHack's own topline endings
+/// (nothing, the terminal `--More--`, or a two-space concatenation with the
+/// next queued message). See the anti-spoof note at the top of the module.
+fn marker_is_whole_pline(screen_text: &str, marker: &str) -> bool {
+    match message_line(screen_text).strip_prefix(marker) {
+        Some(rest) => {
+            let rest = rest.trim_end();
+            rest.is_empty() || rest == "--More--" || rest.starts_with("  ")
+        }
+        None => false,
+    }
+}
+
 /// True when the message line announces the real-Amulet pickup.
 pub fn has_amulet_pickup(screen_text: &str) -> bool {
-    message_line(screen_text).starts_with(AMULET_MARK)
+    marker_is_whole_pline(screen_text, AMULET_MARK)
 }
 
 /// True when the message line shows the ascension *prelude* (the choir line).
 /// Observing it earlier in the session is the corroboration required before a
 /// later ascend line is trusted.
 pub fn has_ascension_prelude(screen_text: &str) -> bool {
-    message_line(screen_text).starts_with(CHOIR_MARK)
+    marker_is_whole_pline(screen_text, CHOIR_MARK)
 }
 
 /// True when the message line shows the winning "You ascend to the status of
 /// Demigod" line. Only meaningful in combination with a previously seen prelude.
 pub fn has_ascension_line(screen_text: &str) -> bool {
-    message_line(screen_text).starts_with(ASCEND_MARK)
+    ASCEND_MARKS
+        .iter()
+        .any(|mark| marker_is_whole_pline(screen_text, mark))
 }
 
 /// End-of-game death signals. We deliberately avoid the message-line announce

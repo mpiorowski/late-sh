@@ -12,5 +12,6 @@ pub mod hub;
 pub mod landing;
 pub mod lateania;
 pub mod nethack;
+pub mod rc;
 pub mod rebels;
 pub mod usurper;

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -20,6 +21,12 @@ pub enum Mode {
 /// crawl's end-of-game "goodbye" / character-dump prompts) so a stray `q` cannot
 /// reach the launcher's global quit and drop the whole SSH session.
 const EXIT_GRACE_TICKS: u8 = 10;
+
+/// Close a running game after this long without a single forwarded keystroke.
+/// Detached games (the player stepped out with ` and never came back) would
+/// otherwise hold a host child forever; the close is a clean SIGHUP-save on
+/// the host, so the run resumes on the next launch.
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
 
 pub struct State {
     host: String,
@@ -44,6 +51,13 @@ pub struct State {
     /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
     /// intent); the claimed handle becomes crawl's `-name`.
     handle: HandleFlow,
+    /// The account's init.txt content ("" = none), pushed to the host at
+    /// launch. Copied from the App's session-local rc map at screen entry.
+    rc: String,
+    /// When the last keystroke was forwarded to the game. A running game idle
+    /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
+    /// is staring at it or has detached to another screen.
+    last_input: Instant,
 }
 
 impl State {
@@ -57,6 +71,7 @@ impl State {
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
         handle_svc: Option<ArcadeHandleService>,
+        rc: String,
     ) -> Self {
         Self {
             host,
@@ -75,6 +90,8 @@ impl State {
             ),
             repaint,
             exit_grace: 0,
+            last_input: Instant::now(),
+            rc,
         }
     }
 
@@ -119,10 +136,12 @@ impl State {
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
+            rc: self.rc.clone(),
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
         self.exit_grace = 0;
+        self.last_input = Instant::now();
     }
 
     /// Called every app tick: if the process closed (clean save, death, quit, or
@@ -141,6 +160,12 @@ impl State {
                 // crawl's end-of-game prompts, and those trailing keys must not
                 // reach the launcher's global `q` = quit-the-app handler.
                 self.exit_grace = EXIT_GRACE_TICKS;
+            } else if self.last_input.elapsed() >= IDLE_SHUTDOWN {
+                // Idle too long (typically a detached game the player forgot):
+                // drop the proxy so the host SIGHUP-saves the run. No exit
+                // grace; an idle player has no trailing keystrokes in flight.
+                self.proxy = None;
+                self.mode = Mode::Launcher;
             }
             return;
         }
@@ -215,7 +240,7 @@ impl State {
     /// key, and intercepting it also stops the raw F1 escape (`ESC O P`) from
     /// leaking into the game as stray commands. late.sh keeps no help UI of its
     /// own; `?` and F1 both open crawl's in-game help.
-    pub fn intercept_input(&self, data: &[u8]) -> bool {
+    pub fn intercept_input(&mut self, data: &[u8]) -> bool {
         if is_f1(data) {
             self.forward_input(b"?");
             return true;
@@ -227,13 +252,33 @@ impl State {
     /// The crawl console build is keyboard-driven, but late.sh keeps any-event
     /// mouse tracking (`?1003h`) on for its own UI, so the client streams motion
     /// reports whose leading `ESC` would cancel crawl's menus and prompts.
-    pub fn forward_input(&self, data: &[u8]) {
+    pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
             let filtered = strip_input_noise(data);
             if !filtered.is_empty() {
+                self.last_input = Instant::now();
                 proxy.send_input(filtered);
             }
         }
+    }
+
+    /// Test-only: fabricate a Running state around a proxy pointed at a dead
+    /// address, so detach/idle paths can be exercised without a live host.
+    /// Needs a Tokio runtime (the proxy spawns its bridge task).
+    #[cfg(test)]
+    pub fn force_running_for_test(&mut self) {
+        self.proxy = Some(DcssProcess::spawn(ProcessConfig {
+            host: "127.0.0.1".into(),
+            port: 1,
+            secret: "test-secret".into(),
+            playname: "tester".into(),
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+            rc: String::new(),
+            repaint: None,
+        }));
+        self.mode = Mode::Running;
     }
 }
 

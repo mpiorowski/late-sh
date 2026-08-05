@@ -34,6 +34,9 @@ tokio = { workspace = true }
 # SSH transport
 russh = { workspace = true }
 
+# Pushed per-player rc decoding (see src/rc.rs)
+base64 = { workspace = true }
+
 # Identity: shared-secret -> derived ed25519 client key (mirrors the rebels door)
 blake3 = { workspace = true }
 

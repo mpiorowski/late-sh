@@ -39,6 +39,7 @@ struct InputContext {
     news_composing: bool,
     showcase_composing: bool,
     work_composing: bool,
+    door_rc_modal: bool,
 }
 
 impl InputContext {
@@ -52,6 +53,7 @@ impl InputContext {
             news_composing: app.chat.news.composing(),
             showcase_composing: app.chat.showcase.composing(),
             work_composing: app.chat.work.composing(),
+            door_rc_modal: app.door_rc_modal.is_some(),
         }
     }
 
@@ -107,6 +109,7 @@ enum PasteTarget {
     ShowcaseComposer,
     WorkComposer,
     Pinstar,
+    DoorRcModal,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1353,6 +1356,28 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
 
     let selected = app.games_hub_state.selected_game();
 
+    // The rc config modal is fully modal while open: `x` clears the stored
+    // config, paste replaces it (handle_bracketed_paste), Esc closes it
+    // (dispatch_escape), and every other key is swallowed.
+    if let Some(game) = app.door_rc_modal {
+        return match event {
+            ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
+                // Nothing stored means nothing to clear: skip the DB round
+                // trip and don't claim success for a no-op.
+                if app.door_rcs.remove(&game).is_some() {
+                    app.door_rc_service.clear_task(app.user_id, game);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(&format!(
+                        "{} cleared. Defaults are back at your next launch.",
+                        game.file_label()
+                    )));
+                }
+                true
+            }
+            ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => true,
+            _ => false,
+        };
+    }
+
     // Click on a sidebar row jumps to that game; the hit test mirrors the
     // hub's own layout against the same content area the renderer gets.
     if let ParsedInput::Mouse(mouse) = event
@@ -1451,8 +1476,31 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             app.door_delete_confirm = true;
             true
         }
+        ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C')
+            if selected.rc_game().is_some() =>
+        {
+            app.door_rc_modal = selected.rc_game();
+            true
+        }
         _ => false,
     }
+}
+
+/// Jump to the Games hub with `game` selected in the sidebar and its rc config
+/// modal open. The modal only lives on the hub; the door screens' `c` key
+/// bounces through here so the landing hint works on both surfaces.
+fn open_door_rc_modal(app: &mut App, game: late_core::models::door_rc::DoorRcGame) {
+    use crate::app::door::hub::state::HubGame;
+
+    let hub_game = match game {
+        late_core::models::door_rc::DoorRcGame::Nethack => HubGame::Nethack,
+        late_core::models::door_rc::DoorRcGame::Dcss => HubGame::Dcss,
+    };
+    if let Some(idx) = HubGame::ALL.iter().position(|g| *g == hub_game) {
+        app.games_hub_state.select(idx);
+    }
+    app.set_screen(Screen::Games);
+    app.door_rc_modal = Some(game);
 }
 
 /// Launch the chosen door game from the hub: switch to its screen and start it
@@ -1607,6 +1655,12 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         {
             return false;
         }
+        // `c` opens the account rc config box, which lives on the Games hub:
+        // bounce there with the modal up and NetHack selected.
+        if let ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') = event {
+            open_door_rc_modal(app, late_core::models::door_rc::DoorRcGame::Nethack);
+            return true;
+        }
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Keys go to the launcher first: Enter
         // plays or reopens the claim modal depending on the arcade-name state.
@@ -1634,6 +1688,11 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
             .is_some_and(|s| s.name_modal_visible())
         {
             return false;
+        }
+        // Same `c` bounce as NetHack: the rc config box lives on the hub.
+        if let ParsedInput::Byte(b'c' | b'C') | ParsedInput::Char('c' | 'C') = event {
+            open_door_rc_modal(app, late_core::models::door_rc::DoorRcGame::Dcss);
+            return true;
         }
         if let Some(b) = launcher_key_byte(event) {
             app.enter_dcss();
@@ -2640,10 +2699,12 @@ fn dispatch_escape(app: &mut App) {
         crate::app::door::darkroom::screen::GAME.handle_key(app, 0x1B);
         return;
     }
-    // Esc from the Games hub cancels a pending Lateania reset, otherwise drops
-    // back to Home.
+    // Esc from the Games hub closes the rc config modal, cancels a pending
+    // reset prompt, and otherwise drops back to Home.
     if ctx.screen == Screen::Games {
-        if app.door_delete_confirm {
+        if app.door_rc_modal.is_some() {
+            app.door_rc_modal = None;
+        } else if app.door_delete_confirm {
             app.door_delete_confirm = false;
         } else {
             app.set_screen(Screen::Dashboard);
@@ -2750,8 +2811,40 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
                 });
             }
         }
+        PasteTarget::DoorRcModal => handle_door_rc_paste(app, pasted),
         PasteTarget::None => {}
     }
+}
+
+/// A paste into the rc config modal replaces the stored config wholesale:
+/// sanitize (keep newlines and tabs, drop other controls), enforce the size
+/// cap, then update the in-App copy and fire the DB save. The modal stays
+/// open so the refreshed preview confirms what landed.
+fn handle_door_rc_paste(app: &mut App, pasted: &[u8]) {
+    use crate::app::common::primitives::Banner;
+
+    let Some(game) = app.door_rc_modal else {
+        return;
+    };
+    let cleaned = sanitize_paste_markers(&String::from_utf8_lossy(pasted));
+    let content = crate::app::door::rc::sanitize_rc_paste(&cleaned);
+    if content.trim().is_empty() {
+        app.banner = Some(Banner::error("That paste was empty."));
+        return;
+    }
+    if !late_core::models::door_rc::content_acceptable(&content) {
+        app.banner = Some(Banner::error("Config is too large (16KB max)."));
+        return;
+    }
+    let lines = content.lines().count();
+    app.door_rcs.insert(game, content.clone());
+    app.door_rc_service.save_task(app.user_id, game, content);
+    app.banner = Some(Banner::success(&format!(
+        "{} saved ({} line{}). Applies at your next launch.",
+        game.file_label(),
+        lines,
+        if lines == 1 { "" } else { "s" }
+    )));
 }
 
 fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
@@ -2790,7 +2883,9 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
 }
 
 fn paste_target(ctx: InputContext) -> PasteTarget {
-    if is_chat_composer_context(ctx) {
+    if ctx.screen == Screen::Games && ctx.door_rc_modal {
+        PasteTarget::DoorRcModal
+    } else if is_chat_composer_context(ctx) {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
