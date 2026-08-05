@@ -128,6 +128,85 @@ async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
 }
 
 #[tokio::test]
+async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
+    use crate::app::common::primitives::Screen;
+    use late_core::models::door_rc::{DoorRc, DoorRcGame};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "door-rc-flow").await;
+    let client = test_db.db.get().await.expect("db client");
+    let mut app = make_app(test_db.db.clone(), user.id, "door-rc-flow-it");
+
+    // Walk the hub sidebar to NetHack (Lateania, DCSS, NetHack) and open the
+    // config box.
+    app.set_screen(Screen::Games);
+    app.handle_input(b"jj");
+    app.handle_input(b"c");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal title; frame={frame:?}"
+    );
+    assert!(
+        frame.contains("No custom config yet"),
+        "expected the empty state before any paste; frame={frame:?}"
+    );
+
+    // A bracketed paste replaces the whole file: preview updates at once, the
+    // DB row lands via the fire-and-forget save.
+    app.handle_input(b"\x1b[200~OPTIONS=autopickup\nOPTIONS=color\x1b[201~");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("OPTIONS=autopickup"),
+        "expected the pasted config in the preview; frame={frame:?}"
+    );
+    assert!(
+        frame.contains(".nethackrc saved (2 lines)"),
+        "expected the save banner; frame={frame:?}"
+    );
+    wait_until(
+        || async {
+            DoorRc::get(&client, user.id, DoorRcGame::Nethack)
+                .await
+                .expect("get door rc")
+                .as_deref()
+                == Some("OPTIONS=autopickup\nOPTIONS=color")
+        },
+        "nethack rc row saved",
+    )
+    .await;
+
+    // `x` clears: back to the empty state, row deleted.
+    app.handle_input(b"x");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("No custom config yet"),
+        "expected the empty state after clearing; frame={frame:?}"
+    );
+    wait_until(
+        || async {
+            DoorRc::get(&client, user.id, DoorRcGame::Nethack)
+                .await
+                .expect("get door rc")
+                .is_none()
+        },
+        "nethack rc row cleared",
+    )
+    .await;
+
+    // Esc closes the modal and stays on the hub. The lone ESC is held for
+    // escape-sequence disambiguation, so give it a moment to dispatch.
+    app.handle_input(b"\x1b");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(app.screen, Screen::Games);
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal to close on Esc; frame={frame:?}"
+    );
+}
+
+#[tokio::test]
 async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "account-delete-flow").await;

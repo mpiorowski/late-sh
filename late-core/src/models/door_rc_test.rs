@@ -34,9 +34,14 @@ async fn upsert_get_replace_and_clear_round_trip() {
         .await
         .expect("insert");
     // A replace overwrites in place (one row per user+game).
-    DoorRc::upsert(&client, user.id, DoorRcGame::Nethack, "OPTIONS=autopickup\n")
-        .await
-        .expect("replace");
+    DoorRc::upsert(
+        &client,
+        user.id,
+        DoorRcGame::Nethack,
+        "OPTIONS=autopickup\n",
+    )
+    .await
+    .expect("replace");
     assert_eq!(
         DoorRc::get(&client, user.id, DoorRcGame::Nethack)
             .await
@@ -47,9 +52,7 @@ async fn upsert_get_replace_and_clear_round_trip() {
     DoorRc::upsert(&client, user.id, DoorRcGame::Dcss, "show_more = false\n")
         .await
         .expect("insert dcss");
-    let mut all = DoorRc::list_for_user(&client, user.id)
-        .await
-        .expect("list");
+    let mut all = DoorRc::list_for_user(&client, user.id).await.expect("list");
     all.sort_by_key(|(game, _)| game.as_key());
     assert_eq!(
         all,

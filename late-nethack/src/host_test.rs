@@ -1,23 +1,13 @@
 use super::*;
 
 #[test]
-fn macro_dirs_are_distinct_per_playname() {
-    let a = macro_dir("/data", "alice");
-    let b = macro_dir("/data", "bob");
-    assert_ne!(a, b);
-    assert_eq!(a, "/data/.crawl/macros/alice");
-    // A trailing slash on the configured data dir must not double up.
-    assert_eq!(macro_dir("/data/", "bob"), "/data/.crawl/macros/bob");
-}
-
-#[test]
 fn rc_paths_are_distinct_per_playname() {
-    assert_eq!(rc_path("/data", "alice"), "/data/rc/alice.rc");
-    assert_eq!(rc_path("/data/", "bob"), "/data/rc/bob.rc");
+    assert_eq!(rc_path("/data", "alice"), "/data/rc/alice.nethackrc");
+    assert_eq!(rc_path("/data/", "bob"), "/data/rc/bob.nethackrc");
 }
 
 fn scratch_data_dir(test: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("late-dcss-{}-{test}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("late-nethack-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_str().expect("utf-8 temp dir").to_string()
 }
@@ -26,11 +16,11 @@ fn scratch_data_dir(test: &str) -> String {
 fn materialize_writes_then_clears_the_rc_file() {
     let data_dir = scratch_data_dir("materialize");
 
-    let path = materialize_rc(&data_dir, "alice", Some("autopickup = $?!+\n"))
+    let path = materialize_rc(&data_dir, "alice", Some("OPTIONS=autopickup\n"))
         .expect("push should land a file");
     assert_eq!(
         std::fs::read_to_string(&path).expect("rc readable"),
-        "autopickup = $?!+\n"
+        "OPTIONS=autopickup\n"
     );
 
     // An empty push deletes the file and reports no rc to use.
@@ -48,6 +38,6 @@ fn materialize_none_keeps_whatever_is_on_disk() {
     assert_eq!(materialize_rc(&data_dir, "bob", None), None);
 
     // No push, existing file (written by a newer client earlier): keep using it.
-    let path = materialize_rc(&data_dir, "bob", Some("show_more = false\n")).expect("file lands");
+    let path = materialize_rc(&data_dir, "bob", Some("OPTIONS=color\n")).expect("file lands");
     assert_eq!(materialize_rc(&data_dir, "bob", None), Some(path));
 }

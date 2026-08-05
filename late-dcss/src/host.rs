@@ -37,6 +37,11 @@ pub(crate) struct HostConfig {
     pub(crate) cols: u16,
     pub(crate) rows: u16,
     pub(crate) term: String,
+    /// Per-account rc content pushed by the client over the SSH env request.
+    /// `Some(content)` replaces the player's rc file (empty content deletes
+    /// it); `None` (an older client that sent no env request) leaves whatever
+    /// is already on disk.
+    pub(crate) rc: Option<String>,
 }
 
 enum Command {
@@ -148,6 +153,11 @@ async fn run_bridge(
     fs::create_dir_all(&macros)
         .with_context(|| format!("failed to create dcss macro dir {macros}"))?;
 
+    // Materialize the per-account rc pushed by the client. When a file lands,
+    // `-rc` points crawl at it instead of the shared `$HOME/.crawl/init.txt`;
+    // the `-extra-opt-last` display defaults below still apply on top.
+    let rc_path = materialize_rc(&cfg.data_dir, &cfg.playname, cfg.rc.as_deref());
+
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Spawn with a cleared environment and an explicit allowlist. crawl needs a
     // TERM, a writable HOME (everything lives under `$HOME/.crawl`), and a
@@ -195,6 +205,9 @@ async fn run_bridge(
                 .context("clone dcss pty slave for stderr")?,
         ))
         .kill_on_drop(true);
+    if let Some(path) = &rc_path {
+        cmd.arg("-rc").arg(path);
+    }
 
     // Give the child its own session and make the PTY its controlling terminal,
     // so curses sizing and job control behave.
@@ -356,6 +369,47 @@ fn send_sighup(pid: u32, playname: &str) {
         Err(e) => {
             tracing::debug!(pid, playname, error = ?e, "SIGHUP to crawl failed (already exited?)")
         }
+    }
+}
+
+/// Where a player's pushed rc lives, passed as crawl's `-rc`. Keyed by the
+/// (already sanitized, `[A-Za-z0-9_]`) playname so no two handles can share
+/// config.
+fn rc_path(data_dir: &str, playname: &str) -> String {
+    format!("{}/rc/{}.rc", data_dir.trim_end_matches('/'), playname)
+}
+
+/// Write, delete, or keep the player's rc file from the client-pushed content:
+/// `Some(content)` replaces the file, `Some("")` deletes it (the player
+/// cleared their config), `None` (an older client that sent no env request)
+/// leaves whatever is on disk. Returns the path when a usable file exists
+/// afterwards. Filesystem errors fail soft: warn and launch with defaults.
+fn materialize_rc(data_dir: &str, playname: &str, rc: Option<&str>) -> Option<String> {
+    let path = rc_path(data_dir, playname);
+    match rc {
+        Some("") => {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(path, error = ?e, "failed to delete dcss rc"),
+            }
+            None
+        }
+        Some(content) => {
+            let dir = format!("{}/rc", data_dir.trim_end_matches('/'));
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(dir, error = ?e, "failed to create dcss rc dir");
+                return None;
+            }
+            match std::fs::write(&path, content) {
+                Ok(()) => Some(path),
+                Err(e) => {
+                    tracing::warn!(path, error = ?e, "failed to write dcss rc");
+                    None
+                }
+            }
+        }
+        None => std::fs::metadata(&path).is_ok().then_some(path),
     }
 }
 

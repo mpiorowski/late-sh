@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-04 (The three roguelike doors (NetHack/DCSS/Brogue) gained detach-and-resume: ` inside a running game steps out while the host child keeps running, `set_screen` keeps running door states alive, the backtick workspace cycle gained live-dungeon stops, the hub sidebar/landing show a live-game pip + resume line, and a 20-minute input-idle shutdown closes forgotten games via the hosts' SIGHUP-save)
+- Last updated: 2026-08-05 (NetHack and DCSS gained per-account config files: `c` on their Games hub card opens a paste box, the rc is stored in Postgres (`door_rcs`) and pushed to the door host at every launch as one SSH env request (`LATE_DOOR_RC_B64`), where it is materialized per-player and wired in via NETHACKOPTIONS / crawl's `-rc`; see the nethack/dcss door CONTEXTs)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1247,6 +1247,7 @@ Content invariants worth preserving when editing `data.rs`:
 | Arcade game keys | Arcade | See `late-ssh/src/app/arcade/CONTEXT.md` and each game's info panel. |
 | arrows / `h`/`l`/`j`/`k` | Games hub (page 3) | Switch the selected door-game card (Lateania / NetHack / DCSS / Brogue / Usurper / Green Dragon / A Dark Room / Rebels / dopewars / CodeKeep) |
 | `Enter` | Games hub | Launch the selected door game directly into its live screen |
+| `c` | Games hub | With NetHack or DCSS selected: open the per-account config paste box (.nethackrc / init.txt; paste replaces, `x` clears, Esc closes). The same key on those doors' landing screens bounces here. |
 | `d` | Games hub, Lateania selected | Reset the current user's Lateania character after confirmation |
 | arrows / `Enter` / `q` / `Esc` | Active CodeKeep | Navigate and confirm upstream menus; `q`/`Esc` backs out, and `q` on the main menu saves and returns to Games |
 | `Ctrl-C` | Active CodeKeep | Ask upstream to save and return to Games |

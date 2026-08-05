@@ -104,6 +104,7 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
     ]);
     lines.extend(launch);
     lines.extend([
+        landing::hint("c", "customize your init.txt (paste box)", 8),
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "crawl's own in-game help menu", 8),

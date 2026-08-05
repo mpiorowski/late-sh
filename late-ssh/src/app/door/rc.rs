@@ -15,6 +15,17 @@ use uuid::Uuid;
 /// `late-dcss` (like the doors' identity derivations); keep the copies in sync.
 pub const RC_ENV_VAR: &str = "LATE_DOOR_RC_B64";
 
+/// Normalize pasted rc content for storage: CRLF and bare CR become LF, and
+/// control characters are dropped except the newlines and tabs a real config
+/// file legitimately contains. Escape sequences lose their ESC byte here, so
+/// nothing a paste smuggles in can reach the game's terminal.
+pub fn sanitize_rc_paste(pasted: &str) -> String {
+    let unix = pasted.replace("\r\n", "\n").replace('\r', "\n");
+    unix.chars()
+        .filter(|&ch| ch == '\n' || ch == '\t' || (!ch.is_control() && ch != '\u{7f}'))
+        .collect()
+}
+
 /// Thin async accessor for the account's door rc files.
 #[derive(Clone)]
 pub struct DoorRcService {
@@ -64,3 +75,7 @@ impl DoorRcService {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "rc_test.rs"]
+mod rc_test;

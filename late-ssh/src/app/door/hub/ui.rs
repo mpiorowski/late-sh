@@ -1,16 +1,24 @@
+use late_core::models::door_rc::DoorRcGame;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use super::state::{HubGame, HubGroup};
 use crate::app::common::{primitives::hint_line, theme};
 
+/// The rc config modal, when open: which game's file plus the stored content.
+pub struct RcModalView<'a> {
+    pub game: DoorRcGame,
+    /// The account's stored config; `None` when it has never been set.
+    pub content: Option<&'a str>,
+}
+
 /// View data the renderer needs for one frame of the Games hub.
-pub struct HubView {
+pub struct HubView<'a> {
     pub selected: usize,
     pub delete_confirm: bool,
     pub rebels_enabled: bool,
@@ -27,9 +35,11 @@ pub struct HubView {
     pub nethack_live: bool,
     pub dcss_live: bool,
     pub brogue_live: bool,
+    /// The rc config modal, drawn over the hub while open.
+    pub rc_modal: Option<RcModalView<'a>>,
 }
 
-impl HubView {
+impl HubView<'_> {
     /// Whether this game has a live (detached) session to resume.
     fn is_live(&self, game: HubGame) -> bool {
         match game {
@@ -110,7 +120,7 @@ fn sidebar_scroll(rows: &[SidebarRow], selected: usize, height: usize) -> usize 
     selected_row.saturating_sub(height / 2).min(max_scroll)
 }
 
-pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
+pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
         frame.render_widget(
             Paragraph::new("Terminal too small for Games")
@@ -195,6 +205,110 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView) {
     }
 
     draw_footer(frame, layout[2]);
+
+    if let Some(modal) = &view.rc_modal {
+        draw_rc_modal(frame, area, modal);
+    }
+}
+
+/// How many config lines the modal previews before eliding the rest.
+const RC_PREVIEW_LINES: usize = 10;
+
+fn draw_rc_modal(frame: &mut Frame, area: Rect, modal: &RcModalView<'_>) {
+    let game_name = match modal.game {
+        DoorRcGame::Nethack => "NetHack",
+        DoorRcGame::Dcss => "DCSS",
+    };
+    let popup = centered_rect(area, 64, 19);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(format!(
+            " {game_name} config ({}) ",
+            modal.game.file_label()
+        ))
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // breathing room
+            Constraint::Length(2), // explainer
+            Constraint::Length(1), // gap
+            Constraint::Min(1),    // stored config preview
+            Constraint::Length(1), // footer hints
+        ])
+        .split(inner);
+
+    let explainer = vec![
+        Line::from(Span::styled(
+            " Paste into this window to replace the whole file.",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        )),
+        Line::from(Span::styled(
+            " Saved to your account and applied at every launch.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(explainer), layout[1]);
+
+    let preview: Vec<Line> = match modal.content {
+        Some(content) => {
+            let total_lines = content.lines().count();
+            let visible = usize::from(layout[3].height)
+                .saturating_sub(2)
+                .min(RC_PREVIEW_LINES);
+            let mut lines: Vec<Line> = content
+                .lines()
+                .take(visible)
+                .map(|line| {
+                    Line::from(Span::styled(
+                        format!(" {line}"),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ))
+                })
+                .collect();
+            if total_lines > visible {
+                lines.push(Line::from(Span::styled(
+                    format!(" ... {} more lines", total_lines - visible),
+                    Style::default().fg(theme::TEXT_MUTED()),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(" {} bytes, {} lines", content.len(), total_lines),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+            lines
+        }
+        None => vec![Line::from(Span::styled(
+            " No custom config yet. House defaults apply.",
+            Style::default().fg(theme::TEXT_MUTED()),
+        ))],
+    };
+    frame.render_widget(Paragraph::new(preview), layout[3]);
+
+    let hints: &[(&str, &str)] = &[("paste", "replace"), ("x", "clear"), ("Esc", "close")];
+    frame.render_widget(Paragraph::new(hint_line(hints)), layout[4]);
+}
+
+/// A centred rectangle of the given size, clamped to `area`.
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) {

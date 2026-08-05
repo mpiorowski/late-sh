@@ -613,8 +613,7 @@ pub struct App {
     /// game. Session-local copy of the DB truth: preloaded at init, updated by
     /// the hub config box, read at door launch. Another session's edits are
     /// not reflected until reconnect.
-    pub(crate) door_rcs:
-        std::collections::HashMap<late_core::models::door_rc::DoorRcGame, String>,
+    pub(crate) door_rcs: std::collections::HashMap<late_core::models::door_rc::DoorRcGame, String>,
     /// Which game's rc config box is open over the Games hub, if any.
     pub(crate) door_rc_modal: Option<late_core::models::door_rc::DoorRcGame>,
     pub(crate) usurper_state: Option<crate::app::door::usurper::state::State>,

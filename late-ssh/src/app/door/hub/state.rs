@@ -81,6 +81,25 @@ impl HubGame {
             HubGame::Darkroom | HubGame::Rebels | HubGame::Codekeep => HubGroup::BackRoom,
         }
     }
+
+    /// The pushed-config slot this game reads from, for the doors that take
+    /// one. Brogue keeps its config per-player upstream already; the rest have
+    /// no config file at all.
+    pub fn rc_game(self) -> Option<late_core::models::door_rc::DoorRcGame> {
+        use late_core::models::door_rc::DoorRcGame;
+        match self {
+            HubGame::Nethack => Some(DoorRcGame::Nethack),
+            HubGame::Dcss => Some(DoorRcGame::Dcss),
+            HubGame::Lateania
+            | HubGame::Rebels
+            | HubGame::Brogue
+            | HubGame::Usurper
+            | HubGame::GreenDragon
+            | HubGame::Dopewars
+            | HubGame::Codekeep
+            | HubGame::Darkroom => None,
+        }
+    }
 }
 
 /// Per-session hub state: which game card is currently selected.
