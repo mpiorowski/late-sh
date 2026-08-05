@@ -3816,6 +3816,9 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
+        // Always visible, mirroring `visual_order_for_rooms`: unlinked users
+        // get the pitch + login funnel.
+        push_slot(RoomSlot::Cyberspace, &mut push_row);
         // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
         if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
             is_chat_list_room(r)

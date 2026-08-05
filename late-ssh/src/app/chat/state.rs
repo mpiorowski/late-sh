@@ -1746,6 +1746,15 @@ impl ChatState {
         current_slot_from_state(self.selected_slot_state())
     }
 
+    /// Whether a synthetic rail entry (rss, news, cyberspace, mentions,
+    /// browse rooms, showcase, work) owns the center pane instead of a real
+    /// room. The shell asks this instead of re-deriving the list: a new
+    /// synthetic entry that misses one of those chains renders the room
+    /// behind it while the rail says otherwise.
+    pub fn synthetic_entry_selected(&self) -> bool {
+        synthetic_entry_selected(self.selected_slot_state())
+    }
+
     /// Collapse/expand a room-list section. If collapsing hides the currently
     /// selected room, selection snaps to the first still-visible slot so the
     /// cursor never ends up stranded inside a hidden section.

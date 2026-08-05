@@ -1222,12 +1222,7 @@ impl App {
         if self.screen != Screen::Dashboard {
             return false;
         }
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
+        let synthetic_selected = self.chat.synthetic_entry_selected();
         crate::app::render::dashboard_home_selected(
             self.chat.lounge_room_id(),
             self.chat.selected_room_id,

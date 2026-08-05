@@ -971,6 +971,46 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
 }
 
 #[tokio::test]
+async fn cyberspace_rail_entry_is_listed_under_core() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-rail-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-rail-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    // The rail lists cyberspace in Core, next to news, so it is reachable by
+    // eye and by click, not only by arrowing onto an invisible row.
+    wait_for_render_contains(&mut app, "cyberspace").await;
+}
+
+#[tokio::test]
+async fn cs_command_opens_the_cyberspace_pane() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-command-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-command-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"i/cs\r");
+    // A fresh account is unlinked, so the pane shows the link pitch.
+    wait_for_render_contains(&mut app, "cyberspace.online").await;
+}
+
+#[tokio::test]
 async fn client_side_chat_commands_render_without_persisting_messages() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "command-flow-viewer").await;
