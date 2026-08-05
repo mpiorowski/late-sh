@@ -65,6 +65,10 @@ pub struct ProcessConfig {
     pub cols: u16,
     pub rows: u16,
     pub term: String,
+    /// The account's rc file content ("" = none configured). Pushed to the
+    /// host as one env request before the shell so the child reads a
+    /// per-player config; an empty push tells the host to clear its copy.
+    pub rc: String,
     /// Render-loop wakeup. The reader task pokes it on new remote output so the
     /// embedded game repaints promptly. `None` on headless/test paths.
     pub repaint: Option<Arc<RenderSignal>>,
@@ -176,6 +180,21 @@ async fn run_bridge(
         .await
         .context("dcss outbound channel_open_session timed out")?
         .context("channel_open_session failed")?;
+    // Push the account's rc before the PTY/shell so the host can materialize
+    // the per-player config file ahead of spawning the child. Best-effort on
+    // the host side; `want_reply = false` keeps old hosts (which ignore env
+    // requests) compatible.
+    {
+        use base64::Engine as _;
+        let rc_b64 = base64::engine::general_purpose::STANDARD.encode(cfg.rc.as_bytes());
+        timeout(
+            SETUP_TIMEOUT,
+            outbound.set_env(false, crate::app::door::rc::RC_ENV_VAR, rc_b64),
+        )
+        .await
+        .context("dcss outbound set_env timed out")?
+        .context("set_env failed")?;
+    }
     timeout(
         SETUP_TIMEOUT,
         outbound.request_pty(true, &cfg.term, cfg.cols as u32, cfg.rows as u32, 0, 0, &[]),

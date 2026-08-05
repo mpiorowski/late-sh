@@ -51,6 +51,7 @@ impl russh::server::Server for Server {
             term: "xterm-256color".to_string(),
             cols: 80,
             rows: 24,
+            rc: None,
             host: None,
         }
     }
@@ -65,6 +66,10 @@ pub(crate) struct ClientHandler {
     term: String,
     cols: u16,
     rows: u16,
+    /// The pushed per-player .nethackrc content, decoded from the client's env
+    /// request (`Some("")` = clear the stored file). `None` when the client
+    /// never sent one (an older late-ssh): leave any existing file alone.
+    rc: Option<String>,
     /// The running NetHack child, once the shell is requested.
     host: Option<PtyHost>,
 }
@@ -173,6 +178,24 @@ impl Handler for ClientHandler {
         Ok(())
     }
 
+    async fn env_request(
+        &mut self,
+        _channel: ChannelId,
+        variable_name: &str,
+        variable_value: &str,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // The one env var this host takes: the account's pushed rc. Anything
+        // else is ignored (the child env is a hard allowlist regardless).
+        if variable_name == crate::rc::RC_ENV_VAR {
+            match crate::rc::decode_rc(variable_value) {
+                Ok(rc) => self.rc = Some(rc),
+                Err(reason) => tracing::warn!(reason, "ignoring pushed rc"),
+            }
+        }
+        Ok(())
+    }
+
     async fn shell_request(
         &mut self,
         channel: ChannelId,
@@ -207,6 +230,7 @@ impl Handler for ClientHandler {
                 cols: self.cols,
                 rows: self.rows,
                 term,
+                rc: self.rc.take(),
             },
             session.handle(),
             channel,

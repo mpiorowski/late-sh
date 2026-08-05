@@ -220,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(db.clone());
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
+    let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
         late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
@@ -344,6 +345,7 @@ async fn main() -> anyhow::Result<()> {
         greendragon_service,
         darkroom_service,
         arcade_handle_service,
+        door_rc_service,
         daily_service,
         bonsai_service,
         pet_service,

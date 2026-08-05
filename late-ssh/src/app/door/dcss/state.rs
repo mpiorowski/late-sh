@@ -51,6 +51,9 @@ pub struct State {
     /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
     /// intent); the claimed handle becomes crawl's `-name`.
     handle: HandleFlow,
+    /// The account's init.txt content ("" = none), pushed to the host at
+    /// launch. Copied from the App's session-local rc map at screen entry.
+    rc: String,
     /// When the last keystroke was forwarded to the game. A running game idle
     /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
     /// is staring at it or has detached to another screen.
@@ -68,6 +71,7 @@ impl State {
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
         handle_svc: Option<ArcadeHandleService>,
+        rc: String,
     ) -> Self {
         Self {
             host,
@@ -87,6 +91,7 @@ impl State {
             repaint,
             exit_grace: 0,
             last_input: Instant::now(),
+            rc,
         }
     }
 
@@ -131,6 +136,7 @@ impl State {
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
+            rc: self.rc.clone(),
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
@@ -269,6 +275,7 @@ impl State {
             cols: 80,
             rows: 24,
             term: "xterm".into(),
+            rc: String::new(),
             repaint: None,
         }));
         self.mode = Mode::Running;

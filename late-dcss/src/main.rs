@@ -11,6 +11,7 @@ mod identity;
 #[cfg(test)]
 mod identity_test;
 mod playname;
+mod rc;
 mod server;
 
 use std::sync::Arc;

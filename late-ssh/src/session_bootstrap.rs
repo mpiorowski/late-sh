@@ -376,6 +376,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
+    let initial_door_rcs = match state.door_rc_service.list(user_id).await {
+        Ok(rcs) => rcs,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load door rc files");
+            Vec::new()
+        }
+    };
+
     let key_layout = load_device_rails(state, user_id, key_fingerprint.as_deref()).await;
 
     SessionConfig {
@@ -422,6 +430,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         greendragon_service: state.greendragon_service.clone(),
         darkroom_service: state.darkroom_service.clone(),
         arcade_handle_service: state.arcade_handle_service.clone(),
+        door_rc_service: state.door_rc_service.clone(),
+        initial_door_rcs,
         daily_service: state.daily_service.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),

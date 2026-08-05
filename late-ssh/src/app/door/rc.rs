@@ -1,0 +1,66 @@
+// Per-account door rc files (.nethackrc / DCSS init.txt): the session-side
+// accessor plus the client half of the push contract. The DB row is the source
+// of truth; at launch the door proxy sends the content to the game host as one
+// SSH env request before requesting the shell, and the host materializes it as
+// an ephemeral per-player file for the child.
+
+use anyhow::Result;
+use late_core::db::Db;
+use late_core::models::door_rc::{DoorRc, DoorRcGame};
+use uuid::Uuid;
+
+/// SSH env variable carrying the base64-encoded rc to a door host. Always sent
+/// when the account has ever touched its rc; an empty value tells the host to
+/// remove its per-player file. The name is duplicated in `late-nethack` and
+/// `late-dcss` (like the doors' identity derivations); keep the copies in sync.
+pub const RC_ENV_VAR: &str = "LATE_DOOR_RC_B64";
+
+/// Thin async accessor for the account's door rc files.
+#[derive(Clone)]
+pub struct DoorRcService {
+    db: Db,
+}
+
+impl DoorRcService {
+    pub fn new(db: Db) -> Self {
+        Self { db }
+    }
+
+    /// Every configured rc for the account, for session-init preloading.
+    pub async fn list(&self, user_id: Uuid) -> Result<Vec<(DoorRcGame, String)>> {
+        let client = self.db.get().await?;
+        DoorRc::list_for_user(&client, user_id).await
+    }
+
+    /// Fire-and-forget save. Logs its own failure; the App's in-memory copy is
+    /// already updated by the caller, so a lost write surfaces as a stale rc
+    /// next session, not a broken modal.
+    pub fn save_task(&self, user_id: Uuid, game: DoorRcGame, content: String) {
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                DoorRc::upsert(&client, user_id, game, &content).await
+            }
+            .await;
+            if let Err(e) = result {
+                tracing::error!(error = ?e, %user_id, game = game.as_key(), "failed to save door rc");
+            }
+        });
+    }
+
+    /// Fire-and-forget clear (back to upstream defaults). Same logging rule.
+    pub fn clear_task(&self, user_id: Uuid, game: DoorRcGame) {
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                DoorRc::clear(&client, user_id, game).await
+            }
+            .await;
+            if let Err(e) = result {
+                tracing::error!(error = ?e, %user_id, game = game.as_key(), "failed to clear door rc");
+            }
+        });
+    }
+}

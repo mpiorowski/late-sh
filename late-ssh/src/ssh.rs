@@ -893,6 +893,13 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
+            Ok(rcs) => rcs,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load door rc files");
+                Vec::new()
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -939,6 +946,8 @@ impl russh::server::Handler for ClientHandler {
             greendragon_service: self.state.greendragon_service.clone(),
             darkroom_service: self.state.darkroom_service.clone(),
             arcade_handle_service: self.state.arcade_handle_service.clone(),
+            door_rc_service: self.state.door_rc_service.clone(),
+            initial_door_rcs,
             daily_service: self.state.daily_service.clone(),
             house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),

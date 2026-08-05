@@ -252,6 +252,12 @@ pub struct SessionConfig {
     /// Accessor for the account's arcade handle (the public door-game name;
     /// crawl's `-name`), claimed once from the DCSS launcher.
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
+    /// edited from the Games hub config box and pushed to the hosts at launch.
+    pub door_rc_service: crate::app::door::rc::DoorRcService,
+    /// The account's configured door rcs, preloaded at session init. Edits in
+    /// this session update the in-App copy (`App::door_rcs`) alongside the DB.
+    pub initial_door_rcs: Vec<(late_core::models::door_rc::DoorRcGame, String)>,
     /// Usurper door game: reached over SSH like nethack (host `late-usurper`).
     pub usurper_enabled: bool,
     pub usurper_host: String,
@@ -602,6 +608,15 @@ pub struct App {
     pub(crate) brogue_port: u16,
     pub(crate) brogue_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    pub(crate) door_rc_service: crate::app::door::rc::DoorRcService,
+    /// The account's door rc files (.nethackrc / DCSS init.txt), keyed by
+    /// game. Session-local copy of the DB truth: preloaded at init, updated by
+    /// the hub config box, read at door launch. Another session's edits are
+    /// not reflected until reconnect.
+    pub(crate) door_rcs:
+        std::collections::HashMap<late_core::models::door_rc::DoorRcGame, String>,
+    /// Which game's rc config box is open over the Games hub, if any.
+    pub(crate) door_rc_modal: Option<late_core::models::door_rc::DoorRcGame>,
     pub(crate) usurper_state: Option<crate::app::door::usurper::state::State>,
     /// Per-session TERM string (from the PTY request); the Usurper host pins
     /// the child's TERM itself, this only sizes the request.
@@ -1362,6 +1377,9 @@ impl App {
             brogue_port: config.brogue_port,
             brogue_secret: config.brogue_secret,
             arcade_handle_service: config.arcade_handle_service,
+            door_rc_service: config.door_rc_service,
+            door_rcs: config.initial_door_rcs.into_iter().collect(),
+            door_rc_modal: None,
             usurper_state: None,
             usurper_term: config.term.clone(),
             usurper_enabled: config.usurper_enabled,
@@ -1561,6 +1579,11 @@ impl App {
         self.rebels_state = None;
     }
 
+    /// The session-local rc content for one door ("" when unconfigured).
+    fn door_rc(&self, game: late_core::models::door_rc::DoorRcGame) -> String {
+        self.door_rcs.get(&game).cloned().unwrap_or_default()
+    }
+
     pub(crate) fn enter_nethack(&mut self) {
         if self.nethack_state.is_some() {
             return;
@@ -1575,6 +1598,7 @@ impl App {
             self.repaint_signal.clone(),
             self.nethack_awards.clone(),
             Some(self.arcade_handle_service.clone()),
+            self.door_rc(late_core::models::door_rc::DoorRcGame::Nethack),
         ));
     }
 
@@ -1597,6 +1621,7 @@ impl App {
             self.dcss_enabled,
             self.repaint_signal.clone(),
             Some(self.arcade_handle_service.clone()),
+            self.door_rc(late_core::models::door_rc::DoorRcGame::Dcss),
         ));
     }
 

@@ -11,6 +11,7 @@ fn disabled_state() -> State {
         None,
         None,
         None,
+        String::new(),
     )
 }
 

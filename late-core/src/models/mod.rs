@@ -40,6 +40,9 @@ pub mod chips;
 mod chips_test;
 pub mod daily_match;
 pub mod darkroom_save;
+pub mod door_rc;
+#[cfg(test)]
+mod door_rc_test;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;

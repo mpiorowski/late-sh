@@ -10,6 +10,7 @@ fn disabled_state() -> State {
         false,
         None,
         None,
+        String::new(),
     )
 }
 
@@ -25,6 +26,7 @@ fn promptable_state() -> State {
         true,
         None,
         None,
+        String::new(),
     )
 }
 

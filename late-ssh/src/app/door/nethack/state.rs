@@ -88,6 +88,9 @@ pub struct State {
     /// The shared arcade-handle launcher flow (lookup, claim prompt, launch
     /// intent); the claimed handle becomes NetHack's `-u` playname.
     handle: HandleFlow,
+    /// The account's .nethackrc content ("" = none), pushed to the host at
+    /// launch. Copied from the App's session-local rc map at screen entry.
+    rc: String,
 }
 
 impl State {
@@ -102,6 +105,7 @@ impl State {
         repaint: Option<Arc<RenderSignal>>,
         awards: Option<NethackAwards>,
         handle_svc: Option<ArcadeHandleService>,
+        rc: String,
     ) -> Self {
         Self {
             user_id,
@@ -129,6 +133,7 @@ impl State {
             last_dlvl: None,
             death_noted: false,
             last_input: Instant::now(),
+            rc,
         }
     }
 
@@ -173,6 +178,7 @@ impl State {
             cols: self.viewport.width.max(1),
             rows: self.viewport.height.max(1),
             term: self.term.clone(),
+            rc: self.rc.clone(),
             repaint: self.repaint.clone(),
         }));
         self.mode = Mode::Running;
@@ -370,6 +376,7 @@ impl State {
             cols: 80,
             rows: 24,
             term: "xterm".into(),
+            rc: String::new(),
             repaint: None,
         }));
         self.mode = Mode::Running;
