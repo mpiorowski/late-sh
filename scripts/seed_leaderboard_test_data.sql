@@ -88,8 +88,18 @@ JOIN users u
 
 ALTER TABLE seed_players ADD PRIMARY KEY (idx);
 
--- Enrich the most recently active non-system, non-seeded account so the person
--- viewing the local TUI gets meaningful deep-rank/current-user rows too.
+-- Enrich the requested non-system, non-seeded account, or default to the most
+-- recently active one so the person viewing the local TUI gets meaningful
+-- deep-rank/current-user rows too.
+\if :{?leaderboard_username}
+CREATE TEMP TABLE seed_current_player ON COMMIT DROP AS
+SELECT id AS user_id, username
+FROM users
+WHERE username NOT IN ('system', 'bot', 'bartender')
+  AND fingerprint NOT LIKE 'seed:leaderboard:%'
+  AND LOWER(username) = LOWER(:'leaderboard_username')
+LIMIT 1;
+\else
 CREATE TEMP TABLE seed_current_player ON COMMIT DROP AS
 SELECT id AS user_id, username
 FROM users
@@ -97,6 +107,7 @@ WHERE username NOT IN ('system', 'bot', 'bartender')
   AND fingerprint NOT LIKE 'seed:leaderboard:%'
 ORDER BY last_seen DESC
 LIMIT 1;
+\endif
 
 -- Synthetic users are owned entirely by this seed. Clear their prior generated
 -- facts so rerunning the script is deterministic while preserving real users.
@@ -466,7 +477,8 @@ ON CONFLICT (user_id, puzzle_date) DO NOTHING;
 
 -- The rollup the all-time daily-win boards read. Production maintains it
 -- inside each win-insert statement; this seed writes win rows raw, so rebuild
--- the seed players' totals from the tables just filled.
+-- the seed players' and enriched current player's totals from the tables just
+-- filled.
 INSERT INTO daily_win_totals (game, user_id, wins)
 SELECT w.game, w.user_id, COUNT(*)
 FROM (
@@ -482,8 +494,13 @@ FROM (
     UNION ALL
     SELECT 'rubiks_cube', user_id FROM rubiks_cube_daily_wins
 ) w
-JOIN seed_players p ON p.user_id = w.user_id
-GROUP BY w.game, w.user_id;
+JOIN (
+    SELECT user_id FROM seed_players
+    UNION ALL
+    SELECT user_id FROM seed_current_player
+) p ON p.user_id = w.user_id
+GROUP BY w.game, w.user_id
+ON CONFLICT (game, user_id) DO UPDATE SET wins = EXCLUDED.wins;
 
 COMMIT;
 

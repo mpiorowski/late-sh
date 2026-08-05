@@ -1,10 +1,11 @@
 use late_core::models::leaderboard::{DailyPuzzle, RankedEntry, ScoreGame};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use uuid::Uuid;
 
 use super::{
     super::state::{Board, LeaderboardPageState},
-    entry_line, rail_lines, window_lines,
+    entry_line, rail_lines, standings_columns, window_lines, window_natural_width,
 };
 
 fn text(line: &Line) -> String {
@@ -66,6 +67,88 @@ fn entry_line_right_aligns_value_and_truncates_long_names() {
         width,
     ));
     assert!(labeled.ends_with("7 wins"), "{labeled}");
+}
+
+#[test]
+fn window_caps_value_column_at_widest_visible_row() {
+    let board = Board::Score(ScoreGame::ALL[0]);
+    let entries = vec![
+        entry(1, "alice", Uuid::from_u128(10), 12_345),
+        entry(2, "longusername", Uuid::from_u128(11), 7),
+        entry(
+            3,
+            "invisible-name-that-must-not-widen-the-column",
+            Uuid::from_u128(12),
+            999_999,
+        ),
+    ];
+
+    let lines = window_lines("monthly", &entries, board, viewer(), 2, 100);
+    let first = text(&lines[1]);
+    let second = text(&lines[2]);
+
+    assert_eq!(first, "  #1  alice    12,345");
+    assert_eq!(second, "  #2  longusername  7");
+    assert_eq!(first.chars().count(), second.chars().count());
+    assert!(first.chars().count() < 100, "{first}");
+}
+
+#[test]
+fn paired_windows_use_natural_widths_with_a_bounded_gap() {
+    let board = Board::Daily(DailyPuzzle::ALL[0]);
+    let entries = vec![
+        entry(1, "short", Uuid::from_u128(10), 15),
+        entry(2, "longest-visible-name", Uuid::from_u128(11), 7),
+    ];
+    let width = window_natural_width("monthly", &entries, board, viewer(), 10);
+    let area = Rect::new(25, 4, 100, 30);
+
+    let [monthly, all_time] = standings_columns(area, width, width);
+
+    assert_eq!(monthly.x, area.x);
+    assert_eq!(monthly.width as usize, width);
+    assert_eq!(all_time.width as usize, width);
+    assert_eq!(all_time.x - monthly.right(), 3);
+
+    let just_fits = Rect::new(25, 4, width as u16 * 2 + 1, 30);
+    let [monthly, all_time] = standings_columns(just_fits, width, width);
+    assert_eq!(all_time.x - monthly.right(), 1);
+}
+
+#[test]
+fn paired_windows_keep_one_cell_between_them_when_width_is_constrained() {
+    let area = Rect::new(25, 4, 25, 30);
+    let [monthly, all_time] = standings_columns(area, 30, 30);
+
+    assert_eq!(monthly.width, 12);
+    assert_eq!(all_time.width, 12);
+    assert_eq!(all_time.x - monthly.right(), 1);
+    assert_eq!(all_time.right(), area.right());
+}
+
+#[test]
+fn compact_value_column_includes_the_own_row_tail() {
+    let board = Board::Score(ScoreGame::ALL[0]);
+    let mut entries: Vec<RankedEntry> = (1..=8)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128 + 100),
+                1_000 - rank,
+            )
+        })
+        .collect();
+    let own = Uuid::from_u128(999);
+    entries.push(entry(9, "viewer-with-long-name", own, 7));
+
+    let lines = window_lines("monthly", &entries, board, own, 5, 100);
+    let first = text(&lines[1]);
+    let own = text(&lines[5]);
+
+    assert_eq!(own, "  #9  viewer-with-long-name  7");
+    assert_eq!(first.chars().count(), own.chars().count());
+    assert!(own.chars().count() < 100, "{own}");
 }
 
 #[test]

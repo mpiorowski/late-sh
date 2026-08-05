@@ -87,6 +87,10 @@ responsive widths impossible to eyeball. `make seed-leaderboard`
 48 synthetic players spread across every board. Local development only: it owns
 the `seed:leaderboard:` fingerprints, prefixes their usernames with `lb_` to
 clear the unique index on real handles, and rewrites their stats on every rerun.
+With no argument, the seed also gives the most recently active real user a
+representative deep-rank row on every board. Pass a username to target that
+enrichment explicitly, for example
+`scripts/seed_leaderboard_test_data.sh GleamingUnicycle`.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
