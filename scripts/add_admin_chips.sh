@@ -68,6 +68,9 @@ if [[ "${MODE}" == "user_id" && -z "${USER_ID}" ]]; then
   exit 1
 fi
 
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd -- "${ROOT_DIR}"
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required" >&2
   exit 1

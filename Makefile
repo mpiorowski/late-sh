@@ -310,6 +310,5 @@ startm: .env keys
 down:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
 stop:
-	docker ps -aq | xargs -r docker stop
-remove:
-	docker ps -aq | xargs -r docker rm -f
+	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml stop
+remove: down
