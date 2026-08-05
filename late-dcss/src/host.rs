@@ -165,26 +165,9 @@ async fn run_bridge(
     // window size comes ONLY from the pty (openpty winsize + TIOCSWINSZ):
     // LINES/COLUMNS must NOT be exported, because ncurses treats them as an
     // override of the OS size and then ignores SIGWINCH, freezing crawl at its
-    // spawn-time geometry. The `-name` argument keys the per-player save inside
-    // the shared playground; crawl skips its name prompt when one is given.
+    // spawn-time geometry.
     cmd.env_clear()
-        .arg("-name")
-        .arg(&cfg.playname)
-        .arg("-macro")
-        .arg(&macros)
-        // Server-side display defaults, applied after any rc file (players have
-        // no rc of their own here). The viewport maxima let the map grow with
-        // the terminal instead of crawl's cramped 33x21 default (81x71 are the
-        // hard caps); use_terminal_default_colours makes crawl inherit the
-        // terminal's default background (pair 0 via ncurses use_default_colors)
-        // so the late.sh theme shows through instead of every cell being
-        // painted ANSI black.
-        .arg("-extra-opt-last")
-        .arg("view_max_width=81")
-        .arg("-extra-opt-last")
-        .arg("view_max_height=71")
-        .arg("-extra-opt-last")
-        .arg("use_terminal_default_colours=true")
+        .args(crawl_args(&cfg.playname, &macros, rc_path.as_deref()))
         .env("TERM", &cfg.term)
         .env("HOME", &cfg.data_dir)
         .env("LANG", "C.UTF-8")
@@ -205,9 +188,6 @@ async fn run_bridge(
                 .context("clone dcss pty slave for stderr")?,
         ))
         .kill_on_drop(true);
-    if let Some(path) = &rc_path {
-        cmd.arg("-rc").arg(path);
-    }
 
     // Give the child its own session and make the PTY its controlling terminal,
     // so curses sizing and job control behave.
@@ -370,6 +350,47 @@ fn send_sighup(pid: u32, playname: &str) {
             tracing::debug!(pid, playname, error = ?e, "SIGHUP to crawl failed (already exited?)")
         }
     }
+}
+
+/// The crawl argument list. `-name` keys the per-player save inside the shared
+/// playground (crawl skips its name prompt when one is given; the second
+/// command-line pass re-applies it AFTER the rc, so an rc `name =` line cannot
+/// open someone else's save). `-macro` sets the per-player macro dir, and the
+/// `-extra-opt-last` lines are server-side display defaults: the viewport
+/// maxima let the map grow with the terminal instead of crawl's cramped 33x21
+/// default (81x71 are the hard caps), and use_terminal_default_colours makes
+/// crawl inherit the terminal's default background (pair 0 via ncurses
+/// use_default_colors) so the late.sh theme shows through instead of every
+/// cell being painted ANSI black.
+///
+/// The final `macro_dir=` opt-last is a security guard, not a default: our
+/// build is non-DGL, so a player rc CAN set `macro_dir` and crawl's `-macro`
+/// flag does NOT win over it (`-macro` only seeds SysEnv before the rc is
+/// read). Unguarded, a pushed rc could point macro_dir at another player's
+/// macro dir and plant keybind macros there. `-extra-opt-last` lines are
+/// processed after the whole rc (including rc Lua), so this re-force is the
+/// host's last word. Verified against the pinned crawl 0.34.1 source
+/// (initfile.cc: CLO_MACRO vs the macro_dir GameOption).
+fn crawl_args(playname: &str, macro_dir: &str, rc_path: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "-name".to_string(),
+        playname.to_string(),
+        "-macro".to_string(),
+        macro_dir.to_string(),
+        "-extra-opt-last".to_string(),
+        "view_max_width=81".to_string(),
+        "-extra-opt-last".to_string(),
+        "view_max_height=71".to_string(),
+        "-extra-opt-last".to_string(),
+        "use_terminal_default_colours=true".to_string(),
+    ];
+    if let Some(path) = rc_path {
+        args.push("-rc".to_string());
+        args.push(path.to_string());
+    }
+    args.push("-extra-opt-last".to_string());
+    args.push(format!("macro_dir={macro_dir}"));
+    args
 }
 
 /// Where a player's pushed rc lives, passed as crawl's `-rc`. Keyed by the

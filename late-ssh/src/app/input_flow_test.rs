@@ -120,7 +120,10 @@ async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Dashboard);
     tokio::time::sleep(Duration::from_millis(50)).await;
-    app.tick();
+    assert!(
+        app.tick(),
+        "expected the reaping tick to dirty the frame so the hub pip clears"
+    );
     assert!(
         app.nethack_state.is_none(),
         "expected the dead detached game to be dropped"
@@ -203,6 +206,17 @@ async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     assert!(
         !frame.contains("NetHack config (.nethackrc)"),
         "expected the rc modal to close on Esc; frame={frame:?}"
+    );
+
+    // A screen switch that bypasses Esc (e.g. a reserved chord into a lobby
+    // game) must not leave the modal armed to reappear on the next hub visit.
+    app.handle_input(b"c");
+    app.set_screen(Screen::Dashboard);
+    app.set_screen(Screen::Games);
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("NetHack config (.nethackrc)"),
+        "expected the rc modal to be dropped when leaving the hub; frame={frame:?}"
     );
 }
 

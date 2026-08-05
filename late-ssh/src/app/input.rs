@@ -1357,12 +1357,15 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
     if let Some(game) = app.door_rc_modal {
         return match event {
             ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
-                app.door_rcs.remove(&game);
-                app.door_rc_service.clear_task(app.user_id, game);
-                app.banner = Some(crate::app::common::primitives::Banner::success(&format!(
-                    "{} cleared. Defaults are back at your next launch.",
-                    game.file_label()
-                )));
+                // Nothing stored means nothing to clear: skip the DB round
+                // trip and don't claim success for a no-op.
+                if app.door_rcs.remove(&game).is_some() {
+                    app.door_rc_service.clear_task(app.user_id, game);
+                    app.banner = Some(crate::app::common::primitives::Banner::success(&format!(
+                        "{} cleared. Defaults are back at your next launch.",
+                        game.file_label()
+                    )));
+                }
                 true
             }
             ParsedInput::Byte(_) | ParsedInput::Char(_) | ParsedInput::Arrow(_) => true,

@@ -11,6 +11,33 @@ fn macro_dirs_are_distinct_per_playname() {
 }
 
 #[test]
+fn crawl_args_reforce_macro_dir_after_the_player_rc() {
+    // The macro_dir opt-last guard must come AFTER the -rc pair: crawl applies
+    // -extra-opt-last lines after the whole rc, and later lines win, so this
+    // ordering is what stops a pushed rc's `macro_dir =` from redirecting
+    // another player's macro dir. See crawl_args' doc comment.
+    let args = crawl_args(
+        "alice",
+        "/data/.crawl/macros/alice",
+        Some("/data/rc/alice.rc"),
+    );
+    let rc = args.iter().position(|a| a == "-rc").expect("-rc present");
+    assert_eq!(args[rc + 1], "/data/rc/alice.rc");
+    let guard = args
+        .iter()
+        .position(|a| a == "macro_dir=/data/.crawl/macros/alice")
+        .expect("macro_dir guard present");
+    assert!(guard > rc, "guard must follow the rc so it wins");
+    assert_eq!(args[guard - 1], "-extra-opt-last");
+
+    // No rc pushed: the guard still stands (the shared init.txt path), and no
+    // -rc pair sneaks in.
+    let args = crawl_args("bob", "/data/.crawl/macros/bob", None);
+    assert!(!args.contains(&"-rc".to_string()));
+    assert!(args.contains(&"macro_dir=/data/.crawl/macros/bob".to_string()));
+}
+
+#[test]
 fn rc_paths_are_distinct_per_playname() {
     assert_eq!(rc_path("/data", "alice"), "/data/rc/alice.rc");
     assert_eq!(rc_path("/data/", "bob"), "/data/rc/bob.rc");

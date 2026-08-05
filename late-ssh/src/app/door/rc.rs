@@ -9,10 +9,14 @@ use late_core::db::Db;
 use late_core::models::door_rc::{DoorRc, DoorRcGame};
 use uuid::Uuid;
 
-/// SSH env variable carrying the base64-encoded rc to a door host. Always sent
-/// when the account has ever touched its rc; an empty value tells the host to
-/// remove its per-player file. The name is duplicated in `late-nethack` and
-/// `late-dcss` (like the doors' identity derivations); keep the copies in sync.
+/// SSH env variable carrying the base64-encoded rc to a door host. Sent on
+/// EVERY launch, deliberately including the empty value for an account with no
+/// stored rc: the empty push is what deletes the host's per-player file after
+/// a clear, so "optimizing" it away would resurrect stale configs. The host's
+/// no-push branch exists only for version skew (an older client that never
+/// sends the request leaves the host file alone). The name is duplicated in
+/// `late-nethack` and `late-dcss` (like the doors' identity derivations); keep
+/// the copies in sync.
 pub const RC_ENV_VAR: &str = "LATE_DOOR_RC_B64";
 
 /// Normalize pasted rc content for storage: CRLF and bare CR become LF, and

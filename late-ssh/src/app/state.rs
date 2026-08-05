@@ -1956,6 +1956,15 @@ impl App {
             self.force_full_repaint();
         }
 
+        // Leaving the Games hub drops its transient prompts. Esc handles the
+        // ordinary path, but a reserved chord (e.g. Ctrl+G into a lobby game)
+        // can switch screens with the rc config modal or the reset prompt
+        // still up; without this they would silently reappear next visit.
+        if self.screen == Screen::Games {
+            self.door_rc_modal = None;
+            self.door_delete_confirm = false;
+        }
+
         if self.screen == Screen::Rebels {
             self.leave_rebels();
             self.force_full_repaint();
