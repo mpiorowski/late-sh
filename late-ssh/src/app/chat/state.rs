@@ -1864,6 +1864,7 @@ impl ChatState {
             unread_counts: &self.unread_counts,
             room_last_message_at: &self.room_last_message_at,
             feeds_available: self.feeds.has_feeds(),
+            cyberspace_linked: self.cyberspace.is_linked(),
             favorite_room_ids: &self.favorite_room_ids,
             collapsed_sections: &self.collapsed_sections,
             ignored_user_ids: &self.ignored_user_ids,
@@ -2216,6 +2217,16 @@ impl ChatState {
         if let Some(command) = parse_cyberspace_command(&body) {
             self.clear_composer_after_submit();
             match command {
+                // The pane belongs to linked accounts, and so does its rail
+                // entry. An unlinked user gets the link modal over the room
+                // they are already in, so nobody ends up inside a pane the
+                // rail does not list.
+                CyberspaceCommand::Open | CyberspaceCommand::Post
+                    if !self.cyberspace.is_linked() =>
+                {
+                    self.cyberspace.open_link_modal();
+                    return None;
+                }
                 CyberspaceCommand::Open => {
                     self.select_cyberspace();
                     self.pending_chat_screen_switch = true;
@@ -2227,13 +2238,16 @@ impl ChatState {
                     return self.cyberspace.open_compose_modal();
                 }
                 CyberspaceCommand::Link => {
-                    self.select_cyberspace();
-                    self.pending_chat_screen_switch = true;
                     self.cyberspace.open_link_modal();
                     return None;
                 }
                 CyberspaceCommand::Unlink => {
                     self.cyberspace.unlink();
+                    // The rail entry goes with the link, so the pane cannot
+                    // stay selected behind it.
+                    if self.cyberspace_selected {
+                        self.leave_selected_synthetic_entry();
+                    }
                     return None;
                 }
                 CyberspaceCommand::Invalid => {
@@ -5080,6 +5094,7 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub feeds_available: bool,
+    pub cyberspace_linked: bool,
     pub favorite_room_ids: &'a [Uuid],
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
@@ -5096,6 +5111,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         unread_counts,
         room_last_message_at,
         feeds_available,
+        cyberspace_linked,
         favorite_room_ids,
         collapsed_sections,
         ignored_user_ids,
@@ -5141,8 +5157,12 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         if feeds_available {
             order.push(RoomSlot::Feeds);
         }
-        // Always visible: unlinked users get the pitch + login funnel.
-        order.push(RoomSlot::Cyberspace);
+        // Linked accounts only. Everyone else reaches the pitch + login
+        // funnel through `/cs`, so the rail stays about places this user
+        // actually has.
+        if cyberspace_linked {
+            order.push(RoomSlot::Cyberspace);
+        }
     }
 
     // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.

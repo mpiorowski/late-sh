@@ -2633,6 +2633,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
+    /// Gates the rail row: unlinked users reach the pane through `/cs` only.
+    pub cyberspace_linked: bool,
     pub cyberspace_selected: bool,
     pub cyberspace_unread_count: i64,
     pub news_selected: bool,
@@ -2973,6 +2975,9 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
+        cyberspace_linked: view
+            .cyberspace
+            .is_some_and(super::cyberspace::state::State::is_linked),
         cyberspace_selected: view.cyberspace_selected,
         cyberspace_unread_count: view.cyberspace_unread_count,
         news_selected: view.news_selected,
@@ -3201,34 +3206,36 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
 
-    let cyberspace_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
+    if view.cyberspace_linked {
+        let cyberspace_line = {
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                view.cyberspace_selected,
+            );
+            let style = if view.cyberspace_selected {
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let label = if view.cyberspace_unread_count > 0 {
+                format!(
+                    "{prefix}cyberspace ({})",
+                    format_unread_badge(view.cyberspace_unread_count)
+                )
+            } else {
+                format!("{prefix}cyberspace")
+            };
+            Line::from(Span::styled(label, style))
+        };
+        push_row(
+            cyberspace_line,
+            Some(RoomSlot::Cyberspace),
             view.cyberspace_selected,
         );
-        let style = if view.cyberspace_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.cyberspace_unread_count > 0 {
-            format!(
-                "{prefix}cyberspace ({})",
-                format_unread_badge(view.cyberspace_unread_count)
-            )
-        } else {
-            format!("{prefix}cyberspace")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(
-        cyberspace_line,
-        Some(RoomSlot::Cyberspace),
-        view.cyberspace_selected,
-    );
+    }
 
     let mut public_rooms: Vec<_> = chat_rooms
         .iter()
@@ -3596,6 +3603,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
         feeds_available: view.feeds_available,
+        cyberspace_linked: view.cyberspace_linked,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
         ignored_user_ids: view.ignored_user_ids,
@@ -3816,9 +3824,12 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         if view.feeds_available {
             push_slot(RoomSlot::Feeds, &mut push_row);
         }
-        // Always visible, mirroring `visual_order_for_rooms`: unlinked users
-        // get the pitch + login funnel.
-        push_slot(RoomSlot::Cyberspace, &mut push_row);
+        // Linked accounts only, mirroring `visual_order_for_rooms`. A row
+        // here that the navigation order does not have (or the reverse) is a
+        // slot the user can land on but never see.
+        if view.cyberspace_linked {
+            push_slot(RoomSlot::Cyberspace, &mut push_row);
+        }
         // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
         if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
             is_chat_list_room(r)

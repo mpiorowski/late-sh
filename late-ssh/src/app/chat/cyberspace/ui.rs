@@ -381,13 +381,17 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, modal: &Modal) {
     }
 }
 
+/// The link funnel. Unlinked users never reach the pane, so this modal is
+/// where they meet cyberspace.online: it carries the pitch that used to live
+/// on the pane's empty state.
 fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
-    let popup = centered_rect(area, 60, 13);
+    let popup = centered_rect(area, 62, 16);
     frame.render_widget(Clear, popup);
     let block = modal_block(" Link cyberspace account ");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let areas = Layout::vertical([
+        Constraint::Length(3),
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -395,17 +399,38 @@ fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
         Constraint::Length(1),
     ])
     .split(inner);
-    frame.render_widget(hint_line(link.busy, "link"), areas[0]);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                " A small, human social network for computer people, a lot",
+                Style::default().fg(theme::TEXT()),
+            )),
+            Line::from(Span::styled(
+                " like this one. Link yours and late.sh becomes its client.",
+                Style::default().fg(theme::TEXT()),
+            )),
+            Line::from(vec![
+                Span::styled(" No account yet? ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    "https://cyberspace.online",
+                    Style::default().fg(theme::AMBER()),
+                ),
+            ]),
+        ])
+        .style(Style::default().bg(theme::BG_CANVAS())),
+        areas[0],
+    );
+    frame.render_widget(hint_line(link.busy, "link"), areas[1]);
     draw_input_field(
         frame,
-        areas[1],
+        areas[2],
         "Email",
         &link.email,
         link.focus == LinkField::Email,
     );
     draw_input_field(
         frame,
-        areas[2],
+        areas[3],
         "Password",
         &link.password,
         link.focus == LinkField::Password,
@@ -416,9 +441,9 @@ fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
             Style::default().fg(theme::TEXT_FAINT()),
         )))
         .style(Style::default().bg(theme::BG_CANVAS())),
-        areas[3],
+        areas[4],
     );
-    draw_modal_status(frame, areas[4], link.busy, &link.error, "Linking...");
+    draw_modal_status(frame, areas[5], link.busy, &link.error, "Linking...");
 }
 
 fn draw_compose_modal(frame: &mut Frame, area: Rect, compose: &ComposeModal) {

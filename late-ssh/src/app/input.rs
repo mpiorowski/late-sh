@@ -3006,6 +3006,7 @@ fn chat_room_list_view<'a>(
         feeds_available: app.chat.feeds.has_feeds(),
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
+        cyberspace_linked: app.chat.cyberspace.is_linked(),
         cyberspace_selected: app.chat.cyberspace_selected,
         cyberspace_unread_count: app.chat.cyberspace.unread_count(),
         news_selected: app.chat.news_selected,

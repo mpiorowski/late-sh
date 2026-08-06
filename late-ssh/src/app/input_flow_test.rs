@@ -6,6 +6,7 @@ use crate::test_helpers::{
     make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
     with_session_key,
 };
+use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use late_core::models::{
@@ -861,9 +862,9 @@ async fn chat_room_list_is_mouse_clickable() {
     wait_for_render_contains(&mut app, "rust").await;
 
     // Click the #rust row in the sidebar. It sits below the Core section
-    // (lounge, mentions, news, cyberspace, "+ browse rooms") and the Channels
-    // header, at rail row 11 (SGR mouse rows are 1-based).
-    app.handle_input(b"\x1b[<0;5;11M");
+    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
+    // rail row 10 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;10M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }
@@ -971,9 +972,9 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
 }
 
 #[tokio::test]
-async fn cyberspace_rail_entry_is_listed_under_core() {
+async fn unlinked_cs_command_offers_the_link_modal_without_leaving_the_room() {
     let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "cs-rail-viewer").await;
+    let viewer = create_test_user(&test_db.db, "cs-unlinked-viewer").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -982,18 +983,31 @@ async fn cyberspace_rail_entry_is_listed_under_core() {
         .await
         .expect("join viewer to lounge");
 
-    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-rail-flow-it");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-unlinked-flow-it");
     wait_for_render_contains(&mut app, "lounge").await;
 
-    // The rail lists cyberspace in Core, next to news, so it is reachable by
-    // eye and by click, not only by arrowing onto an invisible row.
-    wait_for_render_contains(&mut app, "cyberspace").await;
+    // No link, no rail entry: the rail stays about places this user has.
+    assert_render_not_contains_for(&mut app, "cyberspace", Duration::from_millis(300)).await;
+
+    // /cs is still the way in. It opens the link funnel over the room the
+    // user is already in, rather than a pane with no rail entry behind it.
+    app.handle_input(b"i/cs\r");
+    wait_for_render_contains(&mut app, " Link cyberspace account ").await;
+    wait_for_render_contains(&mut app, "https://cyberspace.online").await;
+    assert!(
+        app.chat.cyberspace.modal_active(),
+        "the link modal should own the input"
+    );
+    assert!(
+        !app.chat.cyberspace_selected,
+        "an unlinked user should never land in the pane"
+    );
 }
 
 #[tokio::test]
-async fn cs_command_opens_the_cyberspace_pane() {
+async fn linked_account_gets_the_rail_entry_and_the_pane() {
     let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "cs-command-viewer").await;
+    let viewer = create_test_user(&test_db.db, "cs-linked-viewer").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -1001,13 +1015,24 @@ async fn cs_command_opens_the_cyberspace_pane() {
     ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
 
-    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-command-flow-it");
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-linked-flow-it");
     wait_for_render_contains(&mut app, "lounge").await;
 
+    // Linking earns the Core rail entry, so the pane is reachable by eye and
+    // by click, not only through the command.
+    wait_for_render_contains(&mut app, "cyberspace").await;
+
     app.handle_input(b"i/cs\r");
-    // A fresh account is unlinked, so the pane shows the link pitch.
-    wait_for_render_contains(&mut app, "cyberspace.online").await;
+    wait_for_render_contains(&mut app, "Home · cyberspace").await;
+    assert!(app.chat.cyberspace_selected, "/cs should open the pane");
+    assert!(
+        !app.chat.cyberspace.modal_active(),
+        "a linked user gets the pane, not the link modal"
+    );
 }
 
 #[tokio::test]
@@ -1053,8 +1078,7 @@ async fn client_side_chat_commands_render_without_persisting_messages() {
     app.handle_input(b"?");
     assert!(!app.show_help, "? should close the guide");
 
-    // lounge → mentions → news → cyberspace → browse rooms → #side
-    app.handle_input(b"lllll");
+    app.handle_input(b"llll");
     app.handle_input(b"i/members\r");
     wait_for_render_contains(&mut app, "#side Members").await;
     wait_for_render_contains(&mut app, "@command-flow-viewer").await;
@@ -1212,9 +1236,9 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     wait_for_render_contains(&mut app, "dnd").await;
 
     // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
-    // cyberspace, "+ browse rooms" (Discover, last in Core), then dnd
-    // (channels section). Press l five times to reach dnd from lounge.
-    app.handle_input(b"lllll");
+    // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
+    // Press l four times to reach dnd from lounge.
+    app.handle_input(b"llll");
     wait_for_render_contains(&mut app, "Home · dnd").await;
 
     app.handle_input(b"i");
