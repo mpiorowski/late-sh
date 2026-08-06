@@ -264,7 +264,7 @@ pub(crate) fn person_entries<'a>(
                 && (query.is_empty() || person_matches(entry, &query))
         })
         .collect();
-    entries.sort_by(|a, b| b.latest_activity().cmp(&a.latest_activity()));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.latest_activity()));
     entries
 }
 
