@@ -65,6 +65,40 @@ fn parse_envelope_maps_garbage_to_transport() {
 }
 
 #[test]
+fn notifications_name_the_post_they_are_about() {
+    // Shapes taken from a live payload. A reply notification carries the
+    // *post* id in targetId (the reply's own id lives in metadata), which is
+    // what makes one jump work for both kinds.
+    let body = r#"{
+        "data": [
+            {
+                "id": "n1",
+                "type": "reply",
+                "actorUsername": "genghis_khan",
+                "targetId": "3fpV5ovHddHqXS2BAhfj",
+                "targetType": "reply",
+                "metadata": { "replyId": "G3Om85TkG4YHWEpfKLmf" },
+                "read": true
+            },
+            {
+                "id": "n2",
+                "type": "bookmark",
+                "targetId": "3fpV5ovHddHqXS2BAhfj",
+                "targetType": "post"
+            },
+            { "id": "n3", "type": "new_follower", "targetId": "some-user", "targetType": "user" },
+            { "id": "n4", "type": "poke" }
+        ]
+    }"#;
+    let notifications: Vec<CsNotification> = parse_envelope(200, body).expect("notifications");
+    assert_eq!(notifications[0].post_id(), Some("3fpV5ovHddHqXS2BAhfj"));
+    assert_eq!(notifications[1].post_id(), Some("3fpV5ovHddHqXS2BAhfj"));
+    // A follow targets a person, and a poke targets nothing at all.
+    assert_eq!(notifications[2].post_id(), None);
+    assert_eq!(notifications[3].post_id(), None);
+}
+
+#[test]
 fn void_endpoints_accept_a_body_with_nothing_in_it() {
     // Reply and mark-all-read ignore their payload. A 2xx that carries no
     // `data` is a success, not a transport failure: treating it as one makes

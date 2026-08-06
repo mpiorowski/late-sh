@@ -6,7 +6,7 @@ use crate::app::chat::cyberspace::api::CsPost;
 use crate::app::chat::cyberspace::state::{
     Modal, State, View, feed_reload_due, parse_topics, unread_poll_due,
 };
-use crate::app::chat::cyberspace::svc::{CsThread, CyberspaceService};
+use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
 async fn test_state() -> State {
     let test_db = test_db().await;
@@ -78,6 +78,60 @@ async fn scrolling_past_the_end_of_a_thread_stops_instead_of_running_away() {
         state.thread_scroll < parked,
         "one k after holding j should move the view, not unwind 500 phantom steps"
     );
+}
+
+#[tokio::test]
+async fn enter_on_a_notification_opens_the_entry_it_is_about() {
+    let mut state = test_state().await;
+    state.notifications = vec![
+        serde_json::from_str(
+            r#"{"id":"n1","type":"reply","targetId":"post-1","targetType":"reply"}"#,
+        )
+        .expect("reply notification"),
+        serde_json::from_str(
+            r#"{"id":"n2","type":"new_follower","targetId":"user-1","targetType":"user"}"#,
+        )
+        .expect("follow notification"),
+    ];
+    state.view = View::Notifications;
+
+    assert!(state.open_selected_notification().is_none());
+    assert_eq!(state.view, View::Thread);
+    assert_eq!(state.thread_target.as_deref(), Some("post-1"));
+
+    // A follow has no entry behind it, so it says so and stays put.
+    state.back_to_feed();
+    state.view = View::Notifications;
+    state.notif_selected = 1;
+    assert!(state.open_selected_notification().is_some(), "banner");
+    assert_eq!(state.view, View::Notifications, "view must not move");
+}
+
+#[tokio::test]
+async fn a_thread_that_finished_loading_after_the_user_left_is_dropped() {
+    let mut state = test_state().await;
+    state.notifications = vec![
+        serde_json::from_str(
+            r#"{"id":"n1","type":"reply","targetId":"post-1","targetType":"reply"}"#,
+        )
+        .expect("notification"),
+    ];
+    state.view = View::Notifications;
+    state.open_selected_notification();
+
+    // The user moves on before the fetch lands, then a slow load arrives for
+    // the entry they were looking at a moment ago.
+    state.back_to_feed();
+    let user_id = state.user_id;
+    let _ = state.apply_event(CsEvent::ThreadLoaded {
+        user_id,
+        thread: CsThread {
+            post: serde_json::from_str(r#"{"postId":"post-1"}"#).expect("post"),
+            replies: Vec::new(),
+        },
+    });
+    assert_eq!(state.view, View::Feed, "a stale load must not yank the view");
+    assert!(state.thread.is_none());
 }
 
 #[tokio::test]

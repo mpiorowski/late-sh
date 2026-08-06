@@ -691,6 +691,7 @@ fn social_help_lines() -> Vec<String> {
         "  j / k or ↑ / ↓   navigate the feed",
         "  Enter             open the selected entry with its replies",
         "  r                 refresh (feed) / reply (open entry)",
+        "  n then Enter      open the entry a notification is about",
         "  p                 new entry, n notifications, b back",
         "",
         "Mentions",

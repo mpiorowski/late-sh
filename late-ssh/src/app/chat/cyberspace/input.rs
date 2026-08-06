@@ -47,8 +47,14 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'\r' | b'\n' => {
-            if state.view == View::Feed {
-                state.open_selected_thread();
+            match state.view {
+                View::Feed => state.open_selected_thread(),
+                View::Notifications => {
+                    if let Some(banner) = state.open_selected_notification() {
+                        app.banner = Some(banner);
+                    }
+                }
+                View::Thread => {}
             }
             true
         }
