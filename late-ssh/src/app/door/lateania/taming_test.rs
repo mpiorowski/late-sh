@@ -36,32 +36,36 @@ fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
 }
 
 #[test]
-fn every_taming_tier_offers_a_better_companion_than_the_one_below() {
-    // Grinding Animal Taming must always earn a better companion. Each tame
-    // level's best beast has to beat everything already reachable below it, or
-    // the levels in between are dead grind. The ten Wildbound mounts used to
-    // undercut the best tame-50 wyrm (attack 38, hp 700), so taming 51..=79
-    // handed you a *worse* pet than the one you already had.
-    let mut tiers: Vec<i32> = TAMEABLE.iter().map(|b| b.tame_level).collect();
-    tiers.sort_unstable();
-    tiers.dedup();
-
-    let (mut best_atk, mut best_hp) = (0, 0);
-    for tier in tiers {
-        let (atk, hp) = TAMEABLE
-            .iter()
-            .filter(|b| b.tame_level == tier)
-            .fold((0, 0), |(a, h), b| (a.max(b.base_attack), h.max(b.base_hp)));
-        assert!(
-            atk >= best_atk,
-            "taming {tier} tops out at attack {atk}, below the {best_atk} already reachable under it"
-        );
-        assert!(
-            hp >= best_hp,
-            "taming {tier} tops out at hp {hp}, below the {best_hp} already reachable under it"
-        );
-        best_atk = atk;
-        best_hp = hp;
+fn no_beast_is_out_classed_by_an_easier_one() {
+    // Grinding Animal Taming must never hand you a worse companion than the one
+    // you can already tame. Beasts at the same tier are free to trade attack for
+    // bulk (a hitter vs. a wall is a real choice), so the invariant is Pareto,
+    // not monotonic: no beast may be beaten on *both* axes by something at a
+    // strictly lower tame level.
+    //
+    // The ten Wildbound mounts used to open at attack 22 / hp 420 against the
+    // tame-50 Green Wyrm's 38 / 560, leaving taming 51..=79 as pure dead grind -
+    // twenty-five levels that downgraded your pet.
+    for b in TAMEABLE {
+        if let Some(better) = TAMEABLE.iter().find(|c| {
+            c.tame_level < b.tame_level
+                && c.base_attack >= b.base_attack
+                && c.base_hp >= b.base_hp
+                && (c.base_attack > b.base_attack || c.base_hp > b.base_hp)
+        }) {
+            panic!(
+                "{} (taming {}, attack {}, hp {}) is out-classed by {} at taming {} \
+                 (attack {}, hp {}) - the levels between are dead grind",
+                b.name,
+                b.tame_level,
+                b.base_attack,
+                b.base_hp,
+                better.name,
+                better.tame_level,
+                better.base_attack,
+                better.base_hp,
+            );
+        }
     }
 }
 

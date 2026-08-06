@@ -43,7 +43,8 @@ bitflags! {
         const RENAME_USER = 1 << 17;
         const BAN_FROM_AUDIO = 1 << 18;
         const UNBAN_FROM_AUDIO = 1 << 19;
-        const DELETE_PINSTAR_GRAPH = 1 << 20;
+        // Bit 20 belonged to DELETE_PINSTAR_GRAPH (feature removed); caps are
+        // derived fresh from Tier each session, so the gap is inert.
         const DELETE_AUDIO_TRACK = 1 << 21;
         const KICK_FROM_VOICE = 1 << 22;
         const UNBLOCK_VOICE = 1 << 23;
@@ -74,7 +75,6 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::RENAME_USER)
     .union(Caps::BAN_FROM_AUDIO)
     .union(Caps::UNBAN_FROM_AUDIO)
-    .union(Caps::DELETE_PINSTAR_GRAPH)
     .union(Caps::DELETE_AUDIO_TRACK)
     .union(Caps::KICK_FROM_VOICE)
     .union(Caps::UNBLOCK_VOICE)
@@ -151,10 +151,6 @@ impl Permissions {
 
     pub const fn can_delete_article(self, is_owner: bool) -> bool {
         is_owner || self.has(Caps::DELETE_OTHER_MESSAGE)
-    }
-
-    pub fn can_delete_pinstar_graph(self, is_owner: bool, target: Tier) -> bool {
-        is_owner || self.can(Caps::DELETE_PINSTAR_GRAPH, target)
     }
 
     pub const fn can_delete_audio_track(self, is_owner: bool) -> bool {

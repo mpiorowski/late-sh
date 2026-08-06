@@ -191,9 +191,6 @@ struct DrawContext<'a> {
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
-    directory_tab: crate::app::directory::state::DirectoryTab,
-    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
-    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
@@ -938,9 +935,8 @@ impl App {
         }
 
         let terminal = &mut self.terminal;
-        let mut pinstar_state_taken = self.pinstar_state.take();
-        // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
-        // call set_viewport with the exact content_area before blitting.
+        // Taken out so the draw dispatch can hold &mut and call set_viewport
+        // with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
@@ -949,11 +945,6 @@ impl App {
         let mut dopewars_state_taken = self.dopewars_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
 
-        let pinstar_browser = if screen == Screen::Profiles {
-            Some(&self.pinstar_browser)
-        } else {
-            None
-        };
         let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
@@ -1006,9 +997,6 @@ impl App {
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
-                        directory_tab: self.directory_state.tab,
-                        pinstar_state: pinstar_state_taken.as_mut(),
-                        pinstar_browser,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
@@ -1109,7 +1097,6 @@ impl App {
             })
             .context("failed to draw frame");
 
-        self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
