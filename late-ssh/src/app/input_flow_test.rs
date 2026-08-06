@@ -861,9 +861,9 @@ async fn chat_room_list_is_mouse_clickable() {
     wait_for_render_contains(&mut app, "rust").await;
 
     // Click the #rust row in the sidebar. It sits below the Core section
-    // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
-    // rail row 10 (SGR mouse rows are 1-based).
-    app.handle_input(b"\x1b[<0;5;10M");
+    // (lounge, mentions, news, cyberspace, "+ browse rooms") and the Channels
+    // header, at rail row 11 (SGR mouse rows are 1-based).
+    app.handle_input(b"\x1b[<0;5;11M");
 
     wait_for_render_contains(&mut app, "rust room backlog").await;
 }

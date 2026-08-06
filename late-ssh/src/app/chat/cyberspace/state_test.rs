@@ -1,6 +1,8 @@
+use std::time::Duration;
+
 use late_core::test_utils::{create_test_user, test_db};
 
-use crate::app::chat::cyberspace::state::{Modal, State, parse_topics};
+use crate::app::chat::cyberspace::state::{Modal, State, parse_topics, unread_poll_due};
 use crate::app::chat::cyberspace::svc::CyberspaceService;
 
 async fn test_state() -> State {
@@ -22,6 +24,18 @@ fn topics_parse_lowercase_deduped_and_capped() {
         parse_topics("one two three four"),
         Err("up to 3 topics".to_string())
     );
+}
+
+#[test]
+fn unread_badge_polls_only_when_linked_and_never_faster_than_the_interval() {
+    // Fresh session, or one that just polled: the count is already current.
+    assert!(!unread_poll_due(true, Duration::ZERO));
+    assert!(!unread_poll_due(true, Duration::from_secs(9 * 60)));
+    // Ten minutes on, a linked session re-fetches the badge.
+    assert!(unread_poll_due(true, Duration::from_secs(10 * 60)));
+    // An unlinked session has no token, so it never polls, however long it
+    // sits there.
+    assert!(!unread_poll_due(false, Duration::from_secs(60 * 60)));
 }
 
 #[tokio::test]

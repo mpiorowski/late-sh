@@ -4,6 +4,8 @@
 //! lives only in this session's memory: cyberspace content is never cached
 //! server-side or shown to anyone but the user who fetched it.
 
+use std::time::{Duration, Instant};
+
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -18,6 +20,12 @@ pub(crate) const TITLE_MAX_CHARS: usize = 100;
 pub(crate) const TOPICS_MAX_CHARS: usize = 80;
 pub(crate) const BODY_MAX_CHARS: usize = 32_768;
 const MAX_TOPICS: usize = 3;
+/// How often a linked session re-fetches the unread badge. Everything else in
+/// the pane is user-driven, but the rail badge has to notice a reply that
+/// landed while the user was reading something else. RSS polls every 30
+/// minutes from one global task; this one rides the session tick instead,
+/// because the count is per user and needs that user's own token.
+const UNREAD_POLL_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// Outcome of one pane tick, mirroring `FeedsTick`.
 pub struct CsTick {
@@ -95,6 +103,7 @@ pub struct State {
     pub(crate) notifications: Vec<CsNotification>,
     pub(crate) notif_selected: usize,
     unread_count: i64,
+    last_unread_poll: Instant,
     pub(crate) loading: bool,
     pub(crate) modal: Option<Modal>,
 }
@@ -116,6 +125,9 @@ impl State {
             notifications: Vec::new(),
             notif_selected: 0,
             unread_count: 0,
+            // `session_init_task` above fetches the count for a linked user,
+            // so the interval starts running from session start.
+            last_unread_poll: Instant::now(),
             loading: false,
             modal: None,
         }
@@ -313,7 +325,19 @@ impl State {
     pub fn tick(&mut self) -> CsTick {
         let changed = !self.event_rx.is_empty();
         let banner = self.drain_events();
+        self.poll_unread_if_due();
         CsTick { banner, changed }
+    }
+
+    /// Slow badge refresh. The clock is stamped when the request goes out,
+    /// not when the count lands, so a hung or failing fetch cannot queue a
+    /// fresh request on every tick.
+    fn poll_unread_if_due(&mut self) {
+        if !unread_poll_due(self.is_linked(), self.last_unread_poll.elapsed()) {
+            return;
+        }
+        self.last_unread_poll = Instant::now();
+        self.service.refresh_unread_task(self.user_id);
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -468,6 +492,12 @@ pub(crate) fn parse_topics(raw: &str) -> Result<Vec<String>, String> {
         return Err(format!("up to {MAX_TOPICS} topics"));
     }
     Ok(topics)
+}
+
+/// An unlinked session has no token to poll with, and a linked one polls no
+/// faster than [`UNREAD_POLL_INTERVAL`].
+pub(crate) fn unread_poll_due(linked: bool, since_last_poll: Duration) -> bool {
+    linked && since_last_poll >= UNREAD_POLL_INTERVAL
 }
 
 fn clamp_index(index: usize, len: usize) -> usize {

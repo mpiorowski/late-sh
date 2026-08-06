@@ -146,8 +146,8 @@ impl CyberspaceService {
     }
 
     /// Session init: answer whether the user is linked, and if so fetch the
-    /// unread notification badge once. No background polling; every later
-    /// call is driven by a user action in the pane.
+    /// unread notification badge. Later refreshes come from the session tick
+    /// (`State::poll_unread_if_due`) or a user action in the pane.
     pub fn session_init_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
@@ -395,6 +395,17 @@ impl CyberspaceService {
             Ok(posts) => self.publish(CsEvent::FeedLoaded { user_id, posts }),
             Err(e) => self.fail(user_id, format!("loading the feed failed: {e}")),
         }
+    }
+
+    /// Fire-and-forget badge refresh, driven by the session tick. Failures
+    /// are logged inside `refresh_unread`: nobody upstream is waiting on it,
+    /// and a stale badge is not worth a banner.
+    pub fn refresh_unread_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move { service.refresh_unread(user_id).await }
+                .instrument(info_span!("cyberspace.unread", user_id = %user_id)),
+        );
     }
 
     async fn refresh_unread(&self, user_id: Uuid) {
