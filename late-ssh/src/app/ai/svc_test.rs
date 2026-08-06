@@ -43,7 +43,10 @@ fn first_text_errors_on_a_body_that_is_not_gemini_json() {
 fn extract_json_object_unwraps_a_fenced_reply() {
     let fenced = "```json\n{\n  \"summary\": \"a video\"\n}\n```";
 
-    assert_eq!(extract_json_object(fenced), "{\n  \"summary\": \"a video\"\n}");
+    assert_eq!(
+        extract_json_object(fenced),
+        "{\n  \"summary\": \"a video\"\n}"
+    );
 }
 
 #[test]
@@ -53,7 +56,10 @@ fn extract_json_object_unwraps_a_fence_with_no_language_tag() {
 
 #[test]
 fn extract_json_object_leaves_bare_json_untouched() {
-    assert_eq!(extract_json_object("{\"summary\": \"x\"}"), "{\"summary\": \"x\"}");
+    assert_eq!(
+        extract_json_object("{\"summary\": \"x\"}"),
+        "{\"summary\": \"x\"}"
+    );
 }
 
 /// Grounded replies also arrive with prose around the fence: a preamble,

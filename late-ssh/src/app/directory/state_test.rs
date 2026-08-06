@@ -1,9 +1,7 @@
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use super::state::{
-    DirectoryEntry, DirectoryEntryId, DirectoryFilter, DirectoryState, merged_entries,
-};
+use super::state::{DirectoryState, PersonFocus, person_entries};
 use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
 use late_core::models::{showcase::Showcase, work_profile::WorkProfile};
 
@@ -48,106 +46,154 @@ fn person(user_id: Uuid, headline: &str, age_minutes: i64) -> WorkFeedItem {
     }
 }
 
-fn titles(entries: &[DirectoryEntry<'_>]) -> Vec<String> {
-    entries
+#[test]
+fn one_row_per_person_regardless_of_what_they_brought() {
+    let both = Uuid::now_v7();
+    let card_only = Uuid::now_v7();
+    let projects_only = Uuid::now_v7();
+    let projects = vec![
+        project(both, "proj-a", 30),
+        project(projects_only, "proj-b", 20),
+        project(projects_only, "proj-c", 40),
+    ];
+    let people = vec![person(both, "both card", 10), person(card_only, "card", 5)];
+
+    let entries = person_entries(&projects, &people, false, both, "");
+    assert_eq!(entries.len(), 3);
+
+    let both_entry = entries
         .iter()
-        .map(|entry| match entry {
-            DirectoryEntry::Project(item) => item.showcase.title.clone(),
-            DirectoryEntry::Person(item) => item.profile.headline.clone(),
-        })
-        .collect()
+        .find(|entry| entry.user_id == both)
+        .expect("person with card and project");
+    assert!(both_entry.work.is_some());
+    assert_eq!(both_entry.projects.len(), 1);
+    assert_eq!(both_entry.focus_len(), 2);
+
+    let projects_entry = entries
+        .iter()
+        .find(|entry| entry.user_id == projects_only)
+        .expect("person with projects only");
+    assert!(projects_entry.work.is_none());
+    assert_eq!(projects_entry.projects.len(), 2);
+    assert_eq!(projects_entry.focus_len(), 2);
 }
 
 #[test]
-fn merged_entries_interleave_newest_first() {
-    let viewer = Uuid::now_v7();
-    let projects = vec![project(viewer, "old-project", 30)];
-    let people = vec![person(viewer, "fresh-person", 5)];
-    let entries = merged_entries(
-        &projects,
-        &people,
-        DirectoryFilter::All,
-        false,
-        viewer,
-        "",
-    );
-    assert_eq!(titles(&entries), vec!["fresh-person", "old-project"]);
+fn people_sort_by_latest_activity() {
+    let stale_card = Uuid::now_v7();
+    let fresh_project = Uuid::now_v7();
+    let projects = vec![project(fresh_project, "fresh", 5)];
+    let people = vec![person(stale_card, "stale", 60)];
+
+    let entries = person_entries(&projects, &people, false, stale_card, "");
+    assert_eq!(entries[0].user_id, fresh_project);
+    assert_eq!(entries[1].user_id, stale_card);
 }
 
 #[test]
-fn filter_narrows_to_one_kind() {
-    let viewer = Uuid::now_v7();
-    let projects = vec![project(viewer, "proj", 10)];
-    let people = vec![person(viewer, "card", 5)];
+fn a_fresh_project_bumps_a_person_with_an_old_card() {
+    let user = Uuid::now_v7();
+    let other = Uuid::now_v7();
+    let projects = vec![project(user, "brand-new", 1)];
+    let people = vec![
+        person(user, "old card", 600),
+        person(other, "newer card", 30),
+    ];
 
-    let only_projects = merged_entries(
-        &projects,
-        &people,
-        DirectoryFilter::Projects,
-        false,
-        viewer,
-        "",
+    let entries = person_entries(&projects, &people, false, user, "");
+    assert_eq!(
+        entries[0].user_id, user,
+        "latest project counts as activity"
     );
-    assert_eq!(titles(&only_projects), vec!["proj"]);
-
-    let only_people = merged_entries(
-        &projects,
-        &people,
-        DirectoryFilter::People,
-        false,
-        viewer,
-        "",
-    );
-    assert_eq!(titles(&only_people), vec!["card"]);
 }
 
 #[test]
-fn mine_only_keeps_viewer_entries() {
+fn mine_only_keeps_the_viewer_row() {
     let viewer = Uuid::now_v7();
     let other = Uuid::now_v7();
     let projects = vec![project(viewer, "mine", 10), project(other, "theirs", 5)];
     let people = vec![person(other, "their card", 1)];
-    let entries = merged_entries(&projects, &people, DirectoryFilter::All, true, viewer, "");
-    assert_eq!(titles(&entries), vec!["mine"]);
+
+    let entries = person_entries(&projects, &people, true, viewer, "");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].user_id, viewer);
 }
 
 #[test]
-fn query_matches_across_both_kinds() {
-    let viewer = Uuid::now_v7();
-    let projects = vec![project(viewer, "late-tui", 10), project(viewer, "blog", 5)];
-    let people = vec![person(viewer, "late nights welcome", 1)];
-    let entries = merged_entries(
-        &projects,
-        &people,
-        DirectoryFilter::All,
-        false,
-        viewer,
-        "late",
-    );
-    assert_eq!(titles(&entries), vec!["late nights welcome", "late-tui"]);
+fn query_matches_username_card_and_projects() {
+    let by_project = Uuid::now_v7();
+    let by_card = Uuid::now_v7();
+    let by_nothing = Uuid::now_v7();
+    let projects = vec![
+        project(by_project, "late-tui", 10),
+        project(by_nothing, "blog", 5),
+    ];
+    let people = vec![person(by_card, "late nights welcome", 1)];
+
+    let entries = person_entries(&projects, &people, false, by_project, "late");
+    let ids: Vec<Uuid> = entries.iter().map(|entry| entry.user_id).collect();
+    assert!(ids.contains(&by_project));
+    assert!(ids.contains(&by_card));
+    assert!(!ids.contains(&by_nothing));
 }
 
 #[test]
-fn entry_ids_are_stable_identities() {
-    let viewer = Uuid::now_v7();
-    let projects = vec![project(viewer, "proj", 10)];
-    let people = vec![person(viewer, "card", 5)];
-    let entries = merged_entries(&projects, &people, DirectoryFilter::All, false, viewer, "");
-    assert_eq!(
-        entries[0].id(),
-        DirectoryEntryId::Person(people[0].profile.id)
+fn focus_targets_card_first_then_projects() {
+    let user = Uuid::now_v7();
+    let projects = vec![project(user, "proj", 10)];
+    let people = vec![person(user, "card", 5)];
+    let entries = person_entries(&projects, &people, false, user, "");
+    let entry = &entries[0];
+
+    assert!(matches!(entry.focus_target(0), Some(PersonFocus::Card(_))));
+    let Some(PersonFocus::Project(item)) = entry.focus_target(1) else {
+        panic!("focus 1 should be the project");
+    };
+    assert_eq!(item.showcase.title, "proj");
+    assert!(entry.focus_target(2).is_none());
+}
+
+#[test]
+fn focus_targets_projects_directly_without_a_card() {
+    let user = Uuid::now_v7();
+    let projects = vec![project(user, "only-proj", 10)];
+    let entries = person_entries(&projects, &[], false, user, "");
+    let Some(PersonFocus::Project(item)) = entries[0].focus_target(0) else {
+        panic!("focus 0 should be the project when there is no card");
+    };
+    assert_eq!(item.showcase.title, "only-proj");
+}
+
+#[test]
+fn unread_when_any_row_moved_past_its_marker() {
+    let user = Uuid::now_v7();
+    let projects = vec![project(user, "proj", 10)];
+    let people = vec![person(user, "card", 60)];
+    let entries = person_entries(&projects, &people, false, user, "");
+    let entry = &entries[0];
+
+    let before_everything = Some(Utc::now() - Duration::minutes(120));
+    let after_everything = Some(Utc::now());
+    assert!(entry.is_unread(before_everything, before_everything));
+    assert!(
+        entry.is_unread(after_everything, before_everything),
+        "a fresh project alone keeps the person unread"
     );
-    assert_eq!(
-        entries[1].id(),
-        DirectoryEntryId::Project(projects[0].showcase.id)
+    assert!(!entry.is_unread(after_everything, after_everything));
+    assert!(
+        entry.is_unread(None, None),
+        "no marker means everything is new"
     );
 }
 
 #[test]
-fn selection_moves_clamp_to_list() {
+fn selection_moves_clamp_and_reset_focus() {
     let mut state = DirectoryState::new();
+    state.move_focus(1, 3);
+    assert_eq!(state.focus(), 1);
     state.move_selection(1, 3);
     assert_eq!(state.selected(), 1);
+    assert_eq!(state.focus(), 0, "moving selection resets focus");
     state.move_selection(10, 3);
     assert_eq!(state.selected(), 2);
     state.move_selection(-10, 3);
@@ -157,14 +203,16 @@ fn selection_moves_clamp_to_list() {
 }
 
 #[test]
-fn filter_cycle_resets_selection() {
+fn focus_wraps_across_the_person_items() {
     let mut state = DirectoryState::new();
-    state.move_selection(2, 5);
-    state.cycle_filter_next();
-    assert_eq!(state.filter, DirectoryFilter::Projects);
-    assert_eq!(state.selected(), 0);
-    state.cycle_filter_prev();
-    assert_eq!(state.filter, DirectoryFilter::All);
+    state.move_focus(1, 2);
+    assert_eq!(state.focus(), 1);
+    state.move_focus(1, 2);
+    assert_eq!(state.focus(), 0, "focus wraps forward");
+    state.move_focus(-1, 2);
+    assert_eq!(state.focus(), 1, "focus wraps backward");
+    state.move_focus(1, 0);
+    assert_eq!(state.focus(), 0);
 }
 
 #[test]

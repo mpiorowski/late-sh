@@ -77,7 +77,14 @@ pub fn draw_pet_strip(frame: &mut Frame, area: Rect, view: &PetStripView<'_>) {
     // alarm. Feeding also forces the bowl to `Done`, so a `?` never coexists
     // with a full dish.
     let needs_restock = view.pet_food_quantity <= 0 && !state.fed_today();
-    draw_bowl(frame, food_area, '*', "/pet feed", needs.food, needs_restock);
+    draw_bowl(
+        frame,
+        food_area,
+        '*',
+        "/pet feed",
+        needs.food,
+        needs_restock,
+    );
     draw_bowl(frame, water_area, '~', "/pet water", needs.water, false);
     if let Some(slot) = view.food_bowl_rect_slot {
         slot.set(Some(food_area));

@@ -341,12 +341,7 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     app.handle_input(b"s");
     wait_for_render_contains(&mut app, " Search ").await;
     app.handle_input(b"\x1b");
-    wait_for_esc_effect(
-        &mut app,
-        |app| !app.directory_state.search_mode(),
-        "search",
-    )
-    .await;
+    wait_for_esc_effect(&mut app, |app| !app.directory_state.search_mode(), "search").await;
     assert_render_not_contains_for(&mut app, " Search ", Duration::from_millis(200)).await;
 }
 

@@ -1528,7 +1528,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 " ✦ the tour · the profiles ",
                 vec![
                     Line::from(Span::styled(
-                        "the people: one feed of profiles and the projects they ship.",
+                        "the people: everyone who ships a project or posts a work card.",
                         text,
                     )),
                     Line::from(vec![

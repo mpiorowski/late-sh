@@ -66,8 +66,7 @@ impl InputContext {
                     || self.news_composing
                     || self.showcase_composing
                     || self.work_composing))
-            || (self.screen == Screen::Profiles
-                && (self.showcase_composing || self.work_composing))
+            || (self.screen == Screen::Profiles && (self.showcase_composing || self.work_composing))
     }
 }
 
@@ -1895,9 +1894,6 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
                 crate::app::chat::showcase::input::handle_composer_input(app, *byte);
                 return true;
             }
-            if handle_directory_filter_switch_byte(app, *byte) {
-                return true;
-            }
             crate::app::directory::input::handle_idle_byte(app, *byte)
         }
         ParsedInput::Char(ch) => {
@@ -1910,31 +1906,10 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
                 return true;
             }
             if ch.is_ascii() {
-                let byte = *ch as u8;
-                if handle_directory_filter_switch_byte(app, byte) {
-                    return true;
-                }
-                crate::app::directory::input::handle_idle_byte(app, byte)
+                crate::app::directory::input::handle_idle_byte(app, *ch as u8)
             } else {
                 false
             }
-        }
-        _ => false,
-    }
-}
-
-/// `[` `]` and idle `h`/`l` cycle the merged-feed filter (all / projects /
-/// people). Composer input is intercepted before this is reached, so the
-/// letters never collide with typing.
-fn handle_directory_filter_switch_byte(app: &mut App, byte: u8) -> bool {
-    match byte {
-        b'[' | b'h' | b'H' => {
-            app.directory_state.cycle_filter_prev();
-            true
-        }
-        b']' | b'l' | b'L' => {
-            app.directory_state.cycle_filter_next();
-            true
         }
         _ => false,
     }

@@ -173,7 +173,7 @@ pub(crate) fn bot_app_context() -> String {
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
         - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
-        - Profiles page 5 is one feed of shared projects and open-to-work cards. Artboard has detailed page-local editing keybinds.\n\
+        - Profiles page 5 lists people: one row per user who shared a project or posted a work card. Artboard has detailed page-local editing keybinds.\n\
         - Leaderboards page 6 holds every board: Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
     );
     for topic in HelpTopic::ALL {
@@ -199,7 +199,7 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (projects and open-to-work cards, one feed), 6 Leaderboards (every board, monthly and all-time).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
@@ -728,19 +728,19 @@ fn directory_help_lines() -> Vec<String> {
     [
         "Profiles",
         "",
-        "Profiles page 5 is one feed of the community's output: shared projects and open-to-work cards, newest first, with a detail panel on wide terminals.",
+        "Profiles page 5 is the people of late.sh: one row per person who shared a project or posted a work card, sorted by their latest activity. The detail panel (wide terminals) shows the whole person: bio, late.fetch, their work card, and every project.",
         "  5                 open Profiles",
-        "  h / l or [ / ]   cycle the feed filter: all, projects, people",
-        "  j / k or ↑ / ↓   navigate the feed",
+        "  j / k or ↑ / ↓   move between people",
+        "  h / l or ← / →   move the detail focus across the person's card and projects",
         "  PageUp/PageDown   jump rows",
-        "  Enter / c         copy the selected row's link (project URL, or public profile link)",
-        "  o                 open the selected author's profile card",
+        "  Enter / c         copy the focused item's link (public profile link, or project URL)",
+        "  o                 open the selected person's profile card",
         "  i                 share a new project",
         "  w                 create/edit your work card",
-        "  e                 edit the selected entry (yours only)",
-        "  d                 delete the selected entry (yours only)",
-        "  /                 toggle filter to only your entries",
-        "  s                 search the feed (matches titles, text, tags, skills, authors)",
+        "  e                 edit the focused item (yours only)",
+        "  d                 delete the focused item (yours only)",
+        "  /                 toggle filter to only your row",
+        "  s                 search people (matches usernames, cards, and projects)",
         "  Esc               cancel the active form or search",
         "",
         "Work cards",
@@ -757,8 +757,8 @@ fn directory_help_lines() -> Vec<String> {
         "  Ctrl+J            newline in summary",
         "",
         "Projects / Showcases",
-        "  Public project-link feed; separate from chat messages.",
-        "  Detail panel       shows the full description plus an author card: their work status, bio, late.fetch, and other projects",
+        "  Public project links; separate from chat messages.",
+        "  Detail panel       the focused project shows its full description; the rest stay compact",
         "  Fields            title, URL, tags, description",
         "  Required          title, http(s) URL, description",
         "  Limits            title 120 chars, description 800 chars",
@@ -946,7 +946,7 @@ fn overview_lines() -> Vec<String> {
         "  2 The Arcade      daily puzzles, endless games, quests at the top",
         "  3 Games           door games: Lateania, Rebels, NetHack, CodeKeep",
         "  4 Artboard        shared persistent ASCII canvas",
-        "  5 Profiles        one feed of projects and open-to-work cards",
+        "  5 Profiles        the people, one row each: their projects and work cards",
         "  6 Leaderboards    every board, monthly and all-time",
         "",
         "You land in the Clubhouse: hjkl/arrows walk, i talks (your words float",
