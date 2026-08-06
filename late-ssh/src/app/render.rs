@@ -1439,19 +1439,16 @@ impl App {
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
-                        tab: ctx.directory_tab,
-                        profiles: ctx.chat_view.work_view,
                         work_state: ctx
                             .chat_view
                             .work_state
                             .expect("directory work state is always present"),
-                        projects: ctx.chat_view.showcase_view,
                         showcase_state: ctx
                             .chat_view
                             .showcase_state
                             .expect("directory showcase state is always present"),
-                        pinstar_state: ctx.pinstar_state,
-                        pinstar_browser: ctx.pinstar_browser,
+                        current_user_id: ctx.chat_view.work_view.current_user_id,
+                        profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
                 );
             }
@@ -2061,31 +2058,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     if screen == Screen::Profiles {
-        let hints: &[(&str, &str)] = match ctx.directory_tab {
-            crate::app::directory::state::DirectoryTab::Profiles => &[
-                ("i", "edit mine"),
-                ("e", "edit selected"),
-                ("Enter", "copy link"),
-            ],
-            crate::app::directory::state::DirectoryTab::Projects => {
-                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
-                &[
-                    ("R-click/a", "menu"),
-                    ("L-drag", "pan"),
-                    ("R-drag", "select"),
-                    ("i", "edit"),
-                    ("Ctrl+P", "help"),
-                ]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar => &[
-                ("Enter", "open"),
-                ("n", "new"),
-                ("a", "join"),
-                ("Ctrl+P", "help"),
-            ],
-        };
+        let hints: &[(&str, &str)] = &[
+            ("i", "new project"),
+            ("w", "work card"),
+            ("Enter", "copy link"),
+        ];
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(

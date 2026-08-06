@@ -680,8 +680,9 @@ pub struct App {
     /// View mode stays connected to the shared board but reserves global
     /// screen hotkeys like `1-4` and `Tab`.
     pub(crate) artboard_interacting: bool,
-    /// Page-5 Directory tab state. Work/Profile and Showcase data continue to
-    /// live on `ChatState`; this stores only the page-level selected tab.
+    /// Page-5 Profiles feed state (filter, selection, search). Work and
+    /// Showcase data continue to live on `ChatState`; this stores only the
+    /// page-level view state over their merged feed.
     pub(crate) directory_state: crate::app::directory::state::DirectoryState,
     pub(crate) dartboard_server: dartboard_local::ServerHandle,
     pub(crate) dartboard_provenance: crate::app::artboard::provenance::SharedArtboardProvenance,

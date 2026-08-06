@@ -112,7 +112,7 @@ pub enum Tutorial {
     VisitGames,
     /// On the Artboard: the shared canvas, then `5`.
     VisitArtboard,
-    /// On the Directory: people and profiles, then `6`.
+    /// On the Profiles page: people and their projects, then `6`.
     VisitDirectory,
     /// On the Leaderboards: the last stop, then `0` home.
     VisitLeaderboard,

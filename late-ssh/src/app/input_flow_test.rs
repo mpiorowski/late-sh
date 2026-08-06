@@ -262,7 +262,7 @@ async fn account_delete_confirmation_rejects_wrong_username_in_dialog() {
 }
 
 #[tokio::test]
-async fn screen_number_keys_switch_between_pages_including_pinstar() {
+async fn screen_number_keys_switch_between_pages_including_profiles() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -284,10 +284,70 @@ async fn screen_number_keys_switch_between_pages_including_pinstar() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Directory ").await;
+    wait_for_render_contains(&mut app, " Profiles ").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
+}
+
+/// A lone Esc is parsed as `pending_escape` and only dispatches on a later
+/// tick (see `flush_pending_escape`), so after sending it the test must tick
+/// until the effect lands before typing anything else.
+async fn wait_for_esc_effect(
+    app: &mut crate::app::state::App,
+    done: impl Fn(&crate::app::state::App) -> bool,
+    label: &str,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !done(app) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for esc effect: {label}"
+        );
+        app.tick();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+#[tokio::test]
+async fn profiles_page_keys_drive_the_merged_feed() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "profiles-feed-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "profiles-feed-flow-it");
+
+    app.handle_input(b"5");
+    wait_for_render_contains(&mut app, " Profiles ").await;
+
+    // `i` opens the project (showcase) composer, Esc closes it.
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, " New showcase ").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.showcase.composing(), "showcase").await;
+
+    // `w` opens the work-card composer, Esc closes it.
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " New work profile ").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.work.composing(), "work").await;
+
+    // `s` opens feed search, Esc dismisses it.
+    app.handle_input(b"s");
+    wait_for_render_contains(&mut app, " Search ").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.directory_state.search_mode(),
+        "search",
+    )
+    .await;
+    assert_render_not_contains_for(&mut app, " Search ", Duration::from_millis(200)).await;
 }
 
 #[tokio::test]
@@ -310,7 +370,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, "Directory").await;
+    wait_for_render_contains(&mut app, "Profiles").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Mode       view").await;
@@ -326,7 +386,7 @@ async fn shift_tab_cycles_screens_backwards() {
 }
 
 #[tokio::test]
-async fn tab_cycles_screens_forward_through_all_including_pinstar() {
+async fn tab_cycles_screens_forward_through_all_including_profiles() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "screen-tab-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -348,7 +408,7 @@ async fn tab_cycles_screens_forward_through_all_including_pinstar() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Directory ").await;
+    wait_for_render_contains(&mut app, " Profiles ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Leaderboards ").await;

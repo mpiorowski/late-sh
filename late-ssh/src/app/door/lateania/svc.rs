@@ -1367,7 +1367,7 @@ impl LateaniaService {
 
     /// Persist every present character right now. Called on graceful server
     /// shutdown so an adventure in progress is not lost to the gap between
-    /// autosaves; mirrors the artboard/pinstar shutdown flushes in main. Saves
+    /// autosaves; mirrors the artboard shutdown flush in main. Saves
     /// are best-effort (each logs on failure), so this always returns Ok.
     pub async fn flush_all(&self) -> anyhow::Result<()> {
         let (saves, world_save): (Vec<PendingSave>, Option<SavedWorld>) = {

@@ -1521,14 +1521,14 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     ]),
                 ],
                 "5",
-                "the directory",
+                "the profiles",
             ),
             Tutorial::VisitDirectory => (
                 Screen::Profiles,
-                " ✦ the tour · the directory ",
+                " ✦ the tour · the profiles ",
                 vec![
                     Line::from(Span::styled(
-                        "the people: profiles, the projects they ship, pinned work.",
+                        "the people: one feed of profiles and the projects they ship.",
                         text,
                     )),
                     Line::from(vec![

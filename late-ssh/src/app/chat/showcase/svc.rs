@@ -3,12 +3,13 @@ use chrono::{DateTime, Utc};
 use late_core::{
     db::Db,
     models::{
+        profile::Profile,
         showcase::{Showcase, ShowcaseParams},
         showcase_feed_read::ShowcaseFeedRead,
         user::User,
     },
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -24,6 +25,9 @@ pub struct ShowcaseSnapshot {
 pub struct ShowcaseFeedItem {
     pub showcase: Showcase,
     pub author_username: String,
+    /// The author's settings profile (bio, late.fetch fields), loaded with
+    /// the feed so the Profiles page can render an author card per project.
+    pub author_profile: Option<Profile>,
 }
 
 #[derive(Clone, Debug)]
@@ -298,12 +302,17 @@ impl ShowcaseService {
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
-        let usernames = User::list_usernames_by_ids(&client, &user_ids).await?;
+        let author_profiles = Profile::list_by_user_ids(&client, &user_ids).await?;
         let items = items
             .into_iter()
-            .map(|showcase| ShowcaseFeedItem {
-                author_username: display_author(&usernames, showcase.user_id),
-                showcase,
+            .map(|showcase| {
+                let author_profile = author_profiles.get(&showcase.user_id).cloned();
+                let author_username = display_author(author_profile.as_ref(), showcase.user_id);
+                ShowcaseFeedItem {
+                    author_username,
+                    author_profile,
+                    showcase,
+                }
             })
             .collect();
 
@@ -362,10 +371,9 @@ impl ShowcaseService {
     }
 }
 
-fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
-    usernames
-        .get(&user_id)
-        .map(|name| name.trim())
+fn display_author(profile: Option<&Profile>, user_id: Uuid) -> String {
+    profile
+        .map(|profile| profile.username.trim())
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| user_id.to_string()[..8].to_string())

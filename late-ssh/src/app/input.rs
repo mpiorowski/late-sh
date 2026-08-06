@@ -10,7 +10,6 @@ use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
 use crate::app::common::primitives::Screen;
 use crate::app::common::readline::ctrl_byte_to_input;
-use crate::app::directory::state::DirectoryTab;
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::help_modal::data::HelpTopic;
@@ -32,7 +31,6 @@ const CTRL_V: u8 = 0x16;
 #[derive(Clone, Copy)]
 struct InputContext {
     screen: Screen,
-    directory_tab: DirectoryTab,
     chat_composing: bool,
     chat_ac_active: bool,
     feeds_processing: bool,
@@ -46,7 +44,6 @@ impl InputContext {
     fn from_app(app: &App) -> Self {
         Self {
             screen: app.screen,
-            directory_tab: app.directory_state.tab,
             chat_composing: app.chat.is_composing(),
             chat_ac_active: app.chat.is_autocomplete_active(),
             feeds_processing: app.chat.feeds.processing(),
@@ -70,10 +67,6 @@ impl InputContext {
                     || self.showcase_composing
                     || self.work_composing))
             || (self.screen == Screen::Profiles
-                && matches!(
-                    self.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
                 && (self.showcase_composing || self.work_composing))
     }
 }
@@ -108,7 +101,6 @@ enum PasteTarget {
     NewsComposer,
     ShowcaseComposer,
     WorkComposer,
-    Pinstar,
     DoorRcModal,
 }
 
@@ -962,76 +954,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Profiles
-        && (ctx.directory_tab == DirectoryTab::Pinstar || app.pinstar_state.is_some())
-    {
-        let content_area = app_content_area(app);
-        if let Some(state) = &mut app.pinstar_state {
-            let pinstar_area = ratatui::layout::Rect::new(
-                content_area.x,
-                content_area.y.saturating_add(1),
-                content_area.width,
-                content_area.height.saturating_sub(1),
-            );
-            if let ParsedInput::Mouse(mouse) = &event {
-                let crossterm_mouse = crossterm::event::MouseEvent {
-                    kind: match mouse.kind {
-                        MouseEventKind::Down => {
-                            crossterm::event::MouseEventKind::Down(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Up => {
-                            crossterm::event::MouseEventKind::Up(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Drag => {
-                            crossterm::event::MouseEventKind::Drag(match mouse.button {
-                                Some(MouseButton::Left) => crossterm::event::MouseButton::Left,
-                                Some(MouseButton::Middle) => crossterm::event::MouseButton::Middle,
-                                Some(MouseButton::Right) => crossterm::event::MouseButton::Right,
-                                _ => crossterm::event::MouseButton::Left,
-                            })
-                        }
-                        MouseEventKind::Moved => crossterm::event::MouseEventKind::Moved,
-                        MouseEventKind::ScrollUp => crossterm::event::MouseEventKind::ScrollUp,
-                        MouseEventKind::ScrollDown => crossterm::event::MouseEventKind::ScrollDown,
-                        MouseEventKind::ScrollLeft => crossterm::event::MouseEventKind::ScrollLeft,
-                        MouseEventKind::ScrollRight => {
-                            crossterm::event::MouseEventKind::ScrollRight
-                        }
-                    },
-                    column: mouse.x.saturating_sub(1),
-                    row: mouse.y.saturating_sub(1),
-                    modifiers: crossterm::event::KeyModifiers::NONE,
-                };
-                crate::app::pinstar::input::handle_pinstar_mouse(
-                    state,
-                    crossterm_mouse,
-                    pinstar_area,
-                );
-                return;
-            }
-        } else if matches!(&event, ParsedInput::Mouse(_)) {
-            // No active diagram — handle mouse on the browser list
-            let browser_area = ratatui::layout::Rect::new(
-                content_area.x,
-                content_area.y.saturating_add(1),
-                content_area.width,
-                content_area.height.saturating_sub(1),
-            );
-            if handle_pinstar_browser_mouse(app, &event, browser_area) {
-                return;
-            }
-        }
-    }
     match event {
         ParsedInput::FocusGained
         | ParsedInput::FocusLost
@@ -1318,8 +1240,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         // to the byte dispatch below.
         ParsedInput::Byte(0x1D)
             if !((ctx.screen == Screen::Arcade && app.is_playing_game)
-                || (ctx.screen == Screen::Artboard && app.artboard_interacting)
-                || ctx.screen == Screen::Profiles) =>
+                || (ctx.screen == Screen::Artboard && app.artboard_interacting)) =>
         {
             try_open_icon_picker(app)
         }
@@ -1919,298 +1840,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
     }
 
     if ctx.screen == Screen::Profiles {
-        if app.pinstar_state.is_none() && ctx.directory_tab != DirectoryTab::Pinstar {
-            return handle_directory_catalog_input(app, ctx, event);
-        }
-        if app.pinstar_state.is_none() {
-            match event {
-                ParsedInput::Byte(byte)
-                    if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) =>
-                {
-                    return true;
-                }
-                ParsedInput::Char(ch)
-                    if ch.is_ascii()
-                        && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8) =>
-                {
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        // If no active diagram, handle browser input
-        if app.pinstar_state.is_none() {
-            return handle_pinstar_browser_input(app, event);
-        }
-        // Otherwise handle active diagram input
-        let mut area = app_content_area(app);
-        area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(1);
-        let mut handled = false;
-        if let Some(state) = &mut app.pinstar_state {
-            if state.show_invite_dialog
-                && matches!(event, ParsedInput::Byte(0x0D) | ParsedInput::Byte(0x0A))
-                && let Some(token) = &state.invite_token
-            {
-                app.pending_clipboard = Some(token.clone());
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Invite link copied to clipboard!",
-                ));
-                return true;
-            }
-
-            match event {
-                ParsedInput::Byte(byte) => {
-                    let mut modifiers = crossterm::event::KeyModifiers::NONE;
-                    let code = if *byte < 32
-                        && *byte != 0x1B
-                        && *byte != 0x09
-                        && *byte != 0x0D
-                        && *byte != 0x0A
-                        && *byte != 0x08
-                    {
-                        modifiers |= crossterm::event::KeyModifiers::CONTROL;
-                        crossterm::event::KeyCode::Char((*byte + 96) as char)
-                    } else {
-                        match *byte {
-                            0x0D | 0x0A => crossterm::event::KeyCode::Enter,
-                            0x09 => crossterm::event::KeyCode::Tab,
-                            // ^H (0x08) and DEL (0x7F) are both plain Backspace;
-                            // word-delete stays on Ctrl+W. Matches chat composer.
-                            0x08 | 0x7F => crossterm::event::KeyCode::Backspace,
-                            0x1B => crossterm::event::KeyCode::Esc,
-                            _ => crossterm::event::KeyCode::Char(*byte as char),
-                        }
-                    };
-                    let key = crossterm::event::KeyEvent::new(code, modifiers);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Char(ch) => {
-                    let mut modifiers = crossterm::event::KeyModifiers::NONE;
-                    if ch.is_uppercase() {
-                        modifiers |= crossterm::event::KeyModifiers::SHIFT;
-                    }
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Char(*ch),
-                        modifiers,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Arrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key =
-                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::AltArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key =
-                        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::ALT);
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::ShiftArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::SHIFT,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlShiftArrow(key) => {
-                    let code = match key {
-                        b'A' => crossterm::event::KeyCode::Up,
-                        b'B' => crossterm::event::KeyCode::Down,
-                        b'C' => crossterm::event::KeyCode::Right,
-                        b'D' => crossterm::event::KeyCode::Left,
-                        _ => return false,
-                    };
-                    let key = crossterm::event::KeyEvent::new(
-                        code,
-                        crossterm::event::KeyModifiers::CONTROL
-                            | crossterm::event::KeyModifiers::SHIFT,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlBackspace => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Backspace,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::CtrlDelete => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Delete,
-                        crossterm::event::KeyModifiers::CONTROL,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Delete => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Delete,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::Home => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::Home,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::End => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::End,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::PageUp => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::PageUp,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                ParsedInput::PageDown => {
-                    let key = crossterm::event::KeyEvent::new(
-                        crossterm::event::KeyCode::PageDown,
-                        crossterm::event::KeyModifiers::NONE,
-                    );
-                    handled = crate::app::pinstar::input::handle_pinstar_key(
-                        state,
-                        key,
-                        area,
-                        app.pinstar_registry.db(),
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        if !handled && app.pinstar_state.is_some() {
-            if matches!(
-                event,
-                ParsedInput::Byte(0x1B) | ParsedInput::Byte(b'q') | ParsedInput::Char('q')
-            ) {
-                app.pinstar_state = None;
-                app.refresh_pinstar_browser();
-                return true;
-            }
-
-            // Pinstar normally owns '?'. If the active handler declined it,
-            // let the generic path ignore it without treating it as back/quit.
-            if matches!(event, ParsedInput::Byte(b'?') | ParsedInput::Char('?')) {
-                return false;
-            }
-
-            // Do not return true for Mouse events here, let them fall through to the
-            // specialized Pinstar mouse handler in handle_parsed_input.
-            if matches!(event, ParsedInput::Mouse(_)) {
-                return false;
-            }
-
-            return false;
-        }
-        return handled;
+        return handle_directory_catalog_input(app, ctx, event);
     }
 
     false
@@ -2225,95 +1855,66 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
         return crate::app::directory::input::handle_search_input(app, event);
     }
 
+    let composing = ctx.work_composing || ctx.showcase_composing;
     match event {
         ParsedInput::AltEnter => {
-            match ctx.directory_tab {
-                DirectoryTab::Profiles if app.chat.work.composing() => {
-                    app.chat.work.field_newline()
-                }
-                DirectoryTab::Projects if app.chat.showcase.composing() => {
-                    app.chat.showcase.field_newline();
-                }
-                _ => {}
+            if app.chat.work.composing() {
+                app.chat.work.field_newline();
+            } else if app.chat.showcase.composing() {
+                app.chat.showcase.field_newline();
             }
             true
         }
-        ParsedInput::Arrow(key) => match ctx.directory_tab {
-            DirectoryTab::Profiles => crate::app::chat::work::input::handle_arrow(app, *key),
-            DirectoryTab::Projects => crate::app::chat::showcase::input::handle_arrow(app, *key),
-            DirectoryTab::Pinstar => false,
-        },
+        ParsedInput::Arrow(key) => {
+            if app.chat.work.composing() {
+                crate::app::chat::work::input::handle_arrow(app, *key)
+            } else if app.chat.showcase.composing() {
+                crate::app::chat::showcase::input::handle_arrow(app, *key)
+            } else {
+                crate::app::directory::input::handle_idle_arrow(app, *key)
+            }
+        }
         ParsedInput::PageUp => {
-            move_directory_selection(app, ctx.directory_tab, -6);
+            if !composing {
+                crate::app::directory::input::move_idle_selection(app, -6);
+            }
             true
         }
         ParsedInput::PageDown => {
-            move_directory_selection(app, ctx.directory_tab, 6);
+            if !composing {
+                crate::app::directory::input::move_idle_selection(app, 6);
+            }
             true
         }
         ParsedInput::Byte(byte) => {
-            if handle_directory_tab_switch_byte(app, ctx.directory_tab, *byte) {
+            if app.chat.work.composing() {
+                crate::app::chat::work::input::handle_composer_input(app, *byte);
                 return true;
             }
-            if *byte == b's'
-                && matches!(
-                    ctx.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
-                && !app.chat.work.composing()
-                && !app.chat.showcase.composing()
-            {
-                app.directory_state.enter_search();
+            if app.chat.showcase.composing() {
+                crate::app::chat::showcase::input::handle_composer_input(app, *byte);
                 return true;
             }
-            match ctx.directory_tab {
-                DirectoryTab::Profiles => {
-                    if app.chat.work.composing() {
-                        crate::app::chat::work::input::handle_composer_input(app, *byte);
-                        true
-                    } else {
-                        crate::app::chat::work::input::handle_byte(app, *byte)
-                    }
-                }
-                DirectoryTab::Projects => {
-                    if app.chat.showcase.composing() {
-                        crate::app::chat::showcase::input::handle_composer_input(app, *byte);
-                        true
-                    } else {
-                        crate::app::chat::showcase::input::handle_byte(app, *byte)
-                    }
-                }
-                DirectoryTab::Pinstar => false,
+            if handle_directory_filter_switch_byte(app, *byte) {
+                return true;
             }
+            crate::app::directory::input::handle_idle_byte(app, *byte)
         }
         ParsedInput::Char(ch) => {
-            if ch.eq_ignore_ascii_case(&'s')
-                && matches!(
-                    ctx.directory_tab,
-                    DirectoryTab::Profiles | DirectoryTab::Projects
-                )
-                && !app.chat.work.composing()
-                && !app.chat.showcase.composing()
-            {
-                app.directory_state.enter_search();
+            if app.chat.work.composing() {
+                app.chat.work.field_insert_char(*ch);
                 return true;
             }
-            if ch.is_ascii() && handle_directory_tab_switch_byte(app, ctx.directory_tab, *ch as u8)
-            {
-                return true;
-            }
-            if route_directory_char_to_composer(app, ctx, *ch) {
+            if app.chat.showcase.composing() {
+                app.chat.showcase.field_insert_char(*ch);
                 return true;
             }
             if ch.is_ascii() {
                 let byte = *ch as u8;
-                match ctx.directory_tab {
-                    DirectoryTab::Profiles => crate::app::chat::work::input::handle_byte(app, byte),
-                    DirectoryTab::Projects => {
-                        crate::app::chat::showcase::input::handle_byte(app, byte)
-                    }
-                    DirectoryTab::Pinstar => false,
+                if handle_directory_filter_switch_byte(app, byte) {
+                    return true;
                 }
+                crate::app::directory::input::handle_idle_byte(app, byte)
             } else {
                 false
             }
@@ -2322,83 +1923,20 @@ fn handle_directory_catalog_input(app: &mut App, ctx: InputContext, event: &Pars
     }
 }
 
-fn handle_directory_tab_switch_byte(app: &mut App, tab: DirectoryTab, byte: u8) -> bool {
+/// `[` `]` and idle `h`/`l` cycle the merged-feed filter (all / projects /
+/// people). Composer input is intercepted before this is reached, so the
+/// letters never collide with typing.
+fn handle_directory_filter_switch_byte(app: &mut App, byte: u8) -> bool {
     match byte {
-        b'[' => {
-            select_directory_tab(app, tab.prev());
+        b'[' | b'h' | b'H' => {
+            app.directory_state.cycle_filter_prev();
             true
         }
-        b']' => {
-            select_directory_tab(app, tab.next());
-            true
-        }
-        b'h' | b'H' if directory_tab_accepts_letter_switch(app, tab) => {
-            select_directory_tab(app, tab.prev());
-            true
-        }
-        b'l' | b'L' if directory_tab_accepts_letter_switch(app, tab) => {
-            select_directory_tab(app, tab.next());
+        b']' | b'l' | b'L' => {
+            app.directory_state.cycle_filter_next();
             true
         }
         _ => false,
-    }
-}
-
-fn directory_tab_accepts_letter_switch(app: &App, tab: DirectoryTab) -> bool {
-    match tab {
-        DirectoryTab::Profiles => !app.chat.work.composing(),
-        DirectoryTab::Projects => !app.chat.showcase.composing(),
-        DirectoryTab::Pinstar => {
-            app.pinstar_state.is_none()
-                && matches!(
-                    app.pinstar_browser.mode,
-                    crate::app::pinstar::browser::BrowserMode::List
-                )
-        }
-    }
-}
-
-fn route_directory_char_to_composer(app: &mut App, ctx: InputContext, ch: char) -> bool {
-    match ctx.directory_tab {
-        DirectoryTab::Profiles if app.chat.work.composing() => {
-            app.chat.work.field_insert_char(ch);
-            true
-        }
-        DirectoryTab::Projects if app.chat.showcase.composing() => {
-            app.chat.showcase.field_insert_char(ch);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn move_directory_selection(app: &mut App, tab: DirectoryTab, delta: isize) {
-    match tab {
-        DirectoryTab::Profiles => app.chat.work.move_selection(delta),
-        DirectoryTab::Projects => app.chat.showcase.move_selection(delta),
-        DirectoryTab::Pinstar => {}
-    }
-}
-
-fn select_directory_tab(app: &mut App, tab: DirectoryTab) {
-    if app.directory_state.tab == tab {
-        return;
-    }
-    app.chat.showcase.stop_composing();
-    app.chat.work.stop_composing();
-    app.directory_state.select(tab);
-    match tab {
-        DirectoryTab::Profiles => {
-            app.chat.work.list();
-            app.chat.work.mark_read();
-        }
-        DirectoryTab::Projects => {
-            app.chat.showcase.list();
-            app.chat.showcase.mark_read();
-        }
-        DirectoryTab::Pinstar => {
-            app.refresh_pinstar_browser();
-        }
     }
 }
 
@@ -2715,48 +2253,12 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     if ctx.screen == Screen::Profiles {
-        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Profiles {
-            if app.chat.work.composing() {
-                app.chat.work.stop_composing();
-            }
-            return;
-        }
-        if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Projects {
-            if app.chat.showcase.composing() {
-                app.chat.showcase.stop_composing();
-            }
-            return;
-        }
-        // If a browser popup is active (Create, Rename, Delete, AcceptInvite),
-        // forward Esc to the browser input handler
-        let is_browser_popup = !matches!(
-            app.pinstar_browser.mode,
-            crate::app::pinstar::browser::BrowserMode::List
-        );
-        if app.pinstar_state.is_none() && is_browser_popup {
-            let event = ParsedInput::Byte(0x1B);
-            handle_pinstar_browser_input(app, &event);
-            return;
-        }
-        let mut area = app_content_area(app);
-        area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(1);
-        if let Some(state) = &mut app.pinstar_state {
-            let key = crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Esc,
-                crossterm::event::KeyModifiers::NONE,
-            );
-            let handled = crate::app::pinstar::input::handle_pinstar_key(
-                state,
-                key,
-                area,
-                app.pinstar_registry.db(),
-            );
-            if handled {
-                return;
-            }
-            app.pinstar_state = None;
-            app.refresh_pinstar_browser();
+        if app.chat.work.composing() {
+            app.chat.work.stop_composing();
+        } else if app.chat.showcase.composing() {
+            app.chat.showcase.stop_composing();
+        } else if app.directory_state.search_mode() {
+            app.directory_state.exit_search();
         }
         return;
     }
@@ -2788,31 +2290,6 @@ fn handle_bracketed_paste(app: &mut App, pasted: &[u8]) {
         }
         PasteTarget::WorkComposer => {
             insert_pasted_text(pasted, |ch| app.chat.work.field_insert_char(ch));
-        }
-        PasteTarget::Pinstar => {
-            if let Some(state) = &mut app.pinstar_state {
-                if let Some(textarea) = &mut state.rename_popup {
-                    insert_pasted_text(pasted, |ch| {
-                        textarea.insert_char(ch);
-                    });
-                } else if let Some(textarea) = &mut state.floating_editor {
-                    insert_pasted_text(pasted, |ch| {
-                        textarea.insert_char(ch);
-                    });
-                }
-            } else if app.pinstar_browser.mode
-                == crate::app::pinstar::browser::BrowserMode::ImportCanvas
-            {
-                insert_pasted_text(pasted, |ch| {
-                    app.pinstar_browser.import_input.push(ch);
-                });
-            } else if app.pinstar_browser.mode
-                == crate::app::pinstar::browser::BrowserMode::AcceptInvite
-            {
-                insert_pasted_text(pasted, |ch| {
-                    let _ = app.pinstar_browser.push_invite_token_char(ch);
-                });
-            }
         }
         PasteTarget::DoorRcModal => handle_door_rc_paste(app, pasted),
         PasteTarget::None => {}
@@ -2892,18 +2369,14 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
         PasteTarget::ChatComposer
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
-    } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Profiles && ctx.directory_tab == DirectoryTab::Projects))
+    } else if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Profiles)
         && ctx.showcase_composing
     {
         PasteTarget::ShowcaseComposer
-    } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Profiles && ctx.directory_tab == DirectoryTab::Profiles))
+    } else if (ctx.screen == Screen::Dashboard || ctx.screen == Screen::Profiles)
         && ctx.work_composing
     {
         PasteTarget::WorkComposer
-    } else if ctx.screen == Screen::Profiles {
-        PasteTarget::Pinstar
     } else {
         PasteTarget::None
     }
@@ -3982,7 +3455,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if matches!(ctx.screen, Screen::Artboard | Screen::Profiles) {
+    if ctx.screen == Screen::Artboard {
         return false;
     }
 
@@ -4008,8 +3481,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         && !ctx.news_composing
         && !ctx.showcase_composing
         && !ctx.work_composing
-        && ctx.screen != Screen::Artboard
-        && !(ctx.screen == Screen::Profiles && app.pinstar_state.is_some());
+        && ctx.screen != Screen::Artboard;
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
@@ -4017,6 +3489,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             .set_keep_composer_focused(app.profile_state.profile().keep_composer_focused);
         let topic = if ctx.screen == Screen::Lateania {
             HelpTopic::Lateania
+        } else if ctx.screen == Screen::Profiles {
+            HelpTopic::Profiles
         } else {
             HelpTopic::Pair
         };
@@ -4321,8 +3795,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             let _ = crate::app::artboard::page::handle_key(app, byte);
         }
         Screen::Profiles => {
-            // Pinstar key dispatch is handled via handle_dedicated_screen_input
-            // and the rich-event path; byte dispatch is a no-op here.
+            // Profiles keys are handled in handle_dedicated_screen_input.
         }
         Screen::Clubhouse => {
             // Clubhouse keys are handled in handle_dedicated_screen_input
@@ -4337,467 +3810,6 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Scratchpad => {
             // Scratchpad keys are handled in handle_dedicated_screen_input.
         }
-    }
-}
-
-fn handle_pinstar_browser_mouse(
-    app: &mut App,
-    event: &ParsedInput,
-    area: ratatui::layout::Rect,
-) -> bool {
-    use crate::app::pinstar::browser::BrowserMode;
-
-    let ParsedInput::Mouse(mouse) = event else {
-        return false;
-    };
-
-    // Only handle mouse in List mode
-    if app.pinstar_browser.mode != BrowserMode::List {
-        return false;
-    }
-
-    let mx = mouse.x.saturating_sub(1);
-    let my = mouse.y.saturating_sub(1);
-
-    let inside_browser =
-        mx >= area.x && mx < area.x + area.width && my >= area.y && my < area.y + area.height;
-
-    match mouse.kind {
-        MouseEventKind::Down if matches!(mouse.button, Some(MouseButton::Left)) => {
-            if !inside_browser {
-                return false;
-            }
-
-            let mut list_y = area.y.saturating_add(1);
-            let mut list_height = area.height.saturating_sub(2);
-            if app.pinstar_browser.error.is_some() && list_height > 1 {
-                list_y = list_y.saturating_add(1);
-                list_height = list_height.saturating_sub(1);
-            }
-            let header_rows = 2;
-            if my < list_y + header_rows || my >= list_y + list_height {
-                return true;
-            }
-
-            let window_height = (list_height as usize).saturating_sub(header_rows as usize);
-            let offset = if window_height == 0 {
-                0
-            } else {
-                app.pinstar_browser
-                    .selected
-                    .saturating_sub(window_height.saturating_sub(1))
-            };
-            let clicked_idx = offset + (my - list_y - header_rows) as usize;
-            if clicked_idx < app.pinstar_browser.visible_len() {
-                let is_double_click = if let Some((lx, ly, lt)) = app.pinstar_browser.last_click {
-                    lx == mx && ly == my && lt.elapsed().as_millis() < 500
-                } else {
-                    false
-                };
-
-                app.pinstar_browser.selected = clicked_idx;
-                app.pinstar_browser.last_click = Some((mx, my, std::time::Instant::now()));
-
-                if is_double_click {
-                    handle_pinstar_browser_double_click(app);
-                    app.pinstar_browser.last_click = None;
-                }
-            }
-            true
-        }
-        MouseEventKind::Down => inside_browser,
-        MouseEventKind::ScrollUp => {
-            if !inside_browser {
-                return false;
-            }
-            app.pinstar_browser.move_up();
-            true
-        }
-        MouseEventKind::ScrollDown => {
-            if !inside_browser {
-                return false;
-            }
-            app.pinstar_browser.move_down();
-            true
-        }
-        _ => false,
-    }
-}
-
-fn handle_pinstar_browser_double_click(app: &mut App) {
-    if let Some(entry) = app.pinstar_browser.selected_entry() {
-        app.pinstar_browser.pending_action = Some(
-            crate::app::pinstar::browser::BrowserAction::Open(entry.id, entry.role.clone()),
-        );
-    }
-}
-
-fn handle_pinstar_browser_input(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::pinstar::browser::BrowserMode;
-
-    match &mut app.pinstar_browser.mode {
-        BrowserMode::List => match event {
-            ParsedInput::Byte(0x10) | ParsedInput::Byte(b'?') | ParsedInput::Char('?') => {
-                app.pinstar_browser.mode = BrowserMode::Help;
-                true
-            }
-            ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
-                app.pinstar_browser.move_down();
-                true
-            }
-            ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
-                app.pinstar_browser.move_up();
-                true
-            }
-            ParsedInput::Byte(b'n') | ParsedInput::Char('n') => {
-                app.pinstar_browser.new_diagram_name.clear();
-                app.pinstar_browser.mode = BrowserMode::CreateDiagram;
-                true
-            }
-            ParsedInput::Byte(b'a') | ParsedInput::Char('a') => {
-                app.pinstar_browser.mode = BrowserMode::AcceptInvite;
-                app.pinstar_browser.invite_token_input.clear();
-                app.pinstar_browser.error = None;
-                true
-            }
-            ParsedInput::Byte(b'I') | ParsedInput::Char('I') => {
-                app.pinstar_browser.import_input.clear();
-                app.pinstar_browser.import_name = String::from("Imported Diagram");
-                app.pinstar_browser.error = None;
-                app.pinstar_browser.mode = BrowserMode::ImportCanvas;
-                true
-            }
-            ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner
-                        || app
-                            .permissions
-                            .has(crate::moderation::policy::Caps::DELETE_PINSTAR_GRAPH)
-                    {
-                        app.pinstar_browser.delete_target_id = Some(entry.id);
-                        app.pinstar_browser.mode = BrowserMode::ConfirmDelete;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner or staff can delete diagrams".to_string());
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    if entry.is_owner {
-                        app.pinstar_browser.rename_input = entry.title.clone();
-                        app.pinstar_browser.mode = BrowserMode::RenameInput;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner can rename diagrams".to_string());
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(b'c')
-            | ParsedInput::Char('c')
-            | ParsedInput::Byte(b'C')
-            | ParsedInput::Char('C') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.pending_action = Some(
-                        crate::app::pinstar::browser::BrowserAction::CopySource(entry.id),
-                    );
-                }
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    app.pinstar_browser.pending_action =
-                        Some(crate::app::pinstar::browser::BrowserAction::Open(
-                            entry.id,
-                            entry.role.clone(),
-                        ));
-                }
-                true
-            }
-            ParsedInput::Byte(b'i') | ParsedInput::Char('i') => {
-                if let Some((entry_id, is_owner)) = app
-                    .pinstar_browser
-                    .selected_entry()
-                    .map(|entry| (entry.id, entry.is_owner))
-                {
-                    if is_owner {
-                        app.pinstar_browser.generated_invite_token = None;
-                        app.pinstar_browser.error = None;
-                        app.pinstar_browser.pending_action = Some(
-                            crate::app::pinstar::browser::BrowserAction::GenerateInvite(entry_id),
-                        );
-                        app.pinstar_browser.mode =
-                            crate::app::pinstar::browser::BrowserMode::GenerateInvite;
-                    } else {
-                        app.pinstar_browser.error =
-                            Some("Only owner can create invite links".to_string());
-                    }
-                }
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::Help => {
-            if matches!(
-                event,
-                ParsedInput::Byte(0x1b)
-                    | ParsedInput::Byte(b'q')
-                    | ParsedInput::Byte(b'Q')
-                    | ParsedInput::Char('\x1b')
-                    | ParsedInput::Char('q')
-                    | ParsedInput::Char('Q')
-            ) {
-                app.pinstar_browser.mode = BrowserMode::List;
-            }
-            true
-        }
-        BrowserMode::AcceptInvite => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let token = app.pinstar_browser.invite_token_input.clone();
-                app.pinstar_browser.pending_action = Some(
-                    crate::app::pinstar::browser::BrowserAction::AcceptInvite(token),
-                );
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.invite_token_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                let _ = app.pinstar_browser.push_invite_token_char(*c);
-                true
-            }
-            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
-                let _ = app.pinstar_browser.push_invite_token_char(*byte as char);
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::ImportCanvas => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let raw = app.pinstar_browser.import_input.trim().to_string();
-                let name = if app.pinstar_browser.import_name.trim().is_empty() {
-                    "Imported Diagram".to_string()
-                } else {
-                    app.pinstar_browser.import_name.trim().to_string()
-                };
-                match serde_json::from_str::<crate::app::pinstar::data::CanvasData>(&raw) {
-                    Ok(data) => {
-                        app.pinstar_browser.pending_action =
-                            Some(crate::app::pinstar::browser::BrowserAction::Import {
-                                title: name,
-                                data,
-                            });
-                        app.pinstar_browser.mode = BrowserMode::List;
-                        app.pinstar_browser.error = None;
-                    }
-                    Err(e) => {
-                        app.pinstar_browser.error = Some(format!("Invalid canvas JSON: {}", e));
-                    }
-                }
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.import_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.import_input.push(*c);
-                true
-            }
-            ParsedInput::Byte(byte) if !byte.is_ascii_control() && *byte != 0x7f => {
-                app.pinstar_browser.import_input.push(*byte as char);
-                true
-            }
-            _ => false,
-        },
-        BrowserMode::GenerateInvite => match event {
-            ParsedInput::Byte(0x1b)
-            | ParsedInput::Char('\x1b')
-            | ParsedInput::Byte(b'c')
-            | ParsedInput::Char('c') => {
-                app.pinstar_browser.generated_invite_token = None;
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(token) = &app.pinstar_browser.generated_invite_token {
-                    app.pending_clipboard = Some(token.clone());
-                    app.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Invite link copied to clipboard!",
-                    ));
-                }
-                true
-            }
-            _ => true,
-        },
-        BrowserMode::ConfirmDelete => match event {
-            ParsedInput::Byte(b'y')
-            | ParsedInput::Char('y')
-            | ParsedInput::Byte(b'Y')
-            | ParsedInput::Char('Y') => {
-                if let Some(id) = app.pinstar_browser.delete_target_id.take() {
-                    app.pinstar_browser.pending_action =
-                        Some(crate::app::pinstar::browser::BrowserAction::Delete(id));
-                }
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'n')
-            | ParsedInput::Char('n')
-            | ParsedInput::Byte(b'N')
-            | ParsedInput::Char('N')
-            | ParsedInput::Byte(0x1b)
-            | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.delete_target_id = None;
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            _ => true, // Consume all keys while in confirm mode
-        },
-        BrowserMode::RenameInput => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.rename_input.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                if let Some(entry) = app.pinstar_browser.selected_entry() {
-                    let new_title = app.pinstar_browser.rename_input.trim().to_string();
-                    app.pinstar_browser.pending_action = Some(
-                        crate::app::pinstar::browser::BrowserAction::Rename(entry.id, new_title),
-                    );
-                }
-                app.pinstar_browser.rename_input.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.rename_input.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.rename_input.push(*c);
-                true
-            }
-            // Control keys for text editing
-            ParsedInput::Byte(0x15) => {
-                // Ctrl+U: clear line
-                app.pinstar_browser.rename_input.clear();
-                true
-            }
-            ParsedInput::Byte(0x17) => {
-                // Ctrl+W: delete last word
-                while let Some(c) = app.pinstar_browser.rename_input.pop() {
-                    if c.is_whitespace()
-                        && !app
-                            .pinstar_browser
-                            .rename_input
-                            .ends_with(|c: char| c.is_whitespace())
-                    {
-                        break;
-                    }
-                }
-                true
-            }
-            // Printable ASCII range (space through ~)
-            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
-                app.pinstar_browser.rename_input.push(*b as char);
-                true
-            }
-            _ => true, // Consume all keys while in rename mode
-        },
-        BrowserMode::CreateDiagram => match event {
-            ParsedInput::Byte(0x1b) | ParsedInput::Char('\x1b') => {
-                app.pinstar_browser.new_diagram_name.clear();
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(b'\r')
-            | ParsedInput::Byte(b'\n')
-            | ParsedInput::Char('\r')
-            | ParsedInput::Char('\n') => {
-                let title = app.pinstar_browser.new_diagram_name.trim().to_string();
-                app.pinstar_browser.pending_action =
-                    Some(crate::app::pinstar::browser::BrowserAction::Create { title });
-                app.pinstar_browser.mode = BrowserMode::List;
-                true
-            }
-            ParsedInput::Byte(0x7f)
-            | ParsedInput::Byte(0x08)
-            | ParsedInput::Char('\x08')
-            | ParsedInput::Char('\x7f')
-            | ParsedInput::Delete => {
-                app.pinstar_browser.new_diagram_name.pop();
-                true
-            }
-            ParsedInput::Char(c) => {
-                app.pinstar_browser.new_diagram_name.push(*c);
-                true
-            }
-            // Control keys for text editing
-            ParsedInput::Byte(0x15) => {
-                app.pinstar_browser.new_diagram_name.clear();
-                true
-            }
-            ParsedInput::Byte(0x17) => {
-                while let Some(c) = app.pinstar_browser.new_diagram_name.pop() {
-                    if c.is_whitespace()
-                        && !app
-                            .pinstar_browser
-                            .new_diagram_name
-                            .ends_with(|c: char| c.is_whitespace())
-                    {
-                        break;
-                    }
-                }
-                true
-            }
-            // Printable ASCII range (space through ~)
-            ParsedInput::Byte(b) if *b >= 0x20 && *b <= 0x7E => {
-                app.pinstar_browser.new_diagram_name.push(*b as char);
-                true
-            }
-            _ => true, // Consume all keys while in create mode
-        },
     }
 }
 

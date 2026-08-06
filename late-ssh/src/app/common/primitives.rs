@@ -263,7 +263,7 @@ pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
 /// Build a one-line action-hint footer: `key desc · key desc · …`.
 ///
 /// Keys render in amber, descriptions dim, separators faint. This is the shared
-/// recipe behind every bottom hint bar (the Directory footer, the Artboard
+/// recipe behind every bottom hint bar (the Profiles footer, the Artboard
 /// view bar) so the foot of each page reads the same.
 pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     let key_style = Style::default()

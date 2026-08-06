@@ -1,0 +1,1161 @@
+=== #suggestions — 259 messages — last message 2026-08-06 17:39:39 UTC ===
+
+[2026-05-18 22:09:34 UTC] mat
+---SUGGESTION--- Notification when someone reacts to your message
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:34 UTC] mat
+---SUGGESTION--- Emoji shortcode resolution: :thumbsup: -> 👍, Discord-alias parity
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Do not mark rooms read on hover-nav; require dwell or explicit interaction
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Flexible/customizable room hotkey row (asdfg + numbers, user-configurable)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Chess (vs humans + vs CPU)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- DOOM
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- ttyquake
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Solitaire timer leaderboard
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Tetris: optional grid background, customizable keybinds, run locally to fix input buffer lag
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Snake: alternate body glyphs (e.g. connected pipes)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Daily-challenge timers + speed leaderboards
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Multiplayer lobby: show opponents' bio / country / timezone
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- AI/bot DnD room with a GM bot
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- RNG card-collector meta-game (per-day card deck, sub-cards, achievements)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Picture-to-ASCII avatar uploader
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Donation: preserve bonsai during long absences (nursery / boarding)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Float /active & /members as a modal with actions (view profile, ignore, status string e.g. "playing poker - streak 5")
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Mumble integration
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Blog page (author / co-author / revisor, reactions)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Artboard 10x larger but still performant
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- AoC tasks
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- lynx-based browser stream
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Weather panel (wttr.in)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- "pond" TUI idle animation room
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Customizable keybinds globally (emacs preset etc.)
+----------------------------------------------------------------------
+
+[2026-05-18 22:09:35 UTC] mat
+---SUGGESTION--- Vim-like sticky-scroll behavior past top/bottom of viewport
+----------------------------------------------------------------------
+
+[2026-05-18 22:20:13 UTC] mat
+---SUGGESTION--- Username shop as chip sink: buy prefix/suffix, custom color, markdown toggle. Subscription model so users cannot buy out and sit on a huge balance.
+----------------------------------------------------------------------
+
+[2026-05-19 08:21:43 UTC] Perzium
+---SUGGESTION--- Custom theme support because =P
+----------------------------------------------------------------------
+
+[2026-05-19 17:20:17 UTC] flagrantior
+---SUGGESTION--- I'm not sure, but command mode by pressing ":" for all global commands like closing sidebars etc.
+----------------------------------------------------------------------
+
+[2026-05-19 22:13:45 UTC] syntaxjak
+---SUGGESTION--- what if you could follow people much like a channel, and everything they say in any channel appears in their follow channel (im well known for having terrible ideas so feel free not to implement this idea its probably bad)
+----------------------------------------------------------------------
+
+[2026-05-20 08:57:32 UTC] Kenjii
+---SUGGESTION--- SHOP - fertilizer and/or steroids for bonsai (maybe chance to fertilize with also chance that it goes wrong and kills or decreases the bonsai)
+----------------------------------------------------------------------
+
+[2026-05-21 08:11:03 UTC] not_student
+---SUGGESTION--- collective coding sessions...
+----------------------------------------------------------------------
+
+[2026-05-21 08:30:53 UTC] ndersorn
+---SUGGESTION--- searching in popups (e.g. /members) using somthing like "/" as a keybind from VIM
+----------------------------------------------------------------------
+
+[2026-05-22 21:21:50 UTC] HeadedBranch
+---SUGGESTION--- Premoves
+----------------------------------------------------------------------
+
+[2026-05-22 21:22:01 UTC] HeadedBranch
+---SUGGESTION--- Custom time controls
+----------------------------------------------------------------------
+
+[2026-05-22 21:22:53 UTC] HeadedBranch
+---SUGGESTION--- Ability to challenge people
+----------------------------------------------------------------------
+
+[2026-05-23 10:49:58 UTC] mat
+---SUGGESTION--- - allow adding whole playlist to youtube booth, first submission must be approved by mod
+----------------------------------------------------------------------
+
+[2026-05-23 15:20:20 UTC] flagrantior
+---SUGGESTION--- Tron is good, maybe something like paper.io? It's similar, but fills territory inside your trail loop.
+----------------------------------------------------------------------
+
+[2026-05-25 16:43:24 UTC] imred
+---SUGGESTION--- one idea: since its fun to see where users are coming from (see international + this weeks artboard) ; maybe it would be fun to have a globe visual where each active country (where active users joined) are highlighted. It could be part of a users tab where you can see list of users (names linked to their bio) - users statistics ,etc.... or it could be part of a statistics tab with other statistics of late (all time most visitors, sent messages, prs , actual version, etc...)
+----------------------------------------------------------------------
+
+[2026-05-26 05:53:29 UTC] WinnerWind
+---SUGGESTION--- Why not use Mumble for audio?
+----------------------------------------------------------------------
+
+[2026-05-26 08:27:02 UTC] not_student
+---SUGGESTION--- make #discover use space more efficiently
+----------------------------------------------------------------------
+
+[2026-05-26 09:46:10 UTC] WinnerWind
+---SUGGESTION--- Add nightwave plaza / vaporwave as part of the queue/music genres
+----------------------------------------------------------------------
+
+[2026-05-27 07:41:41 UTC] WinnerWind
+---SUGGESTION--- Add minesweeper that doesn't require guessing (see source code of https://www.chiark.greenend.org.uk/~sgtatham/puzzles/js/mines.html )
+----------------------------------------------------------------------
+
+[2026-05-27 07:41:58 UTC] WinnerWind
+---SUGGESTION--- Make covered squares more visible (eg. using box drawing characters) in minesweeper
+----------------------------------------------------------------------
+
+[2026-05-27 09:43:32 UTC] kirii.md
+---SUGGESTION--- # late cli should scan for upd before launch and install the upd if there's one
+- with this we should start asign number version 
+
+EX: year.month.times
+26.5.1
+----------------------------------------------------------------------
+
+[2026-05-27 10:25:57 UTC] WinnerWind
+---SUGGESTION--- dunno if this is an ssh limitation but use Shift Enter to make newline
+----------------------------------------------------------------------
+
+[2026-05-27 11:52:44 UTC] Kzitold
+---SUGGESTION--- Can we get Pong or Doom? XD
+----------------------------------------------------------------------
+
+[2026-05-27 15:14:54 UTC] HeadedBranch
+---SUGGESTION--- Custom keybinds for minigames (I usually use weird keybinds so tetris is actually difficult for me to get used to)
+----------------------------------------------------------------------
+
+[2026-05-28 07:49:41 UTC] Velcatt
+---SUGGESTION--- Add spoiler tags if possible :)
+----------------------------------------------------------------------
+
+[2026-05-28 08:53:10 UTC] ndersorn
+---SUGGESTION--- Would be nice for us non-US Keyboard layout users to change the keybinds for menues, and store them on the user, so people like me (Danish) can checkout/use features which are currently locked behind unavaiable keybinds :D
+----------------------------------------------------------------------
+
+[2026-05-29 21:39:59 UTC] mat
+---SUGGESTION--- - we need a palce to atach phoots of our pets in profiles :d
+----------------------------------------------------------------------
+
+[2026-06-01 09:33:50 UTC] mat
+---SUGGESTION--- - inb4 late.sh mail reader
+----------------------------------------------------------------------
+
+[2026-06-01 22:06:12 UTC] Renu
+---SUGGESTION--- [user] is typing.... message
+----------------------------------------------------------------------
+
+[2026-06-02 16:49:53 UTC] lazo
+---SUGGESTION--- and use chafa for the NES games too
+----------------------------------------------------------------------
+
+[2026-06-03 03:54:28 UTC] Renu
+---SUGGESTION--- add alternate keys like enter, shift ctrl for the NES games instead of/in addition to k and l (i have homerowmods)😶
+----------------------------------------------------------------------
+
+[2026-06-03 04:22:55 UTC] vechs
+---SUGGESTION--- Add earmark/pencil support for Sudoku and highlight illegal cell input within row/col/3x3.
+----------------------------------------------------------------------
+
+[2026-06-04 11:07:29 UTC] ricott1
+---SUGGESTION--- if/when we move to a lobby system for games, would be nice to have a way to share a game directly in chat, with a button that allows to jump to the game directly
+----------------------------------------------------------------------
+
+[2026-06-04 11:46:47 UTC] outercloud
+---SUGGESTION--- It would be nice to not force this on the local cli
+----------------------------------------------------------------------
+
+[2026-06-07 22:33:28 UTC] botahamec
+---SUGGESTION--- It would be a lot nicer if hitting enter in the CLI while in the news channel just opened the link in your default browser. Honestly, I thought that would already be the case.
+----------------------------------------------------------------------
+
+[2026-06-08 13:01:22 UTC] botahamec
+---SUGGESTION--- I don't know if this is possible on this kind of ssh server, but setting up mosh would be really cool: https://mosh.org/
+----------------------------------------------------------------------
+
+[2026-06-10 23:09:50 UTC] Renu
+---SUGGESTION--- accent color selection for themes. currently catpuccin default color seems to be mauve. id like to be able to select lavender
+----------------------------------------------------------------------
+
+[2026-06-11 12:39:57 UTC] kar
+---SUGGESTION--- i suggest profile pictures for late.sh
+----------------------------------------------------------------------
+
+[2026-06-11 13:10:17 UTC] freya
+---SUGGESTION--- Does anyone know if it would be at all possible to customise the reset for bonsai watering to the local timezones of specific users? No worries if its too much of a faf for something so menial, but I thought it was worth an ask :p
+----------------------------------------------------------------------
+
+[2026-06-12 21:22:08 UTC] imerin
+---SUGGESTION--- a go/baduk gamemode would be really neat
+----------------------------------------------------------------------
+
+[2026-06-13 13:25:28 UTC] crcr
+---SUGGESTION--- need everforest theme!
+----------------------------------------------------------------------
+
+[2026-06-13 13:58:28 UTC] 280
+---SUGGESTION--- need iceberg theme!
+----------------------------------------------------------------------
+
+[2026-06-15 18:23:42 UTC] mat
+---SUGGESTION--- - username background inside shop
+----------------------------------------------------------------------
+
+[2026-06-18 13:57:40 UTC] Kzitold
+---SUGGESTION--- A setting to replace emojis (in chat, badges, etc...) with bracketed text. Use case, TTY clients.
+----------------------------------------------------------------------
+
+[2026-06-19 17:59:13 UTC] mauvehed
+---SUGGESTION--- suggestion: "browse rooms" needs a 'search' and a 'sort'
+----------------------------------------------------------------------
+
+[2026-06-19 21:32:43 UTC] mat
+---SUGGESTION--- " I think it should be possible to send a custom error message via russh to explain how to generate the key directly"
+----------------------------------------------------------------------
+
+[2026-06-20 03:41:29 UTC] kusoneko
+---SUGGESTION--- suggestions:
+- multiplayer games: richii mahjong (it is similar-ish to poker) (and possibly the other multiplayer mahjong variants)
+- singleplayer games: mahjong solitaire, spider solitaire, idk
+
+if there isn't one already, can there be a config file/laterc file where you just list the late companion cli settings you want to use by default, e.g. I use `late --ssh-mode openssh --key [pubkey location]` because my ssh key is actually a gpg subkey on a yubikey atm, would be nice if I could dump these config options into a file and then just use `late` and get in without having to type the whole options. I could arguably make it an alias I guess, but I figure a dedicated config file to dump those in might appeal to someone else as well, presuming they don't use the defaults.
+
+completely unrelated, but this is a nice thing you've built here, i like it a lot. congrats on this project. :)
+----------------------------------------------------------------------
+
+[2026-06-20 05:47:08 UTC] WinnerWind
+---SUGGESTION--- On the IRC: Support https://ircv3.net/specs/client-tags/react.html and the UPLOAD tag (cant find the spec rn but its in use in a few places)
+----------------------------------------------------------------------
+
+[2026-06-20 15:16:28 UTC] Renu
+---SUGGESTION--- 3d rubik's cube via ratty graphics protocol?
+----------------------------------------------------------------------
+
+[2026-06-20 18:17:52 UTC] ObnoxiousOrk
+---SUGGESTION--- speaking of rubix, maybe make it harder to reset, i keep finding myself accidentally reseting when im trying to do algorythms, maybe a confirmation popup
+----------------------------------------------------------------------
+
+[2026-06-21 10:22:43 UTC] king-crow
+---SUGGESTION--- Any chance we can get a jazz icecast stream?
+----------------------------------------------------------------------
+
+[2026-06-21 23:44:04 UTC] cws
+---SUGGESTION--- Forgive me if I'm a bit behind as I just got on this thing, but is there some way to filter/search the project showcases? Do tags actually do something useful or just display?
+----------------------------------------------------------------------
+
+[2026-06-22 09:06:42 UTC] meeshah
+---SUGGESTION--- a magic 8 ball type of entity that gives a piece if wisdom of the day which uses the fortune package tonsay something funny!
+----------------------------------------------------------------------
+
+[2026-06-22 09:13:32 UTC] buddi
+---SUGGESTION--- Weekend 'grace' for daily games, or a 3-day variant to allow people to skip over the weekend.
+----------------------------------------------------------------------
+
+[2026-06-22 09:45:57 UTC] mojoro
+---SUGGESTION--- Suggestion: add large chip prizes for the top three players on the monthly and weekly leaderboards for the games in the 2048 category
+----------------------------------------------------------------------
+
+[2026-06-22 18:58:26 UTC] rumor
+---SUGGESTION--- Lateania's inventory doesn't scroll properly for me most of the time, and being able to use ` to go back to the main screen like in other games would be very welcome
+----------------------------------------------------------------------
+
+[2026-06-22 19:27:16 UTC] rumor
+---SUGGESTION--- additionally, warping with players you are following, being able to open a larger map.
+
+this may be a me thing, but finding where i'm supposed to take npcs or where quests might be located (maybe have some small details in the quest log - like select a quest for small details)
+----------------------------------------------------------------------
+
+[2026-06-22 20:15:39 UTC] rumor
+---SUGGESTION--- suggestion: see who is in the room for games (poker, etc.) not just who is sitting. 
+online player list in laternia somewhere?
+----------------------------------------------------------------------
+
+[2026-06-23 14:36:53 UTC] rumor
+---SUGGESTION--- Just noticed, I have some mentions from last night, but the message history cuts off before the message, so it dumps me to the latest message in the channel.
+----------------------------------------------------------------------
+
+[2026-06-24 19:54:01 UTC] mat
+---SUGGESTION--- slap command
+----------------------------------------------------------------------
+
+[2026-06-24 19:59:39 UTC] kirii.md
+---SUGGESTION--- ## /slap command
+- an action command use to slap some1
+
+Usage:
+/slap @some1 <tool>
+
+if <tool> leave blank, it will pick 1 tool randomly from user's inventory
+
+EX:
+@mat slaps @kirii.md with an update
+
+- user will recieve 3 base tools to slap people with (fish, pillow, bare hand)
+- all tools will randomly shuffle or user can lock on 1 tool to use only
+- user can buy more tools to add into their collection by chips
+
+EX:
+- salmon
+- telekines
+- MUDA MUDA MUDA!
+- terminal
+- knowledge
+----------------------------------------------------------------------
+
+[2026-06-25 01:10:15 UTC] cws
+---SUGGESTION--- Suggestion: make sure https://late.sh has an obvious link to the github source
+----------------------------------------------------------------------
+
+[2026-06-25 05:33:26 UTC] mat
+---SUGGESTION--- trade wars, pit, legend of r3d drsgon
+----------------------------------------------------------------------
+
+[2026-06-25 07:21:50 UTC] MisterFix
+---SUGGESTION--- Suggestion: Global War (Similar to Risk)
+----------------------------------------------------------------------
+
+[2026-06-25 13:16:58 UTC] rumor
+---SUGGESTION--- regarding reactions, maybe make 0 icon show recently used emojis?
+----------------------------------------------------------------------
+
+[2026-06-25 13:27:40 UTC] ironsocks
+---SUGGESTION--- Silly Suggestion: Optional startup sounds. One of the sounds could be a modem connection squeal.
+----------------------------------------------------------------------
+
+[2026-06-25 15:24:26 UTC] mat
+---SUGGESTION--- > @Sdakk: Great, now that I know there are dozens of theme...
+@mat please add an option to randomly select a theme in a selected pool every (launch/day/week/month)
+----------------------------------------------------------------------
+
+[2026-06-25 15:45:55 UTC] num-old
+---SUGGESTION--- Suggestion: Everforest theme
+----------------------------------------------------------------------
+
+[2026-06-25 22:46:26 UTC] issai
+---SUGGESTION--- Suggestion: Add a scratchpad (the thing that let's you mark numbers you think might go in a cell) to the sudoku game. Could probably fit neatly on one of the sides and change when you are over a cell.
+----------------------------------------------------------------------
+
+[2026-06-26 18:03:19 UTC] mjswensen
+---SUGGESTION--- A couple of ideas for Sudoku: auto-candidate mode (where the game starts off with all the possible candidates noted in empty cells, dependent on @issai 's idea above), and automatic highlighting of numbers (either filled cells or candidates) that match the number under the cursor. "Good Sudoku" on the iOS app store is a good reference for these features (playing without them now is no fun haha)
+----------------------------------------------------------------------
+
+[2026-06-26 18:47:02 UTC] rumor
+---SUGGESTION--- i know the youtube queue only plays the first hour of a song/video, maybe have it max the duration counter at 60 min so it doesn't make people think any one listen will go longer than that
+----------------------------------------------------------------------
+
+[2026-06-26 21:13:13 UTC] ronin
+---SUGGESTION--- I kinda suck at sudoku and I need to be able to make pencil marks on the grid, so if there was a way to mark something as 'possible' 1-9 like little dots or something that would be cool
+----------------------------------------------------------------------
+
+[2026-06-27 02:11:27 UTC] daniel-
+---SUGGESTION--- Allow "browse rooms" to sort by members
+----------------------------------------------------------------------
+
+[2026-06-27 14:12:47 UTC] ObnoxiousOrk
+---SUGGESTION--- text in nethack and rebels can be too dark on dark themes, no idea how feasible it is to make the text lighter, but auto switching to a light theme or something like that could be great
+----------------------------------------------------------------------
+
+[2026-06-27 15:09:37 UTC] irravel
+---SUGGESTION--- nethack is cool but makes me want you to add dungeon crawl stone soup
+----------------------------------------------------------------------
+
+[2026-06-27 15:13:35 UTC] ronin
+---SUGGESTION--- use kitty image protocol for terminal images instead of unicode chars
+----------------------------------------------------------------------
+
+[2026-06-28 01:30:12 UTC] fellshard
+---SUGGESTION--- The ability to skip your own song without votes if it's live in the queue
+----------------------------------------------------------------------
+
+[2026-06-28 13:23:57 UTC] blap
+---SUGGESTION--- Currently, rooms cannot be assigned a separate topic description beyond the channel name itself. Oversight or design choice?
+----------------------------------------------------------------------
+
+[2026-06-28 13:38:30 UTC] Bambus
+---SUGGESTION--- somehow save the users volume so the music wont be too lout next youre joining
+----------------------------------------------------------------------
+
+[2026-06-28 14:30:55 UTC] blap
+---SUGGESTION--- Another idea i had was to stream audio through ssh just using color data
+----------------------------------------------------------------------
+
+[2026-06-29 03:09:28 UTC] fellshard
+---SUGGESTION--- Cause /ignore to also ignore replies by `bot` to that user
+----------------------------------------------------------------------
+
+[2026-06-29 14:56:03 UTC] rumor
+---SUGGESTION--- need a way to see more than 4 friends online xD
+----------------------------------------------------------------------
+
+[2026-06-29 14:58:51 UTC] Bambus
+---SUGGESTION--- user-made nonograms for specific themes or user collections
+----------------------------------------------------------------------
+
+[2026-06-29 15:00:28 UTC] Bambus
+---SUGGESTION--- maybe colored nonograms aswell
+----------------------------------------------------------------------
+
+[2026-06-29 15:34:18 UTC] madkoding
+---SUGGESTION--- Would be nice a file sharing (like when i download 3141412 1.44MB disks xD ) could be some kind of file sharing from internet archive
+----------------------------------------------------------------------
+
+[2026-06-29 20:27:47 UTC] mars
+---SUGGESTION--- can we get a chat room for manga/manwha/manhua
+----------------------------------------------------------------------
+
+[2026-06-30 07:44:14 UTC] Monika
+---SUGGESTION--- Upon the installation of the late CLI on Windows maybe search for an existing ssh key in "$env:USERPROFILE\.ssh\id_ed25519"
+----------------------------------------------------------------------
+
+[2026-06-30 07:44:43 UTC] Monika
+---SUGGESTION--- Or suggest the end user to add this to $PROFILE (if on PowerShell): function late { late.exe --key "$env:USERPROFILE\.ssh\id_ed25519" @args }
+----------------------------------------------------------------------
+
+[2026-06-30 07:49:06 UTC] Monika
+---SUGGESTION--- Maybe it'd be a good idea to let the user choose in settings if they want to automatically reply to the message they've selected in chat or explicitly press the reply key
+----------------------------------------------------------------------
+
+[2026-06-30 08:46:15 UTC] lunar
+---SUGGESTION--- How about moving the PUZZLE SOLVED! box away from the center into the top left/middle/right so the solved puzzle is visible? This is just something small but seeing the solved nonogram, maybe also with the remaining xs filled/removed would be really satisfying imo, same with minesweeper etc..
+----------------------------------------------------------------------
+
+[2026-06-30 11:01:23 UTC] Bambus
+---SUGGESTION--- would love it if especially the nonogram boxes could be filled without gaps between them
+----------------------------------------------------------------------
+
+[2026-06-30 12:02:02 UTC] mat
+---SUGGESTION--- search func in yt history
+----------------------------------------------------------------------
+
+[2026-06-30 14:13:02 UTC] cws
+---SUGGESTION--- After mouse clicking an image, it'd be nice if clicking outside of the image would dismiss it instead of needing to reach for a key.
+----------------------------------------------------------------------
+
+[2026-06-30 14:19:05 UTC] madkodingwrk
+---SUGGESTION--- Hi, i want to suggest better message or example to how to link between accounts. Is not really god docummented for end users
+----------------------------------------------------------------------
+
+[2026-06-30 15:54:48 UTC] brightone
+---SUGGESTION--- 99% chance was asked before, still: would be cool to read HN frontpage from here :)
+----------------------------------------------------------------------
+
+[2026-06-30 18:27:25 UTC] WgDimension
+---SUGGESTION--- Although a ctrl + f inside rooms would also be nice
+----------------------------------------------------------------------
+
+[2026-06-30 19:37:59 UTC] Renu
+---SUGGESTION--- remove quoted text from reply notifications
+----------------------------------------------------------------------
+
+[2026-06-30 22:02:27 UTC] blap
+---SUGGESTION--- what do y'all think about color coded text messages for (some?) rooms
+----------------------------------------------------------------------
+
+[2026-07-01 02:04:54 UTC] blap
+---SUGGESTION--- > @rumor: yes, and the chess daily yesterday
+what do you think about the idea of spending chips to overwrite other ppl's artboard stuff?
+----------------------------------------------------------------------
+
+[2026-07-01 02:05:40 UTC] blap
+---SUGGESTION--- or alternatively spending chips to keep it active... kind of interesting possibilities there
+----------------------------------------------------------------------
+
+[2026-07-01 02:26:42 UTC] blap
+---SUGGESTION--- i got 'damage' on the window border somehow: suggest Ctrl-L to redraw screen.
+----------------------------------------------------------------------
+
+[2026-07-01 14:44:03 UTC] Bwana
+---SUGGESTION--- Maybe a ping indicator for those of us across the pond?
+----------------------------------------------------------------------
+
+[2026-07-01 15:37:27 UTC] willows
+---SUGGESTION--- "\" to focus/close out the navigator bar nvim-tree style would be amazing haha
+----------------------------------------------------------------------
+
+[2026-07-02 16:15:56 UTC] partycake
+---SUGGESTION--- There are so many themes, so how about a feature where you can favorite your favorite themes?
+----------------------------------------------------------------------
+
+[2026-07-02 18:03:20 UTC] Monika
+---SUGGESTION--- Community translations of late dot sh
+----------------------------------------------------------------------
+
+[2026-07-03 08:55:07 UTC] lunar
+---SUGGESTION--- Would be nice if the Rubiks Cube game had a way to do slice/m moves
+----------------------------------------------------------------------
+
+[2026-07-03 21:24:32 UTC] mat
+---SUGGESTION--- @mat maybe do smth for /me on clubhouse
+----------------------------------------------------------------------
+
+[2026-07-03 23:55:18 UTC] Bambus
+---SUGGESTION--- not really a suggestion but is there a use for a 3d model of the house on the 0 tab? looking for a new project
+----------------------------------------------------------------------
+
+[2026-07-04 01:13:36 UTC] Kzitold
+---SUGGESTION--- Need "clubhouse" channel, where all clubhouse messages are posted.
+----------------------------------------------------------------------
+
+[2026-07-04 01:16:11 UTC] Kzitold
+---SUGGESTION--- Or make bartender messages DM's.
+----------------------------------------------------------------------
+
+[2026-07-04 02:31:00 UTC] blap
+---SUGGESTION--- i'd make the bartender messages only appear in clubhose and not in the lounge.  but otherwise share the chats
+----------------------------------------------------------------------
+
+[2026-07-04 02:31:33 UTC] blap
+---SUGGESTION--- or maybe all chat when seated at the bar only appear in the clubhouse. idk. hard to say
+----------------------------------------------------------------------
+
+[2026-07-04 05:25:10 UTC] odd
+---SUGGESTION--- i agree with bartender being distracting in lounge. also agree main chat should remain default when joinig.
+i also think it's pretty cool if the ones in clubhouse explicitly "join" to be there
+finally, it would be very nice if there is some "proximity" functionality, some kind of dynamic "sub-rooms" maybe so like when you sit down at a table we spawn a sub-channel wehre the discussion happens, and you then can move to other things, but to actually see what's being said you need to be there. would make some interesting social interactions i think, and is sometimes pretty cool to discuss things in smaller groups
+----------------------------------------------------------------------
+
+[2026-07-04 05:26:33 UTC] odd
+---SUGGESTION--- or maybe just have a few "sub-rooms" always existing - bar, fireplace, table1, table2, etc.. but you are at one of them only one at any time (unlike the other channels here where you virtually exist in all at the same time)
+----------------------------------------------------------------------
+
+[2026-07-04 06:44:06 UTC] blap
+---SUGGESTION--- VIP SEATING ascii to left side of ArtBoard :)
+----------------------------------------------------------------------
+
+[2026-07-04 10:38:21 UTC] Kzitold
+---SUGGESTION--- I think a full screen bonsai would be kinda neat for a Raspberry Pi.
+----------------------------------------------------------------------
+
+[2026-07-04 12:10:42 UTC] Kzitold
+---SUGGESTION--- Serious suggestion. Don't rely on terminal emulator text selection to highlight selection. Change the color of selection, and/or in the case of Solitare, shift the selected card down.
+----------------------------------------------------------------------
+
+[2026-07-04 18:34:47 UTC] blap
+---SUGGESTION--- Column-by-column scrolling in clubhouse is pretty  slow and introduces big movement lag: jump-scroll of delta-10+ columns/rows can alleviate that.
+----------------------------------------------------------------------
+
+[2026-07-05 19:39:41 UTC] odd
+---SUGGESTION--- ability to set 2 themes: one light, one dark + hotkey to switch
+----------------------------------------------------------------------
+
+[2026-07-05 20:49:56 UTC] Bambus
+---SUGGESTION--- might sound weird but id love to see a positive news channel to maybe make it easier to not spiral down negative news stuff
+----------------------------------------------------------------------
+
+[2026-07-06 19:08:05 UTC] cws
+---SUGGESTION--- Seems like polls should probably have something that indicates who made the poll attached to them.
+----------------------------------------------------------------------
+
+[2026-07-07 00:19:33 UTC] cws
+---SUGGESTION--- I see the room shortcuts are supposed to be homerow. They don't make a ton of sense to non-qwerty users. Maybe either a dvorak option or a strict order option?
+----------------------------------------------------------------------
+
+[2026-07-07 05:45:13 UTC] odd
+---SUGGESTION--- @mat i was thinking to add a simple ticket management here - so we can submit, view, categorize, prioritize and more easily see progress, do you think it would make sense? or you prefer just the room
+----------------------------------------------------------------------
+
+[2026-07-07 09:44:28 UTC] igi.dog
+---SUGGESTION--- In Solitaire, an auto solve button or something when you've managed to reveal all the cards would be nice. I have to sit and spam 'A' while moving the cursor around a bunch at the minute 😅 Not exactly a major issue but just a nice QoL improvement :D
+----------------------------------------------------------------------
+
+[2026-07-07 10:46:04 UTC] Monika
+---SUGGESTION--- mailbox in the clubhouse for mentions
+----------------------------------------------------------------------
+
+[2026-07-07 13:38:16 UTC] flagrantior
+---SUGGESTION--- If we already have a mouse in bar to open profiles, maybe mouse also for walk and interact?
+----------------------------------------------------------------------
+
+[2026-07-07 14:56:09 UTC] Kzitold
+---SUGGESTION--- Code on a selection of non-entoxicating drinks the bartender serves. Juices, sodas, water (which should be free,) energy drinks, sports drinks, etc...
+----------------------------------------------------------------------
+
+[2026-07-07 20:15:28 UTC] 84nk5
+---SUGGESTION--- cool a suggestion spot is what we need. the bartender should serve alcahol as well. and add siting and walking animations
+----------------------------------------------------------------------
+
+[2026-07-07 20:59:54 UTC] mat
+---SUGGESTION--- rock and castles to aqarium!
+----------------------------------------------------------------------
+
+[2026-07-07 21:05:59 UTC] flagrantior (reply to mat: "---SUGGESTION--- rock and castles to aqarium!")
+---SUGGESTION--- > @mat: rock and castles to aqarium!
+What about event on Artboard?
+Where people can draw his variants for aquarium stuff.
+----------------------------------------------------------------------
+
+[2026-07-08 01:02:46 UTC] blap
+---SUGGESTION--- Since Lateania only works above a minimum terminal size, abort on start if terminal is below minimum size. It currently requires over 100 rows and 140 columns.
+----------------------------------------------------------------------
+
+[2026-07-08 03:25:17 UTC] kirii.md
+---SUGGESTION--- # Command for submitting songs
+this is a request made by me since I think I got used to how discord bot work.
+
+> alias:
+### add new song to the list:
+`/play` ; `/submit-track` ; `(or anything that u thing it fit better)`
+
+> structure:
+`/play <youtube-link>`
+
+
+### vote skip a song:
+> alias:
+`/skip` ; `/vote-skip`
+
+## Why?
+I love having everything I need in one place, just commands and done. I felt this way is much more convinient to me personally. This will function as a 2nd method to interact with the music player.
+----------------------------------------------------------------------
+
+[2026-07-08 03:37:27 UTC] kirii.md
+---SUGGESTION--- # search for items in shop
+there're items that I don't know it do exist or not, or items that are far down to the bottom and scroll is a pain in the ASS. Especially emojis
+
+> when in shop, press `/` to start searching for the item.
+----------------------------------------------------------------------
+
+[2026-07-08 15:36:09 UTC] lunar
+---SUGGESTION--- currently there is no safeguard for maybe accidentally pressing the refresh button in nonograms.. could be frustrating when youre far and then accidentally hit r (for whatever reason) confirmation would be nice
+----------------------------------------------------------------------
+
+[2026-07-08 19:21:49 UTC] mat
+---SUGGESTION--- - make bot a part of clubhouse so we can see his answers
+----------------------------------------------------------------------
+
+[2026-07-09 04:10:24 UTC] tangelic
+---SUGGESTION--- can late give my terminal window a title on linux pls?
+----------------------------------------------------------------------
+
+[2026-07-09 04:30:39 UTC] blap
+---SUGGESTION--- Suggestion, delete the text of someone who stops in the channel and leaves within a minute of saying "hai"
+----------------------------------------------------------------------
+
+[2026-07-09 09:09:08 UTC] Anonym3000
+---SUGGESTION--- Add an avatar for bot in the bar
+----------------------------------------------------------------------
+
+[2026-07-09 10:00:47 UTC] Anonym3000
+---SUGGESTION--- add an outside area in the clubhouse
+----------------------------------------------------------------------
+
+[2026-07-09 13:58:17 UTC] Anonym3000
+---SUGGESTION--- make it possible to ask `@bartender, one round for my table please` and give drinks to multiple people at once
+----------------------------------------------------------------------
+
+[2026-07-09 14:44:40 UTC] odd
+---SUGGESTION--- lol here's a suggestion: bartender gtfo of other rooms
+----------------------------------------------------------------------
+
+[2026-07-09 15:20:13 UTC] blap
+---SUGGESTION--- Perhaps a quote board that you can submit a different chatter's text to, e.g. if funny or maybe even important, for a certain chip cost. Maybe even 1 chip per character?  Idk. (I think this hasn't been done before)
+----------------------------------------------------------------------
+
+[2026-07-09 17:26:42 UTC] saf
+---SUGGESTION--- for chess section:
+1- add other pawn promotions
+2- add a home for king to go for castle (like chess.com or lichess website)
+----------------------------------------------------------------------
+
+[2026-07-10 11:09:09 UTC] blap
+---SUGGESTION--- since terminal resize events are sent to late.sh maybe the time * size could be logged to get some stats for what people are using. could help devs target the right resolution for real life users
+----------------------------------------------------------------------
+
+[2026-07-10 19:32:36 UTC] mat
+---SUGGESTION--- Actually I have a question: could we have a nethack view where spectators could drop in, their names appearing in a list, and there being the ability to chat while playing.
+----------------------------------------------------------------------
+
+[2026-07-12 05:46:24 UTC] srw
+---SUGGESTION--- walking out of the door in the bar should disconnect you
+----------------------------------------------------------------------
+
+[2026-07-12 14:20:25 UTC] Perzium
+---SUGGESTION--- play gif media files =P
+
+technical implementation (of sorts):
+to prevent the server from going nuts with the latency, download gif media, play it, and when the user clicks out or closes late, perform a quick cache deletion of sorts
+----------------------------------------------------------------------
+
+[2026-07-12 23:27:39 UTC] blap
+---SUGGESTION--- compact 'joined' messages to same line or even a top line
+----------------------------------------------------------------------
+
+[2026-07-14 09:40:28 UTC] Spectadrone
+---SUGGESTION--- Maybe a stock or crypto graph? or is that too serious for this fun place.  Money is evil ofcourse
+----------------------------------------------------------------------
+
+[2026-07-14 12:36:42 UTC] c9fz
+---SUGGESTION--- A mechanic in the tetris game that allows for seeing the next piece/stashing maybe
+----------------------------------------------------------------------
+
+[2026-07-14 15:18:27 UTC] CosmoDude
+---SUGGESTION--- chat: in compose view, message draft browsing with up/dn (ctrl-p/n) keys. Sometimes when writing a draft and having to esc and do something else for a while I would like to return to the previous message I was writing. Make it per channel and store ~5 drafts (or just one).
+----------------------------------------------------------------------
+
+[2026-07-16 02:20:05 UTC] kirii.md
+---SUGGESTION--- let late auto classify if a user is using late cli or not so we can help them answer question and courage the to download it
+
+future late feature gonna hav more feature that could rely on cli in order to work, as for now we have music player (youtube source) and voice chatting. If we can generalize people to download the cli, the community would be much better. 
+
+I think should treat ssh as a "demo" version and to use full features they should download the cli.
+----------------------------------------------------------------------
+
+[2026-07-16 04:42:16 UTC] blap
+---SUGGESTION--- maybe call it "terminal+ssh version" to be accurate and unbiased
+----------------------------------------------------------------------
+
+[2026-07-16 05:59:20 UTC] odd
+---SUGGESTION--- Create late API at some point - that would let us build other clients like an android app - to support basic features like chat (IRC might cover this i know)  but also other essential things like watering bonsai, feeding cat, music (just need sync, not stream)
+----------------------------------------------------------------------
+
+[2026-07-17 08:59:09 UTC] kirii.md
+---SUGGESTION--- # // Auto Update Cli
+- why?
+I'm just lazy with manually update the late cli :)
+ 
+- default: off
+It should be turn off by default so user can choose if they want to
+
+- sub-option: `Force Update` 
+By default this will be turn off and can only see if `Auto Update` is **on**. With `Force Update` turn off, each times user run `late` it will show a Yes or No prompt, if on the late will update itself when user run `late`
+
+> For now the cli can auto detect version and notify user if there're any updates, I wonder if it can also detect user's platform? (Windows, Linux, etc...) or they can add their own option manually in the settings if the cli can't detect it.
+----------------------------------------------------------------------
+
+[2026-07-17 10:54:51 UTC] Perzium
+---SUGGESTION--- Add a notifications pane =P
+Sometimes I'm playing a challenge with someone (battleship) and it sends a notification sound, but I have no idea what it is, so a notification pane would be nice
+Also it's frustrating when someone mentioned me yesterday and I cant see what their message was after 24 hours...
+----------------------------------------------------------------------
+
+[2026-07-20 09:40:41 UTC] blap
+---SUGGESTION--- Allow user 'photo album' and snapshot development for a small fee.  Photos are saved as 24bit-color ansi utf-8 text.  They can be snapshots of a game, or screen-recordings of a game (text format, like asciicinema, etc)
+----------------------------------------------------------------------
+
+[2026-07-21 09:58:27 UTC] flagrantior
+---SUGGESTION--- Pin chat group titles on the left sidebar [my dms are always over the screen].
+   And show summary unread chats count after title eg "- dms 2".
+----------------------------------------------------------------------
+
+[2026-07-21 16:10:27 UTC] mhrstv
+---SUGGESTION--- maybe add 🤘as a name badge :3
+----------------------------------------------------------------------
+
+[2026-07-21 19:09:24 UTC] mhrstv
+---SUGGESTION--- make name decorations(shimmer, glow, etc) more expensive but permanent
+----------------------------------------------------------------------
+
+[2026-07-21 23:35:13 UTC] CosmicOsmo
+---SUGGESTION--- Nethack: options file editing. Usually this is implemented as some kind of vim.
+----------------------------------------------------------------------
+
+[2026-07-22 07:50:44 UTC] mhrstv
+---SUGGESTION--- in the green dragon game, in the forest 'look for something to kill' should be the highlighted option by default. it's really irritating when a fight ends before you expect it to and you accidentally press enter on 'go slumming', which gives you a weaker opponent and less rewards 😢
+----------------------------------------------------------------------
+
+[2026-07-22 07:52:35 UTC] mhrstv
+---SUGGESTION--- also speaking of the green dragon, when fighting the original game had autofight options like 5 rounds, 10 rounds, until you're at half health, would be cool if we had it here, will save a lot of enter pressing :D
+----------------------------------------------------------------------
+
+[2026-07-22 08:01:38 UTC] mhrstv
+---SUGGESTION--- i'm so very sorry to spam here lol, but i really can't find a theme where i can clearly see my cursor in sudoku, especially when highlighting a number, maybe crank up the cursor contrast a bit?
+----------------------------------------------------------------------
+
+[2026-07-22 08:25:02 UTC] Svovl
+---SUGGESTION--- an easy way to copy the browser pairing URL from the Guide panel. I had to scan the QR code and copy of the URL from my phone to open the page on my laptop.
+----------------------------------------------------------------------
+
+[2026-07-22 09:00:07 UTC] sloth
+---SUGGESTION--- The lounge needs a cat in addition to the dog, I think
+----------------------------------------------------------------------
+
+[2026-07-22 09:46:55 UTC] odd (reply to sloth: "---SUGGESTION--- The lounge needs a cat in addition to the d")
+> @sloth: 💡 The lounge needs a cat in addition to the dog,...
+you can switch between cat and dog . or you mean have both?
+----------------------------------------------------------------------
+
+[2026-07-22 10:11:56 UTC] mat
+---SUGGESTION--- It could be cool to see a map of the distribution of people though
+----------------------------------------------------------------------
+
+[2026-07-22 14:09:41 UTC] zzril
+---SUGGESTION--- Navigation w/ `g` / `G` on the help pages would be nice...
+----------------------------------------------------------------------
+
+[2026-07-22 14:12:06 UTC] miku
+---SUGGESTION--- increase reward for sudoku: even the easy one takes a lot of time but only rewards 100 chips
+----------------------------------------------------------------------
+
+[2026-07-22 14:32:14 UTC] sickday
+---SUGGESTION--- display a prompt that tells us the ideal terminal dimensions before we play games. didn't know I couldn't play snake @ 800 x 600 :(
+----------------------------------------------------------------------
+
+[2026-07-22 14:46:06 UTC] dickandballs
+---SUGGESTION--- Add cigarettes I can buy and smoke emitting an annoying grey cloud of symbols around my character and making other stick men sick
+----------------------------------------------------------------------
+
+[2026-07-22 16:11:04 UTC] FLYEMOJI
+---SUGGESTION--- Maybe a i18n support?
+----------------------------------------------------------------------
+
+[2026-07-23 16:11:46 UTC] noon
+---SUGGESTION--- random nicknames in place of user names in the confessional channel
+----------------------------------------------------------------------
+
+[2026-07-23 19:44:17 UTC] preston-2
+---SUGGESTION--- add a hardware or electronics channel!!!!
+----------------------------------------------------------------------
+
+[2026-07-23 19:46:01 UTC] cws (reply to preston-2: "---SUGGESTION--- add a hardware or electronics channel!!!!")
+> @preston-2: 💡 add a hardware or electronics channel!!!!
+You can find #electronics in the "browse rooms" sidebar item and join it!
+----------------------------------------------------------------------
+
+[2026-07-23 20:28:44 UTC] mat
+> @mat: and noone will go ot a page to copy/paste urls e...
+the idea is to have a script to do that, and auto plug it into mpv or something
+----------------------------------------------------------------------
+
+[2026-07-24 06:25:45 UTC] odd
+---SUGGESTION--- hide pet should hide it even when strolling - very annoying in games :D
+----------------------------------------------------------------------
+
+[2026-07-24 08:51:24 UTC] dani99
+---SUGGESTION--- add white/brown noise along with music option for noise canceling / conversation suppression / enhanced focus etc
+----------------------------------------------------------------------
+
+[2026-07-24 08:55:33 UTC] ariedov
+---SUGGESTION--- add support for .pls links for music playlists
+----------------------------------------------------------------------
+
+[2026-07-24 13:24:29 UTC] crk
+---SUGGESTION--- Have the ability to purchase username modifiers (glow, gradient, shimmer) on a weekly basis or have them auto-renew.
+----------------------------------------------------------------------
+
+[2026-07-24 13:41:05 UTC] odd
+---SUGGESTION--- FAQ as first section in help with things like "how to play music", "how to view mentions", ... with on-the-spot answers
+----------------------------------------------------------------------
+
+[2026-07-24 14:26:18 UTC] compiled
+---SUGGESTION--- a specific room to ask bot questions
+----------------------------------------------------------------------
+
+[2026-07-24 14:27:06 UTC] odd (reply to compiled: "---SUGGESTION--- a specific room to ask bot questions")
+> @compiled: 💡 a specific room to ask bot questions
+i think #help can be used for this
+----------------------------------------------------------------------
+
+[2026-07-24 14:29:29 UTC] kirii.md (reply to odd: "> @compiled: 💡 a specific room to ask bot questions i think ")
+> @odd: i think #help can be used for this
+think we might need to add a short bio for each room so user know what they can do with it
+----------------------------------------------------------------------
+
+[2026-07-24 14:57:12 UTC] Tasmania (reply to kirii.md: "> @odd: i think #help can be used for this think we might ne")
+> @kirii.md: think we might need to add a short bio for each...
+Already in PRs :)
+----------------------------------------------------------------------
+
+[2026-07-24 15:24:00 UTC] eljeje
+---SUGGESTION--- add a status, very much like whatapps for example. aka a feature sharing temporary updates attached to your nickname
+----------------------------------------------------------------------
+
+[2026-07-24 15:30:52 UTC] eljeje
+---SUGGESTION--- when somebody reply to you in the chat, the reply should be highligthed, the same for mentions
+----------------------------------------------------------------------
+
+[2026-07-24 16:07:12 UTC] sbr
+---SUGGESTION--- would be cool if bartender could walk as well. to the first person that walked at the bar
+----------------------------------------------------------------------
+
+[2026-07-24 17:11:36 UTC] capitalist
+---SUGGESTION--- blackjack needs a way to split
+----------------------------------------------------------------------
+
+[2026-07-24 17:57:26 UTC] zzril
+---SUGGESTION--- vi-style line editing!
+----------------------------------------------------------------------
+
+[2026-07-24 18:45:07 UTC] eljeje
+---SUGGESTION--- when people are idle for too long, their nickname should be dimmed.
+----------------------------------------------------------------------
+
+[2026-07-24 19:11:25 UTC] ardbeg
+---SUGGESTION--- dimming of idle nicknames should be configurable for privacy reasons
+----------------------------------------------------------------------
+
+[2026-07-24 19:39:41 UTC] jimmy-4
+---SUGGESTION--- put LORD2 in the games --- or a door to the outside where the outside is kinda like lord2
+----------------------------------------------------------------------
+
+[2026-07-24 21:24:54 UTC] eljeje
+---SUGGESTION--- the mentions in #mentions should be clickable, if i click, it should jump on the #channel + position of the of the mentions, thus i got context of where/when the mentions has been done
+----------------------------------------------------------------------
+
+[2026-07-25 00:58:25 UTC] njg-2
+---SUGGESTION--- blackjack needs sidebets
+----------------------------------------------------------------------
+
+[2026-07-25 02:52:06 UTC] kirii.md
+---SUGGESTION--- .
+# text editor (for chat input)
+- only work for cli (if it can open user prefer text editor like vim)
+
+## why?
+editing ur text in late can be a bit "annoying" since late doesn't fully support it, everything u can do is pretty barebone and a bit clunky.
+
+so I think wouldn't it be cool if u could use ur fav text editor to do that one, especially when u're editing a big paragraph of text.
+
+## how it work:
+- shortcut: `ctrl e`
+- requirement: is using chat input. && have a text editor configured in the settings
+
+> settings: tweaks tab -> compose section
+- **Use external text editor**: <string> (default: none)
+EX:
+- **Use external text editor**: nvim
+
+late will use the same string that use to trigger that text editor. After user done editing they can *save*, it will close the text editor and apply the result to the chat input.
+
+this option act as an alternative way to edit ur text, I know (especially nvim user) have a lot of plugins that allow them edit paragraph much faster, so this suggestion might be it.
+----------------------------------------------------------------------
+
+[2026-07-25 06:18:36 UTC] eljeje
+---SUGGESTION--- support selecting text in ssh/cli, thus copy/paste usual operation is possible
+----------------------------------------------------------------------
+
+[2026-07-25 06:39:47 UTC] kirii.md
+https://files.late.sh/chat/2026/07/019f9800-338b-7d01-b3d2-1255615c5b11.png
+
+# We do hav it supported!
+----------------------------------------------------------------------
+
+[2026-07-25 16:36:04 UTC] reiwa.ca
+---SUGGESTION--- is it possible to make the nonograms always solvable? as it stands, the daily monogram puzzles (which give coins and are often part of the daily quests) sometimes are not solvable because the clues are too small or too few to have just one solution. for smaller games, this isn't a huuge issue, because you can make a guess and have a fairly high chance of getting to one of the solutions but for the larger board sizes this is almost impossible, which makes it often impossible to claim the monetary prize or achieve the daily quest.
+----------------------------------------------------------------------
+
+[2026-07-25 20:12:23 UTC] eljeje
+---SUGGESTION--- pool do not mentions the author, they should
+----------------------------------------------------------------------
+
+[2026-07-25 22:33:42 UTC] eljeje
+---SUGGESTION--- handle a readline-like history, with up to get previous msg, and down to get next msf
+----------------------------------------------------------------------
+
+[2026-07-26 11:27:39 UTC] mat
+---SUGGESTION--- add a group dunkeness metric too that could trigger a world event like a bar fight :P
+----------------------------------------------------------------------
+
+[2026-07-26 11:41:24 UTC] cws
+---SUGGESTION--- Give a section/entry in the channel rail for lobby game chats you're sitting in
+----------------------------------------------------------------------
+
+[2026-07-26 14:02:00 UTC] ardbeg
+---SUGGESTION--- allow public room creators to set their own topics
+----------------------------------------------------------------------
+
+[2026-07-26 14:03:14 UTC] ardbeg
+---SUGGESTION--- allow sorting the room directory by number of members or messages
+----------------------------------------------------------------------
+
+[2026-07-26 15:51:08 UTC] mhrstv
+---SUGGESTION--- let us toggle the audio visualizer on/off without removing music entirely from the sidebar, and maybe an option to collapse the radios to just the one playing at the moment, so we can have the bonzai showing on a 1080p laptop screens too :D
+----------------------------------------------------------------------
+
+[2026-07-26 23:55:58 UTC] Tasmanwork (reply to mhrstv: "---SUGGESTION--- let us toggle the audio visualizer on/off w")
+> @mhrstv: 💡 let us toggle the audio visualizer on/off with...
+Both of those are already PR's and coming shortly :)
+----------------------------------------------------------------------
+
+[2026-07-27 18:22:22 UTC] sbr
+---SUGGESTION--- add arrow keys support to crawl
+----------------------------------------------------------------------
+
+[2026-07-28 01:16:14 UTC] LordWasd
+---SUGGESTION--- Bring back the pairing system for the audio streams.
+----------------------------------------------------------------------
+
+[2026-07-28 04:25:22 UTC] ardbeg
+---SUGGESTION--- a way to make inline image viewing higher resolution
+----------------------------------------------------------------------
+
+[2026-07-28 17:40:03 UTC] ardbeg
+---SUGGESTION--- a button to jump to the next unread room, similar to alt+a in irssi
+----------------------------------------------------------------------
+
+[2026-07-28 17:41:22 UTC] ardbeg
+---SUGGESTION--- allow adding suggestions with the i compose button instead of having to use /suggest
+----------------------------------------------------------------------
+
+[2026-07-28 21:08:47 UTC] WoodenPeak
+---SUGGESTION--- dnd room should be rpg room
+----------------------------------------------------------------------
+
+[2026-07-29 05:15:45 UTC] r4ppzX
+---SUGGESTION--- make the announcement window scrollable using the arrow keys
+----------------------------------------------------------------------
+
+[2026-07-29 05:34:27 UTC] kirii.md
+---SUGGESTION--- !
+# New Messages bar should be bolder
+- just make it seperate msgs better especially in suggestions channel when there's alot of bar, doing it would make it easier to look at
+
+- Current:
+───────────── new messages ──────────
+
+- After:
+━━━━━━━━━━━━━ new messages ━━━━━━━━━━
+----------------------------------------------------------------------
+
+[2026-07-29 13:32:07 UTC] LordWasd
+---SUGGESTION--- Add escape key to:
+1. Allow things like use of the ? - For example in games like Green Dragon within the ingame chat interfaces. - Currently attempting to puncuate with a question mark results in the global help menu intercepting the "?"
+2. Allow getting to the chat context without having to exit the game completely.
+----------------------------------------------------------------------
+
+[2026-07-29 15:10:10 UTC] Juest
+---SUGGESTION--- synchronized channel list with irc
+----------------------------------------------------------------------
+
+[2026-07-30 17:53:56 UTC] mat
+global map that shows where everyone is from
+----------------------------------------------------------------------
+
+[2026-07-30 19:03:13 UTC] skel101
+---SUGGESTION--- a trdanig card gmae or other kind of gmae taht alowls users to trade collectibels between each ohter
+----------------------------------------------------------------------
+
+[2026-07-31 02:12:43 UTC] kirii.md (reply to skel101: "---SUGGESTION--- a trdanig card gmae or other kind of gmae t")
+> @skel101: 💡 a trdanig card gmae or other kind of gmae taht...
+this is actually did suggested (by me) I'll resend the detailed suggestion..
+----------------------------------------------------------------------
+
+[2026-07-31 13:12:41 UTC] eljeje
+---SUGGESTION--- Feature Request: High-Stakes pet mechanics.
+
+I suggest rewarding players with chips for maintaining a daily pet care streak to make it more engaging. To balance this, neglecting the pet should incur a penalty, such as a chip fine or a funny punishment like having to type an apology 100 times.
+----------------------------------------------------------------------
+
+[2026-07-31 17:50:29 UTC] skel101
+---SUGGESTION--- add dub techno as a genre in the radio
+----------------------------------------------------------------------
+
+[2026-08-01 03:16:03 UTC] kirii.md (reply to skel101: "---SUGGESTION--- add dub techno as a genre in the radio")
+> @skel101: 💡 add dub techno as a genre in the radio
+in order to do that you or mat need to find a big list of royalty-free tracks.
+----------------------------------------------------------------------
+
+[2026-08-01 20:57:22 UTC] astersystem
+---SUGGESTION--- ability to show what someone is listening to - maybe set a thing to switch between listenbrainz, last.fm and mpris?
+----------------------------------------------------------------------
+
+[2026-08-02 10:57:10 UTC] odd
+---SUGGESTION--- option to easily hide bot conversations (all msgs mentioning bots and replies from bots)
+----------------------------------------------------------------------
+
+[2026-08-02 17:50:02 UTC] eljeje
+---SUGGESTION--- Unify TUI room entry by adding /join #room. It should join any existing public room or private room you have access to, and optionally create a public room if it doesn't exist yet, matching standard IRC expectations and simplifying room navigation.
+----------------------------------------------------------------------
+
+[2026-08-03 13:46:40 UTC] Renu
+---SUGGESTION--- interactive aquarium with mouse clicks. maybe scares the fish away or smthn
+----------------------------------------------------------------------
+
+[2026-08-03 14:28:30 UTC] Tasmania (reply to Renu: "---SUGGESTION--- interactive aquarium with mouse clicks. may")
+> @Renu: 💡 interactive aquarium with mouse clicks. maybe...
+mouse stuff is in the pipes in a pretty big way.
+----------------------------------------------------------------------
+
+[2026-08-04 14:49:31 UTC] eljeje
+---SUGGESTION--- in nick completion widget, sort by recency of activity on the channel you are in, aka if @aac talked on the channel 10sec ago, and there is a @aab connected, put @aac first
+----------------------------------------------------------------------
+
+[2026-08-05 09:55:45 UTC] mojoro
+---SUGGESTION--- add a repeatable mode to Le Word with random selection from the dictionary, vis-a-vis solitaire, minesweeper, etc.
+----------------------------------------------------------------------
+
+[2026-08-06 03:41:34 UTC] eljeje
+---SUGGESTION--- add a auto translator in the CLI thus we could have multi-lingual chat. the user declares its main language, if a message is not in this language, we use a model running on the user computer to translate it
+----------------------------------------------------------------------
+
+[2026-08-06 10:18:01 UTC] sbr
+---SUGGESTION--- a keybind/button to quickly clear all mentions
+----------------------------------------------------------------------
+
+[2026-08-06 17:39:14 UTC] astersystem
+---SUGGESTION--- pinning messages
+----------------------------------------------------------------------
+
+[2026-08-06 17:39:39 UTC] astersystem
+---SUGGESTION--- also room-specific moderators
+----------------------------------------------------------------------
