@@ -994,7 +994,6 @@ async fn unlinked_cs_command_offers_the_link_modal_without_leaving_the_room() {
     app.handle_input(b"i/cs\r");
     wait_for_render_contains(&mut app, " Link cyberspace account ").await;
     wait_for_render_contains(&mut app, "https://cyberspace.online").await;
-    println!("{}", render_plain(&mut app));
     assert!(
         app.chat.cyberspace.modal_active(),
         "the link modal should own the input"
@@ -1029,6 +1028,10 @@ async fn linked_account_gets_the_rail_entry_and_the_pane() {
 
     app.handle_input(b"i/cs\r");
     wait_for_render_contains(&mut app, "Home · cyberspace").await;
+    // The pane header names the account and the notification key, so the
+    // rail badge is not the only thing explaining the count.
+    wait_for_render_contains(&mut app, "@oddity on cyberspace.online").await;
+    wait_for_render_contains(&mut app, "n notifications").await;
     assert!(app.chat.cyberspace_selected, "/cs should open the pane");
     assert!(
         !app.chat.cyberspace.modal_active(),

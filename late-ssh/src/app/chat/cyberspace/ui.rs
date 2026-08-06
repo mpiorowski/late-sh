@@ -106,11 +106,15 @@ fn draw_pitch(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
+    let [header_area, area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+    draw_feed_header(frame, header_area, state, username);
+
     if state.posts.is_empty() {
         let text = if state.loading {
             "Loading the cyberspace feed...".to_string()
         } else {
-            format!("No entries yet. Linked as {username}. Press r to refresh, p to post.")
+            "No entries yet. Press r to refresh, p to post.".to_string()
         };
         frame.render_widget(
             Paragraph::new(Text::from(text)).style(Style::default().fg(theme::TEXT_DIM())),
@@ -147,6 +151,58 @@ fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
             content,
         );
     }
+}
+
+/// Identity on the left, notification state on the right. The rail badge only
+/// says "cyberspace (3)", which reads like new entries; this is where the
+/// count gets named as notifications and points at the key that opens them.
+fn draw_feed_header(frame: &mut Frame, area: Rect, state: &State, username: &str) {
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let (right_text, right_style) = if state.unread_count() > 0 {
+        (
+            format!(
+                "● {} unread notification{} · n to open",
+                state.unread_count(),
+                if state.unread_count() == 1 { "" } else { "s" }
+            ),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            "n notifications".to_string(),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )
+    };
+    let right_width = right_text.chars().count() as u16;
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("@{username}"),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " on cyberspace.online",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ])),
+        left_area,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(right_text, right_style))),
+        right_area,
+    );
 }
 
 fn feed_entry_lines(post: &CsPost) -> Vec<Line<'static>> {

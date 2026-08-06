@@ -242,6 +242,39 @@ impl CsApi {
         .await
     }
 
+    // TEMPORARY PROBE (notification -> post jump). `CsNotification` drops
+    // every field it does not name, so the typed value cannot tell us whether
+    // the API hands out a post id. These two return raw status + body for one
+    // look at the real shape. Delete both once the jump is wired.
+    pub async fn probe_notifications_raw(&self, id_token: &str) -> (u16, String) {
+        self.probe_get(
+            &format!("/v1/notifications?limit={NOTIFICATIONS_PAGE_LIMIT}"),
+            id_token,
+        )
+        .await
+    }
+
+    pub async fn probe_path(&self, path: &str, id_token: &str) -> (u16, String) {
+        self.probe_get(path, id_token).await
+    }
+
+    async fn probe_get(&self, path: &str, id_token: &str) -> (u16, String) {
+        let response = self
+            .http
+            .get(format!("{}{path}", self.base_url))
+            .bearer_auth(id_token)
+            .send()
+            .await;
+        match response {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body = response.text().await.unwrap_or_default();
+                (status, body.chars().take(2000).collect())
+            }
+            Err(e) => (0, e.without_url().to_string()),
+        }
+    }
+
     pub async fn unread_count(&self, id_token: &str) -> Result<i64, CsApiError> {
         #[derive(Deserialize)]
         struct Count {
