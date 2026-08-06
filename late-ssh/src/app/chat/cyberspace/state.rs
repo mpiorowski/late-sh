@@ -90,10 +90,13 @@ pub(crate) struct ReplyModal {
     pub busy: bool,
 }
 
+/// Boxed variants: each modal carries its own `TextArea`s, so the inline enum
+/// would be ~2KB living in every session's pane state whether a modal is open
+/// or not.
 pub(crate) enum Modal {
-    Link(LinkModal),
-    Compose(ComposeModal),
-    Reply(ReplyModal),
+    Link(Box<LinkModal>),
+    Compose(Box<ComposeModal>),
+    Reply(Box<ReplyModal>),
 }
 
 pub struct State {
@@ -201,10 +204,7 @@ impl State {
             }
             View::Thread => {
                 let ceiling = self.thread.as_ref().map_or(0, thread_scroll_ceiling);
-                self.thread_scroll = self
-                    .thread_scroll
-                    .saturating_add_signed(delta)
-                    .min(ceiling);
+                self.thread_scroll = self.thread_scroll.saturating_add_signed(delta).min(ceiling);
             }
             View::Notifications => {
                 self.notif_selected =
@@ -281,13 +281,13 @@ impl State {
         set_themed_textarea_cursor_visible(&mut email, true);
         let mut password = new_themed_textarea("password", WrapMode::None, false);
         password.set_mask_char('•');
-        self.modal = Some(Modal::Link(LinkModal {
+        self.modal = Some(Modal::Link(Box::new(LinkModal {
             email,
             password,
             focus: LinkField::Email,
             error: None,
             busy: false,
-        }));
+        })));
     }
 
     pub fn open_compose_modal(&mut self) -> Option<Banner> {
@@ -296,14 +296,14 @@ impl State {
                 "Link your cyberspace account first: /cs link",
             ));
         }
-        self.modal = Some(Modal::Compose(ComposeModal {
+        self.modal = Some(Modal::Compose(Box::new(ComposeModal {
             title: new_themed_textarea("Title (optional)", WrapMode::None, true),
             topics: new_themed_textarea("Topics, up to 3 (optional)", WrapMode::None, false),
             body: new_themed_textarea("Write your entry (markdown)...", WrapMode::Word, false),
             focus: ComposeField::Title,
             error: None,
             busy: false,
-        }));
+        })));
         None
     }
 
@@ -311,12 +311,12 @@ impl State {
         let Some(post) = self.current_thread_post() else {
             return;
         };
-        self.modal = Some(Modal::Reply(ReplyModal {
+        self.modal = Some(Modal::Reply(Box::new(ReplyModal {
             post,
             body: new_themed_textarea("Write your reply (markdown)...", WrapMode::Word, true),
             error: None,
             busy: false,
-        }));
+        })));
     }
 
     fn current_thread_post(&self) -> Option<CsPost> {

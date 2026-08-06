@@ -265,7 +265,9 @@ impl CyberspaceService {
                 };
                 let post = match service.api.get_post(&token, &post_id).await {
                     Ok(post) => post,
-                    Err(e) => return service.fail(user_id, format!("opening the entry failed: {e}")),
+                    Err(e) => {
+                        return service.fail(user_id, format!("opening the entry failed: {e}"));
+                    }
                 };
                 match service.api.list_replies(&token, &post.post_id).await {
                     Ok(replies) => service.publish(CsEvent::ThreadLoaded {

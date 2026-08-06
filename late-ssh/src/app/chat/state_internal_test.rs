@@ -2331,7 +2331,10 @@ fn parse_pair_command_rejects_bare_and_malformed_forms() {
 
 #[test]
 fn parse_cyberspace_command_reads_the_subcommands_and_leaves_neighbours_alone() {
-    assert_eq!(parse_cyberspace_command("/cs"), Some(CyberspaceCommand::Open));
+    assert_eq!(
+        parse_cyberspace_command("/cs"),
+        Some(CyberspaceCommand::Open)
+    );
     assert_eq!(
         parse_cyberspace_command("/cyberspace"),
         Some(CyberspaceCommand::Open)

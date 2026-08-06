@@ -47,11 +47,7 @@ fn entering_the_pane_refetches_the_feed_but_not_on_every_landing() {
     // would otherwise be an authenticated call to a third party.
     assert!(feed_reload_due(true, false, None), "first open must fetch");
     assert!(!feed_reload_due(true, false, Some(Duration::from_secs(5))));
-    assert!(feed_reload_due(
-        true,
-        false,
-        Some(Duration::from_secs(30))
-    ));
+    assert!(feed_reload_due(true, false, Some(Duration::from_secs(30))));
     // Never on top of a fetch in flight, and never without a token.
     assert!(!feed_reload_due(true, true, None));
     assert!(!feed_reload_due(false, false, None));
@@ -130,7 +126,11 @@ async fn a_thread_that_finished_loading_after_the_user_left_is_dropped() {
             replies: Vec::new(),
         },
     });
-    assert_eq!(state.view, View::Feed, "a stale load must not yank the view");
+    assert_eq!(
+        state.view,
+        View::Feed,
+        "a stale load must not yank the view"
+    );
     assert!(state.thread.is_none());
 }
 
