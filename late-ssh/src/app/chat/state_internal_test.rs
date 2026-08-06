@@ -1414,6 +1414,19 @@ fn parse_public_room_without_hash() {
 }
 
 #[test]
+fn join_opens_a_public_room_like_public_does() {
+    assert_eq!(parse_public_room_command("/join #lobby"), Some("lobby"));
+    assert_eq!(parse_public_room_command("/join lobby"), Some("lobby"));
+    assert_eq!(parse_public_room_command("/public #lobby"), Some("lobby"));
+
+    // A bare alias is not a room command, so it falls through to the unknown
+    // command banner the same way a bare `/public` does.
+    assert_eq!(parse_public_room_command("/join "), None);
+    assert_eq!(parse_public_room_command("/join #"), None);
+    assert_eq!(parse_public_room_command("/joins lobby"), None);
+}
+
+#[test]
 fn parse_private_room_with_hash() {
     assert_eq!(
         parse_room_command("/private #hideout", "/private"),

@@ -2610,7 +2610,7 @@ impl ChatState {
 
         // Public rooms are hosted, not owned: `/public` only ever opens or
         // joins one, and a mod sets its topic and rules afterwards.
-        if let Some(room) = parse_room_command(&body, "/public") {
+        if let Some(room) = parse_public_room_command(&body) {
             if user_created_channel_name_too_long(room) {
                 return Some(user_created_channel_name_length_error());
             }
@@ -5683,6 +5683,16 @@ fn parse_room_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
         return None;
     }
     Some(slug)
+}
+
+/// Parse the composer text for a command that opens a public room. `/join` is
+/// an alias for `/public`, not a second behavior: it is the name an IRC user
+/// reaches for first, and the IRC bridge already answers to it.
+fn parse_public_room_command(input: &str) -> Option<&str> {
+    match parse_room_command(input, "/public") {
+        Some(slug) => Some(slug),
+        None => parse_room_command(input, "/join"),
+    }
 }
 
 fn user_created_channel_name_too_long(slug: &str) -> bool {

@@ -461,6 +461,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /profile [@user]   open your profile, or another user's profile",
         "  /exit              open quit confirm",
         "  /public #room      open/create opt-in public room",
+        "  /join #room        same as /public",
         "  /private #room     create a private room",
         "  /roominfo          set this room's topic & rules (owner, or a mod)",
         "  /rules             show this room's rules",

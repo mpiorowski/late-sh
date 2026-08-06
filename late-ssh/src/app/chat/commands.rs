@@ -116,6 +116,7 @@ const COMMANDS: &[Command] = &[
     global("icons", "open icon picker"),
     global("ignore", "mute a user (/ignore @user; bare lists)"),
     global("invite", "add a user to this room (/invite @user)"),
+    global("join", "open/create a public room (/join #room)"),
     global("kick", "remove a user from your room (/kick @user)"),
     global("leave", "leave room"),
     global("list", "list public rooms"),
