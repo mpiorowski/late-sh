@@ -34,14 +34,6 @@ impl std::fmt::Display for CsApiError {
     }
 }
 
-impl CsApiError {
-    /// True when the bearer token is the problem (expired or revoked), so the
-    /// caller should refresh and retry once before surfacing the failure.
-    pub fn is_unauthorized(&self) -> bool {
-        matches!(self, Self::Api { code, .. } if code == "UNAUTHORIZED")
-    }
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginTokens {
@@ -221,14 +213,12 @@ impl CsApi {
         post_id: &str,
         content: &str,
     ) -> Result<(), CsApiError> {
-        let _: serde_json::Value = self
-            .post_json(
-                "/v1/replies",
-                Some(id_token),
-                &serde_json::json!({ "postId": post_id, "content": content }),
-            )
-            .await?;
-        Ok(())
+        self.post_void(
+            "/v1/replies",
+            Some(id_token),
+            &serde_json::json!({ "postId": post_id, "content": content }),
+        )
+        .await
     }
 
     pub async fn list_notifications(
@@ -287,14 +277,12 @@ impl CsApi {
     }
 
     pub async fn mark_all_notifications_read(&self, id_token: &str) -> Result<(), CsApiError> {
-        let _: serde_json::Value = self
-            .post_json(
-                "/v1/notifications/read-all",
-                Some(id_token),
-                &serde_json::json!({}),
-            )
-            .await?;
-        Ok(())
+        self.post_void(
+            "/v1/notifications/read-all",
+            Some(id_token),
+            &serde_json::json!({}),
+        )
+        .await
     }
 
     async fn get_json<T: DeserializeOwned>(
@@ -328,6 +316,26 @@ impl CsApi {
         let response = request.send().await.map_err(transport)?;
         decode_envelope(response).await
     }
+
+    /// POST to an endpoint whose payload we do not read. See [`parse_void`].
+    async fn post_void(
+        &self,
+        path: &str,
+        id_token: Option<&str>,
+        body: &serde_json::Value,
+    ) -> Result<(), CsApiError> {
+        let mut request = self
+            .http
+            .post(format!("{}{path}", self.base_url))
+            .json(body);
+        if let Some(token) = id_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(transport)?;
+        let status = response.status().as_u16();
+        let body = response.text().await.map_err(transport)?;
+        parse_void(status, &body)
+    }
 }
 
 fn transport(error: reqwest::Error) -> CsApiError {
@@ -344,15 +352,16 @@ async fn decode_envelope<T: DeserializeOwned>(
     parse_envelope(status.as_u16(), &body)
 }
 
+#[derive(Deserialize)]
+struct ErrorBody {
+    code: String,
+    #[serde(default)]
+    message: String,
+}
+
 /// Every response is `{ "data": ... }` or `{ "error": { code, message } }`.
 /// The error branch wins whenever present, since 4xx/5xx bodies carry it.
 fn parse_envelope<T: DeserializeOwned>(status: u16, body: &str) -> Result<T, CsApiError> {
-    #[derive(Deserialize)]
-    struct ErrorBody {
-        code: String,
-        #[serde(default)]
-        message: String,
-    }
     #[derive(Deserialize)]
     struct Envelope<T> {
         data: Option<T>,
@@ -375,6 +384,32 @@ fn parse_envelope<T: DeserializeOwned>(status: u16, body: &str) -> Result<T, CsA
         (Some(data), None) => Ok(data),
         (None, None) => Err(CsApiError::Transport(format!(
             "response carried neither data nor error (HTTP {status})"
+        ))),
+    }
+}
+
+/// Same envelope, for the endpoints whose payload we deliberately ignore.
+/// Only the error branch matters: a 2xx carrying `{"data": null}`, or no body
+/// at all, means the call landed. Routing those through `parse_envelope` with
+/// `T = Value` reports a successful write as a transport failure, which on the
+/// reply path means a landed reply looks failed and the user sends it twice.
+fn parse_void(status: u16, body: &str) -> Result<(), CsApiError> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        error: Option<ErrorBody>,
+    }
+
+    // An explicit error wins whatever the status says, same as parse_envelope.
+    if let Ok(Envelope { error: Some(error) }) = serde_json::from_str::<Envelope>(body) {
+        return Err(CsApiError::Api {
+            code: error.code,
+            message: error.message,
+        });
+    }
+    match (200..300).contains(&status) {
+        true => Ok(()),
+        false => Err(CsApiError::Transport(format!(
+            "unexpected response (HTTP {status})"
         ))),
     }
 }

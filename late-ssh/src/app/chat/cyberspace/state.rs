@@ -26,6 +26,12 @@ const MAX_TOPICS: usize = 3;
 /// minutes from one global task; this one rides the session tick instead,
 /// because the count is per user and needs that user's own token.
 const UNREAD_POLL_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// How stale the feed has to be before *entering* the pane refetches it.
+/// Entering happens more often than it looks: cycling the room rail lands on
+/// the slot, and every landing would otherwise be an authenticated call to a
+/// third party under the user's own token, which is the traffic shape their
+/// anti-bot terms are about. `r` is the explicit refresh and ignores this.
+const FEED_RELOAD_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Outcome of one pane tick, mirroring `FeedsTick`.
 pub struct CsTick {
@@ -104,6 +110,8 @@ pub struct State {
     pub(crate) notif_selected: usize,
     unread_count: i64,
     last_unread_poll: Instant,
+    /// `None` until the first feed load of this session.
+    last_feed_load: Option<Instant>,
     pub(crate) loading: bool,
     pub(crate) modal: Option<Modal>,
 }
@@ -128,6 +136,7 @@ impl State {
             // `session_init_task` above fetches the count for a linked user,
             // so the interval starts running from session start.
             last_unread_poll: Instant::now(),
+            last_feed_load: None,
             loading: false,
             modal: None,
         }
@@ -141,25 +150,42 @@ impl State {
         matches!(self.link, LinkStatus::Linked { .. })
     }
 
+    /// Known to be unlinked, as opposed to [`LinkStatus::Unknown`] where the
+    /// session-init answer has not landed yet. The shell uses this to drop a
+    /// pane the rail has stopped listing, so it must not fire on "not sure".
+    pub(crate) fn is_unlinked(&self) -> bool {
+        matches!(self.link, LinkStatus::Unlinked)
+    }
+
     pub fn modal_active(&self) -> bool {
         self.modal.is_some()
     }
 
-    /// Entering the pane (rail selection or /cs): fresh feed for linked
-    /// users, nothing for unlinked ones (the pane shows the pitch + login).
+    /// Entering the pane (rail selection or `/cs`): a fresh feed for linked
+    /// users, rate-limited by [`FEED_RELOAD_INTERVAL`], and nothing at all for
+    /// unlinked ones (they never reach the pane).
     pub fn opened(&mut self) {
         self.view = View::Feed;
-        if self.is_linked() {
-            self.loading = true;
-            self.service.load_feed_task(self.user_id);
+        if feed_reload_due(
+            self.is_linked(),
+            self.loading,
+            self.last_feed_load.map(|at| at.elapsed()),
+        ) {
+            self.load_feed();
         }
     }
 
+    /// `r`: the user asking for the feed, so no interval applies.
     pub(crate) fn refresh(&mut self) {
         if self.is_linked() {
-            self.loading = true;
-            self.service.load_feed_task(self.user_id);
+            self.load_feed();
         }
+    }
+
+    fn load_feed(&mut self) {
+        self.last_feed_load = Some(Instant::now());
+        self.loading = true;
+        self.service.load_feed_task(self.user_id);
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
@@ -168,7 +194,11 @@ impl State {
                 self.selected = step_index(self.selected, delta, self.posts.len());
             }
             View::Thread => {
-                self.thread_scroll = self.thread_scroll.saturating_add_signed(delta);
+                let ceiling = self.thread.as_ref().map_or(0, thread_scroll_ceiling);
+                self.thread_scroll = self
+                    .thread_scroll
+                    .saturating_add_signed(delta)
+                    .min(ceiling);
             }
             View::Notifications => {
                 self.notif_selected =
@@ -199,6 +229,17 @@ impl State {
         self.notif_selected = 0;
         self.loading = true;
         self.service.load_notifications_task(self.user_id);
+    }
+
+    /// Esc from a sub-view goes back to the feed, matching the `b back` the
+    /// footer advertises. Reports whether it acted, so the shell's escape
+    /// chain keeps looking when the pane has nothing to close.
+    pub(crate) fn escape_to_feed(&mut self) -> bool {
+        if self.view == View::Feed {
+            return false;
+        }
+        self.back_to_feed();
+        true
     }
 
     pub(crate) fn back_to_feed(&mut self) {
@@ -498,6 +539,36 @@ pub(crate) fn parse_topics(raw: &str) -> Result<Vec<String>, String> {
 /// faster than [`UNREAD_POLL_INTERVAL`].
 pub(crate) fn unread_poll_due(linked: bool, since_last_poll: Duration) -> bool {
     linked && since_last_poll >= UNREAD_POLL_INTERVAL
+}
+
+/// Never fetch for an unlinked user or on top of a fetch already in flight.
+/// `None` means this session has not loaded the feed yet, which always fetches.
+pub(crate) fn feed_reload_due(
+    linked: bool,
+    loading: bool,
+    since_last_load: Option<Duration>,
+) -> bool {
+    if !linked || loading {
+        return false;
+    }
+    match since_last_load {
+        None => true,
+        Some(elapsed) => elapsed >= FEED_RELOAD_INTERVAL,
+    }
+}
+
+/// An upper bound on thread scrolling. The renderer does the exact clamp,
+/// since only it knows the viewport height; this stops `j` past the end from
+/// running away, which would otherwise need one `k` per press before the view
+/// moved again.
+fn thread_scroll_ceiling(thread: &CsThread) -> usize {
+    let post_lines = thread.post.content.lines().count();
+    let reply_lines: usize = thread
+        .replies
+        .iter()
+        .map(|reply| reply.content.lines().count() + 2)
+        .sum();
+    post_lines + reply_lines + 8
 }
 
 fn clamp_index(index: usize, len: usize) -> usize {

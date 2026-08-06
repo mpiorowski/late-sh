@@ -68,7 +68,6 @@ pub enum CsEvent {
     PostCreated {
         user_id: Uuid,
         title: Option<String>,
-        slug: Option<String>,
     },
     ReplyPosted {
         user_id: Uuid,
@@ -268,7 +267,6 @@ impl CyberspaceService {
                         service.publish(CsEvent::PostCreated {
                             user_id,
                             title: created.title,
-                            slug: created.slug,
                         });
                         service.load_feed(user_id).await;
                     }
@@ -450,8 +448,14 @@ impl CyberspaceService {
         Ok(account.map(|account| account.cs_username))
     }
 
+    /// Caching a token also drops every expired one. These are live bearer
+    /// tokens for a third-party account: without the sweep the map keeps one
+    /// resident for every user who has ever linked, for the life of the
+    /// process, long after their session ended and the token went stale.
     fn cache_token(&self, user_id: Uuid, id_token: String) {
-        self.tokens.lock().expect("token cache lock").insert(
+        let mut tokens = self.tokens.lock().expect("token cache lock");
+        tokens.retain(|_, cached| cached.fetched_at.elapsed() < TOKEN_CACHE_TTL);
+        tokens.insert(
             user_id,
             CachedToken {
                 id_token,

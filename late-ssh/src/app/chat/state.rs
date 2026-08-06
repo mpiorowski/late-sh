@@ -3458,6 +3458,12 @@ impl ChatState {
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
         let cyberspace_tick = self.cyberspace.tick();
+        // Unlinking in one session broadcasts to the others. The rail entry
+        // and the navigation order both go with the link, so a session left
+        // sitting in the pane would be on a slot neither of them has.
+        if self.cyberspace_selected && self.cyberspace.is_unlinked() {
+            self.leave_selected_synthetic_entry();
+        }
         self.flush_pending_read_cursors_if_due();
         let banner = moderation_banner
             .or(banner)
@@ -3495,6 +3501,10 @@ impl ChatState {
     }
 
     pub fn select_cyberspace(&mut self) {
+        // Only an actual entry loads the feed. Re-selecting the slot you are
+        // already on (clicking the row, cycling the rail back around) must not
+        // spend another authenticated call on a third-party API.
+        let entering = !self.cyberspace_selected;
         self.room_jump_active = false;
         self.cyberspace_selected = true;
         self.feeds_selected = false;
@@ -3505,7 +3515,9 @@ impl ChatState {
         self.work_selected = false;
         self.selected_message_id = None;
         self.highlighted_message_id = None;
-        self.cyberspace.opened();
+        if entering {
+            self.cyberspace.opened();
+        }
     }
 
     pub fn select_news(&mut self) {

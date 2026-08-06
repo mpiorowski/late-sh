@@ -65,18 +65,15 @@ fn parse_envelope_maps_garbage_to_transport() {
 }
 
 #[test]
-fn unauthorized_detection_matches_only_the_auth_code() {
-    let unauthorized = CsApiError::Api {
-        code: "UNAUTHORIZED".to_string(),
-        message: "Missing or invalid token".to_string(),
-    };
-    let forbidden = CsApiError::Api {
-        code: "FORBIDDEN".to_string(),
-        message: "Not allowed".to_string(),
-    };
-    assert!(unauthorized.is_unauthorized());
-    assert!(!forbidden.is_unauthorized());
-    assert!(!CsApiError::Transport("boom".to_string()).is_unauthorized());
+fn void_endpoints_accept_a_body_with_nothing_in_it() {
+    // Reply and mark-all-read ignore their payload. A 2xx that carries no
+    // `data` is a success, not a transport failure: treating it as one makes
+    // a landed reply look failed and invites the user to send it twice.
+    parse_void(200, r#"{"data":null}"#).expect("null data is still a success");
+    parse_void(204, "").expect("an empty body is still a success");
+    let error = parse_void(401, r#"{"error":{"code":"UNAUTHORIZED","message":"nope"}}"#)
+        .expect_err("errors still surface");
+    assert!(matches!(error, CsApiError::Api { .. }));
 }
 
 #[test]

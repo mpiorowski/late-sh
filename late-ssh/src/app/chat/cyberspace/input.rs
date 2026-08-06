@@ -73,7 +73,9 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             state.open_notifications();
             true
         }
-        b'b' | b'B' | 0x1B => {
+        // Esc never arrives here: it is routed through `dispatch_escape`,
+        // which has its own arm for the pane.
+        b'b' | b'B' => {
             if state.view != View::Feed {
                 state.back_to_feed();
             }

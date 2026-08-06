@@ -2532,6 +2532,9 @@ fn dispatch_escape(app: &mut App) {
         chat::cyberspace::input::handle_modal_escape(app);
         return;
     }
+    if app.chat.cyberspace_selected && app.chat.cyberspace.escape_to_feed() {
+        return;
+    }
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_escape(app);
         return;

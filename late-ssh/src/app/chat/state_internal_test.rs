@@ -2330,6 +2330,37 @@ fn parse_pair_command_rejects_bare_and_malformed_forms() {
 }
 
 #[test]
+fn parse_cyberspace_command_reads_the_subcommands_and_leaves_neighbours_alone() {
+    assert_eq!(parse_cyberspace_command("/cs"), Some(CyberspaceCommand::Open));
+    assert_eq!(
+        parse_cyberspace_command("/cyberspace"),
+        Some(CyberspaceCommand::Open)
+    );
+    assert_eq!(
+        parse_cyberspace_command("  /cs post  "),
+        Some(CyberspaceCommand::Post)
+    );
+    assert_eq!(
+        parse_cyberspace_command("/cs link"),
+        Some(CyberspaceCommand::Link)
+    );
+    assert_eq!(
+        parse_cyberspace_command("/cs unlink"),
+        Some(CyberspaceCommand::Unlink)
+    );
+    // A typo is still a cyberspace command, so it gets the usage banner
+    // rather than being posted to the room as a message.
+    assert_eq!(
+        parse_cyberspace_command("/cs psot"),
+        Some(CyberspaceCommand::Invalid)
+    );
+    // A longer command that merely starts with the prefix is not ours.
+    assert_eq!(parse_cyberspace_command("/csomething"), None);
+    assert_eq!(parse_cyberspace_command("/cyberspaces"), None);
+    assert_eq!(parse_cyberspace_command("look at /cs"), None);
+}
+
+#[test]
 fn parse_pair_command_ignores_unrelated_input() {
     assert_eq!(parse_pair_command("/pairing @alice"), None);
     assert_eq!(parse_pair_command("hello /pair @alice"), None);

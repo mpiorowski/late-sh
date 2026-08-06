@@ -2,8 +2,11 @@ use std::time::Duration;
 
 use late_core::test_utils::{create_test_user, test_db};
 
-use crate::app::chat::cyberspace::state::{Modal, State, parse_topics, unread_poll_due};
-use crate::app::chat::cyberspace::svc::CyberspaceService;
+use crate::app::chat::cyberspace::api::CsPost;
+use crate::app::chat::cyberspace::state::{
+    Modal, State, View, feed_reload_due, parse_topics, unread_poll_due,
+};
+use crate::app::chat::cyberspace::svc::{CsThread, CyberspaceService};
 
 async fn test_state() -> State {
     let test_db = test_db().await;
@@ -36,6 +39,45 @@ fn unread_badge_polls_only_when_linked_and_never_faster_than_the_interval() {
     // An unlinked session has no token, so it never polls, however long it
     // sits there.
     assert!(!unread_poll_due(false, Duration::from_secs(60 * 60)));
+}
+
+#[test]
+fn entering_the_pane_refetches_the_feed_but_not_on_every_landing() {
+    // Cycling the room rail lands on the slot repeatedly, and each landing
+    // would otherwise be an authenticated call to a third party.
+    assert!(feed_reload_due(true, false, None), "first open must fetch");
+    assert!(!feed_reload_due(true, false, Some(Duration::from_secs(5))));
+    assert!(feed_reload_due(
+        true,
+        false,
+        Some(Duration::from_secs(30))
+    ));
+    // Never on top of a fetch in flight, and never without a token.
+    assert!(!feed_reload_due(true, true, None));
+    assert!(!feed_reload_due(false, false, None));
+}
+
+#[tokio::test]
+async fn scrolling_past_the_end_of_a_thread_stops_instead_of_running_away() {
+    let mut state = test_state().await;
+    // Built the way production builds one: straight off the wire shape.
+    let post: CsPost =
+        serde_json::from_str(r#"{"postId":"p1","content":"one line"}"#).expect("post");
+    state.thread = Some(CsThread {
+        post,
+        replies: Vec::new(),
+    });
+    state.view = View::Thread;
+
+    for _ in 0..500 {
+        state.move_selection(1);
+    }
+    let parked = state.thread_scroll;
+    state.move_selection(-1);
+    assert!(
+        state.thread_scroll < parked,
+        "one k after holding j should move the view, not unwind 500 phantom steps"
+    );
 }
 
 #[tokio::test]
