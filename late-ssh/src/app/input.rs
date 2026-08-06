@@ -69,7 +69,7 @@ impl InputContext {
                     || self.news_composing
                     || self.showcase_composing
                     || self.work_composing))
-            || (self.screen == Screen::Pinstar
+            || (self.screen == Screen::Profiles
                 && matches!(
                     self.directory_tab,
                     DirectoryTab::Profiles | DirectoryTab::Projects
@@ -962,7 +962,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if ctx.screen == Screen::Artboard && crate::app::artboard::page::handle_event(app, &event) {
         return;
     }
-    if ctx.screen == Screen::Pinstar
+    if ctx.screen == Screen::Profiles
         && (ctx.directory_tab == DirectoryTab::Pinstar || app.pinstar_state.is_some())
     {
         let content_area = app_content_area(app);
@@ -1319,7 +1319,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(0x1D)
             if !((ctx.screen == Screen::Arcade && app.is_playing_game)
                 || (ctx.screen == Screen::Artboard && app.artboard_interacting)
-                || ctx.screen == Screen::Pinstar) =>
+                || ctx.screen == Screen::Profiles) =>
         {
             try_open_icon_picker(app)
         }
@@ -1918,7 +1918,7 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return true;
     }
 
-    if ctx.screen == Screen::Pinstar {
+    if ctx.screen == Screen::Profiles {
         if app.pinstar_state.is_none() && ctx.directory_tab != DirectoryTab::Pinstar {
             return handle_directory_catalog_input(app, ctx, event);
         }
@@ -2714,7 +2714,7 @@ fn dispatch_escape(app: &mut App) {
         }
         return;
     }
-    if ctx.screen == Screen::Pinstar {
+    if ctx.screen == Screen::Profiles {
         if app.pinstar_state.is_none() && ctx.directory_tab == DirectoryTab::Profiles {
             if app.chat.work.composing() {
                 app.chat.work.stop_composing();
@@ -2893,16 +2893,16 @@ fn paste_target(ctx: InputContext) -> PasteTarget {
     } else if ctx.screen == Screen::Dashboard && ctx.news_composing {
         PasteTarget::NewsComposer
     } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Projects))
+        || (ctx.screen == Screen::Profiles && ctx.directory_tab == DirectoryTab::Projects))
         && ctx.showcase_composing
     {
         PasteTarget::ShowcaseComposer
     } else if (ctx.screen == Screen::Dashboard
-        || (ctx.screen == Screen::Pinstar && ctx.directory_tab == DirectoryTab::Profiles))
+        || (ctx.screen == Screen::Profiles && ctx.directory_tab == DirectoryTab::Profiles))
         && ctx.work_composing
     {
         PasteTarget::WorkComposer
-    } else if ctx.screen == Screen::Pinstar {
+    } else if ctx.screen == Screen::Profiles {
         PasteTarget::Pinstar
     } else {
         PasteTarget::None
@@ -2972,7 +2972,7 @@ fn topbar_screen_hit_test(x: u16, y: u16) -> Option<Screen> {
         16 => Some(Screen::Arcade),
         18 => Some(Screen::Games),
         20 => Some(Screen::Artboard),
-        22 => Some(Screen::Pinstar),
+        22 => Some(Screen::Profiles),
         24 => Some(Screen::Leaderboard),
         _ => None,
     }
@@ -3527,7 +3527,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
         Screen::Artboard => crate::app::artboard::page::handle_arrow(app, key),
-        Screen::Pinstar => {
+        Screen::Profiles => {
             // Arrows handled via handle_dedicated_screen_input
             false
         }
@@ -3780,8 +3780,8 @@ pub(crate) fn toggle_aquarium_tray_globally(app: &mut App) {
     ));
 }
 
-/// Shared entitlement gate for the pet actions (/feed, /water and the
-/// pet-strip clicks). Shows the shop nudge and returns false when the
+/// Shared entitlement gate for the pet actions (/pet feed, /pet water and
+/// the pet-strip clicks). Shows the shop nudge and returns false when the
 /// pet companion is not unlocked.
 fn pet_available_or_nudge(app: &mut App) -> bool {
     if app.shop_state.entitlements().has_pet_companion() {
@@ -3799,6 +3799,9 @@ pub(crate) fn toggle_pet_strip_globally(app: &mut App) {
         return;
     }
     let shown = app.profile_state.toggle_show_pet_strip();
+    if !shown {
+        app.pet_state.end_roam();
+    }
     app.banner = Some(crate::app::common::primitives::Banner::success(if shown {
         "Pet strip shown"
     } else {
@@ -3979,7 +3982,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if matches!(ctx.screen, Screen::Artboard | Screen::Pinstar) {
+    if matches!(ctx.screen, Screen::Artboard | Screen::Profiles) {
         return false;
     }
 
@@ -4006,7 +4009,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         && !ctx.showcase_composing
         && !ctx.work_composing
         && ctx.screen != Screen::Artboard
-        && !(ctx.screen == Screen::Pinstar && app.pinstar_state.is_some());
+        && !(ctx.screen == Screen::Profiles && app.pinstar_state.is_some());
     let chat_message_shortcut =
         ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some();
     if guide_shortcut && !chat_message_shortcut {
@@ -4225,7 +4228,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         b'5' if !artboard_blocks_page_switch => {
             reset_composers_for_page_change(app);
-            app.set_screen(Screen::Pinstar);
+            app.set_screen(Screen::Profiles);
             true
         }
         b'6' if !artboard_blocks_page_switch => {
@@ -4317,7 +4320,7 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         Screen::Artboard => {
             let _ = crate::app::artboard::page::handle_key(app, byte);
         }
-        Screen::Pinstar => {
+        Screen::Profiles => {
             // Pinstar key dispatch is handled via handle_dedicated_screen_input
             // and the rich-event path; byte dispatch is a no-op here.
         }

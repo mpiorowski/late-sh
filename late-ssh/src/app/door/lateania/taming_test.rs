@@ -36,6 +36,36 @@ fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
 }
 
 #[test]
+fn every_taming_tier_offers_a_better_companion_than_the_one_below() {
+    // Grinding Animal Taming must always earn a better companion. Each tame
+    // level's best beast has to beat everything already reachable below it, or
+    // the levels in between are dead grind. The ten Wildbound mounts used to
+    // undercut the best tame-50 wyrm (attack 38, hp 700), so taming 51..=79
+    // handed you a *worse* pet than the one you already had.
+    let mut tiers: Vec<i32> = TAMEABLE.iter().map(|b| b.tame_level).collect();
+    tiers.sort_unstable();
+    tiers.dedup();
+
+    let (mut best_atk, mut best_hp) = (0, 0);
+    for tier in tiers {
+        let (atk, hp) = TAMEABLE
+            .iter()
+            .filter(|b| b.tame_level == tier)
+            .fold((0, 0), |(a, h), b| (a.max(b.base_attack), h.max(b.base_hp)));
+        assert!(
+            atk >= best_atk,
+            "taming {tier} tops out at attack {atk}, below the {best_atk} already reachable under it"
+        );
+        assert!(
+            hp >= best_hp,
+            "taming {tier} tops out at hp {hp}, below the {best_hp} already reachable under it"
+        );
+        best_atk = atk;
+        best_hp = hp;
+    }
+}
+
+#[test]
 fn tameable_keys_are_unique_and_resolve() {
     let mut keys: Vec<&str> = TAMEABLE.iter().map(|s| s.key).collect();
     keys.sort_unstable();

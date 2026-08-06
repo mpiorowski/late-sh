@@ -949,7 +949,7 @@ impl App {
         let mut dopewars_state_taken = self.dopewars_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
 
-        let pinstar_browser = if screen == Screen::Pinstar {
+        let pinstar_browser = if screen == Screen::Profiles {
             Some(&self.pinstar_browser)
         } else {
             None
@@ -1446,7 +1446,7 @@ impl App {
                     crate::app::door::codekeep::render::draw_page(frame, content_area, state);
                 }
             }
-            Screen::Pinstar => {
+            Screen::Profiles => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
                     content_area,
@@ -1811,7 +1811,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
@@ -1863,7 +1863,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
+        Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
@@ -2073,7 +2073,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
-    if screen == Screen::Pinstar {
+    if screen == Screen::Profiles {
         let hints: &[(&str, &str)] = match ctx.directory_tab {
             crate::app::directory::state::DirectoryTab::Profiles => &[
                 ("i", "edit mine"),

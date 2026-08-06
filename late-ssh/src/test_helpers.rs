@@ -22,7 +22,6 @@ use crate::app::chat::svc::ChatService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::lobby::house::blackjack::player::BlackjackPlayerDirectory;
 use crate::app::pet::svc::PetService;
-use crate::app::pinstar::svc::PinstarServerRegistry;
 use crate::app::profile::svc::ProfileService;
 use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
@@ -316,7 +315,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -537,7 +535,6 @@ fn make_app_with_chat_service_and_permissions(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
@@ -737,7 +734,6 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,

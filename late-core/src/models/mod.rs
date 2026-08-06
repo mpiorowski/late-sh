@@ -87,9 +87,6 @@ pub mod notification;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;
-pub mod pinstar_diagram;
-pub mod pinstar_diagram_member;
-pub mod pinstar_invite;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]

@@ -109,7 +109,6 @@ const COMMANDS: &[Command] = &[
     global("cyberspace", "open the cyberspace tab (alias /cs)"),
     global("dm", "open a DM (/dm @user)"),
     global("exit", "quit confirm"),
-    global("feed", "feed your pet with pet food"),
     global("friend", "mark a friend (/friend @user; bare lists)"),
     global("friends", "list friends"),
     global("gift", "send chips (/gift @user 50 [note])"),
@@ -124,7 +123,7 @@ const COMMANDS: &[Command] = &[
     global("members", "room members"),
     global("pair", "shared coding scratchpad; both run /pair @user"),
     global("paste-image", "upload image from CLI clipboard"),
-    global("pet", "toggle the pet strip"),
+    global("pet", "toggle the pet strip (/pet feed, /pet water)"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),
     global("poll", "start a Home room poll (2-3 options)"),
     global("pomodoro", "focus countdown (/pomodoro 50 deep work; stop)"),
@@ -142,7 +141,6 @@ const COMMANDS: &[Command] = &[
     global("unfriend", "remove a friend mark (/unfriend @user)"),
     global("unignore", "unmute a user (/unignore @user)"),
     global("upload", "upload an image by url (/upload <url>)"),
-    global("water", "water your pet"),
     room(RoomScopedCommand::Sheet),
 ];
 

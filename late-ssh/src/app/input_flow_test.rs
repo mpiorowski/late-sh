@@ -1561,7 +1561,7 @@ async fn forced_tour_gates_input_until_each_named_key() {
         (b"2", Screen::Arcade),
         (b"3", Screen::Games),
         (b"4", Screen::Artboard),
-        (b"5", Screen::Pinstar),
+        (b"5", Screen::Profiles),
         (b"6", Screen::Leaderboard),
         (b"0", Screen::Clubhouse),
     ] {

@@ -81,19 +81,6 @@ async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow
     }
 }
 
-async fn flush_pinstar_diagrams(state: &State, fatal_error: &mut Option<anyhow::Error>) {
-    match state.pinstar_registry.flush_all().await {
-        Ok(()) => tracing::info!("flushed pinstar diagrams during shutdown"),
-        Err(err) => {
-            tracing::error!(error = ?err, "failed to flush pinstar diagrams during shutdown");
-            if fatal_error.is_none() {
-                *fatal_error =
-                    Some(err.context("failed to flush pinstar diagrams during shutdown"));
-            }
-        }
-    }
-}
-
 async fn flush_lateania_characters(state: &State, fatal_error: &mut Option<anyhow::Error>) {
     match state.lateania_service.flush_all().await {
         Ok(()) => tracing::info!("flushed lateania characters during shutdown"),
@@ -319,9 +306,6 @@ async fn main() -> anyhow::Result<()> {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let pinstar_registry =
-        late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
-
     // Initialize app state
     let state = State {
         config: config.clone(),
@@ -383,7 +367,6 @@ async fn main() -> anyhow::Result<()> {
         irc_registry: irc_registry.clone(),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        pinstar_registry,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
@@ -463,15 +446,6 @@ async fn main() -> anyhow::Result<()> {
     let audio_shutdown = session_shutdown.clone();
     tasks.spawn(async move {
         audio_service.start_background_task(audio_shutdown).await;
-        Ok(())
-    });
-
-    let pinstar_persist_shutdown = session_shutdown.clone();
-    let pinstar_persist_registry = state.pinstar_registry.clone();
-    tasks.spawn(async move {
-        pinstar_persist_registry
-            .run_persist_task(pinstar_persist_shutdown)
-            .await;
         Ok(())
     });
 
@@ -578,7 +552,6 @@ async fn main() -> anyhow::Result<()> {
         finish_ssh_drain(&mut ssh_task, &mut fatal_error).await;
     }
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
-    flush_pinstar_diagrams(&state, &mut fatal_error).await;
     flush_lateania_characters(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 

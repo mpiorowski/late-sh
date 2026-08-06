@@ -1524,7 +1524,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 "the directory",
             ),
             Tutorial::VisitDirectory => (
-                Screen::Pinstar,
+                Screen::Profiles,
                 " ✦ the tour · the directory ",
                 vec![
                     Line::from(Span::styled(
