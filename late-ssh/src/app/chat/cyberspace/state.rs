@@ -105,6 +105,11 @@ pub struct State {
     pub(crate) posts: Vec<CsPost>,
     pub(crate) selected: usize,
     pub(crate) thread: Option<CsThread>,
+    /// The post the thread view is currently for. A load that arrives for
+    /// anything else is stale and gets dropped, which is what stops a slow
+    /// fetch from yanking a thread the user has already left. Set before the
+    /// post itself exists, since a notification opens a thread by id alone.
+    pub(crate) thread_target: Option<String>,
     pub(crate) thread_scroll: usize,
     pub(crate) notifications: Vec<CsNotification>,
     pub(crate) notif_selected: usize,
@@ -129,6 +134,7 @@ impl State {
             posts: Vec::new(),
             selected: 0,
             thread: None,
+            thread_target: None,
             thread_scroll: 0,
             notifications: Vec::new(),
             notif_selected: 0,
@@ -211,6 +217,7 @@ impl State {
         let Some(post) = self.posts.get(self.selected).cloned() else {
             return;
         };
+        self.thread_target = Some(post.post_id.clone());
         self.thread = Some(CsThread {
             post: post.clone(),
             replies: Vec::new(),
@@ -219,6 +226,26 @@ impl State {
         self.view = View::Thread;
         self.loading = true;
         self.service.load_thread_task(self.user_id, post);
+    }
+
+    /// Enter on a notification opens the entry it is about. The post is
+    /// fetched by id rather than looked up locally: the entry someone replied
+    /// to is usually older than the feed page in memory.
+    pub(crate) fn open_selected_notification(&mut self) -> Option<Banner> {
+        let notification = self.notifications.get(self.notif_selected)?;
+        let Some(post_id) = notification.post_id() else {
+            return Some(Banner::error("That notification has no entry to open."));
+        };
+        let post_id = post_id.to_string();
+        self.thread_target = Some(post_id.clone());
+        // No placeholder to show: unlike the feed path, nothing here knows
+        // the post yet, so the thread view renders its loading state.
+        self.thread = None;
+        self.thread_scroll = 0;
+        self.view = View::Thread;
+        self.loading = true;
+        self.service.load_thread_by_id_task(self.user_id, post_id);
+        None
     }
 
     pub(crate) fn open_notifications(&mut self) {
@@ -245,6 +272,7 @@ impl State {
     pub(crate) fn back_to_feed(&mut self) {
         self.view = View::Feed;
         self.thread = None;
+        self.thread_target = None;
         self.thread_scroll = 0;
     }
 
@@ -448,10 +476,7 @@ impl State {
                 // Only adopt the thread the user is still looking at; a stale
                 // load for a thread they already left would yank the view.
                 if self.view == View::Thread
-                    && self
-                        .thread
-                        .as_ref()
-                        .is_some_and(|current| current.post.post_id == thread.post.post_id)
+                    && self.thread_target.as_deref() == Some(thread.post.post_id.as_str())
                 {
                     self.thread = Some(thread);
                     self.loading = false;

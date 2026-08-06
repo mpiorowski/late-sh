@@ -251,6 +251,34 @@ impl CyberspaceService {
         );
     }
 
+    /// Open a thread from a post id alone, which is all a notification gives
+    /// us. The post itself is fetched first: the entry a notification is
+    /// about is often older than the feed page in memory, so it cannot be
+    /// looked up locally.
+    pub fn load_thread_by_id_task(&self, user_id: Uuid, post_id: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let token = match service.id_token(user_id).await {
+                    Ok(token) => token,
+                    Err(e) => return service.fail(user_id, e.user_message()),
+                };
+                let post = match service.api.get_post(&token, &post_id).await {
+                    Ok(post) => post,
+                    Err(e) => return service.fail(user_id, format!("opening the entry failed: {e}")),
+                };
+                match service.api.list_replies(&token, &post.post_id).await {
+                    Ok(replies) => service.publish(CsEvent::ThreadLoaded {
+                        user_id,
+                        thread: CsThread { post, replies },
+                    }),
+                    Err(e) => service.fail(user_id, format!("loading replies failed: {e}")),
+                }
+            }
+            .instrument(info_span!("cyberspace.thread_by_id", user_id = %user_id)),
+        );
+    }
+
     pub fn post_task(&self, user_id: Uuid, post: NewPost) {
         let service = self.clone();
         tokio::spawn(
@@ -320,31 +348,6 @@ impl CyberspaceService {
                     Ok(token) => token,
                     Err(e) => return service.fail(user_id, e.user_message()),
                 };
-                // TEMPORARY PROBE (notification -> post jump): dump the raw
-                // notifications payload, then ask whether the API serves a
-                // single post by whatever id that payload carries. Both this
-                // block and the api.rs `probe_*` methods come out once the
-                // jump is wired.
-                let (status, body) = service.api.probe_notifications_raw(&token).await;
-                tracing::info!(status, body = %body, "PROBE cyberspace notifications raw");
-                match probe_post_refs(&body) {
-                    Some((target_id, slug)) => {
-                        for path in [
-                            format!("/v1/posts/{target_id}"),
-                            format!("/v1/posts/{target_id}/replies?limit=3"),
-                        ] {
-                            let (status, body) = service.api.probe_path(&path, &token).await;
-                            tracing::info!(%path, status, body = %body, "PROBE cyberspace path");
-                        }
-                        if let Some(slug) = slug {
-                            let path = format!("/v1/posts/{slug}");
-                            let (status, body) = service.api.probe_path(&path, &token).await;
-                            tracing::info!(%path, status, body = %body, "PROBE cyberspace path");
-                        }
-                    }
-                    None => tracing::info!("PROBE cyberspace: no targetId in the payload"),
-                }
-
                 match service.api.list_notifications(&token).await {
                     Ok(notifications) => {
                         service.publish(CsEvent::NotificationsLoaded {
@@ -497,22 +500,6 @@ impl CyberspaceService {
             Err(CsApiError::Transport(message)) => Err(TokenError::Transport(message)),
         }
     }
-}
-
-/// TEMPORARY PROBE helper: pulls the first notification's `targetId` (the
-/// post the notification is about) and its `metadata.postSlug`, so the probe
-/// can ask which of them the API will serve a post for. Goes out with the
-/// probe.
-fn probe_post_refs(body: &str) -> Option<(String, Option<String>)> {
-    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
-    let first = parsed.get("data")?.as_array()?.first()?;
-    let target_id = first.get("targetId")?.as_str()?.to_string();
-    let slug = first
-        .get("metadata")
-        .and_then(|metadata| metadata.get("postSlug"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    Some((target_id, slug))
 }
 
 #[cfg(test)]

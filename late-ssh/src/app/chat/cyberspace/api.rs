@@ -85,12 +85,30 @@ pub struct CsNotification {
     pub kind: String,
     #[serde(default)]
     pub actor_username: Option<String>,
+    /// What the notification is about. For `post` and `reply` targets this is
+    /// the **post** id either way: a reply notification names the post that
+    /// was replied to, and puts the reply's own id in `metadata.replyId`.
+    #[serde(default)]
+    pub target_id: Option<String>,
+    #[serde(default)]
+    pub target_type: Option<String>,
     #[serde(default)]
     pub read: bool,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub metadata: serde_json::Value,
+}
+
+impl CsNotification {
+    /// The post this notification can open, when it has one. Follows and
+    /// pokes target a user rather than a post, so they open nothing.
+    pub fn post_id(&self) -> Option<&str> {
+        match self.target_type.as_deref() {
+            Some("post" | "reply") => self.target_id.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -232,37 +250,11 @@ impl CsApi {
         .await
     }
 
-    // TEMPORARY PROBE (notification -> post jump). `CsNotification` drops
-    // every field it does not name, so the typed value cannot tell us whether
-    // the API hands out a post id. These two return raw status + body for one
-    // look at the real shape. Delete both once the jump is wired.
-    pub async fn probe_notifications_raw(&self, id_token: &str) -> (u16, String) {
-        self.probe_get(
-            &format!("/v1/notifications?limit={NOTIFICATIONS_PAGE_LIMIT}"),
-            id_token,
-        )
-        .await
-    }
-
-    pub async fn probe_path(&self, path: &str, id_token: &str) -> (u16, String) {
-        self.probe_get(path, id_token).await
-    }
-
-    async fn probe_get(&self, path: &str, id_token: &str) -> (u16, String) {
-        let response = self
-            .http
-            .get(format!("{}{path}", self.base_url))
-            .bearer_auth(id_token)
-            .send()
-            .await;
-        match response {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let body = response.text().await.unwrap_or_default();
-                (status, body.chars().take(2000).collect())
-            }
-            Err(e) => (0, e.without_url().to_string()),
-        }
+    /// One post by id, for opening a thread the feed page does not hold (a
+    /// notification about an older entry). Ids only: slugs 404 here.
+    pub async fn get_post(&self, id_token: &str, post_id: &str) -> Result<CsPost, CsApiError> {
+        self.get_json(&format!("/v1/posts/{post_id}"), id_token)
+            .await
     }
 
     pub async fn unread_count(&self, id_token: &str) -> Result<i64, CsApiError> {
