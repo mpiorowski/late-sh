@@ -114,6 +114,20 @@ fn first_text(call: &str, body_text: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// Unwrap a ```json markdown fence if the reply is wrapped in one. Grounded
+/// calls can't use JSON response mode (see `generate_json_with_search`), and
+/// asked via the prompt alone the model fences its JSON more often than not.
+/// Bare JSON passes through untouched.
+fn strip_json_fence(text: &str) -> &str {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let rest = rest.strip_prefix("json").unwrap_or(rest);
+    let rest = rest.strip_suffix("```").unwrap_or(rest);
+    rest.trim()
+}
+
 impl AiService {
     pub fn new(enabled: bool, api_key: Option<String>) -> Self {
         Self {
@@ -212,6 +226,14 @@ impl AiService {
         first_text("generate", &body_text)
     }
 
+    /// A grounded (Google Search) call whose reply is expected to be JSON.
+    /// Grounding and JSON response mode don't mix on gemini-3.6-flash:
+    /// attaching the `googleSearch` tool together with
+    /// `responseMimeType: application/json` gets a 200 whose body has no
+    /// `candidates` at all (the model thinks, then emits nothing). So this
+    /// path requests JSON purely through the prompt and strips the markdown
+    /// fence the model wraps it in despite being told not to. The shape is
+    /// still prompt-enforced only; callers must tolerate a parse failure.
     pub async fn generate_json_with_search(
         &self,
         system_prompt: &str,
@@ -239,7 +261,7 @@ impl AiService {
             generation_config: GeminiConfig {
                 temperature: 0.8,
                 max_output_tokens: 8192,
-                response_mime_type: Some("application/json".to_string()),
+                response_mime_type: None,
                 response_schema: None,
             },
             tools: Some(vec![GeminiTool {
@@ -256,7 +278,10 @@ impl AiService {
 
         let body_text = res.text().await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
-        first_text("generate_json_with_search", &body_text)
+        match first_text("generate_json_with_search", &body_text)? {
+            Some(text) => Ok(Some(strip_json_fence(&text).to_string())),
+            None => Ok(None),
+        }
     }
 
     /// A JSON reply Gemini must conform to `schema`, ungrounded (no Google

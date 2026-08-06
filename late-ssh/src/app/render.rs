@@ -5,7 +5,7 @@ use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
@@ -340,10 +340,13 @@ impl App {
         } else {
             self.profile_state.profile().enable_background_color
         };
-        let current_bg = if enabled {
-            Some(theme::BG_CANVAS())
-        } else {
-            None
+        // A `Color::Reset` canvas (the terminal-default theme) hands the
+        // background to the terminal on purpose, so it never drives OSC 11:
+        // painting it as a hex would pin the session to black and defeat both
+        // the user's own background and any transparency they run with.
+        let current_bg = match (enabled, theme::BG_CANVAS()) {
+            (false, _) | (true, Color::Reset) => None,
+            (true, canvas) => Some(canvas),
         };
 
         if current_bg != self.last_terminal_bg {

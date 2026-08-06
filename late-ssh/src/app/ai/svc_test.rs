@@ -36,3 +36,22 @@ fn first_text_is_none_for_a_blocked_prompt() {
 fn first_text_errors_on_a_body_that_is_not_gemini_json() {
     assert!(first_text("test", "<html>502 Bad Gateway</html>").is_err());
 }
+
+/// The shape 3.6-flash actually returns on the grounded JSON path: told to
+/// emit bare JSON, it fences it anyway.
+#[test]
+fn strip_json_fence_unwraps_a_fenced_reply() {
+    let fenced = "```json\n{\n  \"summary\": \"a video\"\n}\n```";
+
+    assert_eq!(strip_json_fence(fenced), "{\n  \"summary\": \"a video\"\n}");
+}
+
+#[test]
+fn strip_json_fence_unwraps_a_fence_with_no_language_tag() {
+    assert_eq!(strip_json_fence("```\n{\"a\": 1}\n```"), "{\"a\": 1}");
+}
+
+#[test]
+fn strip_json_fence_leaves_bare_json_untouched() {
+    assert_eq!(strip_json_fence("{\"summary\": \"x\"}"), "{\"summary\": \"x\"}");
+}

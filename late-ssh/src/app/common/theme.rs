@@ -3990,22 +3990,34 @@ const PALETTE_AMOLED_CERULEAN: Palette = Palette {
     badge_gold: Color::Rgb(152, 180, 212),
 };
 
+/// The one palette that owns none of its colors: every entry is an ANSI slot
+/// or `Color::Reset`, so the session inherits whatever the terminal is
+/// configured with. Two rules keep it readable:
+///
+/// - The primary reading pair (canvas, body text) is `Color::Reset`, the
+///   terminal's own default background and foreground. That pair is legible on
+///   any profile the user has actually configured, and leaving the background
+///   alone is what keeps terminal transparency working.
+/// - Everything quieter than body text assumes a dark profile. A 16-color
+///   palette offers exactly two grays (7 and 8), and no assignment of them
+///   reads on both light and dark backgrounds; 8 is the faint tier, 7 the
+///   quiet-but-legible one.
 const PALETTE_TERMINAL: Palette = Palette {
-    bg_canvas: Color::Indexed(0),      // Black
+    bg_canvas: Color::Reset,           // terminal default background
     bg_selection: Color::Indexed(4),   // Blue
     bg_highlight: Color::Indexed(4),   // Blue
     border_dim: Color::Indexed(8),     // Bright Black
     border: Color::Indexed(7),         // White (normal gray)
-    border_active: Color::Indexed(4),  // Blue
+    border_active: Color::Indexed(12), // Bright Blue
     text_faint: Color::Indexed(8),     // Bright Black
-    text_dim: Color::Indexed(8),       // Bright Black
+    text_dim: Color::Indexed(7),       // White (gray)
     text_muted: Color::Indexed(7),     // White (gray)
-    text: Color::Indexed(15),          // Bright White
-    text_bright: Color::Indexed(15),   // Bright White
-    amber: Color::Indexed(3),          // Yellow
-    amber_dim: Color::Indexed(11),     // Bright Yellow
+    text: Color::Reset,                // terminal default foreground
+    text_bright: Color::Reset,         // terminal default foreground
+    amber: Color::Indexed(11),         // Bright Yellow
+    amber_dim: Color::Indexed(3),      // Yellow
     amber_glow: Color::Indexed(11),    // Bright Yellow
-    chat_body: Color::Indexed(15),     // Bright White
+    chat_body: Color::Reset,           // terminal default foreground
     chat_author: Color::Indexed(6),    // Cyan
     mention: Color::Indexed(3),        // Yellow
     success: Color::Indexed(2),        // Green
@@ -4355,7 +4367,7 @@ pub fn DRUNK_WORD_FG(level: u8) -> Color {
         3 => Color::Rgb(200, 110, 30),
         _ => Color::Rgb(190, 45, 40),
     };
-    blend_toward(anchor, BG_CANVAS(), 0.45)
+    blend_toward_canvas(anchor, 0.45)
 }
 
 /// Background tint for the Sudoku cells that share the selected cell's number.
@@ -4364,7 +4376,7 @@ pub fn DRUNK_WORD_FG(level: u8) -> Color {
 /// themes. Derived, so no per-palette field is needed.
 #[allow(non_snake_case)]
 pub fn SUDOKU_SAME_NUM_BG() -> Color {
-    blend_toward(Color::Rgb(210, 180, 90), BG_CANVAS(), 0.72)
+    blend_toward_canvas(Color::Rgb(210, 180, 90), 0.72)
 }
 
 /// Background wash for a chat message that mentions you.
@@ -4383,30 +4395,35 @@ pub fn CHAT_REPLY_BG() -> Color {
 
 /// An accent color blended most of the way to the active canvas, so it reads
 /// as a quiet wash behind body text on dark and light themes alike. Derived,
-/// so no per-palette field is needed. Palettes whose colors are not plain RGB
-/// (the terminal-default theme) fall back to the flat highlight background.
+/// so no per-palette field is needed. An accent with no RGB reading falls back
+/// to the flat highlight background.
 fn attention_bg(accent: Color) -> Color {
     const TOWARD_CANVAS: f32 = 0.84;
-    let Some((accent_r, accent_g, accent_b)) = color_rgb(accent) else {
-        return BG_HIGHLIGHT();
+    match color_rgb(accent) {
+        Some(_) => blend_toward_canvas(accent, TOWARD_CANVAS),
+        None => BG_HIGHLIGHT(),
+    }
+}
+
+/// Blend `t` of the way from `anchor` to the active canvas. The terminal
+/// palette's canvas is `Color::Reset`: the background belongs to the terminal
+/// and cannot be read back, so its blends anchor on black, matching the dark
+/// ramp that palette carries. Without this every canvas-relative blend would
+/// return its unblended anchor at full strength.
+fn blend_toward_canvas(anchor: Color, t: f32) -> Color {
+    let canvas = match color_rgb(BG_CANVAS()) {
+        Some((r, g, b)) => Color::Rgb(r, g, b),
+        None => Color::Rgb(0, 0, 0),
     };
-    let Some((canvas_r, canvas_g, canvas_b)) = color_rgb(BG_CANVAS()) else {
-        return BG_HIGHLIGHT();
-    };
-    let mix =
-        |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * TOWARD_CANVAS).round() as u8;
-    Color::Rgb(
-        mix(accent_r, canvas_r),
-        mix(accent_g, canvas_g),
-        mix(accent_b, canvas_b),
-    )
+    blend_toward(anchor, canvas, t)
 }
 
 /// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
-/// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
+/// Both ends resolve through `color_rgb`, so ANSI-indexed palette colors blend
+/// like any other. Falls back to `a` when either end has no RGB reading.
 pub(crate) fn blend_toward(a: Color, b: Color, t: f32) -> Color {
-    match (a, b) {
-        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
+    match (color_rgb(a), color_rgb(b)) {
+        (Some((ar, ag, ab)), Some((br, bg, bb))) => {
             let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
             Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
         }
