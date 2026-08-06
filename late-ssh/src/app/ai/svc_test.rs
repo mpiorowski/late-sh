@@ -55,3 +55,14 @@ fn strip_json_fence_unwraps_a_fence_with_no_language_tag() {
 fn strip_json_fence_leaves_bare_json_untouched() {
     assert_eq!(strip_json_fence("{\"summary\": \"x\"}"), "{\"summary\": \"x\"}");
 }
+
+/// Grounded replies also arrive with prose around the fence: a preamble,
+/// trailing grounding notes, an uppercase language tag. Any remnant fails the
+/// caller's parse and aborts the whole article share, so the JSON has to come
+/// out of all of them.
+#[test]
+fn strip_json_fence_survives_prose_around_the_fence() {
+    let reply = "Here is the JSON:\n```JSON\n{\"summary\": \"x\"}\n```\nSources: example.com";
+
+    assert_eq!(strip_json_fence(reply), "{\"summary\": \"x\"}");
+}

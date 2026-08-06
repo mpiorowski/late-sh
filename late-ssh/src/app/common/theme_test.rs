@@ -139,6 +139,23 @@ fn canvas_relative_blends_darken_when_the_canvas_has_no_rgb() {
 }
 
 #[test]
+fn attention_washes_fall_back_to_the_highlight_bg_when_the_canvas_has_no_rgb() {
+    // The mention/reply washes sit under body text, and on the terminal
+    // palette body text is the terminal's own default foreground. A wash
+    // blended toward the black anchor goes unreadable under a light
+    // profile's dark text, so the washes take the flat highlight background
+    // instead, the same fallback an accent with no RGB reading gets.
+    set_current_by_id("terminal");
+    let mention = CHAT_MENTION_BG();
+    let reply = CHAT_REPLY_BG();
+    let highlight = BG_HIGHLIGHT();
+    set_current_by_id("contrast");
+
+    assert_eq!(mention, highlight);
+    assert_eq!(reply, highlight);
+}
+
+#[test]
 fn every_theme_group_has_distinct_bit() {
     let mut mask = 0u32;
     for group in ThemeGroup::ALL {
