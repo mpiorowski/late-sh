@@ -385,32 +385,40 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, modal: &Modal) {
 /// where they meet cyberspace.online: it carries the pitch that used to live
 /// on the pane's empty state.
 fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
-    let popup = centered_rect(area, 62, 16);
+    let popup = centered_rect(area, 64, 18);
     frame.render_widget(Clear, popup);
     let block = modal_block(" Link cyberspace account ");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
+    // A blank row between every group and a column of padding down each side.
+    // The lengths fill the inner height exactly, so nothing pools into dead
+    // space at the bottom.
     let areas = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(1), // pad
+        Constraint::Length(3), // pitch
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // keys
+        Constraint::Length(1), // blank
+        Constraint::Length(3), // email
+        Constraint::Length(1), // blank
+        Constraint::Length(3), // password
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // token note
     ])
+    .horizontal_margin(2)
     .split(inner);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                " A small, human social network for computer people, a lot",
+                "A small, human social network for computer people, a lot",
                 Style::default().fg(theme::TEXT()),
             )),
             Line::from(Span::styled(
-                " like this one. Link yours and late.sh becomes its client.",
+                "like this one. Link yours and late.sh becomes its client.",
                 Style::default().fg(theme::TEXT()),
             )),
             Line::from(vec![
-                Span::styled(" No account yet? ", Style::default().fg(theme::TEXT_DIM())),
+                Span::styled("No account yet? ", Style::default().fg(theme::TEXT_DIM())),
                 Span::styled(
                     "https://cyberspace.online",
                     Style::default().fg(theme::AMBER()),
@@ -418,32 +426,37 @@ fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
             ]),
         ])
         .style(Style::default().bg(theme::BG_CANVAS())),
-        areas[0],
+        areas[1],
     );
-    frame.render_widget(hint_line(link.busy, "link"), areas[1]);
+    frame.render_widget(hint_line(link.busy, "link"), areas[3]);
     draw_input_field(
         frame,
-        areas[2],
+        areas[5],
         "Email",
         &link.email,
         link.focus == LinkField::Email,
     );
     draw_input_field(
         frame,
-        areas[3],
+        areas[7],
         "Password",
         &link.password,
         link.focus == LinkField::Password,
     );
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            " late.sh keeps a login token, never your password.",
-            Style::default().fg(theme::TEXT_FAINT()),
-        )))
-        .style(Style::default().bg(theme::BG_CANVAS())),
-        areas[4],
-    );
-    draw_modal_status(frame, areas[5], link.busy, &link.error, "Linking...");
+    // Busy/error takes the bottom row when there is something to say;
+    // otherwise the credentials note keeps it, so the row is never dead space.
+    if link.busy || link.error.is_some() {
+        draw_modal_status(frame, areas[9], link.busy, &link.error, "Linking...");
+    } else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "late.sh keeps a login token, never your password.",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )))
+            .style(Style::default().bg(theme::BG_CANVAS())),
+            areas[9],
+        );
+    }
 }
 
 fn draw_compose_modal(frame: &mut Frame, area: Rect, compose: &ComposeModal) {
