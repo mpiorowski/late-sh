@@ -318,10 +318,7 @@ fn draw_empty_placeholder(frame: &mut Frame, area: Rect, placeholder: &str, acti
     let first = if active {
         Span::styled(
             first.to_string(),
-            Style::default()
-                .fg(theme::BG_CANVAS())
-                .bg(theme::TEXT_DIM())
-                .add_modifier(Modifier::BOLD),
+            theme::punch_through(theme::TEXT_DIM()).add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(first.to_string(), Style::default().fg(theme::TEXT_DIM()))

@@ -40,20 +40,20 @@ fn first_text_errors_on_a_body_that_is_not_gemini_json() {
 /// The shape 3.6-flash actually returns on the grounded JSON path: told to
 /// emit bare JSON, it fences it anyway.
 #[test]
-fn strip_json_fence_unwraps_a_fenced_reply() {
+fn extract_json_object_unwraps_a_fenced_reply() {
     let fenced = "```json\n{\n  \"summary\": \"a video\"\n}\n```";
 
-    assert_eq!(strip_json_fence(fenced), "{\n  \"summary\": \"a video\"\n}");
+    assert_eq!(extract_json_object(fenced), "{\n  \"summary\": \"a video\"\n}");
 }
 
 #[test]
-fn strip_json_fence_unwraps_a_fence_with_no_language_tag() {
-    assert_eq!(strip_json_fence("```\n{\"a\": 1}\n```"), "{\"a\": 1}");
+fn extract_json_object_unwraps_a_fence_with_no_language_tag() {
+    assert_eq!(extract_json_object("```\n{\"a\": 1}\n```"), "{\"a\": 1}");
 }
 
 #[test]
-fn strip_json_fence_leaves_bare_json_untouched() {
-    assert_eq!(strip_json_fence("{\"summary\": \"x\"}"), "{\"summary\": \"x\"}");
+fn extract_json_object_leaves_bare_json_untouched() {
+    assert_eq!(extract_json_object("{\"summary\": \"x\"}"), "{\"summary\": \"x\"}");
 }
 
 /// Grounded replies also arrive with prose around the fence: a preamble,
@@ -61,8 +61,8 @@ fn strip_json_fence_leaves_bare_json_untouched() {
 /// caller's parse and aborts the whole article share, so the JSON has to come
 /// out of all of them.
 #[test]
-fn strip_json_fence_survives_prose_around_the_fence() {
+fn extract_json_object_survives_prose_around_the_fence() {
     let reply = "Here is the JSON:\n```JSON\n{\"summary\": \"x\"}\n```\nSources: example.com";
 
-    assert_eq!(strip_json_fence(reply), "{\"summary\": \"x\"}");
+    assert_eq!(extract_json_object(reply), "{\"summary\": \"x\"}");
 }

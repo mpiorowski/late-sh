@@ -23,8 +23,7 @@ pub struct PinstarTheme {
     pub tag: Color,
     #[allow(dead_code)]
     pub folder: Color,
-    pub highlight_fg: Color,
-    pub highlight_bg: Color,
+    pub highlight: Style,
 }
 
 impl Default for PinstarTheme {
@@ -37,7 +36,7 @@ impl PinstarTheme {
     pub fn current() -> Self {
         use crate::app::common::theme::{
             AMBER, BG_CANVAS, BORDER, BORDER_ACTIVE, CHAT_AUTHOR, ERROR, MENTION, SUCCESS, TEXT,
-            TEXT_BRIGHT, TEXT_DIM,
+            TEXT_BRIGHT, TEXT_DIM, punch_through,
         };
         Self {
             accent: BORDER_ACTIVE(),
@@ -52,8 +51,7 @@ impl PinstarTheme {
             border: BORDER(),
             tag: MENTION(),
             folder: CHAT_AUTHOR(),
-            highlight_fg: BG_CANVAS(),
-            highlight_bg: BORDER_ACTIVE(),
+            highlight: punch_through(BORDER_ACTIVE()),
         }
     }
 

@@ -114,18 +114,18 @@ fn first_text(call: &str, body_text: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Unwrap a ```json markdown fence if the reply is wrapped in one. Grounded
-/// calls can't use JSON response mode (see `generate_json_with_search`), and
-/// asked via the prompt alone the model fences its JSON more often than not.
-/// Bare JSON passes through untouched.
-fn strip_json_fence(text: &str) -> &str {
+/// Slice the JSON object out of a reply. Grounded calls can't use JSON
+/// response mode (see `generate_json_with_search`), and asked via the prompt
+/// alone the model fences its JSON, prefixes prose, or appends grounding
+/// notes. Taking the first `{` through the last `}` survives all of those;
+/// bare JSON passes through untouched. A reply with no object comes back
+/// trimmed and fails at the caller's parse, which callers must tolerate.
+fn extract_json_object(text: &str) -> &str {
     let trimmed = text.trim();
-    let Some(rest) = trimmed.strip_prefix("```") else {
-        return trimmed;
-    };
-    let rest = rest.strip_prefix("json").unwrap_or(rest);
-    let rest = rest.strip_suffix("```").unwrap_or(rest);
-    rest.trim()
+    match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &trimmed[start..=end],
+        _ => trimmed,
+    }
 }
 
 impl AiService {
@@ -231,9 +231,10 @@ impl AiService {
     /// attaching the `googleSearch` tool together with
     /// `responseMimeType: application/json` gets a 200 whose body has no
     /// `candidates` at all (the model thinks, then emits nothing). So this
-    /// path requests JSON purely through the prompt and strips the markdown
-    /// fence the model wraps it in despite being told not to. The shape is
-    /// still prompt-enforced only; callers must tolerate a parse failure.
+    /// path requests JSON purely through the prompt and slices the object out
+    /// of the fence and prose the model wraps it in despite being told not
+    /// to. The shape is still prompt-enforced only; callers must tolerate a
+    /// parse failure.
     pub async fn generate_json_with_search(
         &self,
         system_prompt: &str,
@@ -279,7 +280,7 @@ impl AiService {
         let body_text = res.text().await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
         match first_text("generate_json_with_search", &body_text)? {
-            Some(text) => Ok(Some(strip_json_fence(&text).to_string())),
+            Some(text) => Ok(Some(extract_json_object(&text).to_string())),
             None => Ok(None),
         }
     }

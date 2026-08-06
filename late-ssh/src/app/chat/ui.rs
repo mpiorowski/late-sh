@@ -407,12 +407,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
 
     if view.composing {
         return Paragraph::new(Line::from(vec![
-            Span::styled(
-                "T",
-                Style::default()
-                    .fg(theme::BG_CANVAS())
-                    .bg(theme::TEXT_DIM()),
-            ),
+            Span::styled("T", theme::punch_through(theme::TEXT_DIM())),
             Span::styled("ype a message...", dim),
         ]));
     }

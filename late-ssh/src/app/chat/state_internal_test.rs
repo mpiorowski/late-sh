@@ -568,11 +568,16 @@ fn new_chat_textarea_uses_theme_text_color() {
 }
 
 #[test]
-fn composer_cursor_visible_uses_explicit_theme_colors() {
+fn composer_cursor_visible_inverts_the_cell() {
     let mut textarea = new_chat_textarea();
     composer::set_themed_textarea_cursor_visible(&mut textarea, true);
-    assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-    assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    assert!(
+        textarea
+            .cursor_style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert_eq!(textarea.cursor_style().bg, None);
 }
 
 #[test]
@@ -596,8 +601,13 @@ fn common_textarea_theme_refreshes_existing_chat_textarea_colors() {
     assert_ne!(textarea.style().fg, late_text);
     assert_eq!(textarea.style().fg, Some(theme::TEXT()));
     assert_eq!(textarea.cursor_line_style().fg, Some(theme::TEXT()));
-    assert_eq!(textarea.cursor_style().fg, Some(theme::BG_CANVAS()));
-    assert_eq!(textarea.cursor_style().bg, Some(theme::TEXT()));
+    assert_eq!(textarea.cursor_style().fg, Some(theme::TEXT()));
+    assert!(
+        textarea
+            .cursor_style()
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
 
     theme::set_current_by_id("late");
 }

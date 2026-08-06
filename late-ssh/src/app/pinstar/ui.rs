@@ -1308,10 +1308,7 @@ pub fn draw_pinstar_view(
             .map(|(i, item)| {
                 let is_selected = i == menu.selected;
                 let base_style = if is_selected {
-                    Style::default()
-                        .fg(theme.highlight_fg)
-                        .bg(theme.highlight_bg)
-                        .add_modifier(Modifier::BOLD)
+                    theme.highlight.add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme.text)
                 };
@@ -1368,10 +1365,10 @@ pub fn draw_pinstar_view(
                         .max(1);
                     let spacer = " ".repeat(spacer_len);
 
+                    // A selected row is already inverted by `base_style`;
+                    // the hint only bolds so it inherits the same pair.
                     let hint_style = if is_selected {
-                        Style::default()
-                            .fg(theme.highlight_fg)
-                            .add_modifier(Modifier::BOLD)
+                        Style::default().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(theme.muted)
                     };

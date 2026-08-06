@@ -2661,7 +2661,7 @@ fn abilities_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Opt
             ),
             Span::styled(
                 format!("{:>2} ", a.slot),
-                Style::default().fg(theme::BG_CANVAS()).bg(if a.ready {
+                theme::punch_through(if a.ready {
                     theme::AMBER()
                 } else {
                     theme::BORDER_DIM()

@@ -153,8 +153,9 @@ the palette does assume a dark profile.
 If you write a palette this way, know what you trade away:
 
 - `Color::Reset` has no readable RGB value, so colors derived from the canvas
-  (the mention and reply washes, the Sudoku same-number wash) anchor on black
-  instead of the real background.
+  (the Sudoku same-number wash) anchor on black instead of the real
+  background. The mention and reply washes sit under body text, so instead of
+  the black anchor they fall back to the flat `bg_highlight`.
 - The text brightness setting only moves colors it can read, so `Color::Reset`
   entries ignore it.
 - With `bg_canvas: Color::Reset`, the "sync terminal background" setting stops

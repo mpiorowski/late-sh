@@ -1,4 +1,4 @@
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use std::{cell::Cell, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -4313,6 +4313,15 @@ pub fn BG_CANVAS() -> Color {
     current_palette().bg_canvas
 }
 
+/// Style for a glyph cut out of an accent fill: the fill paints the cell and
+/// the glyph shows the canvas through it. `REVERSED` makes the terminal swap
+/// the pair itself instead of painting `BG_CANVAS()` as a foreground, which
+/// keeps the cutout correct on the terminal palette, whose canvas is
+/// `Color::Reset` and has no paintable value.
+pub fn punch_through(fill: Color) -> Style {
+    Style::default().fg(fill).add_modifier(Modifier::REVERSED)
+}
+
 pub fn color_to_hex(color: Color) -> String {
     match color {
         Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
@@ -4395,13 +4404,16 @@ pub fn CHAT_REPLY_BG() -> Color {
 
 /// An accent color blended most of the way to the active canvas, so it reads
 /// as a quiet wash behind body text on dark and light themes alike. Derived,
-/// so no per-palette field is needed. An accent with no RGB reading falls back
-/// to the flat highlight background.
+/// so no per-palette field is needed. When the accent or the canvas has no
+/// RGB reading, the wash falls back to the flat highlight background: these
+/// washes sit under body text, and on the terminal palette that text follows
+/// the terminal's own foreground, which a black-anchored blend would swallow
+/// on a light profile.
 fn attention_bg(accent: Color) -> Color {
     const TOWARD_CANVAS: f32 = 0.84;
-    match color_rgb(accent) {
-        Some(_) => blend_toward_canvas(accent, TOWARD_CANVAS),
-        None => BG_HIGHLIGHT(),
+    match (color_rgb(accent), color_rgb(BG_CANVAS())) {
+        (Some(_), Some(_)) => blend_toward_canvas(accent, TOWARD_CANVAS),
+        _ => BG_HIGHLIGHT(),
     }
 }
 
