@@ -45,7 +45,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/api.rs` — `/api/ws/pair` parses inbound `voice_state`, sends `PairControlMessage` voice events, and removes CLI participants on CLI WS close.
 - `late-ssh/src/paired_clients.rs` — `PairControlMessage::{VoiceJoin,VoiceLeave,VoiceSetMuted,VoiceSetDeafened}` and `send_control_to_voice_cli`.
 - `late-ssh/src/app/state.rs` — `voice_join`, `voice_leave`, `voice_toggle_join`, `voice_toggle_muted`, `voice_toggle_deafened`.
-- `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard/Pinstar opting out.
+- `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard opting out.
 - `late-ssh/src/app/chat/ui.rs` — chat and game surfaces embed `draw_voice_strip` when a voice channel is present.
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, and CLI capability.
 - `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
@@ -157,7 +157,7 @@ Render:
 Input:
 - `Ctrl+V` — join the active voice channel, switch to it if joined elsewhere, or leave when already joined to that same channel. If no active voice channel is visible but the user is joined elsewhere, it leaves the current voice room.
 - `Ctrl+T` — mute or unmute microphone.
-- Artboard and Pinstar opt out of these global chords.
+- Artboard opts out of these global chords.
 - Deafen is still represented in the lower-level CLI/pair protocol, but no TUI shortcut is exposed in the embedded voice UI.
 
 Join behavior:

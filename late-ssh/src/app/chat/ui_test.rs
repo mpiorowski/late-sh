@@ -529,6 +529,9 @@ fn chat_view<'a>(
         feeds_selected: false,
         feeds_processing: false,
         feeds_unread_count: 0,
+        cyberspace_selected: false,
+        cyberspace_unread_count: 0,
+        cyberspace: None,
         feeds_view: crate::app::chat::feeds::ui::FeedListView {
             entries: &[],
             selected_index: 0,
@@ -967,8 +970,12 @@ fn empty_composer_placeholder_is_dim_while_composing() {
     let buf = terminal.backend().buffer();
     let rendered: String = (0..17).map(|x| buf[(x, 0)].symbol()).collect();
     assert_eq!(rendered, "Type a message...");
-    assert_eq!(buf[(0, 0)].fg, theme::BG_CANVAS());
-    assert_eq!(buf[(0, 0)].bg, theme::TEXT_DIM());
+    assert_eq!(buf[(0, 0)].fg, theme::TEXT_DIM());
+    assert!(
+        buf[(0, 0)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
     assert_eq!(buf[(1, 0)].fg, theme::TEXT_DIM());
 }
 

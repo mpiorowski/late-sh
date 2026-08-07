@@ -398,6 +398,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),
+        cyberspace_service: state.cyberspace_service.clone(),
         showcase_service: state.showcase_service.clone(),
         work_service: state.work_service.clone(),
         profile_service: state.profile_service.clone(),
@@ -525,7 +526,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
         initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
-        pinstar_registry: state.pinstar_registry.clone(),
         is_draining: state.is_draining.clone(),
     }
 }

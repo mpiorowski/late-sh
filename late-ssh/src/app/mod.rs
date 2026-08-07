@@ -29,7 +29,6 @@ pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
 pub mod pet;
-pub mod pinstar;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;

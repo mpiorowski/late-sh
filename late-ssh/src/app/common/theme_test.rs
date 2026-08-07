@@ -92,6 +92,70 @@ fn dim_and_faint_text_never_matches_a_highlight_background() {
 }
 
 #[test]
+fn terminal_theme_defers_to_the_terminals_own_colors() {
+    set_current_by_id("terminal");
+    let canvas = BG_CANVAS();
+    let body = CHAT_BODY();
+    let text = TEXT();
+    let faint = TEXT_FAINT();
+    let dim = TEXT_DIM();
+    let amber = color_rgb(AMBER()).expect("amber resolves to rgb");
+    let amber_dim = color_rgb(AMBER_DIM()).expect("amber_dim resolves to rgb");
+    set_current_by_id("contrast");
+
+    // The reading pair is the terminal's own default background/foreground:
+    // legible on whatever profile the user actually configured, and leaving
+    // the background alone is what keeps terminal transparency working.
+    assert_eq!(canvas, Color::Reset);
+    assert_eq!(body, Color::Reset);
+    assert_eq!(text, Color::Reset);
+
+    // Faint and dim sharing Indexed(8) collapsed two tiers onto the one gray
+    // that sits closest to a dark background, which is what made secondary
+    // text unreadable.
+    assert_ne!(faint, dim, "text_faint and text_dim are the same color");
+
+    let sum = |(r, g, b): (u8, u8, u8)| r as u32 + g as u32 + b as u32;
+    assert!(
+        sum(amber_dim) < sum(amber),
+        "amber_dim {amber_dim:?} is brighter than amber {amber:?}"
+    );
+}
+
+#[test]
+fn canvas_relative_blends_darken_when_the_canvas_has_no_rgb() {
+    // The terminal palette's canvas is `Color::Reset`, which cannot be read
+    // back. Blends used to return their unblended anchor there, so the Sudoku
+    // "same number" wash painted as full-strength tan behind the digits.
+    set_current_by_id("terminal");
+    let wash = SUDOKU_SAME_NUM_BG();
+    set_current_by_id("contrast");
+
+    let (r, g, b) = color_rgb(wash).expect("wash resolves to rgb");
+    assert!(
+        r < 210 && g < 180 && b < 90,
+        "wash {wash:?} was not blended toward the canvas"
+    );
+}
+
+#[test]
+fn attention_washes_fall_back_to_the_highlight_bg_when_the_canvas_has_no_rgb() {
+    // The mention/reply washes sit under body text, and on the terminal
+    // palette body text is the terminal's own default foreground. A wash
+    // blended toward the black anchor goes unreadable under a light
+    // profile's dark text, so the washes take the flat highlight background
+    // instead, the same fallback an accent with no RGB reading gets.
+    set_current_by_id("terminal");
+    let mention = CHAT_MENTION_BG();
+    let reply = CHAT_REPLY_BG();
+    let highlight = BG_HIGHLIGHT();
+    set_current_by_id("contrast");
+
+    assert_eq!(mention, highlight);
+    assert_eq!(reply, highlight);
+}
+
+#[test]
 fn every_theme_group_has_distinct_bit() {
     let mut mask = 0u32;
     for group in ThemeGroup::ALL {

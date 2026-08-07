@@ -953,7 +953,7 @@ fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
     } else if item.sku == AQUARIUM_FOOD_SKU {
         "/aquarium opens the tray; /aquarium feed spends one"
     } else if item.sku == PET_FOOD_SKU {
-        "/feed spends one and sends the pet strolling"
+        "/pet feed spends one and sends the pet strolling"
     } else {
         "Enter buys one"
     }

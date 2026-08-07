@@ -22,7 +22,6 @@ use crate::app::chat::svc::ChatService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::lobby::house::blackjack::player::BlackjackPlayerDirectory;
 use crate::app::pet::svc::PetService;
-use crate::app::pinstar::svc::PinstarServerRegistry;
 use crate::app::profile::svc::ProfileService;
 use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
@@ -262,6 +261,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ai_service,
         article_service,
         feed_service,
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service,
         work_service,
         profile_service,
@@ -312,7 +315,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -416,6 +418,10 @@ fn make_app_with_chat_service_and_permissions(
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
@@ -529,7 +535,6 @@ fn make_app_with_chat_service_and_permissions(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
@@ -612,6 +617,10 @@ pub fn make_app_with_paired_client(
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
@@ -725,7 +734,6 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,

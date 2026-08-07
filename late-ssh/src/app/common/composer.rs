@@ -122,9 +122,10 @@ fn hidden_textarea_cursor_style() -> Style {
     Style::default().fg(theme::TEXT())
 }
 
+/// An inverted block of the text color. Punched through rather than painted
+/// as an explicit fg/bg pair because on the terminal palette both `TEXT()`
+/// and `BG_CANVAS()` resolve to `Color::Reset`, and that pair paints no
+/// visible cursor at all.
 fn visible_textarea_cursor_style() -> Style {
-    Style::default()
-        .fg(theme::BG_CANVAS())
-        .bg(theme::TEXT())
-        .add_modifier(Modifier::BOLD)
+    theme::punch_through(theme::TEXT()).add_modifier(Modifier::BOLD)
 }

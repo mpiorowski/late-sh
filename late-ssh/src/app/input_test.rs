@@ -58,7 +58,6 @@ fn blocks_arrow_when_chat_is_composing_on_dashboard() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());
 }
@@ -74,7 +73,6 @@ fn blocks_arrow_when_chat_is_composing_on_chat_screen() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());
 }
@@ -90,7 +88,6 @@ fn allows_arrow_when_idle() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert!(!ctx.blocks_arrow_sequence());
 }
@@ -109,7 +106,7 @@ fn topbar_screen_hit_test_maps_screen_digits() {
     assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
     assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Games));
     assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
-    assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+    assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Profiles));
     assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Leaderboard));
     // The door games are no longer top-level tabs; the column past the last
     // digit and the gaps between digits map to nothing.
@@ -321,7 +318,6 @@ fn paste_target_prefers_chat_composer() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
 }
@@ -337,7 +333,6 @@ fn paste_target_routes_to_news_composer() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
 }
@@ -353,7 +348,6 @@ fn paste_target_routes_to_showcase_composer() {
         showcase_composing: true,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
 }
@@ -687,7 +681,6 @@ fn allows_arrow_when_autocomplete_active() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert!(!ctx.blocks_arrow_sequence());
 }
@@ -703,7 +696,6 @@ fn blocks_arrow_when_composing_without_autocomplete() {
         showcase_composing: false,
         work_composing: false,
         door_rc_modal: false,
-        directory_tab: DirectoryTab::Profiles,
     };
     assert!(ctx.blocks_arrow_sequence());
 }

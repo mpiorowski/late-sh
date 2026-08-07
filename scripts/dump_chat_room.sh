@@ -7,8 +7,12 @@
 #   scripts/dump_chat_room.sh                      # defaults: bugs suggestions
 #   scripts/dump_chat_room.sh bugs suggestions feedback
 #
+#   # refresh the committed snapshot contributors browse for open tasks:
+#   LATE_DUMP_DIR=feedback scripts/dump_chat_room.sh
+#
 # Output:
-#   chat_dumps/<slug>.txt   (override dir with LATE_DUMP_DIR)
+#   chat_dumps/<slug>.txt   (override dir with LATE_DUMP_DIR; chat_dumps/
+#   itself is gitignored scratch space, use a different dir to commit output)
 #
 # Optional env (same conventions as scripts/connect_db.sh):
 #   KUBECTL=kubectl  KUBE_CONTEXT=<ctx>  KUBE_NAMESPACE=default
@@ -120,7 +124,7 @@ RUN_PSQL=("${PSQL}" -h "${LOCAL_HOST}" -p "${LOCAL_PORT}" -U "${DB_USER}" -d "${
   -v ON_ERROR_STOP=1 -P pager=off --set=default_transaction_read_only=on)
 
 # Per-message block:
-#   [YYYY-MM-DD HH:MI:SS UTC] username [pinned] (reply to other: "snippet")
+#   [YYYY-MM-DD HH:MI:SS UTC] username (reply to other: "snippet")
 #   <body>
 #   ----------------------------------------------------------------------
 MSG_SQL_PATH="${TMP_DIR}/dump.sql"
@@ -129,7 +133,6 @@ select
   E'\n' ||
   '[' || to_char(m.created at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') || ' UTC] ' ||
   coalesce(u.username, '<deleted>') ||
-  case when m.pinned then ' [pinned]' else '' end ||
   case when m.reply_to_message_id is not null then
     ' (reply to ' || coalesce(ru.username, '<deleted>') || ': "' ||
     left(regexp_replace(coalesce(rm.body, '<missing>'), '\s+', ' ', 'g'), 60) || '")'
@@ -146,15 +149,21 @@ order by m.created, m.id;
 SQL
 
 for slug in "${SLUGS[@]}"; do
-  count="$("${RUN_PSQL[@]}" -tA -c \
-    "select count(*) from chat_messages m join chat_rooms r on r.id=m.room_id where r.slug='${slug//\'/\'\'}' and r.kind='topic';")"
+  # count and last-message time both come from the data, not wall-clock, so
+  # the header only changes when there's actually something new to see —
+  # these files get committed, and a "dumped now" stamp would diff on every
+  # no-op refresh.
+  stats="$("${RUN_PSQL[@]}" -tA -F '|' -c \
+    "select count(*), coalesce(to_char(max(m.created) at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'), '') from chat_messages m join chat_rooms r on r.id=m.room_id where r.slug='${slug//\'/\'\'}' and r.kind='topic';")"
+  count="${stats%%|*}"
+  last_at="${stats#*|}"
   if [[ -z "${count}" || "${count}" == "0" ]]; then
     echo "!! no topic room '${slug}' (or it has 0 messages); skipping" >&2
     continue
   fi
   out="${OUT_DIR}/${slug}.txt"
   {
-    echo "=== #${slug} — ${count} messages — dumped $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+    echo "=== #${slug} — ${count} messages — last message ${last_at} UTC ==="
   } >"${out}"
   "${RUN_PSQL[@]}" -tA -v slug="${slug}" -f "${MSG_SQL_PATH}" >>"${out}"
   echo "-> wrote ${count} messages to ${out}"

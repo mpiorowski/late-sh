@@ -914,6 +914,7 @@ impl russh::server::Handler for ClientHandler {
             notification_service: self.state.notification_service.clone(),
             article_service,
             feed_service: self.state.feed_service.clone(),
+            cyberspace_service: self.state.cyberspace_service.clone(),
             showcase_service: self.state.showcase_service.clone(),
             work_service: self.state.work_service.clone(),
             profile_service,
@@ -955,7 +956,6 @@ impl russh::server::Handler for ClientHandler {
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
                 self.state.db.clone(),
             ),
-            pinstar_registry: self.state.pinstar_registry.clone(),
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,

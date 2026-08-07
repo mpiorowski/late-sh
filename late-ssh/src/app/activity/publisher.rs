@@ -138,6 +138,16 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn cyberspace_posted_task(&self, user_id: Uuid, title: Option<String>) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher
+                .tx
+                .send(ActivityEvent::cyberspace_posted(user_id, username, title));
+        });
+    }
+
     pub fn game_scored_task(
         &self,
         user_id: Uuid,

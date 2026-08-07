@@ -448,12 +448,9 @@ fn checker(row: usize, col: usize) -> Style {
     }
 }
 
-/// A hit: dark cross on a solid error-colored tile.
+/// A hit: canvas cross cut out of a solid error-colored tile.
 fn hit_style() -> Style {
-    Style::default()
-        .fg(theme::BG_CANVAS())
-        .bg(theme::ERROR())
-        .add_modifier(Modifier::BOLD)
+    theme::punch_through(theme::ERROR()).add_modifier(Modifier::BOLD)
 }
 
 /// `hot_col` lights up the cursor's column letter as a crosshair.
