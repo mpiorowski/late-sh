@@ -5,7 +5,7 @@ use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
@@ -191,9 +191,6 @@ struct DrawContext<'a> {
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
-    directory_tab: crate::app::directory::state::DirectoryTab,
-    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
-    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
@@ -239,6 +236,7 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
+    cyberspace_modal: Option<&'a chat::cyberspace::state::Modal>,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -339,10 +337,13 @@ impl App {
         } else {
             self.profile_state.profile().enable_background_color
         };
-        let current_bg = if enabled {
-            Some(theme::BG_CANVAS())
-        } else {
-            None
+        // A `Color::Reset` canvas (the terminal-default theme) hands the
+        // background to the terminal on purpose, so it never drives OSC 11:
+        // painting it as a hex would pin the session to black and defeat both
+        // the user's own background and any transparency they run with.
+        let current_bg = match (enabled, theme::BG_CANVAS()) {
+            (false, _) | (true, Color::Reset) => None,
+            (true, canvas) => Some(canvas),
         };
 
         if current_bg != self.last_terminal_bg {
@@ -389,12 +390,7 @@ impl App {
                 .clone()
         };
         let shell_active_room = self.chat.selected_room_id;
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
+        let synthetic_selected = self.chat.synthetic_entry_selected();
         let home_selected = dashboard_home_selected(
             self.chat.lounge_room_id(),
             shell_active_room,
@@ -631,6 +627,7 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
+            && !self.chat.cyberspace_selected
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
             && !self.chat.showcase_selected
@@ -651,6 +648,9 @@ impl App {
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
             feeds_view,
+            cyberspace_selected: self.chat.cyberspace_selected,
+            cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
             news_view,
@@ -894,6 +894,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -911,6 +912,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -933,9 +935,8 @@ impl App {
         }
 
         let terminal = &mut self.terminal;
-        let mut pinstar_state_taken = self.pinstar_state.take();
-        // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
-        // call set_viewport with the exact content_area before blitting.
+        // Taken out so the draw dispatch can hold &mut and call set_viewport
+        // with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
@@ -944,11 +945,6 @@ impl App {
         let mut dopewars_state_taken = self.dopewars_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
 
-        let pinstar_browser = if screen == Screen::Pinstar {
-            Some(&self.pinstar_browser)
-        } else {
-            None
-        };
         let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
@@ -1001,9 +997,6 @@ impl App {
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
-                        directory_tab: self.directory_state.tab,
-                        pinstar_state: pinstar_state_taken.as_mut(),
-                        pinstar_browser,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
@@ -1042,6 +1035,7 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
+                        cyberspace_modal: self.chat.cyberspace.modal.as_ref(),
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
@@ -1103,7 +1097,6 @@ impl App {
             })
             .context("failed to draw frame");
 
-        self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
@@ -1440,25 +1433,22 @@ impl App {
                     crate::app::door::codekeep::render::draw_page(frame, content_area, state);
                 }
             }
-            Screen::Pinstar => {
+            Screen::Profiles => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
-                        tab: ctx.directory_tab,
-                        profiles: ctx.chat_view.work_view,
                         work_state: ctx
                             .chat_view
                             .work_state
                             .expect("directory work state is always present"),
-                        projects: ctx.chat_view.showcase_view,
                         showcase_state: ctx
                             .chat_view
                             .showcase_state
                             .expect("directory showcase state is always present"),
-                        pinstar_state: ctx.pinstar_state,
-                        pinstar_browser: ctx.pinstar_browser,
+                        current_user_id: ctx.chat_view.work_view.current_user_id,
+                        profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
                 );
             }
@@ -1644,6 +1634,10 @@ impl App {
             chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
         }
 
+        if let Some(cyberspace_modal) = ctx.cyberspace_modal {
+            chat::cyberspace::ui::draw_modal(frame, inner, cyberspace_modal);
+        }
+
         if ctx.show_bonsai_modal {
             bonsai::modal_ui::draw(
                 frame,
@@ -1774,6 +1768,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_hub_modal
         || ctx.show_profile_modal
         || ctx.show_poll_modal
+        || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
@@ -1800,7 +1795,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
@@ -1852,7 +1847,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
+        Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
@@ -2062,32 +2057,12 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
-    if screen == Screen::Pinstar {
-        let hints: &[(&str, &str)] = match ctx.directory_tab {
-            crate::app::directory::state::DirectoryTab::Profiles => &[
-                ("i", "edit mine"),
-                ("e", "edit selected"),
-                ("Enter", "copy link"),
-            ],
-            crate::app::directory::state::DirectoryTab::Projects => {
-                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
-                &[
-                    ("R-click/a", "menu"),
-                    ("L-drag", "pan"),
-                    ("R-drag", "select"),
-                    ("i", "edit"),
-                    ("Ctrl+P", "help"),
-                ]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar => &[
-                ("Enter", "open"),
-                ("n", "new"),
-                ("a", "join"),
-                ("Ctrl+P", "help"),
-            ],
-        };
+    if screen == Screen::Profiles {
+        let hints: &[(&str, &str)] = &[
+            ("i", "new project"),
+            ("w", "work card"),
+            ("Enter", "copy link"),
+        ];
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(

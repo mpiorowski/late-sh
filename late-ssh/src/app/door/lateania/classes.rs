@@ -350,7 +350,7 @@ impl Class {
     pub fn trait_desc(self) -> &'static str {
         match self {
             Self::Warrior => {
-                "The first killing blow each fight is survived at 1 HP instead of falling."
+                "The first killing blow each life is survived at 1 HP instead of falling."
             }
             Self::Mage => "Every offensive spell strikes for extra arcane damage.",
             Self::Cleric => "All healing is amplified, and the undead take added holy damage.",
@@ -390,11 +390,15 @@ impl Class {
         let lvl = level.clamp(1, Self::MAX_LEVEL);
         let l = lvl - 1; // levels gained past 1
         match self {
+            // Rage keeps pace with the fight. At regen 6 the Warrior could only
+            // afford its own rotation ~44% of the time (a 13.5 Rage/tick cost
+            // against the worst regen in the game), so the best-armored class
+            // was also the lowest-throughput one. Regen 9 buys ~67% uptime.
             Self::Warrior => ClassStats {
                 max_hp: 48 + l * 12,
                 max_resource: 100,
                 attack: 6 + l * 2,
-                resource_regen: 6,
+                resource_regen: 9,
             },
             Self::Mage => ClassStats {
                 max_hp: 30 + l * 7,

@@ -236,7 +236,7 @@ fn color_palette_line(
         let span = if palette_idx == active_idx {
             Span::styled(
                 "•",
-                style.fg(theme::BG_CANVAS()).add_modifier(Modifier::BOLD),
+                theme::punch_through(rgb(color)).add_modifier(Modifier::BOLD),
             )
         } else {
             Span::styled(" ", style)

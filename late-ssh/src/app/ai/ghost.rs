@@ -14,8 +14,10 @@
 //!   current info: the general **@bot**.
 //! - `generate_json_with_search` — grounded like `generate_reply`, but the
 //!   response is JSON. Used by **news processing**, which genuinely needs the
-//!   web. Note: with a tool attached the JSON mime type is only a hint, so the
-//!   output can come back malformed — don't use it where the shape must hold.
+//!   web. Note: with a tool attached JSON can only be requested via the
+//!   prompt (JSON response mode plus grounding returns no candidates on
+//!   3.6-flash), so the output can come back malformed — don't use it where
+//!   the shape must hold.
 //! - `generate_json` — ungrounded JSON with a hard-enforced `responseSchema`
 //!   (only possible without a tool). The **@bartender mention** uses this: it
 //!   answers house Q&A from the injected app context and decides drink orders

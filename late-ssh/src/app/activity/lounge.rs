@@ -151,6 +151,11 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::UsernameEffectApplied { effect } => {
             format!("username-effect:{}", effect.slug())
         }
+        // Keyed on the title so two distinct entries inside the window both
+        // announce, while a retried publish of the same entry collapses.
+        ActivityKind::CyberspacePosted { title } => {
+            format!("cyberspace-posted:{}", title.as_deref().unwrap_or_default())
+        }
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),

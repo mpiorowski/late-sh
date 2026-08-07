@@ -114,6 +114,7 @@ pub struct State {
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: FeedService,
+    pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: ShowcaseService,
     pub work_service: WorkService,
     pub profile_service: ProfileService,
@@ -175,6 +176,5 @@ pub struct State {
     pub irc_registry: crate::ircd::registry::IrcRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
-    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

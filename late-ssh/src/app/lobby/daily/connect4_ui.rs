@@ -198,12 +198,10 @@ fn board_lines(
             for (col, cell) in grid[row].iter().enumerate() {
                 let span = match *cell {
                     Some(disc) if winning.contains(&(row, col)) => Span::styled(
-                        // The line that ended it: dark discs on solid tiles.
+                        // The line that ended it: canvas discs cut out of
+                        // solid tiles.
                         piece_cell(PUCK_SOLID, '●', tier, sub),
-                        Style::default()
-                            .fg(theme::BG_CANVAS())
-                            .bg(disc_color(disc))
-                            .add_modifier(Modifier::BOLD),
+                        theme::punch_through(disc_color(disc)).add_modifier(Modifier::BOLD),
                     ),
                     Some(disc) if last == Some((row, col)) => Span::styled(
                         piece_cell(PUCK_SOLID, '●', tier, sub),

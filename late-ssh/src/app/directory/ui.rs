@@ -1,165 +1,61 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
-    chat::{showcase, work},
+    chat::{
+        showcase::{self, svc::ShowcaseFeedItem},
+        work,
+    },
     common::{
         markdown::render_body_to_lines,
-        primitives::{format_relative_time, hint_line},
+        primitives::{format_relative_time, hint_line, row_with_hint},
         theme,
     },
-    directory::state::{
-        DirectoryState, DirectoryTab, filtered_profile_indices, filtered_project_indices,
-    },
+    directory::state::{DirectoryState, PersonEntry, PersonFocus, person_entries},
 };
 
-const PROFILE_HINTS: &[(&str, &str)] = &[
+const IDLE_HINTS: &[(&str, &str)] = &[
+    ("j/k", "people"),
+    ("h/l", "focus"),
     ("Enter", "copy link"),
-    ("i", "new"),
+    ("o", "profile"),
+    ("i", "new project"),
+    ("w", "work card"),
     ("e", "edit"),
     ("d", "delete"),
-    ("/", "show mine"),
+    ("/", "mine"),
     ("s", "search"),
 ];
 
-const PROJECT_HINTS: &[(&str, &str)] = &[
-    ("Enter", "copy link"),
-    ("i", "new"),
-    ("e", "edit"),
-    ("d", "delete"),
-    ("/", "show mine"),
-    ("s", "search"),
-];
+/// Uniform people-row height: four content lines plus the bottom border.
+const ITEM_HEIGHT: u16 = 5;
+/// Minimum page width for the side-by-side list + detail layout.
+const DETAIL_MIN_WIDTH: u16 = 86;
 
 pub(crate) struct DirectoryPageView<'a> {
     pub(crate) directory: &'a DirectoryState,
-    pub(crate) tab: DirectoryTab,
-    pub(crate) profiles: work::ui::WorkListView<'a>,
     pub(crate) work_state: &'a work::state::State,
-    pub(crate) projects: showcase::ui::ShowcaseListView<'a>,
     pub(crate) showcase_state: &'a showcase::state::State,
-    pub(crate) pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
-    pub(crate) pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
+    pub(crate) current_user_id: uuid::Uuid,
+    pub(crate) profile_base_url: &'a str,
 }
 
 pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    let layout = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).split(area);
-
-    // The active "mine only" filter rides in the tab strip rather than eating a
-    // row off the list. Only the current tab's filter is surfaced.
-    let mine_only_label = match view.tab {
-        DirectoryTab::Profiles if view.profiles.mine_only => Some("work"),
-        DirectoryTab::Projects if view.projects.mine_only => Some("showcases"),
-        _ => None,
+    let work_composing = view.work_state.composing();
+    let showcase_composing = view.showcase_state.composing();
+    let footer_height = if work_composing {
+        11
+    } else if showcase_composing {
+        10
+    } else {
+        1
     };
-
-    draw_tab_strip(
-        frame,
-        layout[0],
-        view.tab,
-        view.work_state.unread_count(),
-        view.showcase_state.unread_count(),
-        mine_only_label,
-    );
-
-    match view.tab {
-        DirectoryTab::Profiles => draw_profiles_tab(frame, layout[1], view),
-        DirectoryTab::Projects => draw_projects_tab(frame, layout[1], view),
-        DirectoryTab::Pinstar => draw_pinstar_tab(frame, layout[1], view),
-    }
-}
-
-fn draw_tab_strip(
-    frame: &mut Frame,
-    area: Rect,
-    current: DirectoryTab,
-    profile_unread: i64,
-    project_unread: i64,
-    mine_only_label: Option<&str>,
-) {
-    let tabs = [
-        (DirectoryTab::Profiles, "Profiles", profile_unread),
-        (DirectoryTab::Projects, "Projects", project_unread),
-        (DirectoryTab::Pinstar, "Pinstar", 0),
-    ];
-
-    let mut tab_spans = Vec::new();
-    tab_spans.push(Span::raw(" "));
-    for (idx, (tab, label, unread)) in tabs.iter().enumerate() {
-        if idx > 0 {
-            tab_spans.push(Span::raw("  "));
-        }
-        let active = *tab == current;
-        let style = if active {
-            Style::default()
-                .fg(theme::BG_SELECTION())
-                .bg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_DIM())
-        };
-        let suffix = if *unread > 0 {
-            format!(" ({unread})")
-        } else {
-            String::new()
-        };
-        tab_spans.push(Span::styled(format!(" {label}{suffix} "), style));
-    }
-
-    // Right cluster, pinned to the right edge so the tab row keeps its air on
-    // narrow terminals: the active "mine only" filter (when set) sits just left
-    // of the switch hint.
-    let key_style = Style::default()
-        .fg(theme::AMBER_DIM())
-        .add_modifier(Modifier::BOLD);
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-
-    let mut right_spans = Vec::new();
-    if let Some(label) = mine_only_label {
-        right_spans.push(Span::styled(
-            "mine only",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        right_spans.push(Span::styled(
-            format!(" · showing your {label}"),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-        right_spans.push(Span::raw("   "));
-    }
-    right_spans.push(Span::styled("[", key_style));
-    right_spans.push(Span::styled(" ", faint));
-    right_spans.push(Span::styled("]", key_style));
-    right_spans.push(Span::styled(" ", faint));
-    right_spans.push(Span::styled("h/l", key_style));
-    right_spans.push(Span::styled(" switch ", faint));
-
-    let right_w: u16 = right_spans
-        .iter()
-        .map(|s| s.content.chars().count() as u16)
-        .sum();
-
-    let [left, right] =
-        Layout::horizontal([Constraint::Min(0), Constraint::Length(right_w)]).areas(area);
-    frame.render_widget(Paragraph::new(Line::from(tab_spans)), left);
-    frame.render_widget(Paragraph::new(Line::from(right_spans)), right);
-}
-
-fn draw_tab_footer(frame: &mut Frame, area: Rect, hints: &[(&str, &str)]) {
-    frame.render_widget(Paragraph::new(hint_line(hints)), area);
-}
-
-fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    let composing = view.work_state.composing();
-    // Idle tabs end in a single-line hint footer (matching Projects and the
-    // Pinstar browser); the bordered composer only appears while editing.
-    let footer_height = if composing { 11 } else { 1 };
     let search_height = if view.directory.search_mode() { 3 } else { 0 };
     let layout = Layout::vertical([
         Constraint::Length(search_height),
@@ -167,49 +63,34 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
         Constraint::Length(footer_height),
     ])
     .split(area);
+
     if view.directory.search_mode() {
         draw_search_box(frame, layout[0], view.directory.search_query());
     }
 
-    // The "mine only" banner is drawn in the tab strip, so the list keeps its
-    // full height here.
-    let list_view = work::ui::WorkListView {
-        mine_only: false,
-        ..view.profiles
-    };
+    let entries = person_entries(
+        view.showcase_state.all_items(),
+        view.work_state.all_items(),
+        view.directory.mine_only,
+        view.current_user_id,
+        view.directory.active_query(),
+    );
+    let selected = view
+        .directory
+        .selected()
+        .min(entries.len().saturating_sub(1));
+
     let body = layout[1];
-    let filtered_items = view.directory.search_mode().then(|| {
-        filtered_profile_indices(list_view.items, view.directory.search_query())
-            .into_iter()
-            .map(|(_, item)| item.clone())
-            .collect::<Vec<_>>()
-    });
-    if body.width >= 86 {
+    if body.width >= DETAIL_MIN_WIDTH {
         let cols =
-            Layout::horizontal([Constraint::Percentage(44), Constraint::Fill(1)]).split(body);
-        if let Some(items) = &filtered_items {
-            let search_view = work::ui::WorkListView {
-                items,
-                selected_index: view.directory.search_selected(),
-                ..list_view
-            };
-            work::ui::draw_work_list(frame, cols[0], &search_view);
-        } else {
-            work::ui::draw_work_list(frame, cols[0], &list_view);
-        }
-        draw_profile_detail(frame, cols[1], &view);
-    } else if let Some(items) = &filtered_items {
-        let search_view = work::ui::WorkListView {
-            items,
-            selected_index: view.directory.search_selected(),
-            ..list_view
-        };
-        work::ui::draw_work_list(frame, body, &search_view);
+            Layout::horizontal([Constraint::Percentage(40), Constraint::Fill(1)]).split(body);
+        draw_people_list(frame, cols[0], &view, &entries, selected);
+        draw_person_detail(frame, cols[1], &view, entries.get(selected));
     } else {
-        work::ui::draw_work_list(frame, body, &list_view);
+        draw_people_list(frame, body, &view, &entries, selected);
     }
 
-    if composing {
+    if work_composing {
         work::ui::draw_work_composer(
             frame,
             layout[2],
@@ -217,119 +98,301 @@ fn draw_profiles_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>)
                 state: view.work_state,
             },
         );
+    } else if showcase_composing {
+        showcase::ui::draw_showcase_composer(
+            frame,
+            layout[2],
+            &showcase::ui::ShowcaseComposerView {
+                state: view.showcase_state,
+            },
+        );
     } else {
-        draw_tab_footer(frame, layout[2], PROFILE_HINTS);
+        let right = if view.directory.mine_only {
+            vec![Span::styled(
+                "mine only ",
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            )]
+        } else {
+            Vec::new()
+        };
+        let line = row_with_hint(hint_line(IDLE_HINTS).spans, right, layout[2].width as usize);
+        frame.render_widget(Paragraph::new(line), layout[2]);
     }
 }
 
-fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'_>) {
+fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
+    if area.height == 0 {
+        return;
+    }
     let block = Block::default()
-        .title(" Profile ")
+        .title(" Search people and projects ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            query.to_string(),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ))),
+        inner,
+    );
+}
+
+fn draw_people_list(
+    frame: &mut Frame,
+    area: Rect,
+    view: &DirectoryPageView<'_>,
+    entries: &[PersonEntry<'_>],
+    selected: usize,
+) {
+    if entries.is_empty() {
+        let lines = vec![
+            Line::from(Span::styled(
+                "Nobody here yet.",
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+            Line::from(Span::styled(
+                "Press 'i' to share a project, 'w' to post your work card;",
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+            Line::from(Span::styled(
+                "either one puts you on this page.",
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+        ];
+        frame.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    let visible_items = ((area.height / ITEM_HEIGHT).max(1)) as usize;
+    let start_index = selected.saturating_sub(visible_items.saturating_sub(1));
+    let end_index = (start_index + visible_items).min(entries.len());
+    let visible_len = end_index.saturating_sub(start_index);
+
+    let constraints =
+        std::iter::repeat_n(Constraint::Length(ITEM_HEIGHT), visible_len).collect::<Vec<_>>();
+    let rows = Layout::vertical(constraints).split(area);
+
+    for (row, row_area) in rows.iter().copied().enumerate() {
+        let entry_idx = start_index + row;
+        let entry = &entries[entry_idx];
+        let is_selected = entry_idx == selected;
+        let bg = if is_selected {
+            theme::BG_SELECTION()
+        } else {
+            Color::Reset
+        };
+        let block = Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(theme::BORDER()))
+            .style(Style::default().bg(bg));
+        let content = block.inner(row_area);
+        frame.render_widget(block, row_area);
+
+        let lines = person_row_lines(
+            entry,
+            view.current_user_id,
+            view.work_state.marker_read_at(),
+            view.showcase_state.marker_read_at(),
+            content.width as usize,
+        );
+        frame.render_widget(Paragraph::new(lines), content);
+    }
+}
+
+/// Four-line person row: @username, what they are (status or project count),
+/// their freshest line (headline or latest project), tags.
+fn person_row_lines(
+    entry: &PersonEntry<'_>,
+    viewer: uuid::Uuid,
+    work_marker: Option<chrono::DateTime<chrono::Utc>>,
+    showcase_marker: Option<chrono::DateTime<chrono::Utc>>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let is_unread = entry.is_unread(work_marker, showcase_marker);
+    let own = entry.user_id == viewer;
+
+    let mut lines = Vec::with_capacity(4);
+    lines.push(name_line(entry.username, own, is_unread, width));
+
+    // Meta: status word (colored) when they have a card, project count, and
+    // how fresh their latest activity is.
+    let mut meta_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(item) = entry.work {
+        meta_spans.push(Span::styled(
+            work::state::status_label(&item.profile.status).to_string(),
+            Style::default()
+                .fg(status_color(&item.profile.status))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    let mut trailing = String::new();
+    if !entry.projects.is_empty() {
+        if entry.work.is_some() {
+            trailing.push_str(" · ");
+        }
+        let count = entry.projects.len();
+        let noun = if count == 1 { "project" } else { "projects" };
+        trailing.push_str(&format!("{count} {noun}"));
+    }
+    trailing.push_str(&format!(
+        " · {}",
+        format_relative_time(entry.latest_activity())
+    ));
+    meta_spans.push(Span::styled(
+        truncate_to_width(&trailing, width),
+        Style::default().fg(theme::TEXT_DIM()),
+    ));
+    lines.push(Line::from(meta_spans));
+
+    // Freshest line: the card headline when present, else the latest project.
+    match (entry.work, entry.projects.first()) {
+        (Some(item), _) => lines.push(Line::from(Span::styled(
+            truncate_to_width(&item.profile.headline, width),
+            Style::default().fg(theme::TEXT()),
+        ))),
+        (None, Some(item)) => lines.push(Line::from(vec![
+            Span::styled("↳ ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                truncate_to_width(&item.showcase.title, width.saturating_sub(2)),
+                Style::default().fg(theme::TEXT()),
+            ),
+        ])),
+        (None, None) => lines.push(Line::from("")),
+    }
+
+    // Tags: skills when they have a card, else the latest project's tags.
+    let tags = match (entry.work, entry.projects.first()) {
+        (Some(item), _) => item
+            .profile
+            .skills
+            .iter()
+            .map(|s| format!("#{s}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        (None, Some(item)) => item
+            .showcase
+            .tags
+            .iter()
+            .map(|t| format!("#{t}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        (None, None) => String::new(),
+    };
+    lines.push(Line::from(Span::styled(
+        truncate_to_width(&tags, width),
+        Style::default().fg(theme::AMBER_DIM()),
+    )));
+    lines
+}
+
+fn name_line(username: &str, own: bool, is_unread: bool, width: usize) -> Line<'static> {
+    let unread_prefix = if is_unread { "● " } else { "" };
+    let unread_w = UnicodeWidthStr::width(unread_prefix);
+    let badge = if own { "(you)" } else { "" };
+    let badge_w = UnicodeWidthStr::width(badge);
+    let name = format!("@{username}");
+    let name_budget = if own {
+        width
+            .saturating_sub(unread_w)
+            .saturating_sub(badge_w + 1)
+            .max(4)
+    } else {
+        width.saturating_sub(unread_w).max(4)
+    };
+    let truncated = truncate_to_width(&name, name_budget);
+    let truncated_w = UnicodeWidthStr::width(truncated.as_str());
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    if is_unread {
+        spans.push(Span::styled(
+            "● ",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.push(Span::styled(
+        truncated,
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    ));
+    if own {
+        let used = unread_w + truncated_w;
+        let pad = width.saturating_sub(used + badge_w).max(1);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(badge, Style::default().fg(theme::AMBER_DIM())));
+    }
+    Line::from(spans)
+}
+
+fn status_color(status: &str) -> Color {
+    match status {
+        "open" => theme::SUCCESS(),
+        "casual" => theme::AMBER(),
+        _ => theme::TEXT_DIM(),
+    }
+}
+
+/// The whole person in one scroll: header, bio, late.fetch, their work card,
+/// then every project. The `h`/`l` focus cursor paints a `▸` marker on the
+/// focused section; Enter/e/d act on it.
+fn draw_person_detail(
+    frame: &mut Frame,
+    area: Rect,
+    view: &DirectoryPageView<'_>,
+    entry: Option<&PersonEntry<'_>>,
+) {
+    let block = Block::default()
+        .title(" Person ")
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let Some(item) = view.work_state.selected_item() else {
+    let Some(entry) = entry else {
         frame.render_widget(
-            Paragraph::new("No profile selected.").style(Style::default().fg(theme::TEXT_DIM())),
+            Paragraph::new("Nobody selected.").style(Style::default().fg(theme::TEXT_DIM())),
             inner,
         );
         return;
     };
 
-    let profile = &item.profile;
-    let author_projects = view
-        .showcase_state
-        .all_items()
-        .iter()
-        .filter(|project| project.showcase.user_id == profile.user_id)
-        .collect::<Vec<_>>();
-    let author_profile = item.author_profile.as_ref();
     let detail_width = inner.width as usize;
+    let focus = view
+        .directory
+        .focus()
+        .min(entry.focus_len().saturating_sub(1));
+    let card_focused = entry.work.is_some() && focus == 0;
+    let focused_project = match entry.focus_target(focus) {
+        Some(PersonFocus::Project(item)) => Some(item.showcase.id),
+        Some(PersonFocus::Card(_)) => None,
+        None => None,
+    };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        profile.headline.clone(),
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    )));
+
+    // Header: who this is and how fresh.
     lines.push(Line::from(vec![
         Span::styled(
-            format!("@{}", item.author_username),
-            Style::default().fg(theme::AMBER()),
-        ),
-        Span::styled("  ", Style::default()),
-        Span::styled(
-            work::state::status_label(&profile.status),
+            format!("@{}", entry.username),
             Style::default()
-                .fg(theme::SUCCESS())
+                .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {}  {}", profile.work_type, profile.location),
-            Style::default().fg(theme::TEXT_DIM()),
+            format!("  active {}", format_relative_time(entry.latest_activity())),
+            Style::default().fg(theme::TEXT_FAINT()),
         ),
     ]));
-    lines.push(Line::from(Span::styled(
-        format!("updated {}", format_relative_time(profile.updated)),
-        Style::default().fg(theme::TEXT_FAINT()),
-    )));
     lines.push(Line::from(""));
 
-    if !profile.summary.trim().is_empty() {
-        lines.push(section_header("summary"));
-        for paragraph in profile
-            .summary
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-        {
-            lines.push(Line::from(Span::styled(
-                paragraph.trim().to_string(),
-                Style::default().fg(theme::TEXT()),
-            )));
-        }
-        lines.push(Line::from(""));
-    }
-
-    if !profile.skills.is_empty() {
-        lines.push(section_header("skills"));
-        lines.push(Line::from(Span::styled(
-            profile
-                .skills
-                .iter()
-                .map(|skill| format!("#{skill}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            Style::default().fg(theme::AMBER_DIM()),
-        )));
-        lines.push(Line::from(""));
-    }
-
-    if !profile.contact.trim().is_empty() {
-        lines.push(section_header("contact"));
-        lines.push(Line::from(Span::styled(
-            profile.contact.trim().to_string(),
-            Style::default().fg(theme::TEXT()),
-        )));
-        lines.push(Line::from(""));
-    }
-
-    if !profile.links.is_empty() {
-        lines.push(section_header("links"));
-        for link in &profile.links {
-            lines.push(Line::from(Span::styled(
-                format!("-> {link}"),
-                Style::default().fg(theme::TEXT_FAINT()),
-            )));
-        }
-        lines.push(Line::from(""));
-    }
-
-    if let Some(author_profile) = author_profile {
+    if let Some(author_profile) = entry.author_profile() {
         if !author_profile.bio.trim().is_empty() {
-            lines.push(section_header("bio"));
             lines.extend(render_body_to_lines(
                 &author_profile.bio,
                 detail_width,
@@ -338,76 +401,166 @@ fn draw_profile_detail(frame: &mut Frame, area: Rect, view: &DirectoryPageView<'
             ));
             lines.push(Line::from(""));
         }
-
-        lines.push(section_header("late.fetch"));
         lines.extend(late_fetch_lines(author_profile, detail_width));
         lines.push(Line::from(""));
     }
 
-    if !author_projects.is_empty() {
-        lines.push(section_header("showcases"));
-        for project in author_projects.into_iter().take(5) {
-            let showcase = &project.showcase;
-            lines.push(Line::from(vec![
-                Span::styled("-> ", Style::default().fg(theme::TEXT_DIM())),
-                Span::styled(
-                    showcase.title.clone(),
-                    Style::default().fg(theme::TEXT_BRIGHT()),
-                ),
-                Span::styled(
-                    format!("  {}", showcase.url),
-                    Style::default().fg(theme::TEXT_FAINT()),
-                ),
-            ]));
-            if !showcase.description.trim().is_empty() {
-                for paragraph in showcase
-                    .description
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .take(2)
-                {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {}", paragraph.trim()),
-                        Style::default().fg(theme::TEXT_DIM()),
-                    )));
-                }
-            }
-            if !showcase.tags.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        "   {}",
-                        showcase
-                            .tags
-                            .iter()
-                            .map(|tag| format!("#{tag}"))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ),
-                    Style::default().fg(theme::AMBER_DIM()),
-                )));
-            }
+    if let Some(item) = entry.work {
+        let p = &item.profile;
+        lines.push(focus_header("work card", card_focused));
+        lines.push(Line::from(vec![
+            Span::styled(
+                p.headline.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                work::state::status_label(&p.status).to_string(),
+                Style::default()
+                    .fg(status_color(&p.status))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}  {}", p.work_type, p.location),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+        for paragraph in p.summary.lines().filter(|line| !line.trim().is_empty()) {
+            lines.push(Line::from(Span::styled(
+                paragraph.trim().to_string(),
+                Style::default().fg(theme::TEXT()),
+            )));
         }
+        if !p.skills.is_empty() {
+            lines.push(Line::from(Span::styled(
+                p.skills
+                    .iter()
+                    .map(|skill| format!("#{skill}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
+        if !p.contact.trim().is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("contact: {}", p.contact.trim()),
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
+        for link in &p.links {
+            lines.push(Line::from(Span::styled(
+                format!("-> {link}"),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            work::state::profile_url(view.profile_base_url, &p.slug),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        )));
         lines.push(Line::from(""));
     }
 
-    let base_url = view.profiles.profile_base_url;
-    lines.push(Line::from(Span::styled(
-        work::state::profile_url(base_url, &profile.slug),
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    )));
+    for item in &entry.projects {
+        let focused = focused_project == Some(item.showcase.id);
+        lines.extend(project_lines(item, focused));
+        lines.push(Line::from(""));
+    }
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn section_header(label: &'static str) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("# {label}"),
+/// One project section: title (with focus marker), URL, description (full
+/// when focused, first line otherwise), tags.
+fn project_lines(item: &ShowcaseFeedItem, focused: bool) -> Vec<Line<'static>> {
+    let s = &item.showcase;
+    let mut lines = Vec::new();
+
+    let marker = if focused { "▸ " } else { "  " };
+    let marker_style = if focused {
         Style::default()
-            .fg(theme::TEXT_DIM())
-            .add_modifier(Modifier::BOLD),
-    ))
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    lines.push(Line::from(vec![
+        Span::styled(marker.to_string(), marker_style),
+        Span::styled(
+            s.title.clone(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", format_relative_time(s.created)),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  ↗ ", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(
+            display_link(&s.url),
+            Style::default()
+                .fg(theme::AMBER_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    if focused {
+        for paragraph in s.description.lines().filter(|line| !line.trim().is_empty()) {
+            lines.push(Line::from(Span::styled(
+                format!("  {}", paragraph.trim()),
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
+    } else if let Some(first) = s
+        .description
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    {
+        lines.push(Line::from(Span::styled(
+            format!("  {first}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    if !s.tags.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                s.tags
+                    .iter()
+                    .map(|tag| format!("#{tag}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+    }
+    lines
+}
+
+fn focus_header(label: &'static str, focused: bool) -> Line<'static> {
+    let marker = if focused { "▸ " } else { "  " };
+    let marker_style = if focused {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme::TEXT_DIM())
+    };
+    Line::from(vec![
+        Span::styled(marker.to_string(), marker_style),
+        Span::styled(
+            format!("# {label}"),
+            Style::default()
+                .fg(theme::TEXT_DIM())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ])
 }
 
 fn late_fetch_lines(
@@ -492,83 +645,35 @@ fn format_created_at(created_at: &chrono::DateTime<chrono::Utc>) -> String {
     created_at.format("%Y-%m-%d").to_string()
 }
 
-fn draw_projects_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    let composing = view.showcase_state.composing();
-    let footer_height = if composing { 10 } else { 1 };
-    let search_height = if view.directory.search_mode() { 3 } else { 0 };
-    let layout = Layout::vertical([
-        Constraint::Length(search_height),
-        Constraint::Fill(1),
-        Constraint::Length(footer_height),
-    ])
-    .split(area);
-    if view.directory.search_mode() {
-        draw_search_box(frame, layout[0], view.directory.search_query());
-    }
-
-    let list_view = showcase::ui::ShowcaseListView {
-        mine_only: false,
-        ..view.projects
-    };
-    if view.directory.search_mode() {
-        let filtered_items =
-            filtered_project_indices(list_view.items, view.directory.search_query())
-                .into_iter()
-                .map(|(_, item)| item.clone())
-                .collect::<Vec<_>>();
-        let search_view = showcase::ui::ShowcaseListView {
-            items: &filtered_items,
-            selected_index: view.directory.search_selected(),
-            ..list_view
-        };
-        showcase::ui::draw_showcase_list(frame, layout[1], &search_view);
-    } else {
-        showcase::ui::draw_showcase_list(frame, layout[1], &list_view);
-    }
-    if composing {
-        showcase::ui::draw_showcase_composer(
-            frame,
-            layout[2],
-            &showcase::ui::ShowcaseComposerView {
-                state: view.showcase_state,
-            },
-        );
-    } else {
-        draw_tab_footer(frame, layout[2], PROJECT_HINTS);
-    }
+fn display_link(url: &str) -> String {
+    let stripped = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    stripped.trim_end_matches('/').to_string()
 }
 
-fn draw_search_box(frame: &mut Frame, area: Rect, query: &str) {
-    if area.height == 0 {
-        return;
+fn truncate_to_width(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
     }
-    let block = Block::default()
-        .title(" Search ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            query.to_string(),
-            Style::default().fg(theme::TEXT_BRIGHT()),
-        )])),
-        inner,
-    );
-}
-
-fn draw_pinstar_tab(frame: &mut Frame, area: Rect, view: DirectoryPageView<'_>) {
-    if let Some(state) = view.pinstar_state {
-        let theme = crate::app::pinstar::helpers::PinstarTheme::default();
-        crate::app::pinstar::ui::draw_pinstar_view(frame, area, state, &theme);
-    } else if let Some(browser) = view.pinstar_browser {
-        crate::app::pinstar::ui::draw_diagram_browser(frame, area, browser);
-    } else {
-        let placeholder = Paragraph::new(Line::from(Span::styled(
-            "Pinstar diagrams unavailable.",
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .centered();
-        frame.render_widget(placeholder, area);
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
     }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let budget = width - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > budget {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push('…');
+    out
 }

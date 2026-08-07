@@ -38,6 +38,7 @@ pub mod chat_slow_mode;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
+pub mod cyberspace_account;
 pub mod daily_match;
 pub mod darkroom_save;
 pub mod door_rc;
@@ -86,9 +87,6 @@ pub mod notification;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;
-pub mod pinstar_diagram;
-pub mod pinstar_diagram_member;
-pub mod pinstar_invite;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]

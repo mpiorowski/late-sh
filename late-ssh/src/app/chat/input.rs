@@ -641,6 +641,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.feeds_selected {
         return super::feeds::input::handle_arrow(app, key);
     }
+    if app.chat.cyberspace_selected {
+        return super::cyberspace::input::handle_arrow(app, key);
+    }
     if app.chat.news_selected {
         return super::news::input::handle_arrow(app, key);
     }
@@ -718,6 +721,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::feeds::input::handle_byte(app, byte);
+    }
+
+    if app.chat.cyberspace_selected {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        return super::cyberspace::input::handle_byte(app, byte);
     }
 
     if app.chat.news_selected {

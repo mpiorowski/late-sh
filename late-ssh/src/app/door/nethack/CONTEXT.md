@@ -74,7 +74,7 @@ The door is gated behind `LATE_NETHACK_ENABLED` (default `false`); when disabled
 Cross-module wiring (client side, outside this folder):
 - `app/state.rs`: `App::nethack_state`, `enter_nethack`/`leave_nethack`, and the Running-mode input passthrough in `App::handle_input` (intercept F1, else forward raw bytes).
 - `app/input.rs`: launcher `Enter` → `enter_nethack` + `connect`; `7` global screen switch; topbar hit-test columns; arrows are a no-op (Running-mode arrows are forwarded raw upstream).
-- `app/render.rs`: takes `nethack_state` out (like pinstar/rebels) so the draw path can `set_viewport(content_area)` before blitting.
+- `app/render.rs`: takes `nethack_state` out (like rebels) so the draw path can `set_viewport(content_area)` before blitting.
 - `app/tick.rs`: calls `State::tick()` each app tick to detect connection close.
 - `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `src/test_helpers.rs`: thread the `nethack_enabled`/`nethack_host`/`nethack_port`/`nethack_secret` fields through.
 
@@ -194,7 +194,7 @@ Inline pure tests cover:
 - `late-core` `profile_award.rs`: `NHA`/`NHY` badge codes + chips score formatting. `late-core` `user.rs`: chat author label collapses `NHA` into `NHY`.
 - Host `playname.rs`: sanitize keeps alphanumerics + `_`, strips metachars, caps length, falls back when empty.
 - Host `server.rs`: `effective_term` falls back for unknown/hostile TERM and passes a supported one through.
-- `app/common/primitives.rs` + `app/input.rs`: screen `next`/`prev` ordering and topbar columns place `Nethack` between `Rebels` and `Pinstar`.
+- `app/common/primitives.rs` + `app/input.rs`: screen `next`/`prev` ordering; NetHack is a door screen reached through the Games hub, absent from the tab cycle.
 
 The PTY bridge (`host.rs`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/save/quit manually against a real host.
 

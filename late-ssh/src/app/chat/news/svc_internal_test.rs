@@ -1,6 +1,7 @@
 use super::{
     ArticleExtraction, display_author, encode_ascii_payload, extraction_looks_not_found,
-    is_twitter_url, is_youtube_url, sanitize_payload_field, truncate_for_chat,
+    is_ai_blocklisted_url, is_twitter_url, is_youtube_url, sanitize_payload_field,
+    truncate_for_chat,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -11,6 +12,18 @@ fn youtube_url_detection_covers_common_hosts() {
     assert!(is_youtube_url("https://youtu.be/abc"));
     assert!(is_youtube_url("https://m.youtube.com/watch?v=abc"));
     assert!(!is_youtube_url("https://vimeo.com/123"));
+}
+
+#[test]
+fn ai_blocklist_covers_cyberspace_and_nothing_else() {
+    assert!(is_ai_blocklisted_url("https://cyberspace.online/odd/post"));
+    assert!(is_ai_blocklisted_url(
+        "https://api.cyberspace.online/v1/posts"
+    ));
+    assert!(!is_ai_blocklisted_url(
+        "https://example.com/cyberspace.online"
+    ));
+    assert!(!is_ai_blocklisted_url("https://notcyberspace.online/post"));
 }
 
 #[test]

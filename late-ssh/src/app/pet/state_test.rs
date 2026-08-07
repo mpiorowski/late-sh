@@ -215,3 +215,22 @@ async fn sparse_ticks_expire_feedback_on_the_wall_clock() {
         "animation clock syncs to the wall tick, not the call count"
     );
 }
+
+#[tokio::test]
+async fn end_roam_stops_an_in_progress_stroll() {
+    use crate::test_helpers::new_test_db;
+    use late_core::test_utils::create_test_user;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "cat-end-roam").await;
+    let svc = super::super::svc::PetService::new(test_db.db.clone());
+    let cat = svc.ensure_cat(user.id).await.expect("ensure cat");
+    let mut state = PetState::new(user.id, svc, cat);
+
+    assert_eq!(state.feed(1), FeedOutcome::Fed);
+    assert!(state.roaming_active(), "feeding starts a stroll");
+
+    assert!(state.end_roam(), "an active stroll was cancelled");
+    assert!(!state.roaming_active(), "hiding the strip ends the stroll");
+    assert!(!state.end_roam(), "nothing left to cancel the second time");
+}

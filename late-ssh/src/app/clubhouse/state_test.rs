@@ -98,7 +98,7 @@ fn tutorial_tours_every_page_then_comes_home() {
         (b'2', Screen::Arcade, Tutorial::VisitArcade),
         (b'3', Screen::Games, Tutorial::VisitGames),
         (b'4', Screen::Artboard, Tutorial::VisitArtboard),
-        (b'5', Screen::Pinstar, Tutorial::VisitDirectory),
+        (b'5', Screen::Profiles, Tutorial::VisitDirectory),
         (b'6', Screen::Leaderboard, Tutorial::VisitLeaderboard),
         (b'0', Screen::Clubhouse, Tutorial::Homecoming),
     ] {
@@ -131,7 +131,7 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
         Screen::Arcade,
         Screen::Games,
         Screen::Artboard,
-        Screen::Pinstar,
+        Screen::Profiles,
         Screen::Leaderboard,
         Screen::Clubhouse,
     ] {

@@ -292,7 +292,7 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
             .await
             .expect("send tour input after token close");
     }
-    expect_shell_data_contains(&mut shell_channel, b"Directory").await;
+    expect_shell_data_contains(&mut shell_channel, b"Profiles").await;
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")

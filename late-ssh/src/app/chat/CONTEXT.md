@@ -36,6 +36,7 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages
+|-- cyberspace/                  # Synthetic Cyberspace entry: personal client for cyberspace.online
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
@@ -52,6 +53,7 @@ late-ssh/src/app/chat/           # adjacent _test.rs files, wired with #[cfg(tes
 |-- svc_test.rs                  # Broad ChatService DB-backed coverage
 |-- sheet_test.rs                # Character-sheet model/service coverage
 |-- state_test.rs                # Placeholder; direct ChatState tests need more accessors
+|-- cyberspace/svc_test.rs       # CyberspaceService DB-backed coverage (dead base URL, no network)
 |-- news/svc_test.rs             # ArticleService DB-backed coverage
 |-- showcase/svc_test.rs         # ShowcaseService DB-backed coverage
 `-- work/svc_test.rs             # WorkService DB-backed coverage
@@ -60,7 +62,7 @@ late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cur
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `showcase.rs`,
+`notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
 `chat_slow_mode.rs`, `server_ban.rs`, `artboard_ban.rs`, and `moderation_audit_log.rs`.
@@ -271,8 +273,9 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
+- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
-- `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/feed` and `/water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
+- `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` and `/pet water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
@@ -296,7 +299,7 @@ User commands:
 - `/coffee` and `/tea` post a small ASCII-cup chat message to the current room as a coffee/tea-break ritual. No arguments. Steam pattern rotates per invocation through `CUP_VARIANT_COUNT` variants tracked on `ChatState::next_cup_variant` (session-local, not persisted). Routes through the normal `send_message_with_reply_task` send path — the body is a regular chat message subject to the same length/visibility rules.
 - `/private #room` creates a private topic room and joins the caller.
 - `/profile [@user]` opens a user's read-only profile modal. Bare `/profile` opens the caller's own profile as others see it. `@username` autocompletion is available after `/profile `.
-- `/public #room` opens or creates an opt-in public room for the caller only (`auto_join=false`).
+- `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only (`auto_join=false`).
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `app/sheet_modal`.
 - `/settings` opens settings.
 - `/shop` opens the Shop modal (the Shop has no global chord; this and the locked-feature nudges are its only entry points).
@@ -442,6 +445,17 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `i` creates or edits the caller's own profile; `e` edits selected owned/admin entry; `d` deletes owned/admin entry; Enter or `c` copies the selected public work profile link when not composing.
 - Snapshot is global and lists recent work profiles by latest update; unread count is per user through `work_feed_reads`.
 
+### Cyberspace
+
+- late.sh as a personal client for cyberspace.online (`chat/cyberspace/`: `api.rs` typed reqwest client, `svc.rs` orchestration + per-user id-token cache, `state.rs`/`input.rs`/`ui.rs` pane and modals).
+- **Their API terms are load-bearing**: no bots, no scraping/caching for redistribution, no feeding their content to AI. Every call runs under the linked user's own bearer token on a human action; fetched content lives only in the fetching session's memory and renders only for that user; `news/svc.rs::is_ai_blocklisted_url` hard-stops cyberspace.online URLs at the summarizer.
+- Linking: `/cs link` modal → `POST /v1/auth/login` → store only the Firebase refresh token in `cyberspace_accounts` (one row per user, upsert replaces). id tokens are cached in-memory per user for 50 minutes and re-minted via `POST /v1/auth/refresh`, and caching one sweeps the expired entries so live third-party bearer tokens do not accumulate for the life of the process; a rejected refresh means the link is broken and the pane asks for a re-link. **Known gap:** nothing invalidates a cached token on an `UNAUTHORIZED` response, so a token revoked on their side mid-TTL (password change, session revoke) fails every pane action until the 50 minutes are up, even though a re-mint would recover it. Fixing it means dropping the cache entry and retrying once at the call sites in `svc.rs`. `/cs unlink` deletes the row and drops the cached token.
+- The rail entry appears in Core (below rss) only once the account is linked, and `/cs unlink` takes it away again; `/cs` is the way in before that, showing a pitch + Enter-to-link funnel. `cyberspace_linked` gates the row in **both** `visual_order_for_rooms` (navigation) and the rail builders (rendering): gating one and not the other leaves a slot the user can arrow onto but never see. Views: feed (j/k, Enter opens a thread), thread (j/k scroll, r reply, b back), notifications (opened with n; loading marks all read server-side, same contract as RSS; Enter opens the entry the notification is about). The jump reads `targetId`, which is the **post** id for both `post` and `reply` targets (a reply notification puts the reply's own id in `metadata.replyId`), and fetches it through `GET /v1/posts/{id}` rather than looking locally, since the entry someone replied to is usually older than the feed page in memory. Ids only: that route 404s on slugs. `State::thread_target` holds the post the thread view is for, set before the post exists, so a load that lands after the user has moved on is dropped instead of yanking the view. Unread badge comes from `GET /v1/notifications/unread-count`, fetched at session init, on pane actions, and every 10 minutes from the session tick (`State::poll_unread_if_due`). The poll rides the tick rather than a spawned task so it dies with the session; it is per session, not global like the RSS poller, because the count needs that user's own token. The badge counts **notifications only, never new feed entries**, so the feed view carries a header row (`@user on cyberspace.online` + `● N unread notifications · n to open`) that names what the rail's bare `cyberspace (N)` is counting.
+- **v3 idea, not investigated: bridging their chat into a late.sh room.** Their API clearly has more surfaces than we consume: `describe_notification` handles `chat_mention`, `dm_message` ("c-mail"), and `guild_new_thread`, all transcribed from their docs, so chat, DMs, and guilds exist over there. None of it is wired here, and the endpoints for reading or sending are unknown to this repo. The blocker is not plumbing, it is the terms: fetched content renders only for the user who fetched it, so a bridged channel cannot live in a shared room where other members would read one linked user's content. A per-user private surface (like this pane, another view inside it) is the shape that fits. Worth reading their chat endpoints before designing anything.
+- **Deferred to v2, on purpose: there is no unread count for new feed entries.** Login fetches the notification count and nothing else; the feed is only pulled when the pane opens, on `r`, or right after linking, and no cursor records which entries have been seen, so "3 new entries" is not a number this code can produce. Building it means a read cursor in the shape of `rss_feed_read`/`article_feed_read` (new forward migration, never edit 133), the 10-minute poll fetching a feed page instead of one integer, and the count landing in the pane header rather than the rail badge, since merging it into `cyberspace (N)` re-creates the notifications-vs-entries ambiguity that the header exists to resolve. Held back because the feed is already newest-first with relative stamps (looking at it answers "what is new"), and because the right cursor semantics (newest entry seen vs last time the pane was opened) depend on reading habits we do not have yet. Storing a cursor is a timestamp, not their content, so it stays clear of the API terms above.
+- Posting: `/cs post` or `p` opens the compose modal (title/topics/body); the modal stays open and busy until the service answers so a failed publish never eats the draft. A created entry publishes `ActivityKind::CyberspacePosted` (a #lounge story line naming the title, throttle-keyed on it).
+- No shared snapshot: `CsEvent` broadcasts carry their data and sessions filter by `user_id`, because content is per-user by their terms and nothing may be shared across users.
+
 ### Notifications / Mentions
 
 - Backed by `notifications` joined with actor, room, and message preview data.
@@ -585,6 +599,7 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
+| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `n` notifications, `r` refresh/reply, `b` back |
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
@@ -629,7 +644,7 @@ A patron deep enough into the tavern's drinks types like it. `ChatService::slurr
 
 ### Room Membership Commands
 
-1. `/public #room` gets or creates a public topic room, forces `auto_join=false`, and joins only caller. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
+1. `/public #room` gets or creates a public topic room, forces `auto_join=false`, and joins only caller. `/join #room` is an alias for it, parsed in the same `parse_public_room_command` so the two can never drift; it exists because IRC users type `/join` first. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
 2. `/private #room` opens the room-info form (`app/room_info_modal`) and creates the room with its topic/rules and `created_by` in one go.
 3. `/roominfo` opens the same form for the selected room. Authority is decided once in `ChatService::set_room_info`: mods for any room, otherwise the derived owner of a private topic room. `ChatState::room_info_authority` mirrors the rule for what the UI offers (and what the refusal banner says); DMs and game rooms have no info at all. A successful write broadcasts `RoomInfoUpdated`, which banners for the editor and refreshes the room list of every session sitting in that room, so no header waits on the 10s snapshot.
 4. `/rules` shows the selected room's rules in the shared overlay (`Overlay`, the same surface `/active` uses), titled `#slug rules`, one entry per stored line: rules are multi-line and a banner is one line. A room with no rules answers with a banner instead of an empty overlay.

@@ -1,5 +1,5 @@
 use super::{display_author, parse_tags};
-use std::collections::HashMap;
+use late_core::models::profile::Profile;
 use uuid::Uuid;
 
 #[test]
@@ -32,14 +32,15 @@ fn parse_tags_empty_input() {
 #[test]
 fn display_author_prefers_username() {
     let id = Uuid::now_v7();
-    let mut map = HashMap::new();
-    map.insert(id, "alice".to_string());
-    assert_eq!(display_author(&map, id), "alice");
+    let profile = Profile {
+        username: "alice".to_string(),
+        ..Profile::default()
+    };
+    assert_eq!(display_author(Some(&profile), id), "alice");
 }
 
 #[test]
 fn display_author_falls_back_to_short_id() {
     let id = Uuid::now_v7();
-    let map = HashMap::new();
-    assert_eq!(display_author(&map, id), id.to_string()[..8]);
+    assert_eq!(display_author(None, id), id.to_string()[..8]);
 }

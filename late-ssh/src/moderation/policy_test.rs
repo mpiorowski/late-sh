@@ -16,7 +16,6 @@ fn moderators_have_staff_caps_without_admin_caps() {
     assert!(permissions.has(Caps::RENAME_ROOM));
     assert!(permissions.has(Caps::RENAME_USER));
     assert!(permissions.has(Caps::RESTORE_ARTBOARD));
-    assert!(permissions.has(Caps::DELETE_PINSTAR_GRAPH));
     assert!(permissions.has(Caps::DELETE_AUDIO_TRACK));
     assert!(!permissions.has(Caps::PERMA_BAN_USER));
     assert!(!permissions.has(Caps::GRANT_MOD));
@@ -30,13 +29,9 @@ fn targeted_actions_require_higher_tier() {
     assert!(moderator.can(Caps::BAN_FROM_ROOM, Tier::Regular));
     assert!(!moderator.can(Caps::BAN_FROM_ROOM, Tier::Moderator));
     assert!(!moderator.can(Caps::BAN_FROM_ROOM, Tier::Admin));
-    assert!(moderator.can_delete_pinstar_graph(false, Tier::Regular));
-    assert!(!moderator.can_delete_pinstar_graph(false, Tier::Moderator));
     assert!(moderator.can_delete_audio_track(false));
     assert!(admin.can(Caps::BAN_FROM_ROOM, Tier::Moderator));
     assert!(!admin.can(Caps::BAN_FROM_ROOM, Tier::Admin));
-    assert!(admin.can_delete_pinstar_graph(false, Tier::Moderator));
-    assert!(!admin.can_delete_pinstar_graph(false, Tier::Admin));
     assert!(admin.can_delete_audio_track(false));
     assert!(Permissions::default().can_delete_audio_track(true));
     assert!(!Permissions::default().can_delete_audio_track(false));

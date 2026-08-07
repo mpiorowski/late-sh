@@ -95,6 +95,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // A bought username effect: being seen is the whole product, so the
         // purchase is a story by design.
         ActivityKind::UsernameEffectApplied { .. } => true,
+        // Publishing on cyberspace: our user's own action, rare by their API
+        // rate limits (15 entries/day), and the funnel that advertises the
+        // integration ("wait, you can post to cyberspace from here?").
+        ActivityKind::CyberspacePosted { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the

@@ -20,6 +20,7 @@ use crate::app::common::{
 use super::state::{Board, LeaderboardPageState};
 
 const RAIL_WIDTH: u16 = 24;
+const WINDOW_GAP_MAX: u16 = 3;
 
 pub(crate) struct LeaderboardPageView<'a> {
     pub state: &'a LeaderboardPageState,
@@ -141,19 +142,76 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
     let monthly = board.monthly(view.data);
     match board.all_time(view.data) {
         Some(all_time) => {
-            let columns = Layout::horizontal([
-                Constraint::Fill(1),
-                Constraint::Length(2),
-                Constraint::Fill(1),
-            ])
-            .split(rows[3]);
+            let capacity = (rows[3].height as usize).saturating_sub(1);
+            let columns = standings_columns(
+                rows[3],
+                window_natural_width("monthly", monthly, board, view.user_id, capacity),
+                window_natural_width("all-time", all_time, board, view.user_id, capacity),
+            );
             draw_window(frame, columns[0], "monthly", monthly, board, view.user_id);
-            draw_window(frame, columns[2], "all-time", all_time, board, view.user_id);
+            draw_window(frame, columns[1], "all-time", all_time, board, view.user_id);
         }
         None => {
             draw_window(frame, rows[3], "this month", monthly, board, view.user_id);
         }
     }
+}
+
+/// Keep paired windows close enough to scan as one category. When both fit at
+/// their natural widths, any surplus space goes after the second window rather
+/// than stretching the pair across the screen. Narrow terminals retain a
+/// one-cell gutter and divide the constrained width evenly.
+fn standings_columns(area: Rect, first_width: usize, second_width: usize) -> [Rect; 2] {
+    if area.width == 0 {
+        return [area, area];
+    }
+
+    let first_width = first_width.min(u16::MAX as usize) as u16;
+    let second_width = second_width.min(u16::MAX as usize) as u16;
+    let required = first_width as usize + second_width as usize + 1;
+    if required <= area.width as usize {
+        let gap = (area.width - first_width - second_width).min(WINDOW_GAP_MAX);
+        let columns = Layout::horizontal([
+            Constraint::Length(first_width),
+            Constraint::Length(gap),
+            Constraint::Length(second_width),
+            Constraint::Min(0),
+        ])
+        .split(area);
+        [columns[0], columns[2]]
+    } else {
+        let columns = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+        [columns[0], columns[2]]
+    }
+}
+
+fn window_natural_width(
+    heading: &'static str,
+    entries: &[RankedEntry],
+    board: Board,
+    user_id: Uuid,
+    capacity: usize,
+) -> usize {
+    let heading_width = heading.chars().count() + 8;
+    let content_width = if entries.is_empty() {
+        empty_copy(board).chars().count() + 2
+    } else {
+        let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
+        entries
+            .iter()
+            .take(leader_rows)
+            .chain(own_tail.map(|index| &entries[index]))
+            .map(|entry| entry_natural_width(entry, board))
+            .max()
+            .unwrap_or(0)
+    };
+
+    heading_width.max(content_width)
 }
 
 fn draw_window(
@@ -200,6 +258,40 @@ fn window_lines(
         return lines;
     }
 
+    let (leader_rows, own_tail) = window_row_plan(entries, user_id, capacity);
+    let content_width = entries
+        .iter()
+        .take(leader_rows)
+        .chain(own_tail.map(|index| &entries[index]))
+        .map(|entry| entry_natural_width(entry, board))
+        .max()
+        .unwrap_or(width)
+        .min(width);
+
+    for entry in entries.iter().take(leader_rows) {
+        lines.push(entry_line(
+            entry,
+            board,
+            entry.user_id == user_id,
+            content_width,
+        ));
+    }
+    if let Some(index) = own_tail {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("…", Style::default().fg(theme::TEXT_FAINT())),
+        ]));
+        lines.push(entry_line(&entries[index], board, true, content_width));
+    }
+
+    lines
+}
+
+fn window_row_plan(
+    entries: &[RankedEntry],
+    user_id: Uuid,
+    capacity: usize,
+) -> (usize, Option<usize>) {
     let own_index = entries.iter().position(|entry| entry.user_id == user_id);
     let own_visible = own_index.is_none_or(|index| index < capacity);
     let leader_rows = if own_visible {
@@ -207,21 +299,8 @@ fn window_lines(
     } else {
         capacity.saturating_sub(2)
     };
-
-    for entry in entries.iter().take(leader_rows) {
-        lines.push(entry_line(entry, board, entry.user_id == user_id, width));
-    }
-    if let Some(index) = own_index
-        && index >= capacity
-    {
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled("…", Style::default().fg(theme::TEXT_FAINT())),
-        ]));
-        lines.push(entry_line(&entries[index], board, true, width));
-    }
-
-    lines
+    let own_tail = own_index.filter(|index| *index >= capacity);
+    (leader_rows, own_tail)
 }
 
 fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Line<'static> {
@@ -241,24 +320,37 @@ fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Lin
     };
 
     let rank = format!("  #{:<3}", entry.rank);
+    let value = entry_value(entry, board);
+
+    // Right-align within the window's compact content width, leaving two cells
+    // between the longest visible name and its value.
+    let name_budget = width.saturating_sub(rank.chars().count() + value.chars().count() + 2);
+    let name = truncate(&entry.username, name_budget);
+    let pad =
+        width.saturating_sub(rank.chars().count() + name.chars().count() + value.chars().count());
+    Line::from(vec![
+        Span::styled(rank, rank_style),
+        Span::styled(name, name_style),
+        Span::raw(" ".repeat(pad.max(2))),
+        Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
+    ])
+}
+
+fn entry_natural_width(entry: &RankedEntry, board: Board) -> usize {
+    let rank_width = format!("  #{:<3}", entry.rank).chars().count();
+    let value_width = entry_value(entry, board).chars().count();
+
+    rank_width + entry.username.chars().count() + 2 + value_width
+}
+
+fn entry_value(entry: &RankedEntry, board: Board) -> String {
     let mut value = thousands(entry.value);
     let label = board.value_label();
     if !label.is_empty() {
         value.push(' ');
         value.push_str(label);
     }
-
-    // Right-align the value; give whatever remains to the username.
-    let name_budget = width.saturating_sub(rank.chars().count() + value.chars().count() + 3);
-    let name = truncate(&entry.username, name_budget);
-    let pad = width
-        .saturating_sub(rank.chars().count() + name.chars().count() + value.chars().count() + 1);
-    Line::from(vec![
-        Span::styled(rank, rank_style),
-        Span::styled(name, name_style),
-        Span::raw(" ".repeat(pad.max(1))),
-        Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
-    ])
+    value
 }
 
 fn empty_copy(board: Board) -> &'static str {

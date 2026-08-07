@@ -1,5 +1,7 @@
 use super::*;
 use late_core::db::{Db, DbConfig};
+use late_core::models::leaderboard::RankedEntry;
+use uuid::Uuid;
 
 /// The refresh loop's gate. These assert the observable contract: a service
 /// nobody is watching does no leaderboard work, and one live session is enough
@@ -55,6 +57,34 @@ fn subscribing_does_not_report_the_published_snapshot_as_changed() {
         session.borrow_and_update().today_champions.is_empty(),
         "borrow is the only way to reach the seeded snapshot"
     );
+}
+
+#[test]
+fn initial_snapshot_is_retained_without_subscribers() {
+    let service = inert_service();
+    let expected = RankedEntry {
+        username: "first-player".to_string(),
+        user_id: Uuid::from_u128(1),
+        value: 42,
+        rank: 1,
+    };
+
+    service.publish(LeaderboardData {
+        monthly_chip_earners: vec![expected.clone()],
+        ..LeaderboardData::default()
+    });
+    let session = service.subscribe();
+    let snapshot = session.borrow();
+    let actual = snapshot
+        .monthly_chip_earners
+        .first()
+        .expect("published entry retained");
+
+    assert_eq!(snapshot.monthly_chip_earners.len(), 1);
+    assert_eq!(actual.username, expected.username);
+    assert_eq!(actual.user_id, expected.user_id);
+    assert_eq!(actual.value, expected.value);
+    assert_eq!(actual.rank, expected.rank);
 }
 
 #[test]

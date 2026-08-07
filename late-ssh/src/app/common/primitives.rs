@@ -72,7 +72,7 @@ pub enum Screen {
     GreenDragon,
     Darkroom,
     Artboard,
-    Pinstar,
+    Profiles,
     Leaderboard,
     Clubhouse,
     /// Full-screen daily-match board. Entered only from the Daily Games
@@ -99,8 +99,8 @@ impl Screen {
             Screen::Dashboard => Screen::Arcade,
             Screen::Arcade => Screen::Games,
             Screen::Games => Screen::Artboard,
-            Screen::Artboard => Screen::Pinstar,
-            Screen::Pinstar => Screen::Leaderboard,
+            Screen::Artboard => Screen::Profiles,
+            Screen::Profiles => Screen::Leaderboard,
             Screen::Leaderboard => Screen::Clubhouse,
             Screen::Lateania
             | Screen::Rebels
@@ -125,8 +125,8 @@ impl Screen {
             Screen::Arcade => Screen::Dashboard,
             Screen::Games => Screen::Arcade,
             Screen::Artboard => Screen::Games,
-            Screen::Pinstar => Screen::Artboard,
-            Screen::Leaderboard => Screen::Pinstar,
+            Screen::Profiles => Screen::Artboard,
+            Screen::Leaderboard => Screen::Profiles,
             Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
@@ -189,7 +189,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
+        Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
@@ -263,8 +263,8 @@ pub fn format_relative_time_short(dt: chrono::DateTime<chrono::Utc>) -> String {
 /// Build a one-line action-hint footer: `key desc · key desc · …`.
 ///
 /// Keys render in amber, descriptions dim, separators faint. This is the shared
-/// recipe behind every bottom hint bar (the Directory footers, the Pinstar
-/// browser) so the foot of each page reads the same.
+/// recipe behind every bottom hint bar (the Profiles footer, the Artboard
+/// view bar) so the foot of each page reads the same.
 pub(crate) fn hint_line(hints: &[(&str, &str)]) -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())

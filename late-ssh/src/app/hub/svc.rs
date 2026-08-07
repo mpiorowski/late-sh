@@ -114,9 +114,16 @@ impl LeaderboardService {
     pub async fn refresh(&self) -> Result<()> {
         let client = self.db.get().await?;
         let data = fetch_leaderboard_data(&client).await?;
-        let _ = self.data_tx.send(Arc::new(data));
+        self.publish(data);
         *self.last_refresh.lock().expect("last_refresh poisoned") = Some(Instant::now());
         Ok(())
+    }
+
+    fn publish(&self, data: LeaderboardData) {
+        // The initial refresh runs before any SSH session may have subscribed.
+        // `send` discards the value when there are no receivers; `send_replace`
+        // retains it so the first session can seed from the warm snapshot.
+        self.data_tx.send_replace(Arc::new(data));
     }
 
     pub fn start_refresh_loop(self) -> tokio::task::JoinHandle<()> {

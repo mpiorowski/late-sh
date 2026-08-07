@@ -315,6 +315,16 @@ impl ArticleService {
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, url = %url))]
     async fn do_process_url(&self, user_id: Uuid, url: &str) -> Result<()> {
+        // cyberspace.online's API terms ban feeding their content to AI
+        // systems, and this pipeline summarizes the page with AI. Hard stop
+        // here so no share path (chat link, RSS share) can route their
+        // content into the summarizer.
+        if is_ai_blocklisted_url(url) {
+            anyhow::bail!(
+                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
+            );
+        }
+
         // 1. Quick existence check — acquire and release before the slow AI work
         tracing::info!(%url, "checking article url");
         {
@@ -734,6 +744,18 @@ fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| user_id.to_string()[..8].to_string())
+}
+
+/// Domains whose content must never reach the AI summarizer. Currently just
+/// cyberspace.online: their API terms ban feeding their content to AI systems.
+fn is_ai_blocklisted_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    host == "cyberspace.online" || host.ends_with(".cyberspace.online")
 }
 
 fn is_youtube_url(url: &str) -> bool {

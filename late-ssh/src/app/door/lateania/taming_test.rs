@@ -36,6 +36,40 @@ fn there_are_fifty_tameable_beasts_ordered_small_to_large() {
 }
 
 #[test]
+fn no_beast_is_out_classed_by_an_easier_one() {
+    // Grinding Animal Taming must never hand you a worse companion than the one
+    // you can already tame. Beasts at the same tier are free to trade attack for
+    // bulk (a hitter vs. a wall is a real choice), so the invariant is Pareto,
+    // not monotonic: no beast may be beaten on *both* axes by something at a
+    // strictly lower tame level.
+    //
+    // The ten Wildbound mounts used to open at attack 22 / hp 420 against the
+    // tame-50 Green Wyrm's 38 / 560, leaving taming 51..=79 as pure dead grind -
+    // twenty-five levels that downgraded your pet.
+    for b in TAMEABLE {
+        if let Some(better) = TAMEABLE.iter().find(|c| {
+            c.tame_level < b.tame_level
+                && c.base_attack >= b.base_attack
+                && c.base_hp >= b.base_hp
+                && (c.base_attack > b.base_attack || c.base_hp > b.base_hp)
+        }) {
+            panic!(
+                "{} (taming {}, attack {}, hp {}) is out-classed by {} at taming {} \
+                 (attack {}, hp {}) - the levels between are dead grind",
+                b.name,
+                b.tame_level,
+                b.base_attack,
+                b.base_hp,
+                better.name,
+                better.tame_level,
+                better.base_attack,
+                better.base_hp,
+            );
+        }
+    }
+}
+
+#[test]
 fn tameable_keys_are_unique_and_resolve() {
     let mut keys: Vec<&str> = TAMEABLE.iter().map(|s| s.key).collect();
     keys.sort_unstable();

@@ -182,6 +182,7 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             }
             RoomSlot::Feeds
             | RoomSlot::News
+            | RoomSlot::Cyberspace
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
@@ -241,6 +242,11 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
     let (label, meta, unread_count) = match slot {
         RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
+        RoomSlot::Cyberspace => (
+            "cyberspace",
+            "cyberspace.online",
+            chat.cyberspace.unread_count(),
+        ),
         RoomSlot::Notifications => (
             "mentions",
             "notifications",

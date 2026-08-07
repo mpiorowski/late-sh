@@ -482,13 +482,21 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "a living scion of the World-Oak, oldest and mightiest of all beasts",
     ),
     // ---- Wildbound: the rideable beasts (five wild, five mythical) -------
+    //
+    // These sit above the fifty classic beasts on the taming ladder, so their
+    // stats have to *start* above the best tame-50 beast (the Green Wyrm of the
+    // World-Oak at attack 38, the Scion at hp 700) and climb from there. They
+    // originally began at attack 22 / hp 420, which meant taming 51..=79 earned
+    // you a strictly worse companion than the one you already had - twenty-five
+    // levels of the trade spent going backwards. Pinned by
+    // `every_taming_tier_offers_a_better_companion_than_the_one_below`.
     beast(
         "wb_palfrey",
         "Duskmane Palfrey",
         "\u{1F40E}",
         55,
-        420,
-        22,
+        720,
+        40,
         "a calm-eyed forest horse, dusk-grey down the mane; steady under a saddle",
     ),
     beast(
@@ -496,8 +504,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Greatantler Elk",
         "\u{1F98C}",
         60,
-        460,
-        26,
+        760,
+        42,
         "a bull elk whose antlers scrape the low boughs; strong enough to carry two",
     ),
     beast(
@@ -505,8 +513,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Snowcrest Ram",
         "\u{1F411}",
         65,
-        500,
-        28,
+        800,
+        44,
         "a mountain ram, sure-footed on ledges no horse would dare",
     ),
     beast(
@@ -514,8 +522,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Fenland Strider",
         "\u{1F9B6}",
         70,
-        540,
-        30,
+        840,
+        46,
         "a long-legged marsh runner that skims the soft ground like a skipped stone",
     ),
     beast(
@@ -523,8 +531,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Direhorn Stag",
         "\u{1F98C}",
         75,
-        600,
-        34,
+        880,
+        48,
         "a stag grown vast and wary in the deep wood; it suffers only a worthy rider",
     ),
     beast(
@@ -532,8 +540,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Moonlit Unicorn",
         "\u{1F984}",
         80,
-        680,
-        38,
+        920,
+        50,
         "a unicorn seen only where moonlight pools; its stride bends the miles",
     ),
     beast(
@@ -541,8 +549,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Stormfeather Hippogriff",
         "\u{1F985}",
         85,
-        740,
-        42,
+        950,
+        52,
         "half hawk, half horse, all weather; it lands where the storm was heading",
     ),
     beast(
@@ -550,8 +558,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Emberwing Griffin",
         "\u{1F981}",
         90,
-        800,
-        46,
+        970,
+        54,
         "a griffin whose wingbeats shed sparks; the sky shortens beneath it",
     ),
     beast(
@@ -559,8 +567,8 @@ pub const TAMEABLE: &[PetSpecies] = &[
         "Verdant Wyvern",
         "\u{1F409}",
         95,
-        880,
-        50,
+        985,
+        55,
         "a green-scaled wyvern of the canopy roads; it knows every gap in the world",
     ),
     beast(

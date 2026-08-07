@@ -112,7 +112,7 @@ pub enum Tutorial {
     VisitGames,
     /// On the Artboard: the shared canvas, then `5`.
     VisitArtboard,
-    /// On the Directory: people and profiles, then `6`.
+    /// On the Profiles page: people and their projects, then `6`.
     VisitDirectory,
     /// On the Leaderboards: the last stop, then `0` home.
     VisitLeaderboard,
@@ -481,7 +481,7 @@ impl State {
             (Tutorial::VisitChat, Screen::Arcade) => Tutorial::VisitArcade,
             (Tutorial::VisitArcade, Screen::Games) => Tutorial::VisitGames,
             (Tutorial::VisitGames, Screen::Artboard) => Tutorial::VisitArtboard,
-            (Tutorial::VisitArtboard, Screen::Pinstar) => Tutorial::VisitDirectory,
+            (Tutorial::VisitArtboard, Screen::Profiles) => Tutorial::VisitDirectory,
             (Tutorial::VisitDirectory, Screen::Leaderboard) => Tutorial::VisitLeaderboard,
             (Tutorial::VisitLeaderboard, Screen::Clubhouse) => Tutorial::Homecoming,
             (stage, _) => stage,
@@ -498,7 +498,7 @@ impl State {
             Tutorial::VisitChat => Some(TourStep::Page(b'2', Screen::Arcade)),
             Tutorial::VisitArcade => Some(TourStep::Page(b'3', Screen::Games)),
             Tutorial::VisitGames => Some(TourStep::Page(b'4', Screen::Artboard)),
-            Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Pinstar)),
+            Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Profiles)),
             Tutorial::VisitDirectory => Some(TourStep::Page(b'6', Screen::Leaderboard)),
             Tutorial::VisitLeaderboard => Some(TourStep::Page(b'0', Screen::Clubhouse)),
             Tutorial::Homecoming => Some(TourStep::Enter),
