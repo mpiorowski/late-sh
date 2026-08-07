@@ -618,7 +618,9 @@ fn block_style(focused: bool, selected: bool, suit: Option<Suit>) -> Style {
     });
 
     if selected {
-        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        style = style
+            .patch(theme::selection_style())
+            .add_modifier(Modifier::BOLD);
     }
     if focused {
         style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);

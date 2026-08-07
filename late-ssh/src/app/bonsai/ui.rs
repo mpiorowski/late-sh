@@ -248,7 +248,7 @@ pub(crate) fn render_tree_art_lines(
                 if cursor_here {
                     style = style
                         .fg(theme::AMBER_GLOW())
-                        .bg(theme::BG_SELECTION())
+                        .patch(theme::selection_style())
                         .add_modifier(Modifier::BOLD);
                 }
                 spans.push(Span::styled(display.to_string(), style));
@@ -265,7 +265,7 @@ pub(crate) fn render_tree_art_lines(
             if cursor_here {
                 style = style
                     .fg(theme::AMBER_GLOW())
-                    .bg(theme::BG_SELECTION())
+                    .patch(theme::selection_style())
                     .add_modifier(Modifier::BOLD);
             }
             spans.push(Span::styled(cursor_display(ch, cursor_here), style));

@@ -1446,15 +1446,16 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     );
 
     // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
-    // the first row (Background color). The save banner marks the write landing.
+    // the first row (Sync terminal background). The save banner marks the
+    // write landing.
     app.handle_input(b"\x0f");
     // Wait for the draft to hydrate from the profile snapshot before moving:
     // that hydration resets the modal to its first tab (`open_from_profile`).
     wait_for_render_contains(&mut app, "rails-key-it").await;
     app.handle_input(b"\t\t\t");
-    wait_for_render_contains(&mut app, "Background color").await;
-    // Enter toggles the selected row (Background color, the first one), which
-    // runs the same `save()` every other settings edit runs.
+    wait_for_render_contains(&mut app, "Sync terminal background").await;
+    // Enter toggles the selected row (Sync terminal background, the first
+    // one), which runs the same `save()` every other settings edit runs.
     app.handle_input(b"\r");
     wait_until(
         || {

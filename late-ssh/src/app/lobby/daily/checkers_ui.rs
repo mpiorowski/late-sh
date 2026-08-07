@@ -229,13 +229,13 @@ fn board_lines(
                     style = style.bg(theme::BG_HIGHLIGHT());
                 }
                 if last.contains(&index) {
-                    style = style.bg(theme::BG_SELECTION());
+                    style = style.patch(theme::selection_style());
                 }
                 if next_steps.contains(&index) {
                     style = style.bg(theme::AMBER_DIM());
                 }
                 if pending.contains(&index) {
-                    style = style.bg(theme::BG_SELECTION());
+                    style = style.patch(theme::selection_style());
                 }
                 if is_cursor {
                     style = style.bg(theme::AMBER_DIM());

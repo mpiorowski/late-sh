@@ -5,7 +5,7 @@ use crate::app::common::{primitives::format_relative_time, theme};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
@@ -90,14 +90,8 @@ fn draw_room_list(frame: &mut Frame, area: Rect, view: &DiscoverListView<'_>) {
         let item = view.items[idx];
         let selected = idx == selected_index;
 
-        let bg_color = if selected {
-            theme::BG_SELECTION()
-        } else {
-            Color::Reset
-        };
-
         let lines = room_lines(item, selected, row_area.width);
-        let p = Paragraph::new(lines).style(Style::default().bg(bg_color));
+        let p = Paragraph::new(lines).style(theme::row_style(selected));
         frame.render_widget(p, row_area);
     }
 }

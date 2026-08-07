@@ -1786,7 +1786,7 @@ fn visible_chat_rows(
         let end = end.min(visible_end);
         for idx in start..end {
             for span in &mut lines[idx - visible_start].spans {
-                span.style = span.style.bg(theme::BG_SELECTION());
+                span.style = span.style.patch(theme::selection_style());
             }
         }
     }

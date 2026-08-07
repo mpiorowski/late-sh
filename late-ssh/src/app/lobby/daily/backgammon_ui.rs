@@ -239,7 +239,7 @@ impl GridCtx {
             style = style.bg(theme::AMBER_DIM());
         }
         if self.selected == Some(code) {
-            style = style.bg(theme::BG_SELECTION());
+            style = style.patch(theme::selection_style());
         }
         if self.cursor == Some(half * SLOT_COLS + col) {
             style = style.bg(theme::AMBER_DIM());

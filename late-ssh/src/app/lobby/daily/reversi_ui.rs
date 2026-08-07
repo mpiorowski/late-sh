@@ -215,7 +215,7 @@ fn board_lines(
                 let is_legal = legal.contains(&(row, col));
                 let mut style = checker(row, col);
                 if last == Some((row, col)) {
-                    style = style.bg(theme::BG_SELECTION());
+                    style = style.patch(theme::selection_style());
                 }
                 if is_cursor {
                     style = style.bg(theme::AMBER_DIM());

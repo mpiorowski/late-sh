@@ -267,7 +267,9 @@ fn table_lines(
             Some(&card) => {
                 let mut style = Style::default().fg(suit_color(card));
                 if cursor == Some(index) {
-                    style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+                    style = style
+                        .patch(theme::selection_style())
+                        .add_modifier(Modifier::BOLD);
                 }
                 (Slot::Face(card), style)
             }

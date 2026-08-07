@@ -207,7 +207,7 @@ fn board_lines(
                         piece_cell(PUCK_SOLID, '●', tier, sub),
                         Style::default()
                             .fg(disc_color(disc))
-                            .bg(theme::BG_SELECTION())
+                            .patch(theme::selection_style())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Some(disc) => Span::styled(

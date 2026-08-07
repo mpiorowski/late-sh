@@ -246,12 +246,14 @@ fn target_grid_lines(
                     };
                     let bracket = Style::default()
                         .fg(theme::AMBER())
-                        .bg(theme::BG_SELECTION())
+                        .patch(theme::selection_style())
                         .add_modifier(Modifier::BOLD);
                     spans.push(Span::styled("[", bracket));
                     spans.push(Span::styled(
                         mid.to_string(),
-                        style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD),
+                        style
+                            .patch(theme::selection_style())
+                            .add_modifier(Modifier::BOLD),
                     ));
                     spans.push(Span::styled("]", bracket));
                     continue;

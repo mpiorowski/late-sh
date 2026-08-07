@@ -135,15 +135,10 @@ fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
         let index = start + row;
         let post = &state.posts[index];
         let is_selected = index == selected;
-        let bg = if is_selected {
-            theme::BG_SELECTION()
-        } else {
-            ratatui::style::Color::Reset
-        };
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
-            .style(Style::default().bg(bg));
+            .style(theme::row_style(is_selected));
         let content = block.inner(row_area);
         frame.render_widget(block, row_area);
         frame.render_widget(
@@ -372,11 +367,6 @@ fn draw_notifications(frame: &mut Frame, area: Rect, state: &State) {
 }
 
 fn notification_line(notification: &CsNotification, selected: bool) -> Line<'static> {
-    let bg = if selected {
-        theme::BG_SELECTION()
-    } else {
-        ratatui::style::Color::Reset
-    };
     let mut spans = Vec::new();
     if !notification.read {
         spans.push(Span::styled(
@@ -405,7 +395,7 @@ fn notification_line(notification: &CsNotification, selected: bool) -> Line<'sta
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
-    Line::from(spans).style(Style::default().bg(bg))
+    Line::from(spans).style(theme::row_style(selected))
 }
 
 /// Human phrasing for the notification types the API documents; unknown
