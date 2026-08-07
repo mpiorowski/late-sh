@@ -1,7 +1,6 @@
 //! Chip payout + profile badge grants for door-game milestones landed by the
-//! log pipe. The shared door-award sink the plan calls for: the NetHack
-//! screen-scrape sink (`door/nethack/award.rs`) migrates onto this roster
-//! when its ingestion phase moves badges to the xlogfile.
+//! log pipe. The shared door-award sink: DCSS and NetHack today, Brogue when
+//! its ingestion phase (Phase 3 of devdocs/PLAN-ROGUELIKE-BOARDS.md) lands.
 //!
 //! Same dedup story as NetHack's: once per account for life, enforced twice
 //! over — the lifetime reward template claim and the `NOT EXISTS` profile
@@ -15,21 +14,29 @@
 use late_core::db::Db;
 use late_core::models::chips::ChipMove;
 use late_core::models::profile_award::{
-    DCSS_ORB_AWARD_CATEGORY, DCSS_WIN_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+    DCSS_ORB_AWARD_CATEGORY, DCSS_WIN_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
+    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
 };
-use late_core::models::reward::{DCSS_ORB_REWARD_KEY, DCSS_WIN_REWARD_KEY};
+use late_core::models::reward::{
+    DCSS_ORB_REWARD_KEY, DCSS_WIN_REWARD_KEY, NETHACK_AMULET_REWARD_KEY,
+    NETHACK_ASCENSION_REWARD_KEY,
+};
 use uuid::Uuid;
 
 use crate::app::games::chips::svc::ChipService;
 
 /// The badge-paying door milestones, one variant per lifetime badge pair
-/// member. Phase 2 adds the NetHack pair, Phase 3 Brogue's.
+/// member. Phase 3 adds Brogue's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoorBadge {
     /// DCSS: picked up the Orb of Zot (10k, `DCO`).
     DcssOrb,
     /// DCSS: escaped with the Orb (20k, `DCW`).
     DcssWin,
+    /// NetHack: acquired the Amulet of Yendor (10k, `NHA`).
+    NethackAmulet,
+    /// NetHack: ascended (20k, `NHY`).
+    NethackAscension,
 }
 
 impl DoorBadge {
@@ -37,6 +44,8 @@ impl DoorBadge {
         match self {
             Self::DcssOrb => DCSS_ORB_REWARD_KEY,
             Self::DcssWin => DCSS_WIN_REWARD_KEY,
+            Self::NethackAmulet => NETHACK_AMULET_REWARD_KEY,
+            Self::NethackAscension => NETHACK_ASCENSION_REWARD_KEY,
         }
     }
 
@@ -44,6 +53,8 @@ impl DoorBadge {
         match self {
             Self::DcssOrb => ChipMove::DcssOrbFound,
             Self::DcssWin => ChipMove::DcssOrbEscape,
+            Self::NethackAmulet => ChipMove::NethackAmuletAcquired,
+            Self::NethackAscension => ChipMove::NethackAscension,
         }
     }
 
@@ -51,6 +62,8 @@ impl DoorBadge {
         match self {
             Self::DcssOrb => DCSS_ORB_AWARD_CATEGORY,
             Self::DcssWin => DCSS_WIN_AWARD_CATEGORY,
+            Self::NethackAmulet => NETHACK_AMULET_AWARD_CATEGORY,
+            Self::NethackAscension => NETHACK_ASCENSION_AWARD_CATEGORY,
         }
     }
 }
@@ -67,16 +80,21 @@ impl DoorAwards {
         Self { chip_svc, db }
     }
 
-    /// Grant the chips + badge for a milestone. A win implies the Orb pickup
-    /// (crawl will not let you win without it), so it back-grants the Orb in
-    /// case the milestone stream missed it; the dedup guards make the
-    /// redundant grant a no-op.
+    /// Grant the chips + badge for a milestone. A win implies the lesser
+    /// artifact pickup (neither game lets you win without it), so it
+    /// back-grants the pair's lesser badge in case the milestone stream
+    /// missed it; the dedup guards make the redundant grant a no-op.
     pub fn grant(&self, user_id: Uuid, badge: DoorBadge) {
         match badge {
             DoorBadge::DcssOrb => self.spawn_grant(user_id, DoorBadge::DcssOrb),
             DoorBadge::DcssWin => {
                 self.spawn_grant(user_id, DoorBadge::DcssOrb);
                 self.spawn_grant(user_id, DoorBadge::DcssWin);
+            }
+            DoorBadge::NethackAmulet => self.spawn_grant(user_id, DoorBadge::NethackAmulet),
+            DoorBadge::NethackAscension => {
+                self.spawn_grant(user_id, DoorBadge::NethackAmulet);
+                self.spawn_grant(user_id, DoorBadge::NethackAscension);
             }
         }
     }

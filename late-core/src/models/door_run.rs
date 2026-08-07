@@ -17,11 +17,13 @@ use uuid::Uuid;
 pub enum DoorRunResult {
     /// Died in the dungeon.
     Death,
-    /// Quit the run (DCSS `ktyp=quitting`).
+    /// Quit the run (DCSS `ktyp=quitting`, NetHack `death=quit`).
     Quit,
-    /// Left the dungeon alive without winning (DCSS `ktyp=leaving`).
+    /// Left the dungeon alive without winning (DCSS `ktyp=leaving`, NetHack
+    /// `death=escaped`).
     Leaving,
-    /// Won the game (DCSS: escaped with the Orb, `ktyp=winning`).
+    /// Won the game (DCSS: escaped with the Orb, `ktyp=winning`; NetHack:
+    /// `death=ascended`).
     Win,
     /// A win beyond winning (Brogue's Mastered, Phase 3). No DCSS mapping.
     Mastery,

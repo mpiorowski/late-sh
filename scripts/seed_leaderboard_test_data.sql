@@ -448,6 +448,43 @@ SELECT
 FROM seed_players p
 WHERE p.idx <= 6;
 
+-- NetHack door boards, same shape shifted by four so the two doors' boards
+-- don't mirror each other: the first four players ascended (NetHack's maxlvl
+-- is already the deepest level reached, so no milestone union is needed —
+-- winners carry a real depth on the run row itself).
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'nethack',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 2 = 1 THEN (p.idx % 18) ELSE 35 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx BETWEEN 5 AND 8 THEN 'win'
+        WHEN p.idx % 9 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    3200000 - p.idx * 61000,
+    CASE WHEN p.idx BETWEEN 5 AND 8 THEN 45 + p.idx ELSE GREATEST(2, 30 - (p.idx % 29)) END,
+    45000 + p.idx * 900,
+    '{}'::jsonb,
+    'seed:xlogfile',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 32;
+
+-- The ascenders' Amulet pickup milestones (no depth payload; NetHack's dive
+-- board reads run maxlvl only).
+INSERT INTO door_milestones (game, user_id, kind, occurred_at, raw, source_file, source_offset)
+SELECT
+    'nethack',
+    p.user_id,
+    'amulet',
+    current_timestamp - CASE WHEN p.idx % 2 = 1 THEN (p.idx % 18) ELSE 35 + p.idx END * interval '1 day',
+    '{}'::jsonb,
+    'seed:livelog',
+    p.idx
+FROM seed_players p
+WHERE p.idx BETWEEN 5 AND 8;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -563,6 +600,12 @@ ON CONFLICT (user_id) DO NOTHING;
 -- (distinct seed: source_file).
 INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
 SELECT 'dcss', user_id, current_timestamp - interval '3 days', 'death', 214000, 15, 41000, '{}'::jsonb, 'seed:logfile', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
+
+-- And a mid-field NetHack death to match.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'nethack', user_id, current_timestamp - interval '5 days', 'death', 388000, 18, 52000, '{}'::jsonb, 'seed:xlogfile', 999999
 FROM seed_current_player
 ON CONFLICT (game, source_file, source_offset) DO NOTHING;
 

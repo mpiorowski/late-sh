@@ -306,12 +306,33 @@ async fn door_boards_rank_wins_depth_and_score() {
         .expect("replay run")
     );
 
+    // A NetHack ascension for the diver: the boards partition by game, so it
+    // must rank on the nethack triple and leak nothing into the DCSS one.
+    let mut ascension = run(diver.id, DoorRunResult::Win, 3_000_000, 50, 600);
+    ascension.game = DoorGame::Nethack.key();
+    ascension.source_file = "xlogfile".to_string();
+    assert!(
+        DoorRun::insert_ignore(&client, &ascension)
+            .await
+            .expect("insert nethack run")
+    );
+
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
+
+    let nethack = data
+        .door_board(DoorGame::Nethack)
+        .expect("nethack boards present");
+    assert_eq!(nethack.wins.len(), 1);
+    assert_eq!(entry_for(&nethack.wins, diver.id).value, 1);
+    assert_eq!(entry_for(&nethack.depth.all_time, diver.id).value, 50);
+
     let boards = data
         .door_board(DoorGame::Dcss)
         .expect("dcss boards present");
+    // The nethack win/depth/score stayed off the DCSS boards.
+    assert!(boards.depth.all_time.iter().all(|entry| entry.value != 50));
 
     // Wins: only the winner's one win row; the quit pays nothing.
     assert_eq!(boards.wins.len(), 1);

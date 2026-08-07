@@ -18,7 +18,7 @@ ARG DEBIAN_VERSION=bookworm
 # (.github/workflows/<door>.yml). Pinning them here by tag means a door recipe
 # rebuilds only when its own Dockerfile changes, never on ordinary image
 # builds. Bump a tag when that door's recipe or upstream version changes.
-FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r1 AS nethack-build
+FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build

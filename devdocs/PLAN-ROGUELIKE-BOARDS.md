@@ -1,9 +1,10 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
-Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07, uncommitted on
-branch `mateu/roguelikes_leaderboards`; Phases 2-4 not started. This plan
-covers the three external roguelike doors: NetHack, DCSS, Brogue. (The
-Lateania Games boards shipped separately.)
+Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07; Phase 2 (NetHack +
+scrape removal) IMPLEMENTED 2026-08-08, uncommitted on branch
+`mateu/roguelikes_leaderboards`; Phases 3-4 not started. This plan covers the
+three external roguelike doors: NetHack, DCSS, Brogue. (The Lateania Games
+boards shipped separately.)
 
 Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md`
 (created during Phase 1: the whole leaderboard domain, incl. the door board
@@ -11,6 +12,54 @@ model), and the door contexts for the phase at hand
 (`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss one now
 documents the shipped log pipe, the other two name their log files in
 §9/Deferred).
+
+## Phase 2 handoff (NetHack, 2026-08-08)
+
+Green under targeted `make test-llm` runs (late-nethack, ingest, leaderboard,
+nethack door suites); `make check` not run (human-owned). Everything mirrors
+the Phase 1 patterns; the notable findings and deltas:
+
+- **LIVELOG panned out.** 5.0.0 compiles it in via the `NHL_SANDBOX` +
+  `CHRONICLE` chain (config.h force-defines it for `--loglua`), but
+  `sysopt.livelog` defaults to `LL_NONE`, so the Dockerfile appends
+  `LIVELOG=0x0002` (LL_ACHIEVE) to sysconf. Live Amulet-at-pickup badges and
+  achievement feed flavor come from the `livelog` file; XLOGFILE is defined
+  unconditionally. Both plus `CHRONICLE`/`NHL_SANDBOX` are grep-asserted
+  fail-closed; `door-nethack` image tag bumped to `5.0.0-r2`.
+- **Explore mode is locked off** (sysconf `EXPLORERS=` blanked, grep-asserted):
+  shipped `EXPLORERS=*` let any player enter non-scoring explore mode, and
+  livelog lines carry no mode flag, so an explore Amulet pickup would have
+  spoofed the 10k grant. xlogfile lines DO flag wizard/explore games
+  (`flags` 0x1/0x2) and the parser+service skip them wholesale.
+- **xlog dialect correction to this plan:** NetHack's xlogfile is
+  TAB-separated (`XLOG_SEP '\t'`), not space-separated; `endtime` is unix
+  epoch; the Amulet is `achieve` bit 0x20 (ACH_AMUL=6, bit value-1);
+  `death=` is exactly `ascended`/`escaped`/`quit` for the non-death ends.
+  `maxlvl` is already the run maximum, so the dive board needs no milestone
+  union for NetHack (livelog has no depth field at all).
+- **Implementation map:** host `late-nethack/src/stats.rs` + `server.rs`
+  SessionHost split + `config.var_dir` (`LATE_NETHACK_VAR_DIR`, the
+  VAR_PLAYGROUND the logs live in — NOT data_dir/HOME); client
+  `app/door/ingest/nethack.rs` (+`nethack_test.rs`), `DoorKind` in
+  `ingest/svc.rs` sharing the session plumbing across doors,
+  `DoorBadge::{NethackAmulet, NethackAscension}` on the existing
+  `nethack_amulet`/`nethack_ascension` reward templates,
+  `DoorGame::Nethack` in the roster (page arms exhaustive-matched),
+  `DoorMilestoneKind::Amulet`, main.rs task behind `LATE_NETHACK_ENABLED`,
+  seed script NetHack rows, infra initContainer now touches `livelog`.
+- **The scrape is gone:** `door/nethack/{milestone,status,award}.rs` + tests
+  deleted, `scan_screen` + debounce fields removed from its `state.rs`; the
+  connect-based "started a NetHack game" event moved to a plain
+  `ActivityPublisher` (`SessionConfig.nethack_activity`, ex `nethack_awards`).
+  Descent feed lines are gone by owner decision (#1 below).
+- **Prod bring-up order matters, same as Phase 1:** deploy the new
+  `late-nethack` host (a `-nethack` release, which also rebuilds the r2 game
+  image) before or with the service-ssh release. The initContainer change
+  (touch `livelog`) is a manifest change: it ships through `deploy_infra.yml`,
+  not the image-only `deploy_nethack.yml`. First connect backfills the whole
+  xlogfile history (boards launch non-empty; historical ascensions back-grant
+  badges by owner decision). Legacy `late_<hex>` lines in the backfill are
+  skipped by the reserved-name rule.
 
 ## Phase 1 handoff (what exists now, for a fresh session)
 
@@ -76,7 +125,8 @@ non-empty; historical wins grant badges/chips by owner decision).
    instead of at pickup, and the mid-run "descended to level N" #lounge lines
    go away, unless the pinned NetHack 5.0.0 source has the LIVELOG compile
    option (check during Phase 2; if present, enable it and live events come
-   back from a file).
+   back from a file). *Resolved in Phase 2: LIVELOG is compiled in and now
+   enabled, so the Amulet grants at pickup; the descent lines are gone.*
 2. **Badge pairs, 10k/20k chips, once per lifetime, per game**, mirroring the
    existing NetHack pair (NHA 10k, NHY 20k):
    - DCSS: Orb of Zot pickup 10k, escape with the Orb (win) 20k. Orb pickup
@@ -109,13 +159,11 @@ non-empty; historical wins grant badges/chips by owner decision).
 
 Verification steps before trusting them:
 
-- **NetHack:** confirm XLOGFILE is compiled into the 5.0.0 build (check the
-  pinned tarball's config; distro-style builds usually enable it, ours is
-  hand-built). If it needs a define, add it in the `nethack-build` stage of
-  `docker/doors/nethack.Dockerfile` with a fail-closed grep, same pattern as
-  the existing SAFERHANGUP assertion. While in there, check for LIVELOG
-  (newer NetHacks have it; it live-logs notable moments and would restore live
-  feed events and amulet-at-pickup timing).
+- **NetHack:** VERIFIED in Phase 2 against the pinned tarball: XLOGFILE is
+  defined unconditionally; LIVELOG is compiled in (via `NHL_SANDBOX` +
+  `CHRONICLE`) but silent until a sysconf `LIVELOG=` mask is set. The
+  Dockerfile asserts the defines fail-closed and sets the mask (details in
+  the Phase 2 handoff).
 - **DCSS:** nothing to build; the files exist today. Confirm exact field names
   against the pinned 0.34.1 source in the `dcss-build` stage or a local run.
 - **Brogue:** upstream 1.15.1 has the victory-logging condition inverted
@@ -216,7 +264,7 @@ a shared door-award sink fed by ingestion instead of per-door screen scrapes:
   client (it never was a scrape). Latency is seconds (tail push), fine for
   #lounge.
 
-## NetHack scrape removal (the cleaning)
+## NetHack scrape removal (the cleaning) — DONE in Phase 2
 
 Once xlogfile ingestion grants badges and posts death events:
 
@@ -255,21 +303,9 @@ morgue dumps per game.
    phases: host stats session (`late-dcss/src/stats.rs`), client slice
    (`late-ssh/src/app/door/ingest/`), shared award sink
    (`ingest/award.rs`, `DoorBadge`), `DoorGame` roster boards.
-2. **NetHack**: XLOGFILE build assertion, xlogfile parser, badge grants move
-   to ingestion, delete the scrape, death events from the log, LIVELOG
-   investigation. The cleaning phase. Concretely, each step reuses a Phase 1
-   pattern: a `late_stats` branch in `late-nethack/src/server.rs` +
-   a `stats.rs` mirroring `late-dcss/src/stats.rs` (file id `xlogfile`,
-   path inside `VAR_PLAYGROUND`; add `livelog` as a second file if the
-   define pans out); a `nethack.rs` parser module in `app/door/ingest/`
-   (space-separated `key=value` xlog dialect, `achieve` bitmask for the
-   Amulet); a `start_nethack_task` beside the dcss one (identity module:
-   `door::nethack::identity`); `DoorGame::Nethack` in the roster;
-   `DoorBadge::{NethackAmulet, NethackAscension}` in `ingest/award.rs`,
-   then delete `door/nethack/{milestone,status,award}.rs` and the
-   `scan_screen` path in its `state.rs`, and rewrite nethack CONTEXT
-   §1/§7 around the pipe (they call the scrape "the one exception to no
-   late.sh persistence").
+2. **NetHack** — DONE (see the Phase 2 handoff above; LIVELOG panned out, so
+   live Amulet-at-pickup timing and achievement flavor came back from a
+   file, and the scrape is deleted).
 3. **Brogue**: victory-logging patch + isolation-script-style fail-closed
    grep, run-history parser (per-player files: the tailer walks
    `players/*/`), badges, boards.

@@ -8,6 +8,9 @@ pub mod award;
 pub mod dcss;
 #[cfg(test)]
 mod dcss_test;
+pub mod nethack;
+#[cfg(test)]
+mod nethack_test;
 pub mod stream;
 #[cfg(test)]
 mod stream_test;

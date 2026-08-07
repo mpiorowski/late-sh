@@ -70,11 +70,15 @@ async fn run_count(db: &late_core::db::Db, user_id: Uuid) -> i64 {
 }
 
 async fn cursor_for(db: &late_core::db::Db, file: &str) -> Option<i64> {
+    cursor_for_game(db, "dcss", file).await
+}
+
+async fn cursor_for_game(db: &late_core::db::Db, game: &str, file: &str) -> Option<i64> {
     let client = db.get().await.expect("db client");
     client
         .query_opt(
-            "SELECT next_offset FROM door_log_cursors WHERE game = 'dcss' AND file = $1",
-            &[&file],
+            "SELECT next_offset FROM door_log_cursors WHERE game = $1 AND file = $2",
+            &[&game, &file],
         )
         .await
         .expect("cursor row")
@@ -82,13 +86,17 @@ async fn cursor_for(db: &late_core::db::Db, file: &str) -> Option<i64> {
 }
 
 async fn award_chip_total(db: &late_core::db::Db, user_id: Uuid) -> i64 {
+    award_chip_total_for(db, user_id, "dcss").await
+}
+
+async fn award_chip_total_for(db: &late_core::db::Db, user_id: Uuid, game: &str) -> i64 {
     let client = db.get().await.expect("db client");
     client
         .query_one(
             "SELECT COALESCE(SUM(amount), 0)::bigint AS total
              FROM game_payout_claims
-             WHERE user_id = $1 AND game = 'dcss'",
-            &[&user_id],
+             WHERE user_id = $1 AND game = $2",
+            &[&user_id, &game],
         )
         .await
         .expect("claim total")
@@ -253,6 +261,219 @@ async fn a_win_grants_both_badges() {
         .await
         .expect("run row");
     assert_eq!(row.get::<_, &str>("result"), "win");
+}
+
+fn nethack_death_frame(offset: i64) -> StatsFrame {
+    StatsFrame {
+        file: "xlogfile".to_string(),
+        next_offset: offset,
+        // Died carrying the Amulet (achieve 0x20): the end-of-run bit must
+        // back-fill the pickup badge even without a livelog line.
+        line: format!(
+            "version=5.0.0\tpoints=12345\tdeathlev=6\tmaxlvl=8\tname={HANDLE}\tdeath=killed by a soldier ant\tturns=23456\tachieve=0x20\tendtime=1754560000\tflags=0x4"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn replayed_nethack_run_lands_one_row_and_backfills_the_amulet() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "nh-replay").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    let frame = nethack_death_frame(500);
+    svc.handle_nethack_frame(&frame)
+        .await
+        .expect("first ingest");
+    svc.handle_nethack_frame(&frame).await.expect("replay");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "nethack", "xlogfile").await,
+        Some(500)
+    );
+
+    // The achieve-bit backstop pays the Amulet exactly once across replays.
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { award_chip_total_for(&db, user.id, "nethack").await == 10_000 }
+        },
+        "amulet chips granted",
+    )
+    .await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT game, result, score, depth, turns FROM door_runs WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("run row");
+    assert_eq!(row.get::<_, &str>("game"), "nethack");
+    assert_eq!(row.get::<_, &str>("result"), "death");
+    assert_eq!(row.get::<_, i64>("score"), 12345);
+    assert_eq!(row.get::<_, i32>("depth"), 8);
+    assert_eq!(row.get::<_, i64>("turns"), 23456);
+}
+
+#[tokio::test]
+async fn cheat_mode_nethack_runs_advance_the_cursor_without_attribution() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "nh-cheat").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    // An explore-mode ascension: flagged non-scoring, must land nothing.
+    svc.handle_nethack_frame(&StatsFrame {
+        file: "xlogfile".to_string(),
+        next_offset: 300,
+        line: format!(
+            "name={HANDLE}\tdeath=ascended\tpoints=999999\tmaxlvl=50\tachieve=0x1ff\tendtime=1754560000\tflags=0x2"
+        ),
+    })
+    .await
+    .expect("cheat ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 0);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "nethack", "xlogfile").await,
+        Some(300)
+    );
+    tokio::task::yield_now().await;
+    assert_eq!(
+        award_chip_total_for(&test_db.db, user.id, "nethack").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_nethack_ascension_grants_both_badges() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "nh-win").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    svc.handle_nethack_frame(&StatsFrame {
+        file: "xlogfile".to_string(),
+        next_offset: 900,
+        line: format!(
+            "name={HANDLE}\tdeath=ascended\tpoints=3654321\tmaxlvl=53\tturns=81234\tachieve=0x1ff\tendtime=1754560000\tflags=0x0"
+        ),
+    })
+    .await
+    .expect("ascension ingest");
+
+    // The ascension pays 20k and back-grants the 10k Amulet pickup.
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { award_chip_total_for(&db, user.id, "nethack").await == 30_000 }
+        },
+        "ascension + amulet chips granted",
+    )
+    .await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let categories: Vec<String> = client
+        .query(
+            "SELECT category FROM profile_awards
+             WHERE user_id = $1 AND category IN ('nethack_amulet', 'nethack_ascension')
+             ORDER BY category",
+            &[&user.id],
+        )
+        .await
+        .expect("award rows")
+        .into_iter()
+        .map(|row| row.get("category"))
+        .collect();
+    assert_eq!(categories, vec!["nethack_amulet", "nethack_ascension"]);
+
+    let row = client
+        .query_one(
+            "SELECT result FROM door_runs WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("run row");
+    assert_eq!(row.get::<_, &str>("result"), "win");
+}
+
+#[tokio::test]
+async fn amulet_livelog_milestone_lands_and_pays_once_per_lifetime() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "nh-amulet").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    let amulet_frame = |offset: i64| StatsFrame {
+        file: "livelog".to_string(),
+        next_offset: offset,
+        line: format!(
+            "lltype=2\tname={HANDLE}\tturns=65432\tcurtime=1754540000\tmessage=acquired The Amulet of Yendor"
+        ),
+    };
+    svc.handle_nethack_frame(&amulet_frame(300))
+        .await
+        .expect("amulet ingest");
+
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { award_chip_total_for(&db, user.id, "nethack").await == 10_000 }
+        },
+        "amulet chips granted",
+    )
+    .await;
+
+    // A later pickup (a second game) pays nothing more; an untracked
+    // achievement lands no milestone row at all.
+    svc.handle_nethack_frame(&amulet_frame(600))
+        .await
+        .expect("second amulet");
+    svc.handle_nethack_frame(&StatsFrame {
+        file: "livelog".to_string(),
+        next_offset: 700,
+        line: format!("lltype=2\tname={HANDLE}\tcurtime=1754541000\tmessage=entered Gehennom"),
+    })
+    .await
+    .expect("untracked achievement");
+    tokio::task::yield_now().await;
+    assert_eq!(
+        award_chip_total_for(&test_db.db, user.id, "nethack").await,
+        10_000
+    );
+    assert_eq!(
+        cursor_for_game(&test_db.db, "nethack", "livelog").await,
+        Some(700)
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let rows = client
+        .query(
+            "SELECT kind FROM door_milestones WHERE user_id = $1 ORDER BY source_offset",
+            &[&user.id],
+        )
+        .await
+        .expect("milestone rows");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<_, &str>("kind"), "amulet");
+
+    let badge: i64 = client
+        .query_one(
+            "SELECT COUNT(*)::bigint AS n FROM profile_awards
+             WHERE user_id = $1 AND category = 'nethack_amulet'",
+            &[&user.id],
+        )
+        .await
+        .expect("badge row")
+        .get("n");
+    assert_eq!(badge, 1);
 }
 
 #[tokio::test]

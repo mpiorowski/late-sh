@@ -1,8 +1,8 @@
 // Live mid-run milestones from the door hosts' milestone xlogs (DCSS's
-// milestones file today; NetHack's livelog if Phase 2 of
-// devdocs/PLAN-ROGUELIKE-BOARDS.md finds it). Same idempotency contract as
-// door_runs: (game, source_file, source_offset) names the line. The Orb badge
-// grants from this stream so it lands at pickup, not at game end.
+// milestones file, NetHack's livelog). Same idempotency contract as
+// door_runs: (game, source_file, source_offset) names the line. The Orb and
+// Amulet badges grant from this stream so they land at pickup, not at game
+// end.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -21,6 +21,8 @@ pub enum DoorMilestoneKind {
     Rune,
     /// Entered a dungeon branch (which one is in `raw`).
     BranchEnter,
+    /// NetHack: acquired the Amulet of Yendor (from the livelog stream).
+    Amulet,
 }
 
 impl DoorMilestoneKind {
@@ -30,6 +32,7 @@ impl DoorMilestoneKind {
             Self::Orb => "orb",
             Self::Rune => "rune",
             Self::BranchEnter => "br_enter",
+            Self::Amulet => "amulet",
         }
     }
 }

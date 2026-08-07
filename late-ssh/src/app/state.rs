@@ -236,9 +236,10 @@ pub struct SessionConfig {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
-    /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
-    /// on headless/test paths, which disables milestone awards.
-    pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher for the NetHack door's connect-based "started" event
+    /// (badges and death/win events come from the log pipe). `None` on
+    /// headless/test paths.
+    pub nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     /// DCSS door game: reached over SSH like nethack (host `late-dcss`).
     pub dcss_enabled: bool,
     pub dcss_host: String,
@@ -587,8 +588,9 @@ pub struct App {
     pub(crate) nethack_host: String,
     pub(crate) nethack_port: u16,
     pub(crate) nethack_secret: String,
-    /// Chip/badge grant sink threaded into the per-session NetHack door state.
-    pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher threaded into the per-session NetHack door state for
+    /// its connect-based "started" event.
+    pub(crate) nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     pub(crate) dcss_state: Option<crate::app::door::dcss::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the DCSS
     /// host so curses gets a real terminfo entry.
@@ -1342,7 +1344,7 @@ impl App {
             nethack_host: config.nethack_host,
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
-            nethack_awards: config.nethack_awards,
+            nethack_activity: config.nethack_activity,
             dcss_state: None,
             dcss_term: config.term.clone(),
             dcss_enabled: config.dcss_enabled,
@@ -1569,7 +1571,7 @@ impl App {
             self.nethack_term.clone(),
             self.nethack_enabled,
             self.repaint_signal.clone(),
-            self.nethack_awards.clone(),
+            self.nethack_activity.clone(),
             Some(self.arcade_handle_service.clone()),
             self.door_rc(late_core::models::door_rc::DoorRcGame::Nethack),
         ));

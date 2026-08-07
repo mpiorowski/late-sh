@@ -82,7 +82,7 @@ resource "kubernetes_deployment_v1" "late_nethack" {
           image = var.NETHACK_IMAGE_TAG
           command = [
             "sh", "-c",
-            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path} && rm -f ${local.nethack_var_path}/?lock.*",
+            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/livelog ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path} && rm -f ${local.nethack_var_path}/?lock.*",
           ]
 
           security_context {

@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use super::award::{DoorAwards, DoorBadge};
 use super::dcss::{DcssMilestone, DcssRun, parse_logfile_line, parse_milestone_line};
+use super::nethack::{NethackMilestone, NethackRun, parse_livelog_line, parse_xlogfile_line};
 use super::stream::{StatsFrame, StreamConfig, run_stats_stream};
 use crate::app::activity::event::ActivityGame;
 use crate::app::activity::publisher::ActivityPublisher;
@@ -50,6 +51,31 @@ pub struct DoorIngestTarget {
     pub host: String,
     pub port: u16,
     pub secret: String,
+}
+
+/// The doors this service can ingest, one variant per host stats session.
+/// Each maps to its roster game, its own identity derivation (per-door blake3
+/// domain), and its own frame dispatch.
+#[derive(Clone, Copy, Debug)]
+enum DoorKind {
+    Dcss,
+    Nethack,
+}
+
+impl DoorKind {
+    const fn game(self) -> DoorGame {
+        match self {
+            Self::Dcss => DoorGame::Dcss,
+            Self::Nethack => DoorGame::Nethack,
+        }
+    }
+
+    fn derive_client_key(self, secret: &str) -> russh::keys::PrivateKey {
+        match self {
+            Self::Dcss => crate::app::door::dcss::identity::derive_client_key(secret),
+            Self::Nethack => crate::app::door::nethack::identity::derive_client_key(secret),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -76,12 +102,30 @@ impl DoorIngestService {
         target: DoorIngestTarget,
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
+        self.start_task(DoorKind::Dcss, target, shutdown)
+    }
+
+    /// The NetHack twin: xlogfile (finished games) + livelog (achievements).
+    pub fn start_nethack_task(
+        self,
+        target: DoorIngestTarget,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        self.start_task(DoorKind::Nethack, target, shutdown)
+    }
+
+    fn start_task(
+        self,
+        kind: DoorKind,
+        target: DoorIngestTarget,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                match self.run_dcss_session(&target).await {
-                    Ok(()) => tracing::info!("dcss stats stream ended; reconnecting"),
+                match self.run_session(kind, &target).await {
+                    Ok(()) => tracing::info!(?kind, "door stats stream ended; reconnecting"),
                     Err(error) => {
-                        tracing::warn!(?error, "dcss stats session failed; reconnecting")
+                        tracing::warn!(?kind, ?error, "door stats session failed; reconnecting")
                     }
                 }
                 tokio::select! {
@@ -92,14 +136,15 @@ impl DoorIngestService {
         })
     }
 
-    async fn run_dcss_session(&self, target: &DoorIngestTarget) -> Result<()> {
+    async fn run_session(&self, kind: DoorKind, target: &DoorIngestTarget) -> Result<()> {
+        let game = kind.game().key();
         let cursors = {
             let client = self.db.get().await.context("db client for cursors")?;
-            DoorLogCursor::all_for_game(&client, DoorGame::Dcss.key())
+            DoorLogCursor::all_for_game(&client, game)
                 .await
-                .context("loading dcss cursors")?
+                .with_context(|| format!("loading {game} cursors"))?
         };
-        let key = crate::app::door::dcss::identity::derive_client_key(&target.secret);
+        let key = kind.derive_client_key(&target.secret);
         let (tx, mut rx) = mpsc::channel::<StatsFrame>(256);
         let stream = tokio::spawn(run_stats_stream(
             StreamConfig {
@@ -113,11 +158,15 @@ impl DoorIngestService {
 
         let mut result = Ok(());
         while let Some(frame) = rx.recv().await {
-            if let Err(error) = self.handle_dcss_frame(&frame).await {
+            let handled = match kind {
+                DoorKind::Dcss => self.handle_dcss_frame(&frame).await,
+                DoorKind::Nethack => self.handle_nethack_frame(&frame).await,
+            };
+            if let Err(error) = handled {
                 // Do not advance past this line: drop the stream and let the
                 // retry loop resume from the last committed cursor.
                 result = Err(error).with_context(|| {
-                    format!("handling dcss frame {}@{}", frame.file, frame.next_offset)
+                    format!("handling {game} frame {}@{}", frame.file, frame.next_offset)
                 });
                 break;
             }
@@ -252,6 +301,142 @@ impl DoorIngestService {
         Ok(())
     }
 
+    /// Land one NetHack log line. Every path advances the cursor; only lines
+    /// that map to a live account insert a fact row.
+    pub(crate) async fn handle_nethack_frame(&self, frame: &StatsFrame) -> Result<()> {
+        let game = DoorGame::Nethack.key();
+        match frame.file.as_str() {
+            "xlogfile" => match parse_xlogfile_line(&frame.line) {
+                Some(run) => self.land_nethack_run(frame, run).await,
+                None => {
+                    tracing::warn!(line = %frame.line, "unparseable nethack xlogfile line; skipping");
+                    self.advance_cursor(game, frame).await
+                }
+            },
+            "livelog" => match parse_livelog_line(&frame.line) {
+                Some(milestone) => self.land_nethack_milestone(frame, milestone).await,
+                None => {
+                    tracing::warn!(line = %frame.line, "unparseable nethack livelog line; skipping");
+                    self.advance_cursor(game, frame).await
+                }
+            },
+            other => {
+                tracing::warn!(file = other, "unknown nethack stats file; skipping");
+                self.advance_cursor(game, frame).await
+            }
+        }
+    }
+
+    async fn land_nethack_run(&self, frame: &StatsFrame, run: NethackRun) -> Result<()> {
+        let game = DoorGame::Nethack.key();
+        // Wizard/explore games still write an xlogfile line (flagged); they
+        // are non-scoring by NetHack's own rules and must not reach boards,
+        // badges, or the feed.
+        if run.cheat_mode {
+            return self.advance_cursor(game, frame).await;
+        }
+        let Some(user_id) = self.resolve_handle(&run.name).await? else {
+            return self.advance_cursor(game, frame).await;
+        };
+
+        let new_run = NewDoorRun {
+            game,
+            user_id,
+            ended_at: run.ended_at,
+            result: run.result,
+            score: run.score,
+            depth: run.depth,
+            turns: run.turns,
+            raw: run.raw.clone(),
+            source_file: frame.file.clone(),
+            source_offset: frame.next_offset,
+        };
+        let mut client = self.db.get().await.context("db client for run insert")?;
+        let tx = client.transaction().await?;
+        let fresh = DoorRun::insert_ignore(&tx, &new_run).await?;
+        DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
+        tx.commit().await?;
+
+        // Awards are lifetime-idempotent, so they fire on every sighting
+        // (fresh or replayed) — that heals a crash between insert and grant.
+        // The end-of-run achieve bit also back-fills an Amulet pickup the
+        // livelog stream missed.
+        if run.result == DoorRunResult::Win {
+            self.awards.grant(user_id, DoorBadge::NethackAscension);
+        } else if run.amulet {
+            self.awards.grant(user_id, DoorBadge::NethackAmulet);
+        }
+
+        let recent = Utc::now().signed_duration_since(run.ended_at) < FEED_RECENCY;
+        if fresh && recent {
+            match run.result {
+                DoorRunResult::Win => {
+                    self.activity
+                        .game_won_task(user_id, ActivityGame::Nethack, None, None);
+                }
+                DoorRunResult::Death => {
+                    self.activity.game_event_task(
+                        user_id,
+                        ActivityGame::Nethack,
+                        nethack_death_action(&run),
+                    );
+                }
+                // Walking away is not a story.
+                DoorRunResult::Quit | DoorRunResult::Leaving => {}
+                // No NetHack mapping produces Mastery (Brogue, Phase 3).
+                DoorRunResult::Mastery => {}
+            }
+        }
+        Ok(())
+    }
+
+    async fn land_nethack_milestone(
+        &self,
+        frame: &StatsFrame,
+        milestone: NethackMilestone,
+    ) -> Result<()> {
+        let game = DoorGame::Nethack.key();
+        // Untracked achievement message: cursor forward, nothing persisted.
+        let Some(kind) = milestone.kind else {
+            return self.advance_cursor(game, frame).await;
+        };
+        let Some(user_id) = self.resolve_handle(&milestone.name).await? else {
+            return self.advance_cursor(game, frame).await;
+        };
+
+        let new_milestone = NewDoorMilestone {
+            game,
+            user_id,
+            kind,
+            occurred_at: milestone.occurred_at,
+            raw: milestone.raw.clone(),
+            source_file: frame.file.clone(),
+            source_offset: frame.next_offset,
+        };
+        let mut client = self
+            .db
+            .get()
+            .await
+            .context("db client for milestone insert")?;
+        let tx = client.transaction().await?;
+        let fresh = DoorMilestone::insert_ignore(&tx, &new_milestone).await?;
+        DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
+        tx.commit().await?;
+
+        if kind == DoorMilestoneKind::Amulet {
+            self.awards.grant(user_id, DoorBadge::NethackAmulet);
+            let recent = Utc::now().signed_duration_since(milestone.occurred_at) < FEED_RECENCY;
+            if fresh && recent {
+                self.activity.game_event_task(
+                    user_id,
+                    ActivityGame::Nethack,
+                    "acquired the Amulet of Yendor".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The live account behind a playname, or `None` for names the pipe must
     /// never attribute: reserved `late`/`late_*` shapes (legacy derived
     /// playnames) and handles whose account was deleted.
@@ -280,5 +465,15 @@ fn death_action(run: &DcssRun) -> String {
         (Some(place), None) => format!("died in DCSS on {place}"),
         (None, Some(msg)) => format!("died in DCSS, {msg}"),
         (None, None) => "died in DCSS".to_string(),
+    }
+}
+
+/// The #lounge line for a NetHack death: the level died on (`deathlev`) plus
+/// NetHack's own death text, e.g.
+/// "died in NetHack on dungeon level 6, killed by a soldier ant".
+fn nethack_death_action(run: &NethackRun) -> String {
+    match run.death_level {
+        Some(dlvl) => format!("died in NetHack on dungeon level {dlvl}, {}", run.death),
+        None => format!("died in NetHack, {}", run.death),
     }
 }

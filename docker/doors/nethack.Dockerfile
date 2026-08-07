@@ -3,7 +3,7 @@
 # nethack door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/nethack.yml as
-# ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r1; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2; the root Dockerfile pins that
 # image as its nethack-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm
@@ -99,6 +99,18 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     # the grep asserts it is active. Fail-closed; re-verify on NetHack bumps.
     && sed -i 's|^/\* #define SAFERHANGUP \*/|#define SAFERHANGUP|' include/unixconf.h \
     && grep -qE '^#define SAFERHANGUP\b' include/unixconf.h \
+    # The door log pipe (late-nethack stats.rs, PLAN-ROGUELIKE-BOARDS Phase 2)
+    # ingests two append-only files from VAR_PLAYGROUND: `xlogfile` (one
+    # key=value line per finished game; boards, badges, death/win feed events)
+    # and `livelog` (live achievement lines; the Amulet badge lands at pickup).
+    # Both are compile-gated. XLOGFILE ships defined unconditionally in 5.0.0;
+    # LIVELOG is normally commented out but the NHL_SANDBOX+CHRONICLE chain
+    # force-defines it (config.h: "LIVELOG ... is needed for --loglua"). Assert
+    # all three fail-closed so a version bump that drops any of them breaks the
+    # build instead of silently starving the boards/badges.
+    && grep -qE '^#define XLOGFILE\b' include/config.h \
+    && grep -qE '^#define NHL_SANDBOX\b' include/config.h \
+    && grep -qE '^#define CHRONICLE\b' include/config.h \
     && cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
     && make fetch-Lua \
     && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games all \
@@ -113,6 +125,23 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     # only asserts the file was rewritten -- the 25 cap itself is upstream's.
     && sed -i 's/^MAXPLAYERS=.*/MAXPLAYERS=25/' ${NETHACK_HACKDIR}/sysconf \
     && grep -qx 'MAXPLAYERS=25' ${NETHACK_HACKDIR}/sysconf \
+    # Turn livelog writing on at runtime: sysopt.livelog defaults to LL_NONE
+    # (src/sys.c), so without a sysconf mask the compiled-in LIVELOG never
+    # writes a line. 0x0002 = LL_ACHIEVE, the significant-achievement stream
+    # (Amulet pickup, Gehennom entry, invocation, the planes) — exactly what
+    # ingestion tracks; wishes/conducts/genocides stay off the wire.
+    && printf 'LIVELOG=0x0002\n' >> ${NETHACK_HACKDIR}/sysconf \
+    && grep -qx 'LIVELOG=0x0002' ${NETHACK_HACKDIR}/sysconf \
+    # Lock explore mode off. sysconf ships EXPLORERS=*, letting any player
+    # enter non-scoring explore mode (the X command), where death is optional
+    # and the Amulet is a stroll. The xlogfile line flags explore games (bit
+    # 0x2), which ingestion filters, but livelog lines carry no such flag, so
+    # an explore-mode Amulet pickup would spoof the at-pickup badge grant.
+    # Blanking EXPLORERS makes authorize_explore_mode() refuse everyone
+    # (unixmain.c checks the list is non-empty). WIZARDS stays as shipped
+    # ("root games"): the prod child runs as `late`, which is not on it.
+    && sed -i 's/^EXPLORERS=.*/EXPLORERS=/' ${NETHACK_HACKDIR}/sysconf \
+    && grep -qx 'EXPLORERS=' ${NETHACK_HACKDIR}/sysconf \
     # `make install` writes sysconf as 0600 root. HACKDIR is read-only at runtime
     # and the host runs as the unprivileged `late` user, which must READ sysconf at
     # startup -- otherwise nethack aborts with "Unable to open SYSCF_FILE." Make it
