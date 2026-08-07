@@ -1,10 +1,12 @@
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use late_core::test_utils::{create_test_user, test_db};
 
-use crate::app::chat::cyberspace::api::CsPost;
+use crate::app::chat::cyberspace::api::{CsNotification, CsPost};
 use crate::app::chat::cyberspace::state::{
-    Modal, State, View, feed_reload_due, parse_topics, unread_poll_due,
+    Modal, State, View, count_unread_entries, dedupe_notifications, feed_reload_due, parse_topics,
+    unread_poll_due,
 };
 use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
@@ -54,7 +56,7 @@ fn entering_the_pane_refetches_the_feed_but_not_on_every_landing() {
 }
 
 #[tokio::test]
-async fn scrolling_past_the_end_of_a_thread_stops_instead_of_running_away() {
+async fn scrolling_a_thread_reaches_the_end_and_stops_there() {
     let mut state = test_state().await;
     // Built the way production builds one: straight off the wire shape.
     let post: CsPost =
@@ -64,22 +66,172 @@ async fn scrolling_past_the_end_of_a_thread_stops_instead_of_running_away() {
         replies: Vec::new(),
     });
     state.view = View::Thread;
+    // What the renderer hands back after laying the entry out: this one wraps
+    // to four rows past the bottom of the viewport.
+    state.thread_max_scroll.set(4);
 
     for _ in 0..500 {
         state.move_selection(1);
     }
-    let parked = state.thread_scroll;
+    assert_eq!(state.thread_scroll, 4, "j must reach the end of the entry");
     state.move_selection(-1);
-    assert!(
-        state.thread_scroll < parked,
+    assert_eq!(
+        state.thread_scroll, 3,
         "one k after holding j should move the view, not unwind 500 phantom steps"
+    );
+    state.go_to_top();
+    assert_eq!(state.thread_scroll, 0, "g returns to the top of the entry");
+}
+
+#[test]
+fn unread_entries_are_the_ones_published_since_the_cursor() {
+    let post = |created: &str| -> CsPost {
+        serde_json::from_str(&format!(r#"{{"postId":"p","createdAt":"{created}"}}"#)).expect("post")
+    };
+    let undated: CsPost = serde_json::from_str(r#"{"postId":"p"}"#).expect("post");
+    let cursor: DateTime<Utc> = "2026-08-07T12:00:00Z".parse().expect("cursor");
+    let posts = vec![
+        post("2026-08-07T14:00:00Z"),
+        post("2026-08-07T13:00:00Z"),
+        post("2026-08-07T11:00:00Z"),
+        undated,
+    ];
+
+    assert_eq!(count_unread_entries(&posts, Some(cursor)), 2);
+    // Never opened the pane: opening it to "everything is new" would be
+    // counting entries that were never theirs to miss.
+    assert_eq!(count_unread_entries(&posts, None), 0);
+    // Caught up: the newest entry is the one they read to.
+    assert_eq!(
+        count_unread_entries(&posts, Some("2026-08-07T14:00:00Z".parse().expect("stamp"))),
+        0
+    );
+}
+
+#[tokio::test]
+async fn the_rail_badge_sums_notifications_and_new_entries() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let read_at: DateTime<Utc> = "2026-08-07T12:00:00Z".parse().expect("cursor");
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: Some(read_at),
+    });
+    let _ = state.apply_event(CsEvent::UnreadCount { user_id, count: 4 });
+    let _ = state.apply_event(CsEvent::RecentEntries {
+        user_id,
+        posts: vec![
+            serde_json::from_str(r#"{"postId":"p1","createdAt":"2026-08-07T13:00:00Z"}"#)
+                .expect("post"),
+            serde_json::from_str(r#"{"postId":"p2","createdAt":"2026-08-07T11:00:00Z"}"#)
+                .expect("post"),
+        ],
+    });
+
+    assert_eq!(state.unread_count(), 5, "4 notifications + 1 new entry");
+    assert_eq!(state.unread_notifications(), 4);
+    assert_eq!(state.unread_entries(), 1);
+}
+
+#[tokio::test]
+async fn opening_the_pane_clears_the_count_but_keeps_the_marks_being_read() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let read_at: DateTime<Utc> = "2026-08-07T12:00:00Z".parse().expect("cursor");
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: Some(read_at),
+    });
+    let fresh: CsPost =
+        serde_json::from_str(r#"{"postId":"p1","createdAt":"2026-08-07T13:00:00Z"}"#)
+            .expect("post");
+    let old: CsPost = serde_json::from_str(r#"{"postId":"p2","createdAt":"2026-08-07T11:00:00Z"}"#)
+        .expect("post");
+    let _ = state.apply_event(CsEvent::RecentEntries {
+        user_id,
+        posts: vec![fresh.clone(), old.clone()],
+    });
+    assert_eq!(state.unread_entries(), 1);
+
+    state.opened();
+
+    assert_eq!(state.unread_entries(), 0, "the badge clears on the visit");
+    assert!(
+        state.is_unread_entry(&fresh),
+        "the entry they came to read must keep its mark for the visit"
+    );
+    assert!(!state.is_unread_entry(&old));
+}
+
+#[tokio::test]
+async fn reopening_the_pane_lands_on_the_newest_entry() {
+    let mut state = test_state().await;
+    state.posts = vec![
+        serde_json::from_str(r#"{"postId":"p1"}"#).expect("post"),
+        serde_json::from_str(r#"{"postId":"p2"}"#).expect("post"),
+    ];
+    state.selected = 1;
+    state.view = View::Notifications;
+
+    state.opened();
+
+    assert_eq!(state.view, View::Feed);
+    assert_eq!(
+        state.selected, 0,
+        "a selection kept across visits points into a feed that has been refetched since"
+    );
+}
+
+#[test]
+fn one_notification_row_per_thing_that_happened() {
+    let reply = |id: &str, actor: &str, post: &str, reply_id: &str| -> CsNotification {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","type":"reply","actorUsername":"{actor}","targetId":"{post}","targetType":"reply","metadata":{{"replyId":"{reply_id}"}}}}"#
+        ))
+        .expect("reply notification")
+    };
+    let bookmark = |id: &str, actor: &str, post: &str| -> CsNotification {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","type":"bookmark","actorUsername":"{actor}","targetId":"{post}","targetType":"post"}}"#
+        ))
+        .expect("bookmark notification")
+    };
+
+    let rows = dedupe_notifications(vec![
+        // One reply from laschii, notified three times over: distinct
+        // notification ids, but all of them about the same reply.
+        reply("n1", "laschii", "post-1", "reply-1"),
+        reply("n2", "laschii", "post-1", "reply-1"),
+        reply("n3", "laschii", "post-1", "reply-1"),
+        // A second, real reply from the same person on the same entry.
+        reply("n4", "laschii", "post-1", "reply-2"),
+        // Same person, a different thing done: its own row.
+        bookmark("n5", "laschii", "post-1"),
+        // A different person, and a different entry: their own rows.
+        reply("n6", "leet", "post-1", "reply-3"),
+        reply("n7", "laschii", "post-2", "reply-4"),
+        // Duplicates further down the page go too, not only adjacent ones.
+        reply("n8", "laschii", "post-1", "reply-1"),
+        bookmark("n9", "laschii", "post-1"),
+    ]);
+
+    let kept: Vec<&str> = rows
+        .iter()
+        .map(|notification| notification.id.as_str())
+        .collect();
+    assert_eq!(
+        kept,
+        vec!["n1", "n4", "n5", "n6", "n7"],
+        "the first notification of each event survives, so the row keeps the newest stamp"
     );
 }
 
 #[tokio::test]
 async fn enter_on_a_notification_opens_the_entry_it_is_about() {
     let mut state = test_state().await;
-    state.notifications = vec![
+    state.notifications = dedupe_notifications(vec![
         serde_json::from_str(
             r#"{"id":"n1","type":"reply","targetId":"post-1","targetType":"reply"}"#,
         )
@@ -88,7 +240,7 @@ async fn enter_on_a_notification_opens_the_entry_it_is_about() {
             r#"{"id":"n2","type":"new_follower","targetId":"user-1","targetType":"user"}"#,
         )
         .expect("follow notification"),
-    ];
+    ]);
     state.view = View::Notifications;
 
     assert!(state.open_selected_notification().is_none());
@@ -106,12 +258,12 @@ async fn enter_on_a_notification_opens_the_entry_it_is_about() {
 #[tokio::test]
 async fn a_thread_that_finished_loading_after_the_user_left_is_dropped() {
     let mut state = test_state().await;
-    state.notifications = vec![
+    state.notifications = dedupe_notifications(vec![
         serde_json::from_str(
             r#"{"id":"n1","type":"reply","targetId":"post-1","targetType":"reply"}"#,
         )
         .expect("notification"),
-    ];
+    ]);
     state.view = View::Notifications;
     state.open_selected_notification();
 

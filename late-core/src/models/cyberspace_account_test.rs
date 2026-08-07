@@ -48,6 +48,39 @@ async fn upsert_replaces_existing_link_and_delete_forgets_it() {
 }
 
 #[tokio::test]
+async fn the_feed_read_cursor_persists_and_survives_a_re_link() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "cs-reader").await;
+
+    let fresh = CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+    assert_eq!(
+        fresh.feed_read_at, None,
+        "a new link has read nothing, which must not read as a full page of unread"
+    );
+
+    // Microsecond precision: timestamptz truncates below that, so a
+    // nanosecond-resolution `Utc::now()` would not round-trip exactly.
+    let read_at: chrono::DateTime<chrono::Utc> =
+        "2026-08-07T12:34:56.123456Z".parse().expect("read stamp");
+    CyberspaceAccount::mark_feed_read(&client, user.id, read_at)
+        .await
+        .expect("mark read");
+
+    // Signing in again is the same person's reading, so the cursor stays put.
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-2")
+        .await
+        .expect("re-link");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.feed_read_at, Some(read_at));
+}
+
+#[tokio::test]
 async fn links_are_scoped_to_their_owner() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");

@@ -28,9 +28,14 @@ async fn session_init_reports_unlinked_users_without_network() {
     service.session_init_task(user.id);
 
     match next_event(&mut rx).await {
-        CsEvent::LinkStatus { user_id, username } => {
+        CsEvent::LinkStatus {
+            user_id,
+            username,
+            feed_read_at,
+        } => {
             assert_eq!(user_id, user.id);
             assert_eq!(username, None);
+            assert_eq!(feed_read_at, None);
         }
         other => panic!("expected LinkStatus, got {other:?}"),
     }
@@ -50,9 +55,14 @@ async fn session_init_reports_the_linked_username() {
     service.session_init_task(user.id);
 
     match next_event(&mut rx).await {
-        CsEvent::LinkStatus { user_id, username } => {
+        CsEvent::LinkStatus {
+            user_id,
+            username,
+            feed_read_at,
+        } => {
             assert_eq!(user_id, user.id);
             assert_eq!(username.as_deref(), Some("odd"));
+            assert_eq!(feed_read_at, None, "a fresh link has read nothing yet");
         }
         other => panic!("expected LinkStatus, got {other:?}"),
     }

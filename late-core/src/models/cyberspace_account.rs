@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -12,6 +13,9 @@ crate::user_scoped_model! {
         pub cs_user_id: String,
         pub cs_username: String,
         pub refresh_token: String,
+        // Feed read cursor: entries published after this are unread. NULL
+        // until the first visit, which reads as nothing unread.
+        pub feed_read_at: Option<DateTime<Utc>>,
     }
 }
 
@@ -39,6 +43,21 @@ impl CyberspaceAccount {
             )
             .await?;
         Ok(Self::from(row))
+    }
+
+    /// Move the feed read cursor forward. Called when the user enters the pane
+    /// or asks for a refresh, the two moments they are demonstrably looking at
+    /// the feed. A re-link keeps the cursor: it is the same person's reading.
+    pub async fn mark_feed_read(client: &Client, user_id: Uuid, at: DateTime<Utc>) -> Result<()> {
+        client
+            .execute(
+                "UPDATE cyberspace_accounts
+                 SET feed_read_at = $2, updated = current_timestamp
+                 WHERE user_id = $1",
+                &[&user_id, &at],
+            )
+            .await?;
+        Ok(())
     }
 
     /// Unlink: forget the account and its token. Returns true if a link existed.

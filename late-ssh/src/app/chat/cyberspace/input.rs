@@ -46,6 +46,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             state.move_selection(-1);
             true
         }
+        b'g' | b'G' => {
+            state.go_to_top();
+            true
+        }
         b'\r' | b'\n' => {
             match state.view {
                 View::Feed => state.open_selected_thread(),

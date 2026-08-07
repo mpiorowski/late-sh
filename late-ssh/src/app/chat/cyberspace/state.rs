@@ -4,8 +4,11 @@
 //! lives only in this session's memory: cyberspace content is never cached
 //! server-side or shown to anyone but the user who fetched it.
 
+use std::cell::Cell;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -114,9 +117,24 @@ pub struct State {
     /// post itself exists, since a notification opens a thread by id alone.
     pub(crate) thread_target: Option<String>,
     pub(crate) thread_scroll: usize,
+    /// Last row the thread view can scroll to, written by the renderer after
+    /// it lays the entry out: only it knows the viewport and how the text
+    /// wrapped, and an estimate here is either short (the tail of a long entry
+    /// becomes unreachable) or long (`j` runs off into blank space).
+    pub(crate) thread_max_scroll: Cell<usize>,
     pub(crate) notifications: Vec<CsNotification>,
     pub(crate) notif_selected: usize,
-    unread_count: i64,
+    unread_notifications: i64,
+    unread_entries: i64,
+    /// Entries published after this are unread. Advances when the user enters
+    /// the pane or asks for a refresh, the two moments they are demonstrably
+    /// looking at the feed. `None` (never visited) reads as nothing unread,
+    /// not as a whole page of it.
+    feed_read_at: Option<DateTime<Utc>>,
+    /// What the `●` row markers compare against: the cursor as it was when
+    /// this visit started. Frozen for the visit, so entering the pane does not
+    /// wipe the marks off the very entries the user came to read.
+    feed_marker_at: Option<DateTime<Utc>>,
     last_unread_poll: Instant,
     /// `None` until the first feed load of this session.
     last_feed_load: Option<Instant>,
@@ -139,9 +157,13 @@ impl State {
             thread: None,
             thread_target: None,
             thread_scroll: 0,
+            thread_max_scroll: Cell::new(0),
             notifications: Vec::new(),
             notif_selected: 0,
-            unread_count: 0,
+            unread_notifications: 0,
+            unread_entries: 0,
+            feed_read_at: None,
+            feed_marker_at: None,
             // `session_init_task` above fetches the count for a linked user,
             // so the interval starts running from session start.
             last_unread_poll: Instant::now(),
@@ -151,8 +173,25 @@ impl State {
         }
     }
 
+    /// The rail badge: notifications plus new entries, one number for
+    /// "cyberspace has this much waiting for you". The pane header splits it
+    /// back apart, since the two open with different keys.
     pub fn unread_count(&self) -> i64 {
-        self.unread_count
+        self.unread_notifications + self.unread_entries
+    }
+
+    pub(crate) fn unread_notifications(&self) -> i64 {
+        self.unread_notifications
+    }
+
+    pub(crate) fn unread_entries(&self) -> i64 {
+        self.unread_entries
+    }
+
+    /// Whether a feed row gets the new-entry mark, against the cursor as it
+    /// stood when this visit started.
+    pub(crate) fn is_unread_entry(&self, post: &CsPost) -> bool {
+        is_newer_than(post, self.feed_marker_at)
     }
 
     pub(crate) fn is_linked(&self) -> bool {
@@ -173,8 +212,17 @@ impl State {
     /// Entering the pane (rail selection or `/cs`): a fresh feed for linked
     /// users, rate-limited by [`FEED_RELOAD_INTERVAL`], and nothing at all for
     /// unlinked ones (they never reach the pane).
+    ///
+    /// The pane always opens on the newest entry. A selection kept from the
+    /// last visit points into a feed that has since been refetched, so it
+    /// lands on whatever entry happens to sit at that row now.
     pub fn opened(&mut self) {
-        self.view = View::Feed;
+        self.back_to_feed();
+        self.selected = 0;
+        self.notif_selected = 0;
+        // Freeze the marks for this visit before the cursor moves past them.
+        self.feed_marker_at = self.feed_read_at;
+        self.mark_feed_read();
         if feed_reload_due(
             self.is_linked(),
             self.loading,
@@ -187,8 +235,26 @@ impl State {
     /// `r`: the user asking for the feed, so no interval applies.
     pub(crate) fn refresh(&mut self) {
         if self.is_linked() {
+            self.mark_feed_read();
             self.load_feed();
         }
+    }
+
+    /// Everything on the feed as of now counts as read. The session's own copy
+    /// of the cursor moves first so the badge clears on this frame; the write
+    /// is fire-and-forget behind it.
+    ///
+    /// Only entering the pane and `r` land here, never a `FeedLoaded` on its
+    /// own: publishing an entry from another room also loads the feed, and
+    /// that is not the user reading it.
+    fn mark_feed_read(&mut self) {
+        if !self.is_linked() {
+            return;
+        }
+        let now = Utc::now();
+        self.feed_read_at = Some(now);
+        self.unread_entries = 0;
+        self.service.mark_feed_read_task(self.user_id, now);
     }
 
     fn load_feed(&mut self) {
@@ -203,13 +269,24 @@ impl State {
                 self.selected = step_index(self.selected, delta, self.posts.len());
             }
             View::Thread => {
-                let ceiling = self.thread.as_ref().map_or(0, thread_scroll_ceiling);
-                self.thread_scroll = self.thread_scroll.saturating_add_signed(delta).min(ceiling);
+                self.thread_scroll = self
+                    .thread_scroll
+                    .saturating_add_signed(delta)
+                    .min(self.thread_max_scroll.get());
             }
             View::Notifications => {
                 self.notif_selected =
                     step_index(self.notif_selected, delta, self.notifications.len());
             }
+        }
+    }
+
+    /// `g`: back to the top of whatever the current view is a list of.
+    pub(crate) fn go_to_top(&mut self) {
+        match self.view {
+            View::Feed => self.selected = 0,
+            View::Thread => self.thread_scroll = 0,
+            View::Notifications => self.notif_selected = 0,
         }
     }
 
@@ -222,7 +299,7 @@ impl State {
             post: post.clone(),
             replies: Vec::new(),
         });
-        self.thread_scroll = 0;
+        self.reset_thread_scroll();
         self.view = View::Thread;
         self.loading = true;
         self.service.load_thread_task(self.user_id, post);
@@ -241,7 +318,7 @@ impl State {
         // No placeholder to show: unlike the feed path, nothing here knows
         // the post yet, so the thread view renders its loading state.
         self.thread = None;
-        self.thread_scroll = 0;
+        self.reset_thread_scroll();
         self.view = View::Thread;
         self.loading = true;
         self.service.load_thread_by_id_task(self.user_id, post_id);
@@ -273,7 +350,15 @@ impl State {
         self.view = View::Feed;
         self.thread = None;
         self.thread_target = None;
+        self.reset_thread_scroll();
+    }
+
+    /// The ceiling belongs to the entry that was on screen, so it goes with it.
+    /// The renderer refills it on the first frame of the next entry, which
+    /// always precedes the keystroke that could scroll one.
+    fn reset_thread_scroll(&mut self) {
         self.thread_scroll = 0;
+        self.thread_max_scroll.set(0);
     }
 
     pub fn open_link_modal(&mut self) {
@@ -430,11 +515,17 @@ impl State {
 
     fn apply_event(&mut self, event: CsEvent) -> Option<Banner> {
         match event {
-            CsEvent::LinkStatus { user_id, username } if user_id == self.user_id => {
+            CsEvent::LinkStatus {
+                user_id,
+                username,
+                feed_read_at,
+            } if user_id == self.user_id => {
                 self.link = match username {
                     Some(username) => LinkStatus::Linked { username },
                     None => LinkStatus::Unlinked,
                 };
+                self.feed_read_at = feed_read_at;
+                self.feed_marker_at = feed_read_at;
                 None
             }
             CsEvent::LinkSucceeded { user_id, username } if user_id == self.user_id => {
@@ -462,7 +553,10 @@ impl State {
                 self.posts.clear();
                 self.notifications.clear();
                 self.thread = None;
-                self.unread_count = 0;
+                self.unread_notifications = 0;
+                self.unread_entries = 0;
+                self.feed_read_at = None;
+                self.feed_marker_at = None;
                 self.view = View::Feed;
                 Some(Banner::success("Cyberspace account unlinked."))
             }
@@ -487,14 +581,18 @@ impl State {
                 user_id,
                 notifications,
             } if user_id == self.user_id => {
-                self.notifications = notifications;
+                self.notifications = dedupe_notifications(notifications);
                 self.notif_selected = clamp_index(self.notif_selected, self.notifications.len());
                 self.loading = false;
-                self.unread_count = 0;
+                self.unread_notifications = 0;
                 None
             }
             CsEvent::UnreadCount { user_id, count } if user_id == self.user_id => {
-                self.unread_count = count;
+                self.unread_notifications = count;
+                None
+            }
+            CsEvent::RecentEntries { user_id, posts } if user_id == self.user_id => {
+                self.unread_entries = count_unread_entries(&posts, self.feed_read_at);
                 None
             }
             CsEvent::PostCreated { user_id, title, .. } if user_id == self.user_id => {
@@ -582,18 +680,60 @@ pub(crate) fn feed_reload_due(
     }
 }
 
-/// An upper bound on thread scrolling. The renderer does the exact clamp,
-/// since only it knows the viewport height; this stops `j` past the end from
-/// running away, which would otherwise need one `k` per press before the view
-/// moved again.
-fn thread_scroll_ceiling(thread: &CsThread) -> usize {
-    let post_lines = thread.post.content.lines().count();
-    let reply_lines: usize = thread
-        .replies
-        .iter()
-        .map(|reply| reply.content.lines().count() + 2)
-        .sum();
-    post_lines + reply_lines + 8
+/// How many of the probed entries the user has not seen. The probe page is
+/// deliberately small (`UNREAD_PROBE_LIMIT`), so a user who has been away long
+/// enough sees the page size rather than the true number: the badge is a nudge,
+/// not an inventory, and the alternative is pulling their whole feed on a timer.
+///
+/// A `None` cursor is a user who has never opened the pane. That reads as
+/// nothing unread, because opening for the first time to "10 new" would be
+/// counting entries that were never theirs to miss.
+pub(crate) fn count_unread_entries(posts: &[CsPost], cursor: Option<DateTime<Utc>>) -> i64 {
+    match cursor {
+        None => 0,
+        Some(_) => posts
+            .iter()
+            .filter(|post| is_newer_than(post, cursor))
+            .count() as i64,
+    }
+}
+
+/// An entry with no timestamp cannot be placed against the cursor, so it is
+/// never new: a badge that counts entries the user cannot find is worse than
+/// one that misses them.
+fn is_newer_than(post: &CsPost, cursor: Option<DateTime<Utc>>) -> bool {
+    match (post.created_at, cursor) {
+        (Some(created), Some(cursor)) => created > cursor,
+        _ => false,
+    }
+}
+
+/// One row per thing that happened, rather than one per notification their
+/// API hands out: a single reply shows up as several `reply` notifications
+/// with distinct ids, so the view fills with rows that read identically and
+/// all open the same entry. Keeping the first occurrence keeps the newest
+/// stamp, since the page is newest-first.
+///
+/// The key is the finest grain the payload offers. `reply_id` is what makes it
+/// safe: two real replies from one person on one entry are different replies
+/// and both survive, while the same reply notified again (an edit, say) folds
+/// away. Kinds that carry no reply id fall back to the entry, which is as
+/// precise as they get. No `×N` count on the row, because a count would have
+/// to be trusted to mean something and duplicates are not repeats.
+pub(crate) fn dedupe_notifications(notifications: Vec<CsNotification>) -> Vec<CsNotification> {
+    let mut seen: HashSet<(String, Option<String>, Option<String>, Option<String>)> =
+        HashSet::new();
+    notifications
+        .into_iter()
+        .filter(|notification| {
+            seen.insert((
+                notification.kind.clone(),
+                notification.actor_username.clone(),
+                notification.target_id.clone(),
+                notification.reply_id().map(str::to_string),
+            ))
+        })
+        .collect()
 }
 
 fn clamp_index(index: usize, len: usize) -> usize {

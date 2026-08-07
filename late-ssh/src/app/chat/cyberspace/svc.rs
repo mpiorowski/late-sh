@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use late_core::{db::Db, models::cyberspace_account::CyberspaceAccount};
 use tokio::sync::broadcast;
 use tracing::{Instrument, info_span};
@@ -33,10 +34,12 @@ pub struct CsThread {
 /// shared to snapshot. Sessions filter on `user_id`.
 #[derive(Clone, Debug)]
 pub enum CsEvent {
-    /// Session-init answer: whether this user has a linked account.
+    /// Session-init answer: whether this user has a linked account, and where
+    /// their feed reading left off.
     LinkStatus {
         user_id: Uuid,
         username: Option<String>,
+        feed_read_at: Option<DateTime<Utc>>,
     },
     LinkSucceeded {
         user_id: Uuid,
@@ -64,6 +67,13 @@ pub enum CsEvent {
     UnreadCount {
         user_id: Uuid,
         count: i64,
+    },
+    /// The newest few entries, for the session to count against its own read
+    /// cursor. The posts travel rather than the count, so the cursor never has
+    /// to leave the session that owns it.
+    RecentEntries {
+        user_id: Uuid,
+        posts: Vec<CsPost>,
     },
     PostCreated {
         user_id: Uuid,
@@ -144,15 +154,16 @@ impl CyberspaceService {
         self.publish(CsEvent::ActionFailed { user_id, error });
     }
 
-    /// Session init: answer whether the user is linked, and if so fetch the
-    /// unread notification badge. Later refreshes come from the session tick
-    /// (`State::poll_unread_if_due`) or a user action in the pane.
+    /// Session init: answer whether the user is linked and where their feed
+    /// reading left off, and if linked fetch the unread badge. Later refreshes
+    /// come from the session tick (`State::poll_unread_if_due`) or a user
+    /// action in the pane.
     pub fn session_init_task(&self, user_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let username = match service.linked_username(user_id).await {
-                    Ok(username) => username,
+                let account = match service.linked_account(user_id).await {
+                    Ok(account) => account,
                     Err(e) => {
                         late_core::error_span!(
                             "cyberspace_link_status_failed",
@@ -163,13 +174,44 @@ impl CyberspaceService {
                         return;
                     }
                 };
-                let linked = username.is_some();
-                service.publish(CsEvent::LinkStatus { user_id, username });
+                let linked = account.is_some();
+                // The cursor lands before any entries do, so the session has
+                // something to count them against.
+                service.publish(CsEvent::LinkStatus {
+                    user_id,
+                    username: account.as_ref().map(|a| a.cs_username.clone()),
+                    feed_read_at: account.and_then(|a| a.feed_read_at),
+                });
                 if linked {
                     service.refresh_unread(user_id).await;
                 }
             }
             .instrument(info_span!("cyberspace.session_init", user_id = %user_id)),
+        );
+    }
+
+    /// Fire-and-forget cursor write. Nobody upstream waits on it: the session
+    /// already moved its own copy, and a lost write only re-counts entries the
+    /// user has seen.
+    pub fn mark_feed_read_task(&self, user_id: Uuid, at: DateTime<Utc>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    CyberspaceAccount::mark_feed_read(&client, user_id, at).await
+                }
+                .await;
+                if let Err(e) = result {
+                    late_core::error_span!(
+                        "cyberspace_mark_feed_read_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to move the cyberspace feed read cursor"
+                    );
+                }
+            }
+            .instrument(info_span!("cyberspace.mark_feed_read", user_id = %user_id)),
         );
     }
 
@@ -436,6 +478,9 @@ impl CyberspaceService {
         );
     }
 
+    /// Both halves of the rail badge on one token: the notification count from
+    /// their counter endpoint, and the newest entries for the session to count
+    /// unread ones out of.
     async fn refresh_unread(&self, user_id: Uuid) {
         let token = match self.id_token(user_id).await {
             Ok(token) => token,
@@ -445,12 +490,15 @@ impl CyberspaceService {
             Ok(count) => self.publish(CsEvent::UnreadCount { user_id, count }),
             Err(e) => tracing::debug!(%e, "cyberspace unread count failed"),
         }
+        match self.api.list_recent_entries(&token).await {
+            Ok(posts) => self.publish(CsEvent::RecentEntries { user_id, posts }),
+            Err(e) => tracing::debug!(%e, "cyberspace recent entries failed"),
+        }
     }
 
-    async fn linked_username(&self, user_id: Uuid) -> anyhow::Result<Option<String>> {
+    async fn linked_account(&self, user_id: Uuid) -> anyhow::Result<Option<CyberspaceAccount>> {
         let client = self.db.get().await?;
-        let account = CyberspaceAccount::find_by_user_id(&client, user_id).await?;
-        Ok(account.map(|account| account.cs_username))
+        CyberspaceAccount::find_by_user_id(&client, user_id).await
     }
 
     /// Caching a token also drops every expired one. These are live bearer

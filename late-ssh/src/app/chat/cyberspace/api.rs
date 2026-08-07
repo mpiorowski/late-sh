@@ -14,6 +14,10 @@ use std::time::Duration;
 pub const BASE_URL: &str = "https://api.cyberspace.online";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const FEED_PAGE_LIMIT: u8 = 30;
+/// How many entries the recurring unread probe pulls. The feed is newest-first
+/// and this page only feeds a badge, so a small one is enough however long the
+/// user has been away, and it keeps the poll cheap against a third party.
+const UNREAD_PROBE_LIMIT: u8 = 10;
 const REPLIES_PAGE_LIMIT: u8 = 50;
 const NOTIFICATIONS_PAGE_LIMIT: u8 = 20;
 
@@ -109,6 +113,16 @@ impl CsNotification {
             _ => None,
         }
     }
+
+    /// The reply a `reply` notification is about, which `target_id` does not
+    /// name (that is the post). This is the finest grain the payload offers
+    /// for telling two notifications apart, so it is what the notifications
+    /// view dedupes on.
+    pub fn reply_id(&self) -> Option<&str> {
+        self.metadata
+            .get("replyId")
+            .and_then(|value| value.as_str())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -194,7 +208,17 @@ impl CsApi {
     }
 
     pub async fn list_feed(&self, id_token: &str) -> Result<Vec<CsPost>, CsApiError> {
-        self.get_json(&format!("/v1/posts?limit={FEED_PAGE_LIMIT}"), id_token)
+        self.feed_page(id_token, FEED_PAGE_LIMIT).await
+    }
+
+    /// The newest handful of entries, for counting what is unread without
+    /// pulling a whole page every time the badge refreshes.
+    pub async fn list_recent_entries(&self, id_token: &str) -> Result<Vec<CsPost>, CsApiError> {
+        self.feed_page(id_token, UNREAD_PROBE_LIMIT).await
+    }
+
+    async fn feed_page(&self, id_token: &str, limit: u8) -> Result<Vec<CsPost>, CsApiError> {
+        self.get_json(&format!("/v1/posts?limit={limit}"), id_token)
             .await
     }
 
