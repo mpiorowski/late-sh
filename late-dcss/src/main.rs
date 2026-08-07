@@ -13,6 +13,7 @@ mod identity_test;
 mod playname;
 mod rc;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;
