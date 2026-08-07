@@ -26,7 +26,6 @@ pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defe
 pub const GREENDRAGON_DRAGON_REWARD_KEY: &str = "greendragon_dragon_slain";
 pub const NETHACK_AMULET_REWARD_KEY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_REWARD_KEY: &str = "nethack_ascension";
-pub const SSNAKE_WIN_REWARD_KEY: &str = "ssnake_win";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
 pub const TRON_WIN_4P_REWARD_KEY: &str = "tron_win_4p";
