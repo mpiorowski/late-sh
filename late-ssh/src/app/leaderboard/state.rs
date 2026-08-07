@@ -3,24 +3,50 @@ use late_core::models::{
     leaderboard::{DailyPuzzle, LeaderboardData, RankedEntry, ScoreGame},
 };
 
+use crate::app::common::primitives::thousands;
+
 const EMPTY: &[RankedEntry] = &[];
 
-/// One selectable board on the Leaderboards page. The two bespoke boards
-/// lead; the per-game boards come straight off the late-core rosters, so a
-/// game added there appears here without a page change.
+/// One selectable board on the Leaderboards page. The Games boards lead, then
+/// the two bespoke boards; the per-game boards come straight off the
+/// late-core rosters, so a game added there appears here without a page
+/// change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Board {
+    LateaniaAdventurers,
+    LateaniaFrontier,
     TopChips,
     ArcadeWins,
     Daily(DailyPuzzle),
     Score(ScoreGame),
 }
 
+/// What the detail pane shows for one board. Every board answers with
+/// exactly one of these; the renderer matches all three, so a new shape
+/// cannot fall through to a wrong heading.
+pub(crate) enum Standings<'a> {
+    /// One window of month-scoped standings, headed "this month".
+    MonthlyOnly(&'a [RankedEntry]),
+    /// One window ranking a current state of the world, headed "right now"
+    /// (the Lateania boards: living characters, not history).
+    Snapshot(&'a [RankedEntry]),
+    /// The default paired monthly and all-time windows.
+    Paired {
+        monthly: &'a [RankedEntry],
+        all_time: &'a [RankedEntry],
+    },
+}
+
 impl Board {
-    /// Page order: bespoke boards, then daily puzzles, then score games,
-    /// each roster in its declaration order.
+    /// Page order: Games boards, then the bespoke boards, then daily puzzles,
+    /// then score games, each roster in its declaration order.
     pub(crate) fn all() -> Vec<Self> {
-        let mut boards = vec![Self::TopChips, Self::ArcadeWins];
+        let mut boards = vec![
+            Self::LateaniaAdventurers,
+            Self::LateaniaFrontier,
+            Self::TopChips,
+            Self::ArcadeWins,
+        ];
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
         boards
@@ -28,6 +54,8 @@ impl Board {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Self::LateaniaAdventurers => "Lateania Adventurers",
+            Self::LateaniaFrontier => "Lateania Frontier",
             Self::TopChips => "Top Chips",
             Self::ArcadeWins => "Arcade Wins",
             Self::Daily(puzzle) => puzzle.title(),
@@ -40,6 +68,10 @@ impl Board {
     /// cannot drift from the SQL the points come from.
     pub(crate) fn hint(self) -> String {
         match self {
+            Self::LateaniaAdventurers => {
+                "living characters by level, ties broken by experience".to_string()
+            }
+            Self::LateaniaFrontier => "deepest Frontier zone walked, of 20".to_string(),
             Self::TopChips => "monthly net chip delta, shop spend ignored".to_string(),
             Self::ArcadeWins => format!(
                 "daily puzzle points: easy {} · medium {} · hard {}",
@@ -52,39 +84,39 @@ impl Board {
         }
     }
 
-    /// Suffix printed after each value; empty for raw scores.
-    pub(crate) fn value_label(self) -> &'static str {
+    /// A board value formatted for a standings row. Kept next to `hint` so a
+    /// board's copy and its number format live in one place.
+    pub(crate) fn format_value(self, value: i64) -> String {
         match self {
-            Self::TopChips => "chips",
-            Self::ArcadeWins => "pts",
-            Self::Daily(_) => "wins",
-            Self::Score(_) => "",
+            Self::LateaniaAdventurers => format!("lvl {value}"),
+            Self::LateaniaFrontier => format!("zone {value}"),
+            Self::TopChips => format!("{} chips", thousands(value)),
+            Self::ArcadeWins => format!("{} pts", thousands(value)),
+            Self::Daily(_) => format!("{} wins", thousands(value)),
+            Self::Score(_) => thousands(value),
         }
     }
 
-    pub(crate) fn monthly(self, data: &LeaderboardData) -> &[RankedEntry] {
+    pub(crate) fn standings(self, data: &LeaderboardData) -> Standings<'_> {
         match self {
-            Self::TopChips => &data.monthly_chip_earners,
-            Self::ArcadeWins => &data.arcade_champions,
-            Self::Daily(puzzle) => data
-                .daily_board(puzzle)
-                .map_or(EMPTY, |board| &board.monthly),
-            Self::Score(game) => data.score_board(game).map_or(EMPTY, |board| &board.monthly),
-        }
-    }
-
-    /// `None` for the two bespoke boards, which are monthly-only.
-    pub(crate) fn all_time(self, data: &LeaderboardData) -> Option<&[RankedEntry]> {
-        match self {
-            Self::TopChips | Self::ArcadeWins => None,
-            Self::Daily(puzzle) => Some(
-                data.daily_board(puzzle)
-                    .map_or(EMPTY, |board| &board.all_time),
-            ),
-            Self::Score(game) => Some(
-                data.score_board(game)
-                    .map_or(EMPTY, |board| &board.all_time),
-            ),
+            Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
+            Self::LateaniaFrontier => Standings::Snapshot(&data.lateania_frontier),
+            Self::TopChips => Standings::MonthlyOnly(&data.monthly_chip_earners),
+            Self::ArcadeWins => Standings::MonthlyOnly(&data.arcade_champions),
+            Self::Daily(puzzle) => {
+                let windows = data.daily_board(puzzle);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            Self::Score(game) => {
+                let windows = data.score_board(game);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
         }
     }
 }

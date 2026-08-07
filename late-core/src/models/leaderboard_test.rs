@@ -1,10 +1,12 @@
 use chrono::{Datelike, Duration, NaiveDate, Utc};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     models::{
         le_word,
         leaderboard::{DailyPuzzle, RankedEntry, fetch_leaderboard_data},
+        mud_character::MudCharacter,
         rubiks_cube, sudoku,
     },
     test_utils::{create_test_user, test_db},
@@ -142,4 +144,82 @@ async fn replayed_daily_win_does_not_double_count_all_time() {
         .daily_board(DailyPuzzle::Sudoku)
         .expect("sudoku board present");
     assert_eq!(entry_for(&board.all_time, solver.id).value, 2);
+}
+
+/// The Lateania boards read the game-owned character blobs: level ranks the
+/// adventurers with experience as the tiebreak and the class carried as the
+/// row note, the visited-room list yields the deepest Frontier zone, and a
+/// pre-class-select shell stays off both boards.
+#[tokio::test]
+async fn lateania_boards_rank_living_characters() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let hero = create_test_user(&test_db.db, "lb_lateania_hero").await;
+    let rival = create_test_user(&test_db.db, "lb_lateania_rival").await;
+    let shell = create_test_user(&test_db.db, "lb_lateania_shell").await;
+
+    // Hero and rival share level 42; the hero's higher experience breaks the
+    // tie. Room 2749 sits in Frontier zone 15 (rooms 2000..=2999, 50 per
+    // zone); room 2000 is zone 1; room 150 is not Frontier at all.
+    MudCharacter::save(
+        &client,
+        hero.id,
+        json!({
+            "version": 17,
+            "class": "runemaster",
+            "level": 42,
+            "xp": 900_000,
+            "visited": [1, 150, 2000, 2749],
+        }),
+    )
+    .await
+    .expect("save hero");
+    MudCharacter::save(
+        &client,
+        rival.id,
+        json!({
+            "version": 17,
+            "class": "warrior",
+            "level": 42,
+            "xp": 800_000,
+            "visited": [1, 2000],
+        }),
+    )
+    .await
+    .expect("save rival");
+    MudCharacter::save(
+        &client,
+        shell.id,
+        json!({ "version": 17, "class": null, "level": 1, "xp": 0, "visited": [150] }),
+    )
+    .await
+    .expect("save shell");
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+
+    let hero_row = entry_for(&data.lateania_adventurers, hero.id);
+    assert_eq!(hero_row.rank, 1, "experience breaks the level tie");
+    assert_eq!(hero_row.value, 42);
+    assert_eq!(hero_row.note.as_deref(), Some("Runemaster"));
+    assert_eq!(entry_for(&data.lateania_adventurers, rival.id).rank, 2);
+    assert!(
+        !data
+            .lateania_adventurers
+            .iter()
+            .any(|entry| entry.user_id == shell.id),
+        "a character without a chosen class stays off the board"
+    );
+
+    assert_eq!(entry_for(&data.lateania_frontier, hero.id).value, 15);
+    assert_eq!(entry_for(&data.lateania_frontier, rival.id).value, 1);
+    assert!(
+        !data
+            .lateania_frontier
+            .iter()
+            .any(|entry| entry.user_id == shell.id),
+        "no Frontier room visited, no Frontier row"
+    );
 }

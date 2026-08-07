@@ -27,6 +27,10 @@ pub struct RankedEntry {
     pub user_id: Uuid,
     pub rank: i64,
     pub value: i64,
+    /// Optional flavor after the username (the Lateania boards put the
+    /// character's class here). Pure decoration: the page drops it before the
+    /// rank, name, or value when width runs short.
+    pub note: Option<String>,
 }
 
 /// Defines a roster enum plus its `ALL` list from one variant list, the same
@@ -209,6 +213,12 @@ pub struct LeaderboardData {
     pub arcade_champions: Vec<RankedEntry>,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
+    /// Living Lateania characters by level (ties broken by experience), the
+    /// character's class carried in `note`. Snapshot of current characters,
+    /// not history: a reset character leaves the board.
+    pub lateania_adventurers: Vec<RankedEntry>,
+    /// Deepest Frontier zone each living Lateania character has walked into.
+    pub lateania_frontier: Vec<RankedEntry>,
 }
 
 impl LeaderboardData {
@@ -234,6 +244,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         daily_all_time,
         score_monthly,
         score_all_time,
+        lateania_adventurers,
+        lateania_frontier,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_today_daily_statuses(client),
@@ -244,6 +256,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
         fetch_score_boards(client, ScoreWindow::AllTime),
+        fetch_lateania_adventurers(client, BOARD_DEPTH),
+        fetch_lateania_frontier(client, BOARD_DEPTH),
     )?;
 
     let daily_boards = DailyPuzzle::ALL
@@ -279,7 +293,105 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         daily_boards,
         score_boards,
+        lateania_adventurers,
+        lateania_frontier,
     })
+}
+
+/// Lateania's Frontier room layout, mirrored from
+/// `late-ssh/src/app/door/lateania/world.rs` (`extend_frontier`): 20 zones of
+/// 50 rooms each, room ids 2000..=2999. late-core cannot depend on the game
+/// crate, so the numbers are restated here; a Frontier reshape must update
+/// both places.
+const LATEANIA_FRONTIER_FIRST_ROOM: i32 = 2000;
+const LATEANIA_FRONTIER_LAST_ROOM: i32 = 2999;
+const LATEANIA_FRONTIER_ZONE_ROOMS: i32 = 50;
+
+/// Living Lateania characters ranked by level, experience as the tiebreak.
+/// The character blob is game-owned JSON (`mud_characters.data`); rows
+/// without a chosen class are pre-class-select shells and stay off the board.
+async fn fetch_lateania_adventurers(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            "WITH chars AS (
+                SELECT c.user_id,
+                       (c.data->>'level')::bigint AS level,
+                       COALESCE((c.data->>'xp')::bigint, 0) AS xp,
+                       initcap(c.data->>'class') AS class
+                FROM mud_characters c
+                WHERE c.data->>'class' IS NOT NULL
+                  AND c.data->>'level' IS NOT NULL
+            ),
+            ranked AS (
+                SELECT u.username,
+                       ch.user_id,
+                       ch.level,
+                       ch.class,
+                       RANK() OVER (ORDER BY ch.level DESC, ch.xp DESC) AS rank
+                FROM chars ch
+                JOIN users u ON u.id = ch.user_id
+            )
+            SELECT username, user_id, class, level AS value, rank
+            FROM ranked
+            ORDER BY rank ASC, username ASC
+            LIMIT $1",
+            &[&limit],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+            note: row.get::<_, Option<String>>("class"),
+        })
+        .collect())
+}
+
+/// Deepest Frontier zone per living Lateania character, from the visited-room
+/// list in the character blob. This unnests each character's visited array,
+/// which is the most per-row work in the leaderboard pass; it stays cheap
+/// because `mud_characters` holds one row per player who ever rolled a
+/// character, a small table by construction, and the pass itself is
+/// subscriber-gated on a 5 minute cadence (`hub/svc.rs`).
+async fn fetch_lateania_frontier(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
+    let rows = client
+        .query(
+            &format!(
+                "WITH depths AS (
+                    SELECT c.user_id,
+                           (MAX((room.value)::int) - {first}) / {zone_rooms} + 1 AS zone
+                    FROM (
+                        SELECT user_id, data->'visited' AS visited
+                        FROM mud_characters
+                        WHERE jsonb_typeof(data->'visited') = 'array'
+                    ) c
+                    CROSS JOIN LATERAL jsonb_array_elements_text(c.visited) AS room(value)
+                    WHERE (room.value)::int BETWEEN {first} AND {last}
+                    GROUP BY c.user_id
+                ),
+                ranked AS (
+                    SELECT u.username,
+                           d.user_id,
+                           d.zone::bigint AS zone,
+                           RANK() OVER (ORDER BY d.zone DESC) AS rank
+                    FROM depths d
+                    JOIN users u ON u.id = d.user_id
+                )
+                SELECT username, user_id, zone AS value, rank
+                FROM ranked
+                ORDER BY rank ASC, username ASC
+                LIMIT $1",
+                first = LATEANIA_FRONTIER_FIRST_ROOM,
+                last = LATEANIA_FRONTIER_LAST_ROOM,
+                zone_rooms = LATEANIA_FRONTIER_ZONE_ROOMS,
+            ),
+            &[&limit],
+        )
+        .await?;
+    Ok(ranked_entries(rows))
 }
 
 async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
@@ -466,6 +578,7 @@ async fn fetch_daily_win_boards(
             user_id: row.get("user_id"),
             rank: row.get("rank"),
             value: row.get("value"),
+            note: None,
         });
     }
     Ok(boards)
@@ -549,6 +662,7 @@ async fn fetch_score_boards(
             user_id: row.get("user_id"),
             rank: row.get("rank"),
             value: row.get("value"),
+            note: None,
         });
     }
     Ok(boards)
@@ -565,6 +679,7 @@ fn ranked_entries(rows: Vec<tokio_postgres::Row>) -> Vec<RankedEntry> {
             user_id: row.get("user_id"),
             rank: row.get("rank"),
             value: row.get("value"),
+            note: None,
         })
         .collect()
 }

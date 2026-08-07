@@ -125,6 +125,7 @@ DELETE FROM minesweeper_daily_wins w USING seed_players p WHERE w.user_id = p.us
 DELETE FROM rubiks_cube_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM le_word_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
+DELETE FROM mud_characters c USING seed_players p WHERE c.user_id = p.user_id;
 
 -- Balances and a multi-event monthly chip ledger. Shop spending is present but
 -- intentionally excluded by the production monthly-earners query.
@@ -375,6 +376,36 @@ FROM seed_players p
 CROSS JOIN LATERAL generate_series(1, 20 + (49 - p.idx) * 4) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
 
+-- Lateania characters for the Games boards: paired levels so the experience
+-- tiebreak is visible, classes cycling the full roster, and the top half of
+-- the field carrying Frontier rooms (2000..=2999, 50 per zone) at spread
+-- depths. The blob shape mirrors the game's save schema; unknown fields
+-- default on load, and these users never log in anyway.
+INSERT INTO mud_characters (user_id, data)
+SELECT
+    p.user_id,
+    jsonb_build_object(
+        'version', 17,
+        'class', (ARRAY[
+            'warrior', 'mage', 'cleric', 'rogue', 'ranger', 'druid',
+            'necromancer', 'bard', 'monk', 'paladin', 'warlock', 'berserker',
+            'beastlord', 'skald', 'runemaster', 'valewalker', 'spiritmaster'
+        ])[1 + (p.idx % 17)],
+        'level', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2),
+        'xp', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2) * 40000 + (48 - p.idx) * 977,
+        'hp', 200,
+        'gold', 50 * p.idx,
+        'visited',
+        CASE
+            WHEN p.idx <= 24 THEN jsonb_build_array(1, 5, 12, 2000, 2000 + (24 - p.idx) * 41)
+            ELSE jsonb_build_array(1, 5, 12)
+        END
+    )
+FROM seed_players p
+ON CONFLICT (user_id) DO UPDATE SET
+    data = EXCLUDED.data,
+    updated = current_timestamp;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -468,6 +499,23 @@ SELECT c.user_id, current_date - g.n, 1 + (g.n % 6)
 FROM seed_current_player c
 CROSS JOIN generate_series(0, 6) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
+
+-- A mid-rank Lateania character, only when the player has none: a real save
+-- must never be overwritten, so this is insert-or-nothing, not upsert.
+INSERT INTO mud_characters (user_id, data)
+SELECT
+    user_id,
+    jsonb_build_object(
+        'version', 17,
+        'class', 'ranger',
+        'level', 29,
+        'xp', 29 * 40000,
+        'hp', 300,
+        'gold', 800,
+        'visited', jsonb_build_array(1, 5, 12, 2000, 2400)
+    )
+FROM seed_current_player
+ON CONFLICT (user_id) DO NOTHING;
 
 INSERT INTO le_word_daily_wins (user_id, puzzle_date, score)
 SELECT c.user_id, current_date - 400 + g.n * 9, 1 + (g.n % 6)

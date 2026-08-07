@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-08-01 (Admin tab deleted with its `admin/` module, tab state, and admin-gated service helpers; reward-template and marketplace edits are direct DB/migration work now. Earlier: Hub modal reduced to the Shop, opened by `/shop`, no chord; Leaderboard tab replaced by the top-level Leaderboards page fed by roster-generated boards; Quests tab replaced by the Arcade-top strip; Events tab deleted)
+- Last updated: 2026-08-07 (Games boards land on the Leaderboards page, leading the rail: Lateania Adventurers (living characters by level, xp tiebreak, class as the row note) and Lateania Frontier (deepest Frontier zone from the visited-room blob), two new snapshot queries over `mud_characters` in the leaderboard pass)
 - Purpose: local working context for the Hub domain: the Shop modal, the leaderboard data/service behind the top-level Leaderboards page, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -64,7 +64,7 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 ## Leaderboard Data
 
-`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the old fourteen-query pass was 13% of all DB execution time at 30s (SCALE.md DB Cost Ranking); the roster rewrite brought the pass down to nine queries while adding the per-game boards, because each board family is one union query ranked with `PARTITION BY game`. Do not make it hot again without re-reading that ranking.
+`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the old fourteen-query pass was 13% of all DB execution time at 30s (SCALE.md DB Cost Ranking); the roster rewrite brought the pass down to nine queries while adding the per-game boards, because each board family is one union query ranked with `PARTITION BY game`, and the Lateania boards added two more (eleven total), both O(players) over `mud_characters`. Do not make it hot again without re-reading that ranking.
 
 Two rules keep that coarse cadence from reading as a broken screen:
 
@@ -76,6 +76,7 @@ The data model is roster-generated (`late-core/src/models/leaderboard.rs`):
 - `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic) is the score-game roster: monthly boards union `game_score_events` with legacy best-score rows touched this month; all-time boards read only the legacy tables of record.
 - Both per-game families land in `BoardWindows { monthly, all_time }` maps keyed by roster variant; every roster key is present after a fetch, empty boards included.
 - `Top Chips` (monthly net chip delta from `chip_ledger`, exclusions derived from `ChipMove::excluded_earning_reasons()`) and `Arcade Wins` stay bespoke monthly-only boards.
+- The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the character's class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short), and `lateania_frontier` unnests each blob's visited-room array for the deepest Frontier zone (rooms 2000..=2999, 50 per zone, constants restated in `leaderboard.rs` with a pointer at `lateania/world.rs`). Snapshot semantics: a reset character leaves both boards; the page shows them as one "right now" window (`Standings::Snapshot`), not monthly/all-time pairs. On the page they lead the rail under a "Games" header, ahead of Top Chips.
 - Arcade Wins weights come from `Difficulty::points` in `late-core/src/models/chips.rs` (easy 1 / medium 3 / hard 5; solitaire draw-1 scores Easy points, draw-3 Hard; Le Word fixed Easy, Rubik's fixed Medium). The same enum's `chips()` is the daily-win payout tier display, so points and payouts cannot drift apart in string-matched copies. Unknown difficulty keys score 0, never a default.
 - The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass; every board is now uniformly monthly + all-time).
 
@@ -90,7 +91,11 @@ clear the unique index on real handles, and rewrites their stats on every rerun.
 With no argument, the seed also gives the most recently active real user a
 representative deep-rank row on every board. Pass a username to target that
 enrichment explicitly, for example
-`scripts/seed_leaderboard_test_data.sh GleamingUnicycle`.
+`scripts/seed_leaderboard_test_data.sh GleamingUnicycle`. The seed also writes
+synthetic `mud_characters` blobs for the Lateania boards (paired levels so the
+xp tiebreak shows, classes cycling the roster, spread Frontier depths); the
+current-player enrichment there is insert-only, so a real character save is
+never overwritten.
 
 Monthly profile awards:
 - Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
@@ -207,4 +212,4 @@ Future Events work (the tab is deleted; these hold for whenever events return):
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before the Leaderboards page catches up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the boards are never *empty*, just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
 - The Leaderboards page has no scrolling inside a board's standings beyond the around-you tail; a board deeper than the pane clips.
-- Door games (DCSS, NetHack attempts, Lateania level, Green Dragon) have no boards yet: each needs its own fact table/ingestion before it can join a roster.
+- Lateania has its two Games boards; the external roguelike doors (NetHack, DCSS, Brogue) still have none. Each needs log-file ingestion from its host before it can join a board (fact table + transport); the worked plan is `devdocs/PLAN-ROGUELIKE-BOARDS.md`.
