@@ -65,7 +65,9 @@ impl russh::server::Server for Server {
 enum SessionHost {
     Game(PtyHost),
     /// Held only so its drop (client EOF/close) ends the stream task.
-    Stats { _host: StatsHost },
+    Stats {
+        _host: StatsHost,
+    },
 }
 
 pub(crate) struct ClientHandler {

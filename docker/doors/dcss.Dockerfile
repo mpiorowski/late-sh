@@ -3,7 +3,7 @@
 # dcss door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/dcss.yml as
-# ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r1; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2; the root Dockerfile pins that
 # image as its dcss-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm

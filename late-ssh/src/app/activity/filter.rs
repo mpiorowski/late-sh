@@ -35,8 +35,13 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         ActivityKind::GameStarted { .. } | ActivityKind::BossSlain { .. } => true,
         ActivityKind::GameEvent { game, .. } => match game {
             // Door games: their moments are curated at the source
-            // (start/descend/die/milestones), so they read as stories.
-            ActivityGame::Mud | ActivityGame::Nethack | ActivityGame::GreenDragon => true,
+            // (start/descend/die/milestones), so they read as stories. DCSS
+            // events come from the log pipe (deaths, Orb pickup), already
+            // freshness- and recency-gated at ingestion.
+            ActivityGame::Mud
+            | ActivityGame::Nethack
+            | ActivityGame::Dcss
+            | ActivityGame::GreenDragon => true,
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess
@@ -65,8 +70,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::TicTacToe
             | ActivityGame::Tron => true,
             // Door-game wins are milestone-gated at the source (dragon
-            // kills, NetHack amulet/ascension) — stories.
-            ActivityGame::GreenDragon | ActivityGame::Nethack => true,
+            // kills, NetHack amulet/ascension, a DCSS Orb escape) — stories.
+            ActivityGame::GreenDragon | ActivityGame::Nethack | ActivityGame::Dcss => true,
             // Lateania fires a win per mob kill; boss kills arrive as
             // `BossSlain` instead.
             ActivityGame::Mud => false,

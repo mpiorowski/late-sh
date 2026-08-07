@@ -193,7 +193,11 @@ async fn pump(tail: &mut FileTail, handle: &Handle, channel: ChannelId) -> Resul
                 return Ok(());
             }
         };
-        if file.seek(std::io::SeekFrom::Start(tail.offset)).await.is_err() {
+        if file
+            .seek(std::io::SeekFrom::Start(tail.offset))
+            .await
+            .is_err()
+        {
             return Ok(());
         }
         let mut buf = vec![0u8; READ_CHUNK];

@@ -223,3 +223,118 @@ async fn lateania_boards_rank_living_characters() {
         "no Frontier room visited, no Frontier row"
     );
 }
+
+/// One fixture covers the whole door-board triple over the log-pipe fact
+/// tables: all-time wins counting only win results, best score in both
+/// windows, and the dive board taking its depth from milestone marks when
+/// they outreach the end-of-run depth (a winner ends at the surface).
+#[tokio::test]
+async fn door_boards_rank_wins_depth_and_score() {
+    use crate::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
+    use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::DoorGame;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let winner = create_test_user(&test_db.db, "lb_door_winner").await;
+    let diver = create_test_user(&test_db.db, "lb_door_diver").await;
+
+    let now = Utc::now();
+    let run = |user_id, result, score, depth, offset| NewDoorRun {
+        game: DoorGame::Dcss.key(),
+        user_id,
+        ended_at: now,
+        result,
+        score: Some(score),
+        depth: Some(depth),
+        turns: Some(1000),
+        raw: json!({}),
+        source_file: "logfile".to_string(),
+        source_offset: offset,
+    };
+
+    // Winner: one old death at depth 8, then a win ending at the surface
+    // whose Orb milestone carries the real dive depth (27).
+    let mut old_death = run(winner.id, DoorRunResult::Death, 5_000, 8, 100);
+    old_death.ended_at = now - Duration::days(45);
+    for new_run in [
+        &old_death,
+        &run(winner.id, DoorRunResult::Win, 2_000_000, 1, 200),
+    ] {
+        assert!(
+            DoorRun::insert_ignore(&client, new_run)
+                .await
+                .expect("insert run")
+        );
+    }
+    assert!(
+        DoorMilestone::insert_ignore(
+            &client,
+            &NewDoorMilestone {
+                game: DoorGame::Dcss.key(),
+                user_id: winner.id,
+                kind: DoorMilestoneKind::Orb,
+                occurred_at: now,
+                raw: json!({"absdepth": "27"}),
+                source_file: "milestones".to_string(),
+                source_offset: 300,
+            },
+        )
+        .await
+        .expect("insert milestone")
+    );
+
+    // Diver: deep death this month, no win; quits never count as wins.
+    for new_run in [
+        &run(diver.id, DoorRunResult::Death, 90_000, 24, 400),
+        &run(diver.id, DoorRunResult::Quit, 999_999_999, 1, 500),
+    ] {
+        assert!(
+            DoorRun::insert_ignore(&client, new_run)
+                .await
+                .expect("insert run")
+        );
+    }
+    // A replayed line lands nothing.
+    assert!(
+        !DoorRun::insert_ignore(
+            &client,
+            &run(diver.id, DoorRunResult::Death, 90_000, 24, 400)
+        )
+        .await
+        .expect("replay run")
+    );
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    let boards = data
+        .door_board(DoorGame::Dcss)
+        .expect("dcss boards present");
+
+    // Wins: only the winner's one win row; the quit pays nothing.
+    assert_eq!(boards.wins.len(), 1);
+    assert_eq!(entry_for(&boards.wins, winner.id).value, 1);
+
+    // Dive: the winner's depth comes from the Orb milestone mark, not the
+    // surface exit; the diver's from the death row.
+    assert_eq!(entry_for(&boards.depth.all_time, winner.id).value, 27);
+    assert_eq!(entry_for(&boards.depth.all_time, winner.id).rank, 1);
+    assert_eq!(entry_for(&boards.depth.all_time, diver.id).value, 24);
+    // Monthly window: the winner's 45-day-old death is out, the milestone in.
+    assert_eq!(entry_for(&boards.depth.monthly, winner.id).value, 27);
+
+    // Score: best per player; the quit's absurd score still counts as a
+    // score (crawl scored the run), and only the monthly window drops the
+    // winner's old death score.
+    assert_eq!(
+        entry_for(&boards.score.all_time, diver.id).value,
+        999_999_999
+    );
+    assert_eq!(
+        entry_for(&boards.score.all_time, winner.id).value,
+        2_000_000
+    );
+    assert_eq!(entry_for(&boards.score.monthly, winner.id).value, 2_000_000);
+}

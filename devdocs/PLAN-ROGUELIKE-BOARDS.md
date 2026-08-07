@@ -1,8 +1,19 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
-Status: approved plan, not started. Written 2026-08-07 for a fresh-context
-session. The Lateania Games boards on the Leaderboards page shipped separately
-(see `late-ssh/src/app/hub/CONTEXT.md`, Leaderboard Data); this plan covers the
+Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07 — stats session,
+ingestion, `door_runs`/`door_milestones`/`door_log_cursors` (migration 136),
+DCO/DCW badges (backfill grants approved), feed events, and the DCSS board
+triple. Phases 2-4 not started. One correction found during Phase 1: the
+plan's "DCSS: nothing to build" was wrong for the milestones file — crawl
+only writes it under the `DGL_MILESTONES` compile define, so the dcss build
+now passes `EXTERNAL_DEFINES="-DDGL_MILESTONES -DTIME_FN=gmtime
+-DDGL_EXTENDED_LOGFILES"` (door-dcss image r2), each asserted fail-closed
+via the `-version` CFLAGS line. **Prod bring-up order matters:** deploy the
+new `late-dcss` host (a `-dcss` release) before or with the service-ssh
+release, or ingestion just retries against a host without the stats session.
+Written 2026-08-07 for a fresh-context session. The Lateania Games boards on
+the Leaderboards page shipped separately (see
+`late-ssh/src/app/hub/CONTEXT.md`, Leaderboard Data); this plan covers the
 three external roguelike doors: NetHack, DCSS, Brogue.
 
 Read first: root `CONTEXT.md`, `late-ssh/src/app/hub/CONTEXT.md`, and the three
@@ -191,10 +202,11 @@ morgue dumps per game.
 
 ## Phases (each shippable alone)
 
-1. **DCSS end-to-end** (no build changes needed, richest files): stats
-   session on `late-dcss` + client task + cursors + `door_runs`/
-   `door_milestones` + parsers + DCSS badges/payouts/feed events + the three
-   DCSS boards on the page. This sets every pattern.
+1. **DCSS end-to-end** — DONE (see Status above; one build change was needed
+   after all: the `DGL_MILESTONES` define). Patterns set for the later
+   phases: host stats session (`late-dcss/src/stats.rs`), client slice
+   (`late-ssh/src/app/door/ingest/`), shared award sink
+   (`ingest/award.rs`, `DoorBadge`), `DoorGame` roster boards.
 2. **NetHack**: XLOGFILE build assertion, xlogfile parser, badge grants move
    to ingestion, delete the scrape, death events from the log, LIVELOG
    investigation. The cleaning phase.
@@ -220,8 +232,10 @@ morgue dumps per game.
 
 ## Open questions for Mat (ask before the phase that needs them)
 
-- Badge codes `DCO`/`DCW`/`BRE`/`BRM` fine, or different letters?
-- Should backfilled historical wins grant badges/chips? (Recommended yes.)
+- ~~Badge codes `DCO`/`DCW` fine?~~ Approved 2026-08-07 (Phase 1). `BRE`/`BRM`
+  still pending Phase 3.
+- ~~Should backfilled historical wins grant badges/chips?~~ Yes, approved
+  2026-08-07.
 - Ingress shape for the DCSS files: subdomain or path prefix?
 - Do Rapid/Bullet Brogue variant games (same run history file) count on the
   Brogue boards, or filter to standard? (They share the player dir; the run

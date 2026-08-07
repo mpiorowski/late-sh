@@ -1,0 +1,16 @@
+// The door log pipe (devdocs/PLAN-ROGUELIKE-BOARDS.md): late-ssh tails the
+// roguelike door hosts' append-only xlog files over a reserved `late_stats`
+// SSH session and lands runs/milestones in the DB, which feeds the door
+// boards, badge payouts, and #lounge feed events. One connect-with-retry task
+// per enabled door, spawned from main.rs; the hosts stay stateless (no
+// cursors, no parsing, no DB), so parser fixes never need a door redeploy.
+pub mod award;
+pub mod dcss;
+#[cfg(test)]
+mod dcss_test;
+pub mod stream;
+#[cfg(test)]
+mod stream_test;
+pub mod svc;
+#[cfg(test)]
+mod svc_test;

@@ -156,6 +156,9 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
         Standings::MonthlyOnly(entries) => {
             draw_window(frame, rows[3], "this month", entries, board, view.user_id);
         }
+        Standings::AllTimeOnly(entries) => {
+            draw_window(frame, rows[3], "all time", entries, board, view.user_id);
+        }
         Standings::Snapshot(entries) => {
             draw_window(frame, rows[3], "right now", entries, board, view.user_id);
         }
@@ -375,6 +378,9 @@ fn empty_copy(board: Board) -> &'static str {
     match board {
         Board::LateaniaAdventurers => "no adventurers yet, roll a character in the Games hub",
         Board::LateaniaFrontier => "no one has braved the Frontier yet",
+        Board::DoorWins(_) => "no wins yet, the Orb awaits",
+        Board::DoorDepth(_) => "no dives recorded yet",
+        Board::DoorScore(_) => "no scored runs yet",
         Board::TopChips => "no chip earnings yet this month",
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::Daily(_) => "no wins yet, be the first",

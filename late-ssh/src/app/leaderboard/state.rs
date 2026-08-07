@@ -1,6 +1,6 @@
 use late_core::models::{
     chips::Difficulty,
-    leaderboard::{DailyPuzzle, LeaderboardData, RankedEntry, ScoreGame},
+    leaderboard::{DailyPuzzle, DoorGame, LeaderboardData, RankedEntry, ScoreGame},
 };
 
 use crate::app::common::primitives::thousands;
@@ -15,6 +15,9 @@ const EMPTY: &[RankedEntry] = &[];
 pub(crate) enum Board {
     LateaniaAdventurers,
     LateaniaFrontier,
+    DoorWins(DoorGame),
+    DoorDepth(DoorGame),
+    DoorScore(DoorGame),
     TopChips,
     ArcadeWins,
     Daily(DailyPuzzle),
@@ -27,6 +30,9 @@ pub(crate) enum Board {
 pub(crate) enum Standings<'a> {
     /// One window of month-scoped standings, headed "this month".
     MonthlyOnly(&'a [RankedEntry]),
+    /// One window over all recorded history, headed "all time" (the door
+    /// wins boards: a win is forever).
+    AllTimeOnly(&'a [RankedEntry]),
     /// One window ranking a current state of the world, headed "right now"
     /// (the Lateania boards: living characters, not history).
     Snapshot(&'a [RankedEntry]),
@@ -38,15 +44,18 @@ pub(crate) enum Standings<'a> {
 }
 
 impl Board {
-    /// Page order: Games boards, then the bespoke boards, then daily puzzles,
-    /// then score games, each roster in its declaration order.
+    /// Page order: Games boards (Lateania, then each door's board triple),
+    /// then the bespoke boards, then daily puzzles, then score games, each
+    /// roster in its declaration order.
     pub(crate) fn all() -> Vec<Self> {
-        let mut boards = vec![
-            Self::LateaniaAdventurers,
-            Self::LateaniaFrontier,
-            Self::TopChips,
-            Self::ArcadeWins,
-        ];
+        let mut boards = vec![Self::LateaniaAdventurers, Self::LateaniaFrontier];
+        for &game in DoorGame::ALL {
+            boards.push(Self::DoorWins(game));
+            boards.push(Self::DoorDepth(game));
+            boards.push(Self::DoorScore(game));
+        }
+        boards.push(Self::TopChips);
+        boards.push(Self::ArcadeWins);
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
         boards
@@ -56,6 +65,9 @@ impl Board {
         match self {
             Self::LateaniaAdventurers => "Lateania Adventurers",
             Self::LateaniaFrontier => "Lateania Frontier",
+            Self::DoorWins(DoorGame::Dcss) => "DCSS Wins",
+            Self::DoorDepth(DoorGame::Dcss) => "DCSS Deepest Dive",
+            Self::DoorScore(DoorGame::Dcss) => "DCSS Top Score",
             Self::TopChips => "Top Chips",
             Self::ArcadeWins => "Arcade Wins",
             Self::Daily(puzzle) => puzzle.title(),
@@ -72,6 +84,9 @@ impl Board {
                 "living characters by level, ties broken by experience".to_string()
             }
             Self::LateaniaFrontier => "deepest Frontier zone walked, of 20".to_string(),
+            Self::DoorWins(DoorGame::Dcss) => "games escaped with the Orb of Zot".to_string(),
+            Self::DoorDepth(DoorGame::Dcss) => "deepest dungeon depth ever reached".to_string(),
+            Self::DoorScore(DoorGame::Dcss) => "best final score".to_string(),
             Self::TopChips => "monthly net chip delta, shop spend ignored".to_string(),
             Self::ArcadeWins => format!(
                 "daily puzzle points: easy {} · medium {} · hard {}",
@@ -90,6 +105,9 @@ impl Board {
         match self {
             Self::LateaniaAdventurers => format!("lvl {value}"),
             Self::LateaniaFrontier => format!("zone {value}"),
+            Self::DoorWins(_) => format!("{} wins", thousands(value)),
+            Self::DoorDepth(_) => format!("depth {value}"),
+            Self::DoorScore(_) => thousands(value),
             Self::TopChips => format!("{} chips", thousands(value)),
             Self::ArcadeWins => format!("{} pts", thousands(value)),
             Self::Daily(_) => format!("{} wins", thousands(value)),
@@ -101,6 +119,23 @@ impl Board {
         match self {
             Self::LateaniaAdventurers => Standings::Snapshot(&data.lateania_adventurers),
             Self::LateaniaFrontier => Standings::Snapshot(&data.lateania_frontier),
+            Self::DoorWins(game) => {
+                Standings::AllTimeOnly(data.door_board(game).map_or(EMPTY, |board| &board.wins))
+            }
+            Self::DoorDepth(game) => {
+                let windows = data.door_board(game).map(|board| &board.depth);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
+            Self::DoorScore(game) => {
+                let windows = data.door_board(game).map(|board| &board.score);
+                Standings::Paired {
+                    monthly: windows.map_or(EMPTY, |board| &board.monthly),
+                    all_time: windows.map_or(EMPTY, |board| &board.all_time),
+                }
+            }
             Self::TopChips => Standings::MonthlyOnly(&data.monthly_chip_earners),
             Self::ArcadeWins => Standings::MonthlyOnly(&data.arcade_champions),
             Self::Daily(puzzle) => {

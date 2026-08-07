@@ -62,6 +62,7 @@ pub(crate) fn legend_lines() -> Vec<Line<'static>> {
             "NHA NetHack Amulet  NHY NetHack Ascension",
             dim,
         )),
+        Line::from(Span::styled("DCO DCSS Orb of Zot  DCW DCSS Escape", dim)),
         Line::from(Span::styled("GDS Green Dragon Slayer", dim)),
     ]
 }

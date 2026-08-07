@@ -1,4 +1,4 @@
-use late_core::models::leaderboard::{DailyPuzzle, RankedEntry, ScoreGame};
+use late_core::models::leaderboard::{DailyPuzzle, DoorGame, RankedEntry, ScoreGame};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use uuid::Uuid;
@@ -217,11 +217,19 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[1])
     );
     assert_eq!(selected_line, 1);
-    assert_eq!(text(&lines[3]), "");
-    assert!(text(&lines[4]).contains("Boards"), "{}", text(&lines[4]));
+    // The Games group: two Lateania boards plus each door's board triple,
+    // then a blank and the "Boards" header.
+    let games_rows = 2 + 3 * DoorGame::ALL.len();
+    let boards_header = 1 + games_rows + 1;
+    assert_eq!(text(&lines[boards_header - 1]), "");
+    assert!(
+        text(&lines[boards_header]).contains("Boards"),
+        "{}",
+        text(&lines[boards_header])
+    );
 
-    // "Boards" at 4, the two bespoke boards, blank, then the Daily Wins group.
-    let daily_header = 8;
+    // The two bespoke boards, blank, then the Daily Wins group.
+    let daily_header = boards_header + 2 + 1 + 1;
     assert_eq!(text(&lines[daily_header - 1]), "");
     assert!(
         text(&lines[daily_header]).contains("Daily Wins"),

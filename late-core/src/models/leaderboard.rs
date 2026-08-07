@@ -5,6 +5,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::chips::{ChipMove, Difficulty, UserChips};
+use super::door_run::DoorRunResult;
 
 /// UTC calendar-month window over a `puzzle_date` date column.
 const MONTH_DATE_FILTER: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
@@ -68,6 +69,16 @@ roster!(
     /// `game_score_events` plus a legacy best-score table; monthly boards
     /// union both, all-time boards read the legacy table of record.
     ScoreGame: Lateris, TwentyFortyEight, Snake, Traffic
+);
+
+roster!(
+    /// The external roguelike-door roster: games whose runs are ingested
+    /// from their host's log files into `door_runs`
+    /// (devdocs/PLAN-ROGUELIKE-BOARDS.md). Each variant gets the uniform
+    /// board triple: Wins (all-time), Deepest dive, and Top score (monthly +
+    /// all-time), all from the per-window union query, so NetHack and Brogue
+    /// join the boards by adding a variant once their ingestion phases land.
+    DoorGame: Dcss
 );
 
 impl DailyPuzzle {
@@ -143,6 +154,26 @@ impl DailyPuzzle {
     }
 }
 
+impl DoorGame {
+    /// The stable game key used in `door_runs.game`, cursor rows, and
+    /// reward-template params.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Dcss => "dcss",
+        }
+    }
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Dcss => "DCSS",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|game| game.key() == key)
+    }
+}
+
 impl ScoreGame {
     /// The `game_score_events.game` key.
     pub const fn score_event_key(self) -> &'static str {
@@ -204,6 +235,23 @@ pub struct BoardWindows {
     pub all_time: Vec<RankedEntry>,
 }
 
+/// The uniform board triple of one roguelike door, over `door_runs` (and,
+/// for the dive board, the mid-run depth marks in `door_milestones`).
+#[derive(Clone, Default)]
+pub struct DoorBoards {
+    /// All-time count of won runs ([`DoorRunResult::WINS`]). Single window
+    /// by design: a monthly wins race would just mirror the score board.
+    pub wins: Vec<RankedEntry>,
+    /// Deepest absolute dungeon depth. The end-of-run `depth` alone would be
+    /// wrong for winners (crawl stamps the *final* place, and a winner ends
+    /// at the surface), so this unions in the depth snapshot every tracked
+    /// milestone line carries — the rune/orb/branch moments are exactly the
+    /// deep points of a run.
+    pub depth: BoardWindows,
+    /// Best final score.
+    pub score: BoardWindows,
+}
+
 #[derive(Clone, Default)]
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
@@ -213,6 +261,7 @@ pub struct LeaderboardData {
     pub arcade_champions: Vec<RankedEntry>,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
+    pub door_boards: HashMap<DoorGame, DoorBoards>,
     /// Living Lateania characters by level (ties broken by experience), the
     /// character's class carried in `note`. Snapshot of current characters,
     /// not history: a reset character leaves the board.
@@ -231,6 +280,10 @@ impl LeaderboardData {
     pub fn score_board(&self, game: ScoreGame) -> Option<&BoardWindows> {
         self.score_boards.get(&game)
     }
+
+    pub fn door_board(&self, game: DoorGame) -> Option<&DoorBoards> {
+        self.door_boards.get(&game)
+    }
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
@@ -246,6 +299,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         score_all_time,
         lateania_adventurers,
         lateania_frontier,
+        door_monthly,
+        door_all_time,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
         fetch_today_daily_statuses(client),
@@ -258,7 +313,31 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         fetch_score_boards(client, ScoreWindow::AllTime),
         fetch_lateania_adventurers(client, BOARD_DEPTH),
         fetch_lateania_frontier(client, BOARD_DEPTH),
+        fetch_door_boards(client, DoorWindow::Monthly),
+        fetch_door_boards(client, DoorWindow::AllTime),
     )?;
+
+    let door_boards = DoorGame::ALL
+        .iter()
+        .map(|&game| {
+            let monthly = door_monthly.get(&game).cloned().unwrap_or_default();
+            let all_time = door_all_time.get(&game).cloned().unwrap_or_default();
+            (
+                game,
+                DoorBoards {
+                    wins: all_time.wins,
+                    depth: BoardWindows {
+                        monthly: monthly.depth,
+                        all_time: all_time.depth,
+                    },
+                    score: BoardWindows {
+                        monthly: monthly.score,
+                        all_time: all_time.score,
+                    },
+                },
+            )
+        })
+        .collect();
 
     let daily_boards = DailyPuzzle::ALL
         .iter()
@@ -293,9 +372,128 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         arcade_champions,
         daily_boards,
         score_boards,
+        door_boards,
         lateania_adventurers,
         lateania_frontier,
     })
+}
+
+#[derive(Clone, Copy)]
+enum DoorWindow {
+    Monthly,
+    AllTime,
+}
+
+/// One window's slice of a door's board triple, straight from the query;
+/// [`fetch_leaderboard_data`] zips the two windows into [`DoorBoards`]. The
+/// wins family is fetched all-time only, so it stays empty here for Monthly.
+#[derive(Clone, Default)]
+struct DoorWindowBoards {
+    wins: Vec<RankedEntry>,
+    depth: Vec<RankedEntry>,
+    score: Vec<RankedEntry>,
+}
+
+/// One query for every door board in the window, all three families ranked
+/// `PARTITION BY (family, game)` — the door twin of [`fetch_score_boards`]'s
+/// one-query-per-window shape. Wins count [`DoorRunResult::WINS`] results,
+/// all-time only. The dive family unions end-of-run depths with the depth
+/// snapshot on every tracked milestone line (see [`DoorBoards::depth`] for
+/// why runs alone would rank a clean winner at the surface).
+async fn fetch_door_boards(
+    client: &Client,
+    window: DoorWindow,
+) -> Result<HashMap<DoorGame, DoorWindowBoards>> {
+    let keys: String = DoorGame::ALL
+        .iter()
+        .map(|game| format!("'{}'", game.key()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let win_results: String = DoorRunResult::WINS
+        .iter()
+        .map(|result| format!("'{}'", result.key()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (runs_filter, milestones_filter, wins_arm) = match window {
+        DoorWindow::Monthly => (
+            format!("AND ended_at >= {MONTH_TS_FILTER}"),
+            format!("AND occurred_at >= {MONTH_TS_FILTER}"),
+            String::new(),
+        ),
+        DoorWindow::AllTime => (
+            String::new(),
+            String::new(),
+            format!(
+                "SELECT 'wins' AS family, game, user_id, COUNT(*)::bigint AS value
+                 FROM runs WHERE result IN ({win_results}) GROUP BY game, user_id
+                 UNION ALL"
+            ),
+        ),
+    };
+    let rows = client
+        .query(
+            &format!(
+                "WITH runs AS (
+                    SELECT game, user_id, result, score, depth
+                    FROM door_runs
+                    WHERE game IN ({keys}) {runs_filter}
+                ),
+                dives AS (
+                    SELECT game, user_id, depth FROM runs WHERE depth IS NOT NULL
+                    UNION ALL
+                    SELECT game, user_id, (raw->>'absdepth')::int AS depth
+                    FROM door_milestones
+                    WHERE game IN ({keys}) AND raw ? 'absdepth' {milestones_filter}
+                ),
+                families AS (
+                    {wins_arm}
+                    SELECT 'depth' AS family, game, user_id, MAX(depth)::bigint AS value
+                    FROM dives GROUP BY game, user_id
+                    UNION ALL
+                    SELECT 'score' AS family, game, user_id, MAX(score)::bigint AS value
+                    FROM runs WHERE score IS NOT NULL GROUP BY game, user_id
+                ),
+                ranked AS (
+                    SELECT f.family,
+                           f.game,
+                           u.username,
+                           f.user_id,
+                           f.value,
+                           RANK() OVER (
+                               PARTITION BY f.family, f.game ORDER BY f.value DESC
+                           ) AS rank
+                    FROM families f
+                    JOIN users u ON u.id = f.user_id
+                )
+                SELECT family, game, username, user_id, value, rank
+                FROM ranked
+                WHERE rank <= $1
+                ORDER BY family ASC, game ASC, rank ASC, username ASC"
+            ),
+            &[&BOARD_DEPTH],
+        )
+        .await?;
+
+    let mut boards: HashMap<DoorGame, DoorWindowBoards> = HashMap::new();
+    for row in rows {
+        let game =
+            DoorGame::from_key(row.get("game")).expect("door board row game key from roster");
+        let entry = RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+            note: None,
+        };
+        let board = boards.entry(game).or_default();
+        match row.get::<_, &str>("family") {
+            "wins" => board.wins.push(entry),
+            "depth" => board.depth.push(entry),
+            "score" => board.score.push(entry),
+            other => unreachable!("door board family {other} not produced by this query"),
+        }
+    }
+    Ok(boards)
 }
 
 /// Lateania's Frontier room layout, mirrored from
@@ -355,7 +553,7 @@ async fn fetch_lateania_adventurers(client: &Client, limit: i64) -> Result<Vec<R
 /// which is the most per-row work in the leaderboard pass; it stays cheap
 /// because `mud_characters` holds one row per player who ever rolled a
 /// character, a small table by construction, and the pass itself is
-/// subscriber-gated on a 5 minute cadence (`hub/svc.rs`).
+/// subscriber-gated on a 5 minute cadence (`app/leaderboard/svc.rs`).
 async fn fetch_lateania_frontier(client: &Client, limit: i64) -> Result<Vec<RankedEntry>> {
     let rows = client
         .query(

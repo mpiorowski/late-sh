@@ -126,6 +126,8 @@ DELETE FROM rubiks_cube_daily_wins w USING seed_players p WHERE w.user_id = p.us
 DELETE FROM le_word_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
 DELETE FROM mud_characters c USING seed_players p WHERE c.user_id = p.user_id;
+DELETE FROM door_runs r USING seed_players p WHERE r.user_id = p.user_id;
+DELETE FROM door_milestones m USING seed_players p WHERE m.user_id = p.user_id;
 
 -- Balances and a multi-event monthly chip ledger. Shop spending is present but
 -- intentionally excluded by the production monthly-earners query.
@@ -406,6 +408,46 @@ ON CONFLICT (user_id) DO UPDATE SET
     data = EXCLUDED.data,
     updated = current_timestamp;
 
+-- DCSS door boards: the first six players are winners (their runs end at the
+-- surface, depth 1, the way crawl really stamps a win), even indexes died
+-- this month and odd ones long ago, and every seventh player quit (quits stay
+-- off the wins board). source_file carries a seed: prefix so the global
+-- unique (game, source_file, source_offset) key can never collide with lines
+-- the real ingestion pipe lands.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dcss',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 2 = 0 THEN (p.idx % 20) ELSE 40 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx <= 6 THEN 'win'
+        WHEN p.idx % 7 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    2000000 - p.idx * 37000,
+    CASE WHEN p.idx <= 6 THEN 1 ELSE GREATEST(2, 28 - (p.idx % 27)) END,
+    30000 + p.idx * 700,
+    '{}'::jsonb,
+    'seed:logfile',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 36;
+
+-- The winners' Orb milestones carry the real dive depth, exercising the dive
+-- board's milestones-over-runs union (a surface exit alone would rank them
+-- at depth 1).
+INSERT INTO door_milestones (game, user_id, kind, occurred_at, raw, source_file, source_offset)
+SELECT
+    'dcss',
+    p.user_id,
+    'orb',
+    current_timestamp - CASE WHEN p.idx % 2 = 0 THEN (p.idx % 20) ELSE 40 + p.idx END * interval '1 day',
+    jsonb_build_object('absdepth', (28 - p.idx)::text),
+    'seed:milestones',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 6;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -516,6 +558,13 @@ SELECT
     )
 FROM seed_current_player
 ON CONFLICT (user_id) DO NOTHING;
+
+-- A representative mid-field DCSS death; real ingested runs are untouched
+-- (distinct seed: source_file).
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'dcss', user_id, current_timestamp - interval '3 days', 'death', 214000, 15, 41000, '{}'::jsonb, 'seed:logfile', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
 
 INSERT INTO le_word_daily_wins (user_id, puzzle_date, score)
 SELECT c.user_id, current_date - 400 + g.n * 9, 1 + (g.n % 6)

@@ -379,6 +379,26 @@ async fn main() -> anyhow::Result<()> {
         singleton_shutdown.clone(),
     );
 
+    // The door log pipe: tail the DCSS host's xlog files over the stats SSH
+    // session and land runs/milestones/badges (PLAN-ROGUELIKE-BOARDS Phase 1).
+    // Gated on the same flag as the door client; single-replica by the same
+    // assumption as every other process-global singleton here.
+    let _door_ingest_task = state.config.dcss_enabled.then(|| {
+        late_ssh::app::door::ingest::svc::DoorIngestService::new(
+            db.clone(),
+            state.chip_service.clone(),
+            activity_publisher.clone(),
+        )
+        .start_dcss_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.dcss_host.clone(),
+                port: state.config.dcss_port,
+                secret: state.config.dcss_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+
     let mut tasks = JoinSet::new();
     let api_state = state.clone();
     let api_shutdown = session_shutdown.clone();

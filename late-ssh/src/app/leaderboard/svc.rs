@@ -12,7 +12,7 @@ use tokio::sync::{Notify, watch};
 /// How often the leaderboard is rebuilt from the DB while at least one session
 /// is watching it.
 ///
-/// `fetch_leaderboard_data` is eleven aggregate queries (several UNION ALL
+/// `fetch_leaderboard_data` is thirteen aggregate queries (several UNION ALL
 /// over every game's win/score tables; the all-time windows read O(players)
 /// sources, the `daily_win_totals` rollup, the legacy best-score tables, and
 /// the one-row-per-player `mud_characters` blobs, so no query scans full
@@ -56,7 +56,7 @@ enum Wake {
 /// `age` is how long ago the last successful refresh published, `None` before
 /// the first one.
 fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> bool {
-    // A refresh nobody is watching is eleven aggregate queries published to
+    // A refresh nobody is watching is thirteen aggregate queries published to
     // nobody, whatever woke us.
     if !has_subscribers {
         return false;
@@ -106,7 +106,7 @@ impl LeaderboardService {
 
     /// Whether any session is currently watching the leaderboard. Every SSH
     /// session subscribes at bootstrap, so this is "is anyone connected". A
-    /// refresh with no subscribers is eleven aggregate queries published to
+    /// refresh with no subscribers is thirteen aggregate queries published to
     /// nobody, so the loop skips it.
     fn has_subscribers(&self) -> bool {
         self.data_tx.receiver_count() > 0

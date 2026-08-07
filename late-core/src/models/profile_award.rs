@@ -12,6 +12,8 @@ pub const LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY: &str = "lateania_sundering_dee
 pub const LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY: &str = "lateania_kaethyr_ascendant";
 pub const NETHACK_AMULET_AWARD_CATEGORY: &str = "nethack_amulet";
 pub const NETHACK_ASCENSION_AWARD_CATEGORY: &str = "nethack_ascension";
+pub const DCSS_ORB_AWARD_CATEGORY: &str = "dcss_orb";
+pub const DCSS_WIN_AWARD_CATEGORY: &str = "dcss_win";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 
 #[derive(Clone, Debug)]
@@ -236,6 +238,8 @@ pub fn award_badge(category: &str, rank: i32) -> String {
             | LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
             | NETHACK_AMULET_AWARD_CATEGORY
             | NETHACK_ASCENSION_AWARD_CATEGORY
+            | DCSS_ORB_AWARD_CATEGORY
+            | DCSS_WIN_AWARD_CATEGORY
             | GREENDRAGON_DRAGON_AWARD_CATEGORY
     ) {
         return award_category_code(category).to_string();
@@ -259,6 +263,8 @@ pub fn award_category_code(category: &str) -> &'static str {
         LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "LKA",
         NETHACK_AMULET_AWARD_CATEGORY => "NHA",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NHY",
+        DCSS_ORB_AWARD_CATEGORY => "DCO",
+        DCSS_WIN_AWARD_CATEGORY => "DCW",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         _ => "LB",
     }
@@ -277,6 +283,8 @@ pub fn award_category_label(category: &str) -> &'static str {
         LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "Lateania Kaethyr Ascendant",
         NETHACK_AMULET_AWARD_CATEGORY => "NetHack Amulet",
         NETHACK_ASCENSION_AWARD_CATEGORY => "NetHack Ascension",
+        DCSS_ORB_AWARD_CATEGORY => "DCSS Orb of Zot",
+        DCSS_WIN_AWARD_CATEGORY => "DCSS Escape",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         _ => "Leaderboard",
     }
@@ -296,6 +304,8 @@ pub fn award_category_priority(category: &str) -> i32 {
         NETHACK_AMULET_AWARD_CATEGORY => 14,
         NETHACK_ASCENSION_AWARD_CATEGORY => 15,
         GREENDRAGON_DRAGON_AWARD_CATEGORY => 16,
+        DCSS_ORB_AWARD_CATEGORY => 17,
+        DCSS_WIN_AWARD_CATEGORY => 18,
         _ => 99,
     }
 }
@@ -321,7 +331,9 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         LATEANIA_ARCHDEMON_AWARD_CATEGORY
         | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
         | NETHACK_AMULET_AWARD_CATEGORY
-        | NETHACK_ASCENSION_AWARD_CATEGORY => {
+        | NETHACK_ASCENSION_AWARD_CATEGORY
+        | DCSS_ORB_AWARD_CATEGORY
+        | DCSS_WIN_AWARD_CATEGORY => {
             format!("{value} chips")
         }
         _ => format!("{value} score"),
