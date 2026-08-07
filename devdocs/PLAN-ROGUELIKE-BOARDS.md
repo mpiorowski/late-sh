@@ -1,25 +1,73 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
-Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07 — stats session,
-ingestion, `door_runs`/`door_milestones`/`door_log_cursors` (migration 136),
-DCO/DCW badges (backfill grants approved), feed events, and the DCSS board
-triple. Phases 2-4 not started. One correction found during Phase 1: the
-plan's "DCSS: nothing to build" was wrong for the milestones file — crawl
-only writes it under the `DGL_MILESTONES` compile define, so the dcss build
-now passes `EXTERNAL_DEFINES="-DDGL_MILESTONES -DTIME_FN=gmtime
--DDGL_EXTENDED_LOGFILES"` (door-dcss image r2), each asserted fail-closed
-via the `-version` CFLAGS line. **Prod bring-up order matters:** deploy the
-new `late-dcss` host (a `-dcss` release) before or with the service-ssh
-release, or ingestion just retries against a host without the stats session.
-Written 2026-08-07 for a fresh-context session. The Lateania Games boards on
-the Leaderboards page shipped separately (see
-`late-ssh/src/app/hub/CONTEXT.md`, Leaderboard Data); this plan covers the
-three external roguelike doors: NetHack, DCSS, Brogue.
+Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07, uncommitted on
+branch `mateu/roguelikes_leaderboards`; Phases 2-4 not started. This plan
+covers the three external roguelike doors: NetHack, DCSS, Brogue. (The
+Lateania Games boards shipped separately.)
 
-Read first: root `CONTEXT.md`, `late-ssh/src/app/hub/CONTEXT.md`, and the three
-door contexts (`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`). Each
-door context's §9/Deferred section already names the log files this plan builds
-on.
+Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md`
+(created during Phase 1: the whole leaderboard domain, incl. the door board
+model), and the door contexts for the phase at hand
+(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss one now
+documents the shipped log pipe, the other two name their log files in
+§9/Deferred).
+
+## Phase 1 handoff (what exists now, for a fresh session)
+
+Everything below is implemented, formatted, and green under targeted
+`make test-llm` runs (ingest, leaderboard, late-dcss, late-core door/user
+suites). NOT run: `make check` (the human-owned full gate).
+
+Implementation map:
+
+- **Host stats session**: `late-dcss/src/stats.rs` (+ `server.rs` branch).
+  Reserved username `late_stats` streams `<file-id>\t<next-offset>\t<line>`
+  frames from `$HOME/.crawl/{logfile,milestones}` with tail -f semantics;
+  client pushes cursors via one `LATE_DOOR_STATS_CURSORS` env request
+  (`logfile:123,milestones:456`); host stays stateless. Constants mirrored
+  client-side in `late-ssh/src/app/door/ingest/stream.rs`.
+- **Build**: `docker/doors/dcss.Dockerfile` now passes
+  `EXTERNAL_DEFINES="-DDGL_MILESTONES -DTIME_FN=gmtime
+  -DDGL_EXTENDED_LOGFILES"`, each asserted fail-closed via the `-version`
+  CFLAGS grep; door-dcss image tag bumped to `0.34.1-r2` (root Dockerfile +
+  `dcss.yml`). Correction to this plan's assumption: crawl writes the
+  milestones file ONLY under `DGL_MILESTONES` — "DCSS: nothing to build" was
+  wrong. Field names/timestamps verified against the pinned 0.34.1 tarball
+  (xlog months are 0-based; `absdepth` is the END-of-run depth, which is why
+  the dive board unions milestone depth marks — a winner ends at depth 1).
+- **Data**: migration `136_create_door_ingestion.sql` (`door_runs`,
+  `door_milestones`, `door_log_cursors`, dcss_orb/dcss_win reward templates);
+  models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`
+  with closed `DoorRunResult`/`DoorMilestoneKind` enums. Idempotency: unique
+  `(game, source_file, source_offset)`; fact insert + cursor advance commit
+  in one transaction.
+- **Ingestion slice**: `late-ssh/src/app/door/ingest/` — `dcss.rs` pure
+  parsers, `stream.rs` stats SSH client, `svc.rs` orchestration (spawned in
+  main.rs behind `LATE_DCSS_ENABLED`, connect-with-retry every 30s),
+  `award.rs` the shared `DoorAwards`/`DoorBadge` sink Phases 2-3 extend.
+  Reserved `late`/`late_*` names and dead handles skipped
+  (`ArcadeHandle::find_user_by_handle`). Feed events gated on insert
+  freshness AND a 10-minute recency window (backfill never floods #lounge);
+  awards fire on every win/orb sighting (lifetime-idempotent, heals a crash
+  between insert and grant); win back-grants the Orb badge.
+- **Badges**: `DCO`/`DCW` categories in `profile_award.rs`, chat-label
+  collapse in `user.rs` (DCO collapses into DCW), legend in
+  `profile_modal/badges.rs`, `ChipMove::DcssOrbFound/DcssOrbEscape`.
+- **Boards**: `DoorGame` roster + `fetch_door_boards` (one query per window,
+  three families ranked `PARTITION BY (family, game)`; pass is 13 queries)
+  in `late-core/src/models/leaderboard.rs`; page variants
+  `DoorWins/DoorDepth/DoorScore` + `Standings::AllTimeOnly` in
+  `app/leaderboard/state.rs`. Seed script grows DCSS rows
+  (`seed:`-prefixed source files avoid key collisions with real lines).
+- **Refactor rider**: `LeaderboardService` moved `app/hub/svc.rs` →
+  `app/leaderboard/svc.rs`; leaderboard domain has its own
+  `app/leaderboard/CONTEXT.md`; hub/root contexts trimmed to pointers.
+
+**Prod bring-up order matters:** deploy the new `late-dcss` host (a `-dcss`
+release, which also rebuilds the r2 game binary) before or with the
+service-ssh release, or ingestion just retries against a host without the
+stats session. First connect backfills the whole PVC history (boards launch
+non-empty; historical wins grant badges/chips by owner decision).
 
 ## Decisions already made (owner-approved, do not re-litigate)
 
@@ -209,7 +257,19 @@ morgue dumps per game.
    (`ingest/award.rs`, `DoorBadge`), `DoorGame` roster boards.
 2. **NetHack**: XLOGFILE build assertion, xlogfile parser, badge grants move
    to ingestion, delete the scrape, death events from the log, LIVELOG
-   investigation. The cleaning phase.
+   investigation. The cleaning phase. Concretely, each step reuses a Phase 1
+   pattern: a `late_stats` branch in `late-nethack/src/server.rs` +
+   a `stats.rs` mirroring `late-dcss/src/stats.rs` (file id `xlogfile`,
+   path inside `VAR_PLAYGROUND`; add `livelog` as a second file if the
+   define pans out); a `nethack.rs` parser module in `app/door/ingest/`
+   (space-separated `key=value` xlog dialect, `achieve` bitmask for the
+   Amulet); a `start_nethack_task` beside the dcss one (identity module:
+   `door::nethack::identity`); `DoorGame::Nethack` in the roster;
+   `DoorBadge::{NethackAmulet, NethackAscension}` in `ingest/award.rs`,
+   then delete `door/nethack/{milestone,status,award}.rs` and the
+   `scan_screen` path in its `state.rs`, and rewrite nethack CONTEXT
+   §1/§7 around the pipe (they call the scrape "the one exception to no
+   late.sh persistence").
 3. **Brogue**: victory-logging patch + isolation-script-style fail-closed
    grep, run-history parser (per-player files: the tailer walks
    `players/*/`), badges, boards.
