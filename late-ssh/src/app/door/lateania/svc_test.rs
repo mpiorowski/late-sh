@@ -3056,6 +3056,113 @@ fn a_word_that_merely_starts_with_z_or_w_is_not_mistaken_for_a_scope_marker() {
     );
 }
 
+/// Any real Wildbound Waste field room, for pvp tests that don't care which.
+fn any_pvp_room(world: &super::super::world::World) -> RoomId {
+    world
+        .rooms
+        .values()
+        .find(|r| r.pvp)
+        .map(|r| r.id)
+        .expect("the Wildbound Waste has at least one pvp room")
+}
+
+#[test]
+fn engage_player_only_works_on_pvp_ground() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Both start in Embergate's safe square: no duelling allowed here.
+    s.players.get_mut(&uid(2)).unwrap().room = s.players[&uid(1)].room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(
+        s.players[&uid(1)].pvp_target,
+        None,
+        "safe ground refuses a duel"
+    );
+
+    // Move both onto real pvp ground: the duel locks on and the victim
+    // auto-retaliates since they weren't already fighting anything.
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(s.players[&uid(1)].pvp_target, Some(uid(2)));
+    assert_eq!(
+        s.players[&uid(2)].pvp_target,
+        Some(uid(1)),
+        "an unengaged victim rounds on their attacker"
+    );
+}
+
+#[test]
+fn a_pvp_duel_blocks_movement_and_recall_like_any_fight() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert!(s.players[&uid(1)].in_combat());
+
+    let room_before = s.players[&uid(1)].room;
+    s.recall(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        room_before,
+        "recall must not work mid-duel"
+    );
+}
+
+#[test]
+fn winning_a_pvp_duel_credits_gold_xp_a_kill_and_a_title() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    // Stack the fight hopelessly in the attacker's favour: a one-shot kill on
+    // the first combat round, no Warrior death-save or veteran charge to
+    // interrupt it.
+    {
+        let victim = s.players.get_mut(&uid(2)).unwrap();
+        victim.hp = 1;
+        victim.death_save_used = true;
+        victim.resurrections_left = 0;
+        victim.gold = 100;
+    }
+    let attacker_xp_before = s.players[&uid(1)].xp;
+    let attacker_gold_before = s.players[&uid(1)].gold;
+    s.engage_player(uid(1), uid(2));
+    s.tick();
+
+    let victim = &s.players[&uid(2)];
+    assert!(victim.dead, "the outmatched victim should have fallen");
+    let lost_gold = 100 - victim.gold;
+    assert!(lost_gold > 0, "a real death loses carried gold");
+
+    let attacker = &s.players[&uid(1)];
+    assert_eq!(attacker.pvp_kills, 1);
+    assert_eq!(
+        attacker.gold,
+        attacker_gold_before + lost_gold,
+        "the victim's lost gold becomes the spoils"
+    );
+    assert!(attacker.xp > attacker_xp_before, "a pvp kill grants xp");
+    assert!(
+        attacker.titles.iter().any(|t| t == "Blooded"),
+        "a first pvp kill earns the Blooded title, got {:?}",
+        attacker.titles
+    );
+}
+
 #[test]
 fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
     // There used to be a 10-minute inactivity kick. It's gone: only an

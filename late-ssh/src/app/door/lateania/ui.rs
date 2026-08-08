@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
@@ -196,8 +197,11 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
-            // Foe rows carry AttackMob, never the action bar; kept for exhaustiveness.
-            ClickAction::AttackMob(_) => Style::default().fg(theme::TEXT_DIM()),
+            // Foe/adventurer rows carry these, never the action bar; kept for
+            // exhaustiveness.
+            ClickAction::AttackMob(_) | ClickAction::AttackPlayer(_) => {
+                Style::default().fg(theme::TEXT_DIM())
+            }
         };
         spans.push(Span::styled(chip.label.clone(), style));
         col += w;
@@ -1497,7 +1501,7 @@ fn draw_room_side(
         rows[0]
     };
 
-    let (lines, foe_hits) = room_panel(view, usernames, panel_area.width as usize);
+    let (lines, foe_hits, player_hits) = room_panel(view, usernames, panel_area.width as usize);
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -1511,6 +1515,20 @@ fn draw_room_side(
                     height: 1,
                 },
                 ClickAction::AttackMob(mob_id),
+            );
+        }
+    }
+    // Same for hostile adventurers in a pvp room's "Adventurers here" list.
+    for (idx, target_id) in player_hits {
+        if (idx as u16) < panel_area.height {
+            state.record_combat_hit(
+                Rect {
+                    x: panel_area.x,
+                    y: panel_area.y + idx as u16,
+                    width: panel_area.width,
+                    height: 1,
+                },
+                ClickAction::AttackPlayer(target_id),
             );
         }
     }
@@ -1659,12 +1677,14 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
 /// The room side panel. Returns the lines plus, for each foe, the line index of
 /// its roster row and its spawn id, so the caller can record a clickable rect
 /// over each foe (click a foe to lock onto it).
+#[allow(clippy::type_complexity)]
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, u32)>) {
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
+    let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
@@ -1816,7 +1836,11 @@ fn room_panel(
         }
     }
     if !view.occupants.is_empty() {
-        lines.push(section("Adventurers here"));
+        lines.push(section(if view.pvp {
+            "Adventurers here (pvp ground)"
+        } else {
+            "Adventurers here"
+        }));
         for occ in &view.occupants {
             let name = usernames
                 .get(&occ.user_id)
@@ -1827,8 +1851,12 @@ fn room_panel(
                 ("fallen", theme::ERROR())
             } else if following {
                 ("follow", theme::MENTION())
+            } else if occ.targeted {
+                ("duel", theme::ERROR())
             } else if occ.in_combat {
                 ("fight", theme::AMBER())
+            } else if occ.attackable {
+                ("hostile", theme::ERROR())
             } else {
                 ("", theme::SUCCESS())
             };
@@ -1838,8 +1866,12 @@ fn room_panel(
                 1 + UnicodeWidthStr::width(tag)
             };
             let name_w = width.saturating_sub(9 + tag_w).clamp(6, 16);
+            let marker = if occ.targeted { "\u{00bb} " } else { "  " };
+            if occ.attackable {
+                player_hits.push((lines.len(), occ.user_id));
+            }
             lines.push(roster_row(
-                "  ",
+                marker,
                 &name,
                 occ.hp,
                 occ.max_hp,
@@ -1923,7 +1955,7 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    (lines, foe_hits)
+    (lines, foe_hits, player_hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,
