@@ -126,11 +126,15 @@ pub struct State {
     pub(crate) notif_selected: usize,
     unread_notifications: i64,
     unread_entries: i64,
-    /// Entries published after this are unread. Advances when the user enters
-    /// the pane or asks for a refresh, the two moments they are demonstrably
-    /// looking at the feed. `None` (never visited) reads as nothing unread,
-    /// not as a whole page of it.
+    /// Entries published after this are unread. Advances when a feed the user
+    /// asked to read arrives, to the newest entry on that page. `None` (never
+    /// visited) reads as nothing unread, not as a whole page of it.
     feed_read_at: Option<DateTime<Utc>>,
+    /// Set by the two reads the user asks for (entering the pane, `r`) and
+    /// consumed by the `FeedLoaded` that answers them, which is the moment the
+    /// entries are actually on screen and the cursor may move. Loads fired for
+    /// other reasons (publishing an entry) leave it unset and mark nothing.
+    mark_read_on_load: bool,
     /// What the `●` row markers compare against: the cursor as it was when
     /// this visit started. Frozen for the visit, so entering the pane does not
     /// wipe the marks off the very entries the user came to read.
@@ -163,6 +167,7 @@ impl State {
             unread_notifications: 0,
             unread_entries: 0,
             feed_read_at: None,
+            mark_read_on_load: false,
             feed_marker_at: None,
             // `session_init_task` above fetches the count for a linked user,
             // so the interval starts running from session start.
@@ -222,12 +227,12 @@ impl State {
         self.notif_selected = 0;
         // Freeze the marks for this visit before the cursor moves past them.
         self.feed_marker_at = self.feed_read_at;
-        self.mark_feed_read();
         if feed_reload_due(
             self.is_linked(),
             self.loading,
             self.last_feed_load.map(|at| at.elapsed()),
         ) {
+            self.mark_read_on_load = true;
             self.load_feed();
         }
     }
@@ -235,26 +240,31 @@ impl State {
     /// `r`: the user asking for the feed, so no interval applies.
     pub(crate) fn refresh(&mut self) {
         if self.is_linked() {
-            self.mark_feed_read();
+            self.mark_read_on_load = true;
             self.load_feed();
         }
     }
 
-    /// Everything on the feed as of now counts as read. The session's own copy
-    /// of the cursor moves first so the badge clears on this frame; the write
-    /// is fire-and-forget behind it.
+    /// Everything the arrived feed shows counts as read. The cursor lands on
+    /// the newest entry actually on screen, not on the clock: a stamp of "now"
+    /// would swallow entries published since the last fetch that the reload
+    /// interval kept off this page, and entries left unfetched by a failed
+    /// load. The cursor never moves backwards, so a quiet feed whose newest
+    /// entry the cursor already covers writes nothing.
     ///
-    /// Only entering the pane and `r` land here, never a `FeedLoaded` on its
-    /// own: publishing an entry from another room also loads the feed, and
-    /// that is not the user reading it.
+    /// Only a load the user asked for lands here (entering the pane, `r`),
+    /// never a `FeedLoaded` on its own: publishing an entry from another room
+    /// also loads the feed, and that is not the user reading it.
     fn mark_feed_read(&mut self) {
-        if !self.is_linked() {
+        let Some(newest) = self.posts.iter().filter_map(|post| post.created_at).max() else {
+            return;
+        };
+        if self.feed_read_at.is_some_and(|cursor| cursor >= newest) {
             return;
         }
-        let now = Utc::now();
-        self.feed_read_at = Some(now);
+        self.feed_read_at = Some(newest);
         self.unread_entries = 0;
-        self.service.mark_feed_read_task(self.user_id, now);
+        self.service.mark_feed_read_task(self.user_id, newest);
     }
 
     fn load_feed(&mut self) {
@@ -556,6 +566,7 @@ impl State {
                 self.unread_notifications = 0;
                 self.unread_entries = 0;
                 self.feed_read_at = None;
+                self.mark_read_on_load = false;
                 self.feed_marker_at = None;
                 self.view = View::Feed;
                 Some(Banner::success("Cyberspace account unlinked."))
@@ -564,6 +575,10 @@ impl State {
                 self.posts = posts;
                 self.selected = clamp_index(self.selected, self.posts.len());
                 self.loading = false;
+                if self.mark_read_on_load {
+                    self.mark_read_on_load = false;
+                    self.mark_feed_read();
+                }
                 None
             }
             CsEvent::ThreadLoaded { user_id, thread } if user_id == self.user_id => {
@@ -610,6 +625,9 @@ impl State {
             }
             CsEvent::ActionFailed { user_id, error } if user_id == self.user_id => {
                 self.loading = false;
+                // A failed action ends any pending read: a later feed load the
+                // user did not ask for must not inherit the mark.
+                self.mark_read_on_load = false;
                 match &mut self.modal {
                     Some(Modal::Compose(compose)) if compose.busy => {
                         compose.error = Some(error);

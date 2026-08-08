@@ -156,13 +156,66 @@ async fn opening_the_pane_clears_the_count_but_keeps_the_marks_being_read() {
     assert_eq!(state.unread_entries(), 1);
 
     state.opened();
+    assert_eq!(
+        state.unread_entries(),
+        1,
+        "the feed has not arrived yet, so nothing has been read"
+    );
+    let _ = state.apply_event(CsEvent::FeedLoaded {
+        user_id,
+        posts: vec![fresh.clone(), old.clone()],
+    });
 
-    assert_eq!(state.unread_entries(), 0, "the badge clears on the visit");
+    assert_eq!(
+        state.unread_entries(),
+        0,
+        "the badge clears once the feed being read arrives"
+    );
     assert!(
         state.is_unread_entry(&fresh),
         "the entry they came to read must keep its mark for the visit"
     );
     assert!(!state.is_unread_entry(&old));
+}
+
+#[tokio::test]
+async fn reentering_inside_the_reload_interval_keeps_unseen_entries_unread() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let read_at: DateTime<Utc> = "2026-08-07T12:00:00Z".parse().expect("cursor");
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: Some(read_at),
+    });
+    // First visit: the feed arrives with its newest entry at 13:00, which is
+    // as far as this user has demonstrably read.
+    let seen: CsPost = serde_json::from_str(r#"{"postId":"p1","createdAt":"2026-08-07T13:00:00Z"}"#)
+        .expect("post");
+    state.opened();
+    let _ = state.apply_event(CsEvent::FeedLoaded {
+        user_id,
+        posts: vec![seen.clone()],
+    });
+
+    // An entry lands, and the pane is re-entered inside the reload interval:
+    // the stale page is shown again, no fetch fires.
+    state.opened();
+
+    // The next probe reports the entry published in the gap. It was never on
+    // screen, so it must still count and keep its mark.
+    let gap: CsPost = serde_json::from_str(r#"{"postId":"p2","createdAt":"2026-08-07T13:30:00Z"}"#)
+        .expect("post");
+    let _ = state.apply_event(CsEvent::RecentEntries {
+        user_id,
+        posts: vec![gap.clone(), seen.clone()],
+    });
+    assert_eq!(
+        state.unread_entries(),
+        1,
+        "an entry never rendered must stay unread"
+    );
+    assert!(state.is_unread_entry(&gap));
 }
 
 #[tokio::test]

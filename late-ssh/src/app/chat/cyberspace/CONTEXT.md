@@ -97,7 +97,7 @@ Three views (`View::Feed`/`Thread`/`Notifications`), three modals (`Modal::Link`
 `cyberspace_accounts.feed_read_at` (migration 136) is one timestamp per user, the same shape both in-repo precedents converged on (`rss_feed_reads.last_read_at`; migration 023 threw away `article_feed_reads`' post-id half). Unread entries are the ones published after it.
 
 - **It costs no recurring DB traffic.** It is read once per session, inside the `find_by_user_id` that `session_init_task` already runs, and written only when a human reads. The 10-minute clock touches their API, never ours.
-- **It advances on exactly two actions: entering the pane and `r`.** Both are moments the user is demonstrably looking at the feed. Deliberately **not** on `FeedLoaded`, because publishing an entry from another room also loads the feed, and that is not reading it.
+- **It advances only when a feed the user asked for arrives.** Entering the pane and `r` set `mark_read_on_load`, and the `FeedLoaded` that answers them stamps the cursor at the newest entry on that page, never at the wall clock: a "now" stamp swallowed entries the 30s reload interval kept off the page (re-entering inside the interval shows the stale page) and entries a failed load never fetched. A `FeedLoaded` on its own marks nothing, because publishing an entry from another room also loads the feed, and that is not reading it. The cursor never moves backwards.
 - `feed_marker_at` is the cursor frozen at the start of the visit, and it is what the `●` row marks compare against. Without it, entering the pane would wipe the marks off the very entries the user came in to read.
 - **A `None` cursor counts as zero unread, not a full page.** A user opening the pane for the first time to "10 new" would be told they missed entries that were never theirs to miss.
 - An entry with no `created_at` is never new: a badge counting rows the user cannot then find is worse than one that misses them.
@@ -125,7 +125,7 @@ Three views (`View::Feed`/`Thread`/`Notifications`), three modals (`Modal::Link`
 - No chat/DM/guild surfaces (v3, section 1).
 - The unread-entry count saturates at the probe page of 10, so a user back from a long absence sees `10` rather than the true number. Raising it is one const, at the cost of a bigger recurring fetch.
 - `me()` parses the profile leniently (`userId`/`uid`/`id`) because their docs pin the endpoint but not the field names.
-- The thread view pre-wraps its text (`thread_lines`, via `common::composer::build_composer_rows`) instead of handing `Wrap` to the paragraph, so one `Line` is one rendered row. The renderer writes the resulting ceiling into `State::thread_max_scroll` (a `Cell`, same pattern as the composer viewport slot) and `move_selection` clamps against it. Counting unwrapped lines instead put the ceiling at zero for the normal shape of a markdown entry (a few long paragraphs), which made the replies unreachable.
+- The thread view pre-wraps its text (`thread_lines` → `wrap_paragraph`, budgeted by display column via `unicode-width`, not char count) instead of handing `Wrap` to the paragraph, so one `Line` is one rendered row. The renderer writes the resulting ceiling into `State::thread_max_scroll` (a `Cell`, same pattern as the composer viewport slot) and `move_selection` clamps against it. Counting unwrapped lines instead put the ceiling at zero for the normal shape of a markdown entry (a few long paragraphs), which made the replies unreachable; wrapping by char count truncated CJK/emoji rows at the pane edge.
 
 ## 9. Testing Guidance
 
@@ -133,7 +133,7 @@ Run via `ARGS="-p late-ssh -E 'test(cyberspace)'" make test-llm`.
 
 - `api_test.rs`: envelope parsing (data/error/neither), `parse_void` on bodyless 2xx, error mapping, notification `post_id()` target shapes.
 - `state_test.rs`: topic parsing, `feed_reload_due`/`unread_poll_due` gating, modal validation, stale-thread drop, notification dedupe, the reset on re-entering the pane, the unread-entry count and the badge sum, and the marks surviving the visit that clears the count.
-- `ui_test.rs`: `thread_lines` height for a long entry (the scroll ceiling that pins the wrapping fix).
+- `ui_test.rs`: `thread_lines` height for a long entry (the scroll ceiling that pins the wrapping fix) and rows staying inside the pane for wide (CJK) glyphs.
 - `svc_test.rs`: DB-backed link status/unlink against a dead base URL so nothing touches the network.
 - `late-core/src/models/cyberspace_account_test.rs`: upsert/replace/delete, owner scoping, the read cursor round-tripping and surviving a re-link (use microsecond-precision stamps: `timestamptz` truncates a nanosecond `Utc::now()`).
 - `app/input_flow_test.rs`: the unlinked funnel vs the linked rail entry + pane.

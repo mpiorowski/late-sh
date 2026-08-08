@@ -52,6 +52,32 @@ fn a_long_entry_is_taller_than_the_pane_so_its_replies_can_be_scrolled_to() {
 }
 
 #[test]
+fn wide_characters_wrap_by_display_width_not_char_count() {
+    // Width-2 glyphs: a row budgeted by chars().count() would render at twice
+    // the pane width and get truncated, dropping text off the right edge.
+    let paragraph = "汉字宽度 ".repeat(60);
+    let post: CsPost = serde_json::from_str(&format!(
+        r#"{{"postId":"p1","authorUsername":"mat","content":"{paragraph}"}}"#
+    ))
+    .expect("post");
+    let thread = CsThread {
+        post,
+        replies: Vec::new(),
+    };
+    let width = 60;
+
+    let lines = thread_lines(&thread, width, false);
+
+    for line in &lines {
+        assert!(
+            line.width() <= width,
+            "row wider than the pane: {:?}",
+            line.width()
+        );
+    }
+}
+
+#[test]
 fn a_narrower_pane_makes_the_same_entry_taller() {
     let thread = long_entry();
     let wide = thread_lines(&thread, 100, false).len();

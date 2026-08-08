@@ -7,7 +7,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::common::composer::build_composer_rows;
+use unicode_width::UnicodeWidthChar;
+
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 
@@ -373,10 +374,65 @@ fn thread_lines(thread: &CsThread, width: usize, loading: bool) -> Vec<Line<'sta
 fn wrapped_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
     // Their editor sends CRLF; a stray \r would render as a control glyph.
     let text = text.replace('\r', "");
-    build_composer_rows(&text, width.max(1))
-        .into_iter()
-        .map(|row| Line::from(Span::styled(row.text, style)))
+    let width = width.max(1);
+    text.split('\n')
+        .flat_map(|paragraph| {
+            let rows = wrap_paragraph(paragraph, width);
+            if rows.is_empty() {
+                vec![String::new()]
+            } else {
+                rows
+            }
+        })
+        .map(|row| Line::from(Span::styled(row, style)))
         .collect()
+}
+
+/// Greedy wrap budgeted by display column, not char count: CJK and emoji
+/// occupy two columns each, and a row over-full in columns gets truncated by
+/// the widget, dropping text off the right edge. Breaks at the last whitespace
+/// that fits, hard-breaking words wider than the pane.
+fn wrap_paragraph(paragraph: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = paragraph.chars().collect();
+    let mut rows = Vec::new();
+    let mut start = 0;
+
+    while start < chars.len() {
+        let mut cols = 0;
+        let mut end = start;
+        while end < chars.len() {
+            let char_cols = chars[end].width().unwrap_or(0);
+            // A single glyph wider than the pane still has to land somewhere,
+            // so a row always takes at least one char.
+            if cols + char_cols > width && end > start {
+                break;
+            }
+            cols += char_cols;
+            end += 1;
+        }
+
+        if end == chars.len() {
+            rows.push(chars[start..end].iter().collect());
+            break;
+        }
+
+        let break_at = chars[start..end]
+            .iter()
+            .rposition(|ch| ch.is_whitespace())
+            .map(|idx| start + idx);
+        match break_at {
+            Some(split) if split > start => {
+                rows.push(chars[start..split].iter().collect());
+                start = split + 1;
+            }
+            _ => {
+                rows.push(chars[start..end].iter().collect());
+                start = end;
+            }
+        }
+    }
+
+    rows
 }
 
 fn draw_notifications(frame: &mut Frame, area: Rect, state: &State) {
