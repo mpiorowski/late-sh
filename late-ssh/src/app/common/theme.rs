@@ -4363,9 +4363,20 @@ pub fn BG_SELECTION() -> Color {
 /// foreground, and no fixed fill can guarantee contrast against an unknown
 /// color, so those palettes invert instead: `REVERSED` swaps the terminal's
 /// own fg/bg pair, the one pair the user has already made legible.
+///
+/// The invert arm carries explicit `Reset` colors because call sites compose
+/// via `Style::patch`, which only overwrites `Some` fields: without them a
+/// pre-set accent fg or board fill would survive the patch and the swapped
+/// pair would not be the terminal's own. The tradeoff is that the swap wins
+/// over any color set before the patch; a color that must survive because it
+/// means something (a piece, a suit) goes on after the patch, where it
+/// becomes the fill of the swapped cell.
 pub fn selection_style() -> Style {
     match BG_CANVAS() {
-        Color::Reset => Style::default().add_modifier(Modifier::REVERSED),
+        Color::Reset => Style::default()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED),
         _ => Style::default().bg(BG_SELECTION()),
     }
 }

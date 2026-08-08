@@ -807,6 +807,37 @@ fn visible_rows_paint_background_for_selected_highlighted_message() {
 }
 
 #[test]
+fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
+    // On the terminal palette the highlighted row carries no bg, only
+    // `REVERSED`; the marker must inherit the row's whole treatment, not
+    // just its bg, or it punches a one-cell hole in the inversion.
+    theme::set_current_by_id("terminal");
+    let message_id = Uuid::now_v7();
+    let mut cache = ChatRowsCache {
+        all_rows: vec![Line::from(vec![Span::raw(" "), Span::raw("hello")])],
+        ..Default::default()
+    };
+    cache.selected_ranges.insert(message_id, (0, 1));
+    cache.highlighted_ranges.insert(message_id, (0, 1));
+
+    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 1);
+    let marker_fg = theme::AMBER();
+    theme::set_current_by_id("contrast");
+
+    let marker = &visible.lines[0].spans[0];
+    assert_eq!(marker.content, "▸");
+    assert_eq!(marker.style.fg, Some(marker_fg));
+    assert!(
+        marker
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "marker dropped the row inversion: {:?}",
+        marker.style
+    );
+}
+
+#[test]
 fn composer_title_reply_state_degrades_through_name_only_and_label() {
     let ta = TextArea::default();
     let mut view = composer_view(&ta);

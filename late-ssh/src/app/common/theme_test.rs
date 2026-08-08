@@ -160,16 +160,38 @@ fn selection_inverts_on_reset_canvas_palettes_and_fills_elsewhere() {
     // A Reset canvas means text follows the terminal's own foreground, and
     // no fixed selection fill can guarantee contrast against it, so those
     // palettes invert the terminal's own fg/bg pair instead of painting
-    // `bg_selection`.
+    // `bg_selection`. The helper composes via `Style::patch`, which only
+    // overwrites `Some` fields, so the swap must carry explicit Reset
+    // colors: a call site's pre-set accent fg or board fill would otherwise
+    // survive and the swapped pair would not be the terminal's own.
     set_current_by_id("terminal");
-    let inverted = selection_style();
+    let inverted = Style::default()
+        .fg(Color::Indexed(11))
+        .bg(Color::Indexed(4))
+        .patch(selection_style());
     set_current_by_id("contrast");
-    let filled = selection_style();
+    let filled = Style::default()
+        .fg(Color::Indexed(11))
+        .patch(selection_style());
     let filled_bg = BG_SELECTION();
 
     assert!(inverted.add_modifier.contains(Modifier::REVERSED));
-    assert_eq!(inverted.bg, None, "inverted selection also paints a fill");
+    assert_eq!(
+        inverted.fg,
+        Some(Color::Reset),
+        "inherited accent fg survived the swap"
+    );
+    assert_eq!(
+        inverted.bg,
+        Some(Color::Reset),
+        "inherited fill survived the swap"
+    );
     assert_eq!(filled.bg, Some(filled_bg));
+    assert_eq!(
+        filled.fg,
+        Some(Color::Indexed(11)),
+        "paintable palettes keep the accent fg over the fill"
+    );
     assert!(!filled.add_modifier.contains(Modifier::REVERSED));
 }
 

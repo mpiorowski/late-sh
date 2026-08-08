@@ -1810,13 +1810,10 @@ fn visible_chat_rows(
             if let Some(first_span) = row.spans.first()
                 && (first_span.content == " " || first_span.content == "│")
             {
-                // Keep whatever background the row already has (the mention or
-                // reply wash), so the marker does not punch a hole in it.
-                let mut style = Style::default().fg(theme::AMBER());
-                if let Some(background) = first_span.style.bg {
-                    style = style.bg(background);
-                }
-                row.spans[0] = Span::styled("▸", style);
+                // Keep the row's whole treatment (the mention or reply wash,
+                // or the highlight inversion), so the marker does not punch
+                // a hole in it; only the glyph color is the marker's own.
+                row.spans[0] = Span::styled("▸", first_span.style.fg(theme::AMBER()));
             }
         }
     }
