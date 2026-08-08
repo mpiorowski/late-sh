@@ -444,6 +444,8 @@ pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
                 | b'E'
                 | b'p'
                 | b'c'
+                | b't'
+                | b'T'
                 | b'f'
                 | b'F'
                 | b'g'
@@ -534,6 +536,15 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.chat.clear_message_selection();
                 return true;
             }
+        }
+        // `t` translates the selected message (or collapses/reopens a shown
+        // translation). Selection stays put so a `t`-collapse-`t`-reopen
+        // doesn't lose your place.
+        b't' | b'T' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+            if let Some(b) = app.chat.toggle_translation_selected_in_room(room_id) {
+                app.banner = Some(b);
+            }
+            return true;
         }
         // `g` always jumps to a reply's referenced message. Enter is overloaded
         // (image/News modals take precedence), so a reply that contains an image

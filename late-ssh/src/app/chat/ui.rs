@@ -37,8 +37,8 @@ use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored,
-    is_chat_list_room, is_selected_slot, visual_order_for_rooms,
+    SelectedRoomSlotState, TranslationDisplay, compare_dm_rooms_for_nav, dm_is_promoted_unread,
+    dm_peer_is_ignored, is_chat_list_room, is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
 
@@ -115,6 +115,8 @@ pub struct DashboardChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -426,7 +428,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
         ))]
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
+            "f react · r reply · e edit · d delete · p profile · c copy · t translate · Enter jump to reply",
             dim,
         ))]
     } else {
@@ -1130,6 +1132,8 @@ pub fn draw_dashboard_chat_card(
                 drunk_levels: view.drunk_levels,
                 name_styles: view.name_styles,
                 peer_pomodoros: view.peer_pomodoros,
+                translations: view.translations,
+                translation_hidden: view.translation_hidden,
             },
         );
         let visible = visible_chat_rows(
@@ -1216,6 +1220,8 @@ struct ChatRowsContext<'a> {
     /// Resolved 24h username-effect styles per author.
     name_styles: &'a HashMap<Uuid, NameStyle>,
     peer_pomodoros: &'a HashMap<Uuid, String>,
+    translations: &'a HashMap<Uuid, TranslationDisplay>,
+    translation_hidden: &'a HashSet<Uuid>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1607,6 +1613,10 @@ fn ensure_chat_rows_cache(
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        let translation = ctx
+            .translations
+            .get(&msg.id)
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
         let wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
@@ -1620,6 +1630,7 @@ fn ensure_chat_rows_cache(
             system_text,
             image_lines,
             reactions,
+            translation,
         );
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -2559,6 +2570,8 @@ pub struct ChatRenderInput<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2684,6 +2697,8 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -2772,6 +2787,8 @@ pub fn draw_embedded_room_chat(
             drunk_levels: view.drunk_levels,
             name_styles: view.name_styles,
             peer_pomodoros: view.peer_pomodoros,
+            translations: view.translations,
+            translation_hidden: view.translation_hidden,
         },
     );
     let visible = visible_chat_rows(
@@ -4319,6 +4336,8 @@ fn draw_selected_content(
                     drunk_levels: view.drunk_levels,
                     name_styles: view.name_styles,
                     peer_pomodoros: view.peer_pomodoros,
+                    translations: view.translations,
+                    translation_hidden: view.translation_hidden,
                 },
             );
             let visible = visible_chat_rows(

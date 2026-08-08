@@ -60,6 +60,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         None,
         None,
         &[],
+        None,
     );
     let lines = lines_to_strings(&wrapped.lines);
     assert_eq!(lines[0], " mat filed a bug [now]");
@@ -85,6 +86,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         None,
         None,
         &[],
+        None,
     );
     assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
     assert_eq!(wrapped.header_line_index, None);
@@ -214,6 +216,7 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
                 count: 1,
             },
         ],
+        None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
     assert!(rendered.contains("[🧡 3]"));

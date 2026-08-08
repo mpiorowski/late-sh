@@ -372,6 +372,8 @@ const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
+const TRANSLATE_TO_KEY: &str = "translate_to";
+const AUTO_TRANSLATE_KEY: &str = "auto_translate";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
@@ -1372,6 +1374,27 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The language chat translations render into for this user. Defaults to
+/// English: inert for the English-reading majority (their messages are
+/// already in it), one settings flip for everyone else.
+pub fn extract_translate_to(settings: &Value) -> crate::models::message_translation::TranslateLang {
+    settings
+        .get(TRANSLATE_TO_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::message_translation::TranslateLang::from_key)
+        .unwrap_or(crate::models::message_translation::TranslateLang::En)
+}
+
+/// Tweak: auto-translate foreign-script messages arriving in the room being
+/// viewed (plus anything already cached). Opt-in; defaults to false so
+/// translation stays on-demand (`t`) until the user asks for more.
+pub fn extract_auto_translate(settings: &Value) -> bool {
+    settings
+        .get(AUTO_TRANSLATE_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

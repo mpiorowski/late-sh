@@ -106,6 +106,8 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let ctx = ChatRowsContext {
@@ -125,6 +127,8 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     theme::set_current_by_id("late");
@@ -153,6 +157,8 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -178,6 +184,8 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let base_key = chat_rows_cache_key(&ctx(base_versions), 80);
@@ -355,6 +363,8 @@ fn mentions_and_replies_paint_a_background_wash() {
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -373,6 +383,8 @@ fn mentions_and_replies_paint_a_background_wash() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let width = 60;
@@ -430,6 +442,8 @@ fn background_wash_fills_the_whole_row_width() {
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
@@ -448,6 +462,8 @@ fn background_wash_fills_the_whole_row_width() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let width = 60;
@@ -514,6 +530,9 @@ fn chat_view<'a>(
     static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
         OnceLock::new();
     static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
+    static TRANSLATIONS: OnceLock<HashMap<Uuid, crate::app::chat::state::TranslationDisplay>> =
+        OnceLock::new();
+    static TRANSLATION_HIDDEN: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
         OnceLock::new();
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
@@ -600,6 +619,8 @@ fn chat_view<'a>(
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_styles: NAME_STYLES.get_or_init(HashMap::new),
         peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
+        translations: TRANSLATIONS.get_or_init(HashMap::new),
+        translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
         news_composer,
         news_composing: false,
         news_processing: false,

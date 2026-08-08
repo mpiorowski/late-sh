@@ -160,6 +160,7 @@ pub struct SessionConfig {
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
     pub chat_service: ChatService,
+    pub translation_service: crate::app::ai::translate::TranslationService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -1251,6 +1252,7 @@ impl App {
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,
+                    translation: config.translation_service,
                     notifications: config.notification_service,
                     articles: config.article_service.clone(),
                     feeds: config.feed_service.clone(),

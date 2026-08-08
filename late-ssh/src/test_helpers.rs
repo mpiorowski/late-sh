@@ -193,6 +193,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
     let ai_service = AiService::new(false, None);
+    let translation_service =
+        crate::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -259,6 +261,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         chat_service,
         notification_service,
         ai_service,
+        translation_service,
         article_service,
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -411,6 +414,10 @@ fn make_app_with_chat_service_and_permissions(
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
         chat_service: chat_service.clone(),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
@@ -610,6 +617,10 @@ pub fn make_app_with_paired_client(
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),

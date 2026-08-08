@@ -101,8 +101,10 @@ pub(crate) enum TweakRow {
     RightSidebar,
     RoomListSidebar,
     PetStrip,
-    // Compose / Music / Display / Startup groups.
+    // Compose / Translation / Music / Display / Startup groups.
     ComposerKeepFocused,
+    TranslateTo,
+    AutoTranslate,
     StartWithMusicMuted,
     FlagFallback,
     LandOnHome,
@@ -111,13 +113,15 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 10] = [
+    pub(crate) const ALL: [TweakRow; 12] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
+        TweakRow::TranslateTo,
+        TweakRow::AutoTranslate,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
@@ -815,6 +819,12 @@ impl SettingsModalState {
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
+            TweakRow::TranslateTo => {
+                self.draft.translate_to = self.draft.translate_to.cycle(true);
+            }
+            TweakRow::AutoTranslate => {
+                self.draft.auto_translate ^= true;
+            }
             TweakRow::StartWithMusicMuted => {
                 self.draft.start_with_music_muted ^= true;
             }
@@ -836,6 +846,10 @@ impl SettingsModalState {
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
+            TweakRow::TranslateTo => {
+                self.draft.translate_to = self.draft.translate_to.cycle(forward);
+                self.save();
+            }
             _ => self.toggle_selected_tweak(),
         }
     }
@@ -1957,6 +1971,8 @@ impl SettingsModalState {
                 land_on_home: self.draft.land_on_home,
                 show_flag_fallback: self.draft.show_flag_fallback,
                 show_pet_strip: self.draft.show_pet_strip,
+                translate_to: self.draft.translate_to,
+                auto_translate: self.draft.auto_translate,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },
