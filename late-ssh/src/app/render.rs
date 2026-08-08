@@ -630,6 +630,7 @@ impl App {
         let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
             && !self.chat.cyberspace_selected
+            && self.chat.cyberspace_room_selected.is_none()
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
             && !self.chat.showcase_selected
@@ -652,6 +653,8 @@ impl App {
             feeds_view,
             cyberspace_selected: self.chat.cyberspace_selected,
             cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace_rooms: self.chat.cyberspace.pinned_rooms(),
+            cyberspace_room_selected: self.chat.cyberspace_room_selected,
             cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),

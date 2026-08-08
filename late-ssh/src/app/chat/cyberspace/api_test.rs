@@ -123,3 +123,106 @@ fn login_tokens_parse_with_and_without_refresh_token() {
     assert_eq!(tokens.id_token, "id-2");
     assert!(tokens.refresh_token.is_none());
 }
+
+#[test]
+fn circ_message_parses_both_style_shapes() {
+    let one: CircMessage =
+        serde_json::from_str(r#"{"id":"m1","content":"hi","style":"rainbow"}"#).expect("one style");
+    assert_eq!(one.styles, vec!["rainbow".to_string()]);
+
+    let many: CircMessage =
+        serde_json::from_str(r#"{"id":"m2","content":"hi","style":["rainbow","blink"]}"#)
+            .expect("chained styles");
+    assert_eq!(many.styles, vec!["rainbow".to_string(), "blink".to_string()]);
+
+    let none: CircMessage = serde_json::from_str(r#"{"id":"m3","content":"hi"}"#).expect("no style");
+    assert!(none.styles.is_empty());
+}
+
+#[test]
+fn display_text_decodes_art_and_drops_duplicated_attachment_captions() {
+    // `style: "art"` is the one style that changes how content reads.
+    let art: CircMessage =
+        serde_json::from_str(r#"{"id":"m1","content":"XF8oId4pXy8=","style":"art"}"#)
+            .expect("art message");
+    assert_eq!(art.display_text(), r"\_(ツ)_/");
+
+    // A caption that is just the attachment's own URL would print twice.
+    let captionless: CircMessage = serde_json::from_str(
+        r#"{"id":"m2","content":"https://cdn.example/a.png","imageUrl":"https://cdn.example/a.png"}"#,
+    )
+    .expect("attachment message");
+    assert_eq!(captionless.display_text(), "");
+    assert_eq!(captionless.attachment_label(), Some("[image]"));
+
+    // A real caption survives alongside its attachment.
+    let captioned: CircMessage = serde_json::from_str(
+        r#"{"id":"m3","content":"look at this","imageUrl":"https://cdn.example/a.png"}"#,
+    )
+    .expect("captioned message");
+    assert_eq!(captioned.display_text(), "look at this");
+
+    // A deleted message is a tombstone whatever it used to carry.
+    let deleted: CircMessage = serde_json::from_str(
+        r#"{"id":"m4","content":"[DELETED]","deleted":true,"imageUrl":"https://cdn.example/a.png"}"#,
+    )
+    .expect("deleted message");
+    assert_eq!(deleted.display_text(), "[deleted]");
+    assert_eq!(deleted.attachment_label(), None);
+}
+
+#[test]
+fn stream_frames_carry_window_arrival_and_deletion() {
+    // The opening frame is the whole window, keyed by message id.
+    let window = parse_circ_stream_frame(
+        "event: put\ndata: {\"path\":\"/\",\"data\":{\"m2\":{\"content\":\"second\",\"timestamp\":2},\"m1\":{\"content\":\"first\",\"timestamp\":1}}}",
+    )
+    .expect("window frame");
+    match window {
+        CircStreamEvent::Window(messages) => {
+            // Sorted oldest-first, and the map key becomes the id.
+            let ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
+            assert_eq!(ids, vec!["m1", "m2"]);
+        }
+        other => panic!("expected a window, got {other:?}"),
+    }
+
+    let arrival = parse_circ_stream_frame(
+        "event: put\ndata: {\"path\":\"/m3\",\"data\":{\"content\":\"hello\",\"timestamp\":3}}",
+    )
+    .expect("arrival frame");
+    match arrival {
+        CircStreamEvent::Upsert(message) => {
+            assert_eq!(message.id, "m3");
+            assert_eq!(message.content, "hello");
+        }
+        other => panic!("expected an upsert, got {other:?}"),
+    }
+
+    // A delete rewrites a message already on screen rather than adding one:
+    // listening only for arrivals leaves the deletion invisible.
+    let deletion = parse_circ_stream_frame(
+        "event: patch\ndata: {\"path\":\"/m3\",\"data\":{\"content\":\"[DELETED]\",\"deleted\":true}}",
+    )
+    .expect("patch frame");
+    match deletion {
+        CircStreamEvent::Patch { id, deleted, .. } => {
+            assert_eq!(id, "m3");
+            assert!(deleted);
+        }
+        other => panic!("expected a patch, got {other:?}"),
+    }
+
+    let removal =
+        parse_circ_stream_frame("event: put\ndata: {\"path\":\"/m3\",\"data\":null}").expect("null");
+    assert!(matches!(removal, CircStreamEvent::Removed(id) if id == "m3"));
+
+    // Keep-alives and unmodelled paths say nothing about the room.
+    assert!(parse_circ_stream_frame("event: keep-alive\ndata: null").is_none());
+    assert!(
+        parse_circ_stream_frame(
+            "event: patch\ndata: {\"path\":\"/m3/content\",\"data\":\"edited\"}"
+        )
+        .is_none()
+    );
+}

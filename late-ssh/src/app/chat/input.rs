@@ -652,7 +652,7 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     if app.chat.feeds_selected {
         return super::feeds::input::handle_arrow(app, key);
     }
-    if app.chat.cyberspace_selected {
+    if cyberspace_surface_active(app) {
         return super::cyberspace::input::handle_arrow(app, key);
     }
     if app.chat.news_selected {
@@ -667,12 +667,29 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     handle_message_arrow(app, key)
 }
 
+/// Whether a cyberspace surface owns navigation keys: the pane itself, a
+/// pinned room's rail slot, or a room opened from the roster without one.
+fn cyberspace_surface_active(app: &App) -> bool {
+    app.chat.cyberspace_selected
+        || app.chat.cyberspace_room_selected.is_some()
+        || app.chat.cyberspace.open_room_slug().is_some()
+}
+
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     // While the Discover filter is open it owns every byte (including space and
     // h/l, which would otherwise trigger room-jump / room-switch) so the user
     // can type an unrestricted query.
     if app.chat.discover_selected && app.chat.discover.is_filtering() {
         return super::discover::input::handle_byte(app, byte);
+    }
+
+    // Same rule for the cyberspace room composer: while it is open every byte
+    // is message text, including space and h/l.
+    if app.chat.cyberspace.room_composer_mut().is_some() {
+        return super::cyberspace::input::handle_room_composer_input(
+            app,
+            crate::app::input::ParsedInput::Byte(byte),
+        );
     }
 
     if app.chat.room_jump_active {
@@ -732,6 +749,24 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             return true;
         }
         return super::feeds::input::handle_byte(app, byte);
+    }
+
+    // An open room owns the pane whichever cyberspace entry is selected, so
+    // it is checked before the pane's own keys.
+    if app.chat.cyberspace.open_room_slug().is_some() {
+        if is_next_room_key(byte) {
+            switch_room(app, 1);
+            return true;
+        }
+        if is_prev_room_key(byte) {
+            switch_room(app, -1);
+            return true;
+        }
+        if matches!(byte, b'b' | b'B') {
+            app.leave_cyberspace_room();
+            return true;
+        }
+        return super::cyberspace::input::handle_room_byte(app, byte);
     }
 
     if app.chat.cyberspace_selected {

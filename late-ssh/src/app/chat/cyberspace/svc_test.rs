@@ -32,10 +32,12 @@ async fn session_init_reports_unlinked_users_without_network() {
             user_id,
             username,
             feed_read_at,
+            circ_rooms,
         } => {
             assert_eq!(user_id, user.id);
             assert_eq!(username, None);
             assert_eq!(feed_read_at, None);
+            assert!(circ_rooms.is_empty());
         }
         other => panic!("expected LinkStatus, got {other:?}"),
     }
@@ -59,10 +61,12 @@ async fn session_init_reports_the_linked_username() {
             user_id,
             username,
             feed_read_at,
+            circ_rooms,
         } => {
             assert_eq!(user_id, user.id);
             assert_eq!(username.as_deref(), Some("odd"));
             assert_eq!(feed_read_at, None, "a fresh link has read nothing yet");
+            assert!(circ_rooms.is_empty(), "a fresh link pins no chat rooms");
         }
         other => panic!("expected LinkStatus, got {other:?}"),
     }

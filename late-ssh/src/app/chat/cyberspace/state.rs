@@ -16,8 +16,8 @@ use uuid::Uuid;
 use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
 use crate::app::common::primitives::Banner;
 
-use super::api::{CsNotification, CsPost, NewPost};
-use super::svc::{CsEvent, CsThread, CyberspaceService};
+use super::api::{CircMessage, CircRoom, CircStreamEvent, CsNotification, CsPost, NewPost};
+use super::svc::{CircRoomSession, CsEvent, CsThread, CyberspaceService};
 
 pub(crate) const TITLE_MAX_CHARS: usize = 100;
 pub(crate) const TOPICS_MAX_CHARS: usize = 80;
@@ -35,6 +35,12 @@ const UNREAD_POLL_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// third party under the user's own token, which is the traffic shape their
 /// anti-bot terms are about. `r` is the explicit refresh and ignores this.
 const FEED_RELOAD_INTERVAL: Duration = Duration::from_secs(30);
+/// Their cap on one chat message.
+pub(crate) const CIRC_MESSAGE_MAX_CHARS: usize = 2_048;
+/// How much of a room's conversation one session keeps. Their live window is
+/// 50 and history pages 50 at a time; this bounds a long sitting without
+/// truncating the scrollback anyone actually reads.
+const CIRC_MESSAGE_CAP: usize = 300;
 
 /// Outcome of one pane tick, mirroring `FeedsTick`.
 pub struct CsTick {
@@ -54,6 +60,8 @@ pub(crate) enum View {
     Feed,
     Thread,
     Notifications,
+    /// Their chat roster, where rooms get pinned into the rail.
+    Rooms,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,10 +110,34 @@ pub(crate) enum Modal {
     Reply(Box<ReplyModal>),
 }
 
+/// A room the user is currently inside. Its `session` is what makes it fetch:
+/// history, the live stream, and the presence heartbeat all hang off it and
+/// all stop when it drops, which is why leaving a room is simply dropping this.
+pub(crate) struct OpenRoom {
+    pub slug: String,
+    pub messages: Vec<CircMessage>,
+    pub loading: bool,
+    /// `None` while reading; `Some` once the user starts writing.
+    pub composer: Option<TextArea<'static>>,
+    /// Rows scrolled back from the newest message. 0 is the live bottom.
+    pub scroll: usize,
+    /// Their stream gave up. Reading still works, the room is just no longer
+    /// live, and the user is told rather than left staring at a frozen room.
+    pub stream_down: bool,
+    session: CircRoomSession,
+}
+
 pub struct State {
     service: CyberspaceService,
     user_id: Uuid,
     event_rx: broadcast::Receiver<CsEvent>,
+    /// Rooms pinned into the rail, in the user's order. Their API has no join
+    /// or leave, so this list is ours: a bookmark, not their state.
+    pub(crate) pinned: Vec<String>,
+    /// Their roster, loaded only while the rooms view is open.
+    pub(crate) roster: Vec<CircRoom>,
+    pub(crate) roster_selected: usize,
+    pub(crate) open_room: Option<OpenRoom>,
     pub(crate) link: LinkStatus,
     pub(crate) view: View,
     pub(crate) posts: Vec<CsPost>,
@@ -154,6 +186,10 @@ impl State {
             service,
             user_id,
             event_rx,
+            pinned: Vec::new(),
+            roster: Vec::new(),
+            roster_selected: 0,
+            open_room: None,
             link: LinkStatus::Unknown,
             view: View::Feed,
             posts: Vec::new(),
@@ -288,6 +324,9 @@ impl State {
                 self.notif_selected =
                     step_index(self.notif_selected, delta, self.notifications.len());
             }
+            View::Rooms => {
+                self.roster_selected = step_index(self.roster_selected, delta, self.roster.len());
+            }
         }
     }
 
@@ -297,6 +336,7 @@ impl State {
             View::Feed => self.selected = 0,
             View::Thread => self.thread_scroll = 0,
             View::Notifications => self.notif_selected = 0,
+            View::Rooms => self.roster_selected = 0,
         }
     }
 
@@ -418,12 +458,177 @@ impl State {
         match self.view {
             View::Thread => self.thread.as_ref().map(|thread| thread.post.clone()),
             View::Feed => self.posts.get(self.selected).cloned(),
-            View::Notifications => None,
+            View::Notifications | View::Rooms => None,
         }
     }
 
     pub(crate) fn close_modal(&mut self) {
         self.modal = None;
+    }
+
+    // --- their chat rooms ---------------------------------------------------
+
+    pub fn pinned_rooms(&self) -> &[String] {
+        &self.pinned
+    }
+
+    pub(crate) fn open_room_slug(&self) -> Option<&str> {
+        self.open_room.as_ref().map(|room| room.slug.as_str())
+    }
+
+    /// `c`: their roster, so the user can pin a room into the rail. Rooms are
+    /// listed on demand, never on a timer: this is the only call that fetches
+    /// it, and a human asked for it.
+    pub(crate) fn open_rooms_view(&mut self) {
+        if !self.is_linked() {
+            return;
+        }
+        self.view = View::Rooms;
+        self.roster_selected = 0;
+        self.loading = true;
+        self.service.load_circ_rooms_task(self.user_id);
+    }
+
+    /// Enter a room: everything it fetches hangs off the session held here, so
+    /// a room nobody is looking at fetches nothing. Re-entering the room
+    /// already open is a no-op rather than a reconnect.
+    pub fn enter_room(&mut self, slug: String) {
+        if self.open_room_slug() == Some(slug.as_str()) {
+            return;
+        }
+        // Dropping the previous session closes its stream and announces the
+        // user out of that room before the new one opens.
+        self.open_room = None;
+        let session = self.service.open_circ_room(self.user_id, slug.clone());
+        self.open_room = Some(OpenRoom {
+            slug,
+            messages: Vec::new(),
+            loading: true,
+            composer: None,
+            scroll: 0,
+            stream_down: false,
+            session,
+        });
+    }
+
+    /// Leaving the room surface for anything else. Dropping the session is
+    /// what stops the stream, the heartbeat, and any further fetching.
+    pub fn leave_room(&mut self) {
+        self.open_room = None;
+    }
+
+    /// The user did something in the open room, which is what keeps them from
+    /// showing as idle in the room's user list on their side.
+    fn note_room_activity(&self) {
+        if let Some(room) = &self.open_room {
+            room.session.note_activity();
+        }
+    }
+
+    pub(crate) fn room_scroll(&mut self, delta: isize) {
+        let Some(room) = &mut self.open_room else {
+            return;
+        };
+        // Scroll counts back from the newest message, so up means older.
+        let ceiling = room.messages.len().saturating_sub(1);
+        room.scroll = room.scroll.saturating_add_signed(-delta).min(ceiling);
+    }
+
+    /// `g` in a room jumps back to the live bottom.
+    pub(crate) fn room_to_bottom(&mut self) {
+        if let Some(room) = &mut self.open_room {
+            room.scroll = 0;
+        }
+    }
+
+    pub(crate) fn start_room_composer(&mut self) {
+        let Some(room) = &mut self.open_room else {
+            return;
+        };
+        if room.composer.is_none() {
+            room.composer = Some(new_themed_textarea("Say something...", WrapMode::Word, true));
+        }
+        self.note_room_activity();
+    }
+
+    pub(crate) fn room_composer_mut(&mut self) -> Option<&mut TextArea<'static>> {
+        self.open_room.as_mut()?.composer.as_mut()
+    }
+
+    /// Typing counts as activity, which is what keeps the user from showing
+    /// as idle to everyone else in the room.
+    pub(crate) fn note_composer_activity(&self) {
+        self.note_room_activity();
+    }
+
+    pub(crate) fn cancel_room_composer(&mut self) -> bool {
+        match &mut self.open_room {
+            Some(room) if room.composer.is_some() => {
+                room.composer = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Send what is in the room composer. Nothing is echoed locally: the
+    /// message arrives through the room's own stream like everyone else's, so
+    /// there is no provisional row to reconcile or leave behind on failure.
+    pub(crate) fn submit_room_composer(&mut self) -> Option<Banner> {
+        let Some(room) = &mut self.open_room else {
+            return None;
+        };
+        let composer = room.composer.as_ref()?;
+        let content = composer.lines().join("\n").trim().to_string();
+        if content.is_empty() {
+            room.composer = None;
+            return None;
+        }
+        if content.chars().count() > CIRC_MESSAGE_MAX_CHARS {
+            return Some(Banner::error(&format!(
+                "Cyberspace messages are capped at {CIRC_MESSAGE_MAX_CHARS} characters."
+            )));
+        }
+        let slug = room.slug.clone();
+        room.composer = None;
+        room.scroll = 0;
+        self.note_room_activity();
+        self.service
+            .send_circ_message_task(self.user_id, slug, content);
+        None
+    }
+
+    /// `a` on the roster: pin the selected room into the rail, or unpin it.
+    /// The rail moves now and the write follows, because this is our own list
+    /// and a lost write costs a re-pin, not data.
+    pub(crate) fn toggle_selected_pin(&mut self) -> Option<Banner> {
+        let room = self.roster.get(self.roster_selected)?;
+        let slug = room.key().to_string();
+        let banner = match self.pinned.iter().position(|pinned| *pinned == slug) {
+            Some(index) => {
+                self.pinned.remove(index);
+                Banner::success(&format!("Removed #{slug} from your rail."))
+            }
+            None => {
+                self.pinned.push(slug.clone());
+                Banner::success(&format!("Added #{slug} to your rail."))
+            }
+        };
+        self.service
+            .set_circ_pinned_task(self.user_id, self.pinned.clone());
+        Some(banner)
+    }
+
+    pub(crate) fn is_pinned(&self, slug: &str) -> bool {
+        self.pinned.iter().any(|pinned| pinned == slug)
+    }
+
+    /// Enter on the roster opens the room whether or not it is pinned, so a
+    /// room can be read before it earns a rail row.
+    pub(crate) fn selected_roster_room(&self) -> Option<String> {
+        self.roster
+            .get(self.roster_selected)
+            .map(|room| room.key().to_string())
     }
 
     /// Submit whichever modal is open. Validation happens here (the boundary);
@@ -529,6 +734,7 @@ impl State {
                 user_id,
                 username,
                 feed_read_at,
+                circ_rooms,
             } if user_id == self.user_id => {
                 self.link = match username {
                     Some(username) => LinkStatus::Linked { username },
@@ -536,6 +742,7 @@ impl State {
                 };
                 self.feed_read_at = feed_read_at;
                 self.feed_marker_at = feed_read_at;
+                self.pinned = circ_rooms;
                 None
             }
             CsEvent::LinkSucceeded { user_id, username } if user_id == self.user_id => {
@@ -563,6 +770,11 @@ impl State {
                 self.posts.clear();
                 self.notifications.clear();
                 self.thread = None;
+                // Dropping the open room closes its stream and heartbeat:
+                // an unlinked account must not still be present in a room.
+                self.open_room = None;
+                self.pinned.clear();
+                self.roster.clear();
                 self.unread_notifications = 0;
                 self.unread_entries = 0;
                 self.feed_read_at = None;
@@ -623,6 +835,56 @@ impl State {
                 }
                 Some(Banner::success("Reply posted on cyberspace."))
             }
+            CsEvent::CircRooms { user_id, rooms } if user_id == self.user_id => {
+                self.roster = rooms;
+                self.roster_selected = clamp_index(self.roster_selected, self.roster.len());
+                self.loading = false;
+                None
+            }
+            CsEvent::CircPinned { user_id, rooms } if user_id == self.user_id => {
+                // Another session of the same user pinned something; adopt
+                // their list rather than keeping a divergent rail.
+                self.pinned = rooms;
+                None
+            }
+            CsEvent::CircHistoryLoaded {
+                user_id,
+                room,
+                messages,
+            } if user_id == self.user_id => {
+                if let Some(open) = &mut self.open_room
+                    && open.slug == room
+                {
+                    open.loading = false;
+                    for message in messages {
+                        merge_message(&mut open.messages, message);
+                    }
+                    trim_messages(&mut open.messages);
+                }
+                None
+            }
+            CsEvent::CircStreamed {
+                user_id,
+                room,
+                event,
+            } if user_id == self.user_id => {
+                // A frame for a room this session is not in belongs to another
+                // session of the same user; theirs to apply, not ours.
+                if let Some(open) = &mut self.open_room
+                    && open.slug == room
+                {
+                    apply_stream_event(open, event);
+                }
+                None
+            }
+            CsEvent::CircStreamEnded { user_id, room } if user_id == self.user_id => {
+                if let Some(open) = &mut self.open_room
+                    && open.slug == room
+                {
+                    open.stream_down = true;
+                }
+                None
+            }
             CsEvent::ActionFailed { user_id, error } if user_id == self.user_id => {
                 self.loading = false;
                 // A failed action ends any pending read: a later feed load the
@@ -649,6 +911,70 @@ impl State {
             }
             _ => None,
         }
+    }
+}
+
+/// Apply one live frame to the open room. Their stream carries edits as well
+/// as arrivals, so a client that only appends never shows a deletion.
+pub(crate) fn apply_stream_event(room: &mut OpenRoom, event: CircStreamEvent) {
+    match event {
+        CircStreamEvent::Window(messages) => {
+            for message in messages {
+                merge_message(&mut room.messages, message);
+            }
+        }
+        CircStreamEvent::Upsert(message) => merge_message(&mut room.messages, *message),
+        CircStreamEvent::Patch {
+            id,
+            content,
+            deleted,
+        } => {
+            if let Some(message) = room.messages.iter_mut().find(|message| message.id == id) {
+                if let Some(content) = content {
+                    message.content = content;
+                }
+                if deleted {
+                    // A tombstone keeps its author and time, and loses
+                    // everything that hung off the message.
+                    message.deleted = true;
+                    message.image_url = None;
+                    message.gif_url = None;
+                    message.styles.clear();
+                }
+            }
+        }
+        CircStreamEvent::Removed(id) => room.messages.retain(|message| message.id != id),
+    }
+    trim_messages(&mut room.messages);
+}
+
+/// Insert or replace by id, keeping the list oldest-first. History and the
+/// stream's opening window overlap by design, so the same message arriving
+/// twice must land as one row.
+fn merge_message(messages: &mut Vec<CircMessage>, message: CircMessage) {
+    match messages
+        .iter()
+        .position(|existing| existing.id == message.id)
+    {
+        Some(index) => messages[index] = message,
+        None => {
+            let at = messages
+                .iter()
+                .position(|existing| existing.timestamp > message.timestamp);
+            match at {
+                Some(index) => messages.insert(index, message),
+                None => messages.push(message),
+            }
+        }
+    }
+}
+
+/// Drop the oldest rows past the cap: a long sitting in a busy room should not
+/// grow a session's memory without bound.
+fn trim_messages(messages: &mut Vec<CircMessage>) {
+    let excess = messages.len().saturating_sub(CIRC_MESSAGE_CAP);
+    if excess > 0 {
+        messages.drain(..excess);
     }
 }
 

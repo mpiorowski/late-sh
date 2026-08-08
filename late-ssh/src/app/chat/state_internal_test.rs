@@ -696,6 +696,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             room_last_message_at: &HashMap::new(),
             feeds_available: true,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -722,6 +723,7 @@ fn room_section_label_round_trips() {
     for section in [
         RoomSection::Favorites,
         RoomSection::Core,
+        RoomSection::Cyberspace,
         RoomSection::Channels,
         RoomSection::Dms,
     ] {
@@ -761,6 +763,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             room_last_message_at: &HashMap::new(),
             feeds_available: false,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
@@ -839,6 +842,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         room_last_message_at: &room_last_message_at,
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -878,6 +882,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -898,6 +903,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[dm_bob.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -941,6 +947,7 @@ fn visual_order_promotes_unread_dms_above_channels() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[dm_carol.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -987,6 +994,7 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
             room_last_message_at: &HashMap::new(),
             feeds_available: false,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -1037,6 +1045,7 @@ fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::from([RoomSection::Dms]),
         ignored_user_ids: &HashSet::new(),
@@ -1123,6 +1132,7 @@ fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::from([bob]),
@@ -2812,4 +2822,69 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
     // the new target's view.
     state.drain_translation_events();
     assert!(state.translations.is_empty());
+}
+
+#[test]
+fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
+    let me = Uuid::from_u128(1);
+    let lounge = Uuid::from_u128(10);
+    let usernames: HashMap<Uuid, String> = HashMap::new();
+    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let pinned = vec!["general".to_string(), "tech".to_string()];
+
+    let order_for = |linked: bool, collapsed: &HashSet<RoomSection>| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            cyberspace_linked: linked,
+            cyberspace_rooms: &pinned,
+            favorite_room_ids: &[],
+            collapsed_sections: collapsed,
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
+        })
+    };
+
+    // Linked: the pane leads its own section and every pinned room follows it,
+    // in the user's order. Slots carry the index into that list.
+    assert_eq!(
+        order_for(true, &HashSet::new()),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+            RoomSlot::Cyberspace,
+            RoomSlot::CyberspaceRoom(0),
+            RoomSlot::CyberspaceRoom(1),
+        ]
+    );
+
+    // Unlinked: no section at all, however many rooms a stale list holds.
+    // A row the rail cannot draw is a slot the user can land on but never see.
+    assert_eq!(
+        order_for(false, &HashSet::new()),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+        ]
+    );
+
+    // Collapsed: the header stays, its rooms leave navigation with it.
+    let collapsed = HashSet::from([RoomSection::Cyberspace]);
+    assert_eq!(
+        order_for(true, &collapsed),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+        ]
+    );
 }

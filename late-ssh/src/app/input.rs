@@ -899,6 +899,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // The open room's composer takes every keystroke while it is up, so arrows
+    // move the cursor rather than scrolling the conversation behind it.
+    if app.chat.cyberspace.room_composer_mut().is_some() {
+        chat::cyberspace::input::handle_room_composer_input(app, event);
+        return;
+    }
+
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
@@ -2045,6 +2052,16 @@ fn dispatch_escape(app: &mut App) {
         chat::cyberspace::input::handle_modal_escape(app);
         return;
     }
+    // Inside a cyberspace chat room, Esc backs out one step at a time: the
+    // composer first (so a draft is never lost to a stray Esc), then the room
+    // itself, which is what closes its stream.
+    if app.chat.cyberspace.cancel_room_composer() {
+        return;
+    }
+    if app.chat.cyberspace.open_room_slug().is_some() {
+        app.leave_cyberspace_room();
+        return;
+    }
     if app.chat.cyberspace_selected && app.chat.cyberspace.escape_to_feed() {
         return;
     }
@@ -2458,7 +2475,9 @@ fn chat_room_list_view<'a>(
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
         cyberspace_linked: app.chat.cyberspace.is_linked(),
+        cyberspace_rooms: app.chat.cyberspace.pinned_rooms(),
         cyberspace_selected: app.chat.cyberspace_selected,
+        cyberspace_room_selected: app.chat.cyberspace_room_selected,
         cyberspace_unread_count: app.chat.cyberspace.unread_count(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),

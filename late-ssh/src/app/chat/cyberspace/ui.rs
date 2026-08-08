@@ -12,16 +12,23 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 
-use super::api::{CsNotification, CsPost};
+use super::api::{CircMessage, CsNotification, CsPost};
 use super::state::{
-    ComposeField, ComposeModal, LinkField, LinkModal, LinkStatus, Modal, ReplyModal, State,
-    TITLE_MAX_CHARS, View,
+    ComposeField, ComposeModal, LinkField, LinkModal, LinkStatus, Modal, OpenRoom, ReplyModal,
+    State, TITLE_MAX_CHARS, View,
 };
 use super::svc::CsThread;
 
 const FEED_ITEM_HEIGHT: u16 = 4;
 
 pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
+    // An open chat room owns the pane whichever entry the rail has selected:
+    // a room opened from the roster has no rail row of its own until it is
+    // pinned, and it still has to render somewhere.
+    if let Some(room) = &state.open_room {
+        draw_room(frame, area, room);
+        return;
+    }
     match &state.link {
         LinkStatus::Unknown => {
             frame.render_widget(
@@ -35,6 +42,7 @@ pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
             View::Feed => draw_feed(frame, area, state, username),
             View::Thread => draw_thread(frame, area, state),
             View::Notifications => draw_notifications(frame, area, state),
+            View::Rooms => draw_rooms(frame, area, state),
         },
     }
 }
@@ -45,10 +53,19 @@ pub fn footer_hint(state: &State) -> &'static str {
     if !state.is_linked() {
         return " Enter link your cyberspace account";
     }
+    if let Some(room) = &state.open_room {
+        return match room.composer.is_some() {
+            true => " Enter send · Esc cancel",
+            false => " j/k scroll · g newest · i write",
+        };
+    }
     match state.view {
-        View::Feed => " j/k navigate · g top · Enter open · p post · n notifications · r refresh",
+        View::Feed => {
+            " j/k navigate · g top · Enter open · p post · c chat · n notifications · r refresh"
+        }
         View::Thread => " j/k scroll · g top · r reply · b back",
         View::Notifications => " j/k navigate · g top · Enter open the entry · b back",
+        View::Rooms => " j/k navigate · Enter open · a add to rail · r refresh · b back",
     }
 }
 
@@ -433,6 +450,206 @@ fn wrap_paragraph(paragraph: &str, width: usize) -> Vec<String> {
     }
 
     rows
+}
+
+/// Their chat roster: every room this account may read, with the ones pinned
+/// into the rail marked. There is no join or leave over there, so the mark is
+/// about our rail and says so.
+fn draw_rooms(frame: &mut Frame, area: Rect, state: &State) {
+    if state.roster.is_empty() {
+        let text = match state.loading {
+            true => "Loading cyberspace chat rooms...",
+            false => "No chat rooms available to your account.",
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM())),
+            area,
+        );
+        return;
+    }
+
+    let visible = area.height.max(1) as usize;
+    let selected = state
+        .roster_selected
+        .min(state.roster.len().saturating_sub(1));
+    let start = selected.saturating_sub(visible.saturating_sub(1));
+    let lines: Vec<Line<'static>> = state
+        .roster
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(index, room)| {
+            let is_selected = index == selected;
+            let pinned = state.is_pinned(room.key());
+            let mut spans = vec![
+                Span::styled(
+                    match is_selected {
+                        true => "> ",
+                        false => "  ",
+                    },
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(
+                    format!("#{}", room.key()),
+                    match is_selected {
+                        true => Style::default()
+                            .fg(theme::TEXT_BRIGHT())
+                            .add_modifier(Modifier::BOLD),
+                        false => Style::default().fg(theme::TEXT()),
+                    },
+                ),
+            ];
+            if room.online_count > 0 {
+                spans.push(Span::styled(
+                    format!("  {} here", room.online_count),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            }
+            if pinned {
+                spans.push(Span::styled(
+                    "  · on your rail",
+                    Style::default().fg(theme::SUCCESS()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// One of their chat rooms, live. Everything on screen arrived through this
+/// session's own stream and renders for this user alone.
+fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
+    let composer_height = match room.composer.is_some() {
+        true => 3,
+        false => 0,
+    };
+    let [header_area, body_area, composer_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Length(composer_height),
+    ])
+    .areas(area);
+
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let header_inner = block.inner(header_area);
+    frame.render_widget(block, header_area);
+    let mut header = vec![
+        Span::styled(
+            format!("#{}", room.slug),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " on cyberspace.online",
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ];
+    if room.stream_down {
+        header.push(Span::styled(
+            "  · not live, press b and come back",
+            Style::default().fg(theme::ERROR()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(header)), header_inner);
+
+    if room.messages.is_empty() {
+        let text = match room.loading {
+            true => "Joining the room...",
+            false => "Nothing said here yet. Press i to write.",
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM())),
+            body_area,
+        );
+    } else {
+        let lines = room_lines(&room.messages);
+        // Scroll counts back from the newest line, so a room opens live at
+        // the bottom the way a chat room should.
+        let height = body_area.height as usize;
+        let end = lines.len().saturating_sub(room.scroll);
+        let start = end.saturating_sub(height);
+        let visible: Vec<Line<'static>> = lines[start..end].to_vec();
+        frame.render_widget(Paragraph::new(visible), body_area);
+    }
+
+    if let Some(composer) = &room.composer {
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::BORDER()))
+                .title(" say something "),
+            composer_area,
+        );
+        let inner = Block::default().borders(Borders::ALL).inner(composer_area);
+        frame.render_widget(composer, inner);
+    }
+}
+
+/// One rendered row per message. Their conventions live in `display_text`, so
+/// this only decides what a row looks like.
+fn room_lines(messages: &[CircMessage]) -> Vec<Line<'static>> {
+    messages
+        .iter()
+        .map(|message| {
+            let stamp = message
+                .at()
+                .map(|at| at.format("%H:%M").to_string())
+                .unwrap_or_else(|| "     ".to_string());
+            let text = message.display_text();
+            let mut spans = vec![Span::styled(
+                format!("{stamp} "),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )];
+            if message.deleted {
+                spans.push(Span::styled(
+                    format!("{} ", message.username),
+                    Style::default().fg(theme::TEXT_FAINT()),
+                ));
+                spans.push(Span::styled(
+                    text,
+                    Style::default()
+                        .fg(theme::TEXT_FAINT())
+                        .add_modifier(Modifier::ITALIC),
+                ));
+                return Line::from(spans);
+            }
+            // `/me` and the emotes read as third person on their side too.
+            if message.is_action {
+                spans.push(Span::styled(
+                    format!("* {} {text}", message.username),
+                    Style::default()
+                        .fg(theme::TEXT_DIM())
+                        .add_modifier(Modifier::ITALIC),
+                ));
+                return Line::from(spans);
+            }
+            spans.push(Span::styled(
+                format!("{}: ", message.username),
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ));
+            let had_text = !text.is_empty();
+            if had_text {
+                spans.push(Span::styled(text, Style::default().fg(theme::TEXT())));
+            }
+            if let Some(label) = message.attachment_label() {
+                spans.push(Span::styled(
+                    match had_text {
+                        true => format!(" {label}"),
+                        false => label.to_string(),
+                    },
+                    Style::default().fg(theme::TEXT_DIM()),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn draw_notifications(frame: &mut Frame, area: Rect, state: &State) {

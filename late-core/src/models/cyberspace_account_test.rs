@@ -107,3 +107,42 @@ async fn links_are_scoped_to_their_owner() {
         .expect("other still linked");
     assert_eq!(other_row.refresh_token, "token-b");
 }
+
+#[tokio::test]
+async fn pinned_circ_rooms_round_trip_and_survive_a_relink() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "cs-circ").await;
+
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+
+    // A fresh link pins nothing: the rail shows the pane and no rooms.
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert!(found.circ_rooms.is_empty());
+
+    // The list is written whole, and order is the user's rail order.
+    let rooms = vec!["general".to_string(), "tech".to_string()];
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &rooms)
+        .await
+        .expect("pin rooms");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.circ_rooms, rooms);
+
+    // Signing in again is the same person's rail, so the pins stay.
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-2")
+        .await
+        .expect("re-link");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.circ_rooms, rooms);
+}

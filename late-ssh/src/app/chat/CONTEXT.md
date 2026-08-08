@@ -37,7 +37,7 @@ late-ssh/src/app/chat/
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages
 |                                # (translation itself lives in ../ai/translate.rs; chat owns only the key, the display state, and the row)
-|-- cyberspace/                  # Synthetic Cyberspace entry: personal client for cyberspace.online
+|-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
@@ -279,7 +279,7 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
-- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
+- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) their chat roster, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` and `/pet water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
@@ -454,8 +454,9 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 ### Cyberspace
 
-- late.sh as a personal client for cyberspace.online. The slice (`chat/cyberspace/`), its API-terms contract, token model, views/modals, deferrals, and tests live in `cyberspace/CONTEXT.md`: read that before touching anything in the directory.
-- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), the synthetic rail entry in Core below rss (`cyberspace_linked` gates the row in **both** `visual_order_for_rooms` and the rail builders: gating one and not the other leaves a slot the user can arrow onto but never see), and the pane's row in the keybindings table.
+- late.sh as a personal client for cyberspace.online. The slice (`chat/cyberspace/`), its API-terms contract, token model, views/modals, their chat (cIRC), and tests live in `cyberspace/CONTEXT.md`: read that before touching anything in the directory.
+- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), and the rail contract. A linked account gets its **own** `RoomSection::Cyberspace` (shortcut `y`, folds like any other section) holding the pane plus one row per pinned cIRC chat room; `cyberspace_linked` gates the section in **both** `visual_order_for_rooms` and the two rail builders, since gating one and not the other leaves a slot the user can arrow onto but never see.
+- `RoomSlot::CyberspaceRoom(index)` is the first **dynamic** slot: it indexes `ChatState::cyberspace.pinned_rooms()`, and `cyberspace_room_selected` is the matching selection. Because a chat room streams only while it is open, **every** selection change must close it: that is why `clear_synthetic_selection` (the one place the synthetic-entry bools are reset) calls `cyberspace.leave_room()`. A future entry that clears selection by hand instead of through that helper would leave a room streaming behind the user's back.
 - The one rule that crosses domains: **their API terms are load-bearing** (no bots, no scraping/caching for redistribution, no feeding their content to AI). Fetched content renders only for the user who fetched it, and `news/svc.rs::is_ai_blocklisted_url` hard-stops cyberspace.online URLs at the summarizer.
 
 ### Notifications / Mentions
@@ -602,7 +603,9 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
-| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `n` notifications, `r` refresh/reply, `b` back |
+| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `c` chat rooms, `n` notifications, `r` refresh/reply, `b` back |
+| Cyberspace rooms (`c`) | `j/k` navigate, Enter read the room, `a` pin it into the rail section, `r` reload the roster, `b` back |
+| Cyberspace room | `j/k` scroll, `g` newest, `i`/Enter write, Enter send, Esc cancel the draft then leave the room, `b` leave |
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 

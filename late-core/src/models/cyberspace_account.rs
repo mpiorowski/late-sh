@@ -16,6 +16,9 @@ crate::user_scoped_model! {
         // Feed read cursor: entries published after this are unread. NULL
         // until the first visit, which reads as nothing unread.
         pub feed_read_at: Option<DateTime<Utc>>,
+        // cIRC room slugs this user pinned into the rail, in their order.
+        // Their API has no join/leave, so this is our bookmark, not their state.
+        pub circ_rooms: Vec<String>,
     }
 }
 
@@ -55,6 +58,21 @@ impl CyberspaceAccount {
                  SET feed_read_at = $2, updated = current_timestamp
                  WHERE user_id = $1",
                 &[&user_id, &at],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Replace the pinned cIRC room list wholesale. The list is short and
+    /// always written as a whole (add, remove, reorder are all "here is the
+    /// new order"), so there is nothing to diff.
+    pub async fn set_circ_rooms(client: &Client, user_id: Uuid, rooms: &[String]) -> Result<()> {
+        client
+            .execute(
+                "UPDATE cyberspace_accounts
+                 SET circ_rooms = $2, updated = current_timestamp
+                 WHERE user_id = $1",
+                &[&user_id, &rooms],
             )
             .await?;
         Ok(())

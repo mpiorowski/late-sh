@@ -549,6 +549,8 @@ fn chat_view<'a>(
         feeds_processing: false,
         feeds_unread_count: 0,
         cyberspace_selected: false,
+        cyberspace_rooms: &[],
+        cyberspace_room_selected: None,
         cyberspace_unread_count: 0,
         cyberspace: None,
         feeds_view: crate::app::chat::feeds::ui::FeedListView {

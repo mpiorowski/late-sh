@@ -9,20 +9,80 @@ use crate::app::{
 };
 
 use super::state::{
-    BODY_MAX_CHARS, ComposeField, LinkField, Modal, TITLE_MAX_CHARS, TOPICS_MAX_CHARS, View,
+    BODY_MAX_CHARS, CIRC_MESSAGE_MAX_CHARS, ComposeField, LinkField, Modal, TITLE_MAX_CHARS,
+    TOPICS_MAX_CHARS, View,
 };
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    match key {
-        b'A' => {
+    let in_room = app.chat.cyberspace.open_room_slug().is_some();
+    match (key, in_room) {
+        (b'A', true) => {
+            app.chat.cyberspace.room_scroll(-1);
+            true
+        }
+        (b'B', true) => {
+            app.chat.cyberspace.room_scroll(1);
+            true
+        }
+        (b'A', false) => {
             app.chat.cyberspace.move_selection(-1);
             true
         }
-        b'B' => {
+        (b'B', false) => {
             app.chat.cyberspace.move_selection(1);
             true
         }
         _ => false,
+    }
+}
+
+/// Keys inside an open chat room. The room is its own surface (its own rail
+/// slot), so it does not share the pane's view keys.
+pub fn handle_room_byte(app: &mut App, byte: u8) -> bool {
+    let state = &mut app.chat.cyberspace;
+    match byte {
+        b'j' | b'J' => {
+            state.room_scroll(1);
+            true
+        }
+        b'k' | b'K' => {
+            state.room_scroll(-1);
+            true
+        }
+        b'g' | b'G' => {
+            state.room_to_bottom();
+            true
+        }
+        b'i' | b'I' | b'\r' | b'\n' => {
+            state.start_room_composer();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Keystrokes while the room composer is open. It owns every byte, the same
+/// way the Discover filter does, so a message can say anything.
+pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) -> bool {
+    let Some(composer) = app.chat.cyberspace.room_composer_mut() else {
+        return false;
+    };
+    match handle_multiline_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
+        EditOutcome::Submit => {
+            if let Some(banner) = app.chat.cyberspace.submit_room_composer() {
+                app.banner = Some(banner);
+            }
+            true
+        }
+        EditOutcome::Cancel => {
+            app.chat.cyberspace.cancel_room_composer();
+            true
+        }
+        EditOutcome::Handled => {
+            app.chat.cyberspace.note_composer_activity();
+            true
+        }
+        EditOutcome::Ignored => false,
     }
 }
 
@@ -58,8 +118,30 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                         app.banner = Some(banner);
                     }
                 }
+                // Enter opens a room whether or not it is pinned, so one can
+                // be read before it earns a rail row.
+                View::Rooms => {
+                    if let Some(slug) = state.selected_roster_room() {
+                        app.open_cyberspace_room(slug);
+                    }
+                }
                 View::Thread => {}
             }
+            true
+        }
+        b'a' | b'A' => {
+            match state.view {
+                View::Rooms => {
+                    if let Some(banner) = state.toggle_selected_pin() {
+                        app.banner = Some(banner);
+                    }
+                    true
+                }
+                View::Feed | View::Thread | View::Notifications => false,
+            }
+        }
+        b'c' | b'C' => {
+            state.open_rooms_view();
             true
         }
         b'r' | b'R' => {
@@ -70,6 +152,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 }
                 View::Thread => state.open_reply_modal(),
                 View::Notifications => state.open_notifications(),
+                View::Rooms => state.open_rooms_view(),
             }
             true
         }

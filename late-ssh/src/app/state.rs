@@ -866,6 +866,29 @@ impl App {
         }
     }
 
+    /// Open a cyberspace chat room chosen from their roster. A pinned room
+    /// selects its own rail slot; an unpinned one opens inside the pane the
+    /// user is already in, so a room can be read before it earns a rail row.
+    pub(crate) fn open_cyberspace_room(&mut self, slug: String) {
+        let pinned = self
+            .chat
+            .cyberspace
+            .pinned_rooms()
+            .iter()
+            .position(|pinned| *pinned == slug);
+        match pinned {
+            Some(index) => self.chat.select_cyberspace_room(index),
+            None => self.chat.cyberspace.enter_room(slug),
+        }
+    }
+
+    /// Leave the open cyberspace chat room and land back on its pane. This is
+    /// what stops the room's stream and heartbeat, so every exit path (Esc,
+    /// `b`, selecting anything else) goes through a `leave_room`.
+    pub(crate) fn leave_cyberspace_room(&mut self) {
+        self.chat.select_cyberspace();
+    }
+
     pub(crate) fn sync_visible_chat_room(&mut self) {
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
