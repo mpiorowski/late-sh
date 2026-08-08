@@ -408,6 +408,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Translation heading
         Constraint::Length(1), // Translate to row
         Constraint::Length(1), // Auto-translate row
+        Constraint::Length(1), // Translate mine row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
@@ -572,10 +573,20 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         )),
         sections[15],
     );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::TranslateMine,
+            width,
+            "Translate my messages to English",
+            toggle_span(state.draft().translate_mine_to_en),
+        )),
+        sections[16],
+    );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[17],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -585,7 +596,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[18],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -595,7 +606,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[19],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -605,7 +616,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[20],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -615,7 +626,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[21],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -632,7 +643,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[22],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -645,10 +656,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[23],
+        sections[24],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[25]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[26]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {

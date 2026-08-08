@@ -483,6 +483,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         },

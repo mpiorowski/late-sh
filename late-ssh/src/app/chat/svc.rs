@@ -25,6 +25,7 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         drinks::UserDrinks,
+        message_translation::{TranslateLang, needs_translation},
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
@@ -150,6 +151,10 @@ pub struct ChatService {
     irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
     chip_service: Option<ChipService>,
+    /// Pre-warms the English translation cache for authors who opted into
+    /// "Translate my messages to English" (send and edit paths). `None` only
+    /// in tests that never exercise sending.
+    translation_svc: Option<crate::app::ai::translate::TranslationService>,
     gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     /// Last time each user posted a message containing a link. Drives the
     /// account-age link cooldown (blunts fresh-account spam-and-leave). Keyed by
@@ -918,6 +923,7 @@ impl ChatService {
             irc_registry: None,
             moderation_infra: ModerationInfra::default(),
             chip_service: None,
+            translation_svc: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             link_last_sent: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
@@ -977,6 +983,14 @@ impl ChatService {
 
     pub fn with_chip_service(mut self, chip_service: ChipService) -> Self {
         self.chip_service = Some(chip_service);
+        self
+    }
+
+    pub fn with_translation_service(
+        mut self,
+        translation_svc: crate::app::ai::translate::TranslationService,
+    ) -> Self {
+        self.translation_svc = Some(translation_svc);
         self
     }
 
@@ -2623,8 +2637,38 @@ impl ChatService {
         metrics::record_chat_message_sent();
         self.notification_svc
             .create_mentions_task(user_id, chat.id, room_id, body);
+        self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
         Ok(())
+    }
+
+    /// Warm the shared English translation cache for an author who opted
+    /// into "Translate my messages to English" (send and edit paths, after
+    /// the row exists). Fire-and-forget on top of a fire-and-forget service:
+    /// a failed settings lookup only means the cache warms on first view
+    /// instead, so it logs here and never fails the send.
+    async fn pretranslate_for_author(&self, client: &tokio_postgres::Client, chat: &ChatMessage) {
+        let Some(translation_svc) = &self.translation_svc else {
+            return;
+        };
+        if !needs_translation(&chat.body, TranslateLang::En) {
+            return;
+        }
+        let opted_in = match User::translate_mine_to_en(client, chat.user_id).await {
+            Ok(opted_in) => opted_in,
+            Err(error) => {
+                tracing::error!(
+                    error = ?error,
+                    user_id = %chat.user_id,
+                    "author pre-translate settings lookup failed"
+                );
+                return;
+            }
+        };
+        if !opted_in {
+            return;
+        }
+        translation_svc.request(chat.id, chat.room_id, chat.body.clone(), TranslateLang::En);
     }
 
     /// The patron's message after the bar gets a say in it: a drink deep
@@ -2766,7 +2810,7 @@ impl ChatService {
         let mut author_metadata =
             Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
-            message: updated,
+            message: updated.clone(),
             target_user_ids,
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
@@ -2776,6 +2820,9 @@ impl ChatService {
                 .remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
+        // The edit's transaction dropped the old cached translations; keep
+        // the author's opt-in warranty alive for the new body.
+        self.pretranslate_for_author(&client, &updated).await;
         Ok(())
     }
 

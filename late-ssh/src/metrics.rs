@@ -11,13 +11,16 @@ pub enum RenderReason {
     WorldTick,
 }
 
-/// How a chat-translation request resolved. `Translated` is the only variant
-/// that spent an API call; the others are the cache and the guardrails doing
-/// their job.
+/// How a chat-translation request resolved. `Translated` and `SameLanguage`
+/// are the variants that spent an API call; the others are the cache and the
+/// guardrails doing their job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslationResult {
     CacheHit,
     Translated,
+    /// The model judged the message already in the target language; cached,
+    /// renders as nothing.
+    SameLanguage,
     Failed,
     CapExhausted,
     Stale,
@@ -293,6 +296,7 @@ mod inner {
         match result {
             TranslationResult::CacheHit => "cache_hit",
             TranslationResult::Translated => "translated",
+            TranslationResult::SameLanguage => "same_language",
             TranslationResult::Failed => "failed",
             TranslationResult::CapExhausted => "cap_exhausted",
             TranslationResult::Stale => "stale",

@@ -159,17 +159,19 @@ impl TranslateLang {
 
     /// The script the pre-flight check treats as "already this language".
     /// `None` means the check can never clear a message locally: the Latin
-    /// roster shares its script with English (and each other), and Russian
-    /// and Ukrainian share Cyrillic, so a same-script body may or may not
+    /// roster (English included) shares one script, and Russian and
+    /// Ukrainian share Cyrillic, so a same-script body may or may not
     /// already be in the target; those targets send everything scripted to
-    /// the model and let the cache absorb the cost. English still claims
-    /// Latin: the chat is English-dominant, and an English reader shouldn't
-    /// have every message qualify. Japanese claims Kana; a kanji-only
-    /// Japanese message counts as Han and gets one redundant (cached) call,
-    /// the price of keeping Chinese translatable for Japanese readers.
+    /// the model, which reports same-language bodies instead of translating
+    /// them, and the cache absorbs the cost either way. English used to
+    /// claim Latin as a cost shortcut, but that silently refused to
+    /// translate French/Spanish/German for English readers, the most common
+    /// real request. Japanese claims Kana; a kanji-only Japanese message
+    /// counts as Han and gets one redundant (cached) call, the price of
+    /// keeping Chinese translatable for Japanese readers.
     fn script(self) -> Option<Script> {
         match self {
-            Self::En => Some(Script::Latin),
+            Self::En => None,
             Self::ZhHans => Some(Script::Han),
             Self::Ko => Some(Script::Hangul),
             Self::Ja => Some(Script::Kana),
@@ -205,9 +207,10 @@ impl TranslateLang {
 /// Writing systems the pre-flight check can classify. This is a script
 /// detector, not a language detector: it exists to answer "could this
 /// message already be in the viewer's language?" cheaply and locally, so
-/// same-script messages never reach the API. All Latin-script languages are
-/// deliberately lumped together; only English claims the Latin script as
-/// "already readable" (see `TranslateLang::script`).
+/// clearly-foreign-script targets never burn a call on a matching body.
+/// All Latin-script languages are deliberately lumped together and no
+/// target claims Latin as "already readable"; the model's same-language
+/// verdict covers what the script check cannot (see `TranslateLang::script`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Script {
     Latin,
@@ -250,15 +253,38 @@ fn char_script(c: char) -> Option<Script> {
     }
 }
 
-/// Whether `body` is worth translating for a viewer reading `target`: it has
-/// enough scripted text to mean something, its dominant script differs from
+/// The part of a stored chat body that translation should look at: the
+/// composer stores a reply as `> @author: preview\nreply text`, and the
+/// quoted first line is someone else's message, already rendered (and
+/// translatable) on its own. Translating it again inside the reply would
+/// put re-worded text in the quoted author's mouth and pollute the reply's
+/// translation, so every translation surface (the worth-translating check,
+/// the model prompt, the cached text) works on this slice. The same `> `
+/// convention guards Drunk Text (`slur.rs`). Bodies that are only a quote
+/// line pass through whole rather than vanishing.
+pub fn translation_source_text(body: &str) -> &str {
+    match body.split_once('\n') {
+        Some((first_line, rest))
+            if first_line.trim_start().starts_with("> ") && !rest.trim().is_empty() =>
+        {
+            rest
+        }
+        _ => body,
+    }
+}
+
+/// Whether `body` is worth translating for a viewer reading `target`: its
+/// reply-quote-free text (see [`translation_source_text`]) has enough
+/// scripted characters to mean something, its dominant script differs from
 /// the target's, and it fits the length cap. Numbers, emoji, URLs-only and
 /// other unscripted bodies never qualify. Targets without a script of their
-/// own (the Latin roster, and Russian/Ukrainian on shared Cyrillic)
-/// translate every scripted body: the check can't prove a same-script
-/// message is already in the target language, so the model decides and the
-/// cache remembers.
+/// own (English and the Latin roster, and Russian/Ukrainian on shared
+/// Cyrillic) translate every scripted body: the check can't prove a
+/// same-script message is already in the target language, so the model
+/// decides (reporting same-language bodies instead of translating them)
+/// and the cache remembers.
 pub fn needs_translation(body: &str, target: TranslateLang) -> bool {
+    let body = translation_source_text(body);
     if body.chars().count() > TRANSLATE_MAX_BODY_CHARS {
         return false;
     }
@@ -284,6 +310,16 @@ pub fn needs_translation(body: &str, target: TranslateLang) -> bool {
     }
 }
 
+/// One cached model verdict for a (message, target) pair. Same-language is
+/// a real, cacheable answer, not an absence: it cost a call to learn and it
+/// renders as nothing, so it must be distinguishable from both a cache miss
+/// (which may trigger a call) and a translation (which renders a `↳` line).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CachedTranslation {
+    Translated(String),
+    SameLanguage,
+}
+
 pub struct MessageTranslation;
 
 impl MessageTranslation {
@@ -292,44 +328,64 @@ impl MessageTranslation {
         client: &impl GenericClient,
         message_ids: &[Uuid],
         target: TranslateLang,
-    ) -> Result<HashMap<Uuid, String>> {
+    ) -> Result<HashMap<Uuid, CachedTranslation>> {
         if message_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let rows = client
             .query(
-                "SELECT message_id, body FROM message_translations
+                "SELECT message_id, body, same_language FROM message_translations
                  WHERE message_id = ANY($1) AND target_lang = $2",
                 &[&message_ids, &target.as_str()],
             )
             .await?;
         Ok(rows
             .into_iter()
-            .map(|row| (row.get("message_id"), row.get("body")))
+            .map(|row| {
+                let cached = if row.get::<_, bool>("same_language") {
+                    CachedTranslation::SameLanguage
+                } else {
+                    CachedTranslation::Translated(row.get("body"))
+                };
+                (row.get("message_id"), cached)
+            })
             .collect())
     }
 
-    /// Cache `translation` for `message_id` into `target`, but only while the
+    /// Cache `verdict` for `message_id` into `target`, but only while the
     /// message's body is still `source_body`. Translation calls are slow; an
     /// edit can land mid-flight, and its row delete runs before this row
     /// exists, so an unconditional write would cache the old body's
     /// translation against the new text forever. `FOR SHARE` makes the check
     /// wait out a concurrent edit's row lock and re-evaluate against the
     /// committed body. Returns whether the row landed; a `false` means the
-    /// translation described text that no longer exists and was discarded.
+    /// verdict described text that no longer exists and was discarded.
     pub async fn upsert_if_current(
         client: &impl GenericClient,
         message_id: Uuid,
         target: TranslateLang,
         source_body: &str,
-        translation: &str,
+        verdict: &CachedTranslation,
     ) -> Result<bool> {
+        // A same-language row stores the judged text in body, so the row
+        // always says exactly what was cached about what.
+        let (body, same_language) = match verdict {
+            CachedTranslation::Translated(text) => (text.as_str(), false),
+            CachedTranslation::SameLanguage => (translation_source_text(source_body), true),
+        };
         let written = client
             .execute(
-                "INSERT INTO message_translations (message_id, target_lang, body)
-                 SELECT id, $2, $3 FROM chat_messages WHERE id = $1 AND body = $4 FOR SHARE
-                 ON CONFLICT (message_id, target_lang) DO UPDATE SET body = EXCLUDED.body",
-                &[&message_id, &target.as_str(), &translation, &source_body],
+                "INSERT INTO message_translations (message_id, target_lang, body, same_language)
+                 SELECT id, $2, $3, $5 FROM chat_messages WHERE id = $1 AND body = $4 FOR SHARE
+                 ON CONFLICT (message_id, target_lang)
+                 DO UPDATE SET body = EXCLUDED.body, same_language = EXCLUDED.same_language",
+                &[
+                    &message_id,
+                    &target.as_str(),
+                    &body,
+                    &source_body,
+                    &same_language,
+                ],
             )
             .await?;
         Ok(written > 0)
