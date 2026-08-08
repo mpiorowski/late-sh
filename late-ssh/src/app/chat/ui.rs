@@ -3273,7 +3273,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                 false => Style::default().fg(theme::TEXT()),
             };
             push_row(
-                Line::from(Span::styled(format!("{prefix}#{slug}"), style)),
+                Line::from(Span::styled(format!("{prefix}{slug}"), style)),
                 Some(RoomSlot::CyberspaceRoom(index)),
                 selected,
             );
@@ -4000,12 +4000,13 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         // Under the `cyberspace` header this row is their feed, not the whole
         // site: the chat rooms beside it are cyberspace too.
         RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_unread_count),
-        // No badge: a chat room is only read while you are inside it, so
-        // there is no unread state to show without fetching in the background.
+        // Bare slugs, like every other room row in this rail. No badge either:
+        // a chat room is only read while you are inside it, so there is no
+        // unread state to show without fetching in the background.
         RoomSlot::CyberspaceRoom(index) => (
             match view.cyberspace_rooms.get(index) {
-                Some(slug) => format!("#{slug}"),
-                None => "#room".to_string(),
+                Some(slug) => slug.clone(),
+                None => "room".to_string(),
             },
             0,
         ),
@@ -4461,20 +4462,36 @@ fn draw_selected_content(
             frame.render_widget(hint_text, composer_area);
         }
     } else if view.cyberspace_selected || view.cyberspace_room_selected.is_some() {
+        let title = match view.cyberspace.and_then(|state| state.open_room_slug()) {
+            Some(slug) => format!(" {slug} "),
+            None => " Cyberspace ".to_string(),
+        };
         let hint_block = Block::default()
-            .title(" Cyberspace ")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER()));
-        let hint = view
-            .cyberspace
-            .map(super::cyberspace::ui::footer_hint)
-            .unwrap_or_default();
-        let hint_text = Paragraph::new(Line::from(Span::styled(
-            hint,
-            Style::default().fg(theme::TEXT_DIM()),
-        )))
-        .block(hint_block);
-        frame.render_widget(hint_text, composer_area);
+        // Writing in a chat room uses this box rather than opening a second
+        // one inside the pane: it is the composer slot every other room types
+        // into, so the room reads like a room.
+        match view.cyberspace.and_then(|state| state.room_composer()) {
+            Some(composer) => {
+                let inner = hint_block.inner(composer_area);
+                frame.render_widget(hint_block, composer_area);
+                frame.render_widget(composer, inner);
+            }
+            None => {
+                let hint = view
+                    .cyberspace
+                    .map(super::cyberspace::ui::footer_hint)
+                    .unwrap_or_default();
+                let hint_text = Paragraph::new(Line::from(Span::styled(
+                    hint,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )))
+                .block(hint_block);
+                frame.render_widget(hint_text, composer_area);
+            }
+        }
     } else if view.notifications_selected {
         let hint_block = Block::default()
             .title(" Mentions ")

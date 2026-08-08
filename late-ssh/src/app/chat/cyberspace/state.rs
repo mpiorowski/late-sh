@@ -582,9 +582,11 @@ impl State {
             return;
         };
         if room.composer.is_none() {
+            // One line: it draws in the chat composer slot, which is a single
+            // row, and their cap is one message rather than a document.
             room.composer = Some(new_themed_textarea(
-                "Say something...",
-                WrapMode::Word,
+                "Enter send · Esc cancel",
+                WrapMode::None,
                 true,
             ));
         }
@@ -593,6 +595,13 @@ impl State {
 
     pub(crate) fn room_composer_mut(&mut self) -> Option<&mut TextArea<'static>> {
         self.open_room.as_mut()?.composer.as_mut()
+    }
+
+    /// The open room's composer for rendering. It draws in the chat composer
+    /// slot at the bottom of the screen, not inside the pane, so a room has
+    /// one input in the place every other room's input lives.
+    pub(crate) fn room_composer(&self) -> Option<&TextArea<'static>> {
+        self.open_room.as_ref()?.composer.as_ref()
     }
 
     /// Typing counts as activity, which is what keeps the user from showing
@@ -619,7 +628,7 @@ impl State {
             return None;
         };
         let composer = room.composer.as_ref()?;
-        let content = composer.lines().join("\n").trim().to_string();
+        let content = single_line(composer);
         if content.is_empty() {
             room.composer = None;
             return None;

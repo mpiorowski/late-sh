@@ -52,11 +52,10 @@ pub fn footer_hint(state: &State) -> &'static str {
     if !state.is_linked() {
         return " Enter link your cyberspace account";
     }
-    if let Some(room) = &state.open_room {
-        return match room.composer.is_some() {
-            true => " Enter send · Esc cancel",
-            false => " j/k scroll · g newest · i write",
-        };
+    // Only the reading hint: while the composer is open it occupies this slot
+    // itself, so there is no hint row to write into.
+    if state.open_room.is_some() {
+        return " j/k scroll · g newest · i write · b leave";
     }
     match state.view {
         View::Feed => {
@@ -568,16 +567,10 @@ fn draw_rooms_modal(frame: &mut Frame, area: Rect, rooms: &RoomsModal, state: &S
 /// One of their chat rooms, live. Everything on screen arrived through this
 /// session's own stream and renders for this user alone.
 fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
-    let composer_height = match room.composer.is_some() {
-        true => 3,
-        false => 0,
-    };
-    let [header_area, body_area, composer_area] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Fill(1),
-        Constraint::Length(composer_height),
-    ])
-    .areas(area);
+    // No composer here: writing happens in the chat composer slot below the
+    // pane, the same box every other room types into (`chat::ui`).
+    let [header_area, body_area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
 
     let block = Block::default()
         .borders(Borders::BOTTOM)
@@ -622,18 +615,6 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
         let start = end.saturating_sub(height);
         let visible: Vec<Line<'static>> = lines[start..end].to_vec();
         frame.render_widget(Paragraph::new(visible), body_area);
-    }
-
-    if let Some(composer) = &room.composer {
-        frame.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::BORDER()))
-                .title(" say something "),
-            composer_area,
-        );
-        let inner = Block::default().borders(Borders::ALL).inner(composer_area);
-        frame.render_widget(composer, inner);
     }
 }
 

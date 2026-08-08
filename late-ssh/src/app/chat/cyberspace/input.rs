@@ -69,7 +69,9 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     let Some(composer) = app.chat.cyberspace.room_composer_mut() else {
         return;
     };
-    match handle_multiline_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
+    // Single line: one keypress sends, matching the one-row composer slot it
+    // draws in and their one-message-per-send API.
+    match handle_single_line_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
         EditOutcome::Submit => {
             if let Some(banner) = app.chat.cyberspace.submit_room_composer() {
                 app.banner = Some(banner);
