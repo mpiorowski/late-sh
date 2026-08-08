@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-08 (chat message translation ships: `t` on a selected message renders a dim `↳` translation under it, an opt-in auto mode pre-expands foreign-script messages arriving in the room on screen, and every result is cached in `message_translations` so cost scales with messages written rather than readers. Target language and auto mode live under `Ctrl+O` → Settings → Translation; the model call is `TranslationService` in `app/ai/translate.rs`; the full contract is in `late-ssh/src/app/chat/CONTEXT.md` §14 Translation)
+- Last updated: 2026-08-08 (chat translation goes two-way: English targets now translate Latin-script languages, with the model's cached `same_language` verdict (migration 137) replacing the script shortcut; replies translate only the reply text, never the baked-in `> @author:` quote line; and a new per-account "Translate my messages to English" setting (`Ctrl+O` → Settings → Translation) pre-warms the shared cache from the send/edit paths. The model call is `TranslationService` in `app/ai/translate.rs`; the full contract is in `late-ssh/src/app/chat/CONTEXT.md` §14 Translation)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

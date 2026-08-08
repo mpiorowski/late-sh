@@ -70,6 +70,130 @@ async fn emits_send_failed_event_when_sender_is_not_room_member() {
 }
 
 #[tokio::test]
+async fn send_pre_translates_to_english_for_opted_in_authors() {
+    use crate::app::ai::svc::AiService;
+    use crate::app::ai::translate::{TranslationOutcome, TranslationService};
+    use late_core::models::message_translation::TranslateLang;
+
+    let test_db = new_test_db().await;
+    let translation = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_translation_service(translation.clone());
+    let client = test_db.db.get().await.expect("db client");
+    let author = create_test_user(&test_db.db, "pretranslate_author").await;
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, room.id, author.id)
+        .await
+        .expect("join author");
+    // Opt in through the production settings write, so the whole chain
+    // (settings key -> send hook -> service request) is what's pinned.
+    Profile::update(
+        &client,
+        author.id,
+        ProfileParams {
+            username: "pretranslate_author".to_string(),
+            bio: String::new(),
+            country: None,
+            timezone: None,
+            ide: None,
+            terminal: None,
+            os: None,
+            langs: Vec::new(),
+            notify_kinds: Vec::new(),
+            notify_bell: false,
+            notify_cooldown_mins: 0,
+            notify_format: None,
+            theme_id: None,
+            enable_background_color: false,
+            text_brightness_adjustment: 0,
+            show_right_sidebar: true,
+            right_sidebar_mode: RightSidebarMode::On,
+            right_sidebar_components: default_right_sidebar_components(),
+            show_room_list_sidebar: true,
+            room_list_mode: late_core::models::user::RoomListMode::On,
+            keep_composer_focused: false,
+            start_with_music_muted: false,
+            land_on_home: false,
+            show_flag_fallback: false,
+            show_pet_strip: true,
+            translate_to: TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: true,
+            favorite_room_ids: Vec::new(),
+            birthday: None,
+        },
+    )
+    .await
+    .expect("opt author in");
+
+    // A bystander with default settings pins the opt-in gate: their send
+    // completes first (SendSucceeded lands after the pre-translate hook
+    // runs), so if the gate ever disappeared, their request would fire
+    // before the opted author's and the id assertion below would catch it.
+    let bystander = create_test_user(&test_db.db, "pretranslate_bystander").await;
+    ChatRoomMember::join(&client, room.id, bystander.id)
+        .await
+        .expect("join bystander");
+
+    let mut translations = translation.subscribe();
+    let mut chat_events = service.subscribe_events();
+    let bystander_request = Uuid::now_v7();
+    service.send_message_task(
+        bystander.id,
+        room.id,
+        None,
+        "salut tout le monde".to_string(),
+        bystander_request,
+        false,
+    );
+    loop {
+        let event = timeout(Duration::from_secs(5), chat_events.recv())
+            .await
+            .expect("bystander send timeout")
+            .expect("chat channel open");
+        if matches!(event, ChatEvent::SendSucceeded { request_id, .. } if request_id == bystander_request)
+        {
+            break;
+        }
+    }
+
+    service.send_message_task(
+        author.id,
+        room.id,
+        None,
+        "bonjour tout le monde".to_string(),
+        Uuid::now_v7(),
+        false,
+    );
+    let opted_message_id = loop {
+        let event = timeout(Duration::from_secs(5), chat_events.recv())
+            .await
+            .expect("author send timeout")
+            .expect("chat channel open");
+        if let ChatEvent::MessageCreated { message, .. } = event
+            && message.user_id == author.id
+        {
+            break message.id;
+        }
+    };
+
+    // AI is disabled, so the request resolves as Failed; the event alone
+    // proves the send path fired an English request, and its message id
+    // proves it fired for the opted-in author only.
+    let event = timeout(Duration::from_secs(5), translations.recv())
+        .await
+        .expect("translation event timeout")
+        .expect("translation channel open");
+    assert_eq!(event.message_id, opted_message_id);
+    assert_eq!(event.room_id, room.id);
+    assert_eq!(event.target, TranslateLang::En);
+    assert!(matches!(event.outcome, TranslationOutcome::Failed));
+}
+
+#[tokio::test]
 async fn emits_message_created_and_send_succeeded_when_sender_is_member() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
@@ -610,6 +734,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             show_pet_strip: true,
             translate_to: late_core::models::message_translation::TranslateLang::En,
             auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: vec![favorite_room.id],
             birthday: None,
         },

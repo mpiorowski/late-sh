@@ -52,6 +52,7 @@ pub(crate) enum Row {
     Timezone,
     TranslateTo,
     AutoTranslate,
+    TranslateMine,
     DirectMessages,
     Mentions,
     GameEvents,
@@ -61,7 +62,7 @@ pub(crate) enum Row {
 }
 
 impl Row {
-    pub(crate) const ALL: [Row; 17] = [
+    pub(crate) const ALL: [Row; 18] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
@@ -73,6 +74,7 @@ impl Row {
         Row::Langs,
         Row::TranslateTo,
         Row::AutoTranslate,
+        Row::TranslateMine,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
@@ -1927,6 +1929,10 @@ impl SettingsModalState {
                 self.draft.auto_translate ^= true;
                 true
             }
+            Row::TranslateMine => {
+                self.draft.translate_mine_to_en ^= true;
+                true
+            }
             Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
@@ -1971,6 +1977,7 @@ impl SettingsModalState {
                 show_pet_strip: self.draft.show_pet_strip,
                 translate_to: self.draft.translate_to,
                 auto_translate: self.draft.auto_translate,
+                translate_mine_to_en: self.draft.translate_mine_to_en,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
                 birthday: self.draft.birthday.clone(),
             },

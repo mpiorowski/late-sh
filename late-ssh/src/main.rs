@@ -145,6 +145,9 @@ async fn main() -> anyhow::Result<()> {
     let session_registry = SessionRegistry::new();
     let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let notification_service = NotificationService::new(db.clone());
+    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
+    let translation_service =
+        late_ssh::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
         notification_service.clone(),
@@ -153,7 +156,8 @@ async fn main() -> anyhow::Result<()> {
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone())
     .with_irc_registry(irc_registry.clone())
-    .with_force_admin(config.force_admin);
+    .with_force_admin(config.force_admin)
+    .with_translation_service(translation_service.clone());
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
     let _lounge_feed_task = late_ssh::app::activity::lounge::start_lounge_feed_task(
         db.clone(),
@@ -161,9 +165,6 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         activity_tx.subscribe(),
     );
-    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
-    let translation_service =
-        late_ssh::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())

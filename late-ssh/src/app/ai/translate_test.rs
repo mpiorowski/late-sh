@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
 use late_core::models::chat_room::ChatRoom;
-use late_core::models::message_translation::{MessageTranslation, TranslateLang};
+use late_core::models::message_translation::{
+    CachedTranslation, MessageTranslation, TranslateLang,
+};
 use uuid::Uuid;
 
 use super::{TranslationOutcome, TranslationService};
@@ -31,9 +33,15 @@ async fn cached_translation_is_served_without_the_api() {
     let test_db = new_test_db().await;
     let (message_id, room_id) = seeded_message(&test_db.db, "你好").await;
     let client = test_db.db.get().await.expect("db client");
-    MessageTranslation::upsert_if_current(&client, message_id, TranslateLang::En, "你好", "hello")
-        .await
-        .expect("seed cache");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message_id,
+        TranslateLang::En,
+        "你好",
+        &CachedTranslation::Translated("hello".to_string()),
+    )
+    .await
+    .expect("seed cache");
 
     // AI disabled: a cache hit is the only way this can produce text.
     let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
@@ -49,8 +57,43 @@ async fn cached_translation_is_served_without_the_api() {
     assert_eq!(event.target, TranslateLang::En);
     match event.outcome {
         TranslationOutcome::Translated(text) => assert_eq!(text, "hello"),
+        TranslationOutcome::SameLanguage => panic!("cache hit holds a translation"),
         TranslationOutcome::Failed => panic!("cache hit must not fail"),
     }
+}
+
+#[tokio::test]
+async fn cached_same_language_verdict_is_served_without_the_api() {
+    let test_db = new_test_db().await;
+    let (message_id, room_id) = seeded_message(&test_db.db, "just chatting in english").await;
+    let client = test_db.db.get().await.expect("db client");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message_id,
+        TranslateLang::En,
+        "just chatting in english",
+        &CachedTranslation::SameLanguage,
+    )
+    .await
+    .expect("seed cache");
+
+    // AI disabled: only the cache can answer, and the cached answer is
+    // "nothing to translate", not a translation and not a failure.
+    let service = TranslationService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut events = service.subscribe();
+    service.request(
+        message_id,
+        room_id,
+        "just chatting in english".to_string(),
+        TranslateLang::En,
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event before timeout")
+        .expect("channel open");
+    assert_eq!(event.message_id, message_id);
+    assert!(matches!(event.outcome, TranslationOutcome::SameLanguage));
 }
 
 #[tokio::test]

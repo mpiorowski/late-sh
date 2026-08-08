@@ -702,10 +702,13 @@ pub struct ChatState {
 
 /// What the UI knows about one message's translation into the session's
 /// target language. `Failed` renders nothing but lets `t` retry.
+/// `SameLanguage` renders nothing and sticks: the model already judged the
+/// message readable, so `t` answers with a banner instead of a new call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranslationDisplay {
     Pending,
     Ready(String),
+    SameLanguage,
     Failed,
 }
 
@@ -1072,6 +1075,10 @@ impl ChatState {
         };
         match self.translations.get(&message_id) {
             Some(TranslationDisplay::Pending) => None,
+            Some(TranslationDisplay::SameLanguage) => Some(Banner::info(&format!(
+                "Already written in {}",
+                self.translate_to.prompt_name()
+            ))),
             Some(TranslationDisplay::Ready(_)) => {
                 if !self.translation_hidden.remove(&message_id) {
                     self.translation_hidden.insert(message_id);
@@ -1081,16 +1088,18 @@ impl ChatState {
             }
             Some(TranslationDisplay::Failed) | None => {
                 // Length check first: `needs_translation` also returns false
-                // for over-cap bodies, and "already readable" would be a lie
-                // for a genuinely foreign wall of text.
-                if body.chars().count() > TRANSLATE_MAX_BODY_CHARS {
+                // for over-cap bodies, and "nothing to translate" would be a
+                // lie for a genuinely foreign wall of text. The cap judges
+                // the reply-quote-free text, same as the check itself.
+                if late_core::models::message_translation::translation_source_text(&body)
+                    .chars()
+                    .count()
+                    > TRANSLATE_MAX_BODY_CHARS
+                {
                     return Some(Banner::info("Message too long to translate"));
                 }
                 if !needs_translation(&body, self.translate_to) {
-                    return Some(Banner::info(&format!(
-                        "Already readable in {}",
-                        self.translate_to.prompt_name()
-                    )));
+                    return Some(Banner::info("Nothing to translate here"));
                 }
                 self.translations
                     .insert(message_id, TranslationDisplay::Pending);
@@ -1177,6 +1186,24 @@ impl ChatState {
                             .insert(event.message_id, TranslationDisplay::Ready(text));
                         self.translation_manual.remove(&event.message_id);
                         self.bump_room_version(event.room_id);
+                    }
+                }
+                TranslationOutcome::SameLanguage => {
+                    // Remembered so the message is never re-requested; renders
+                    // as nothing. A manual `t` gets told instead of left
+                    // staring at a spinner that produced no line.
+                    let show =
+                        self.auto_translate || self.translations.contains_key(&event.message_id);
+                    if show {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::SameLanguage);
+                        self.bump_room_version(event.room_id);
+                    }
+                    if self.translation_manual.remove(&event.message_id) {
+                        banner = Some(Banner::info(&format!(
+                            "Already written in {}",
+                            self.translate_to.prompt_name()
+                        )));
                     }
                 }
                 TranslationOutcome::Failed => {
@@ -4334,8 +4361,14 @@ impl ChatState {
                             room.id == room_id && messages.iter().any(|m| m.id == message_id)
                         })
                     {
-                        self.translations
-                            .insert(message_id, TranslationDisplay::Pending);
+                        // No Pending marker here: the "translating…"
+                        // placeholder is manual-only (`t`). An auto-fired
+                        // request renders nothing until a real translation
+                        // lands, so same-language verdicts (most messages,
+                        // now that English goes to the model) never flash a
+                        // line that immediately vanishes. Duplicate requests
+                        // are the service's single-flight problem, and a `t`
+                        // pressed mid-flight just joins the same call.
                         self.translation_cache_checked.insert(message_id);
                         self.translation_service.request(
                             message_id,
