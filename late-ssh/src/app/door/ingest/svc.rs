@@ -30,6 +30,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::award::{DoorAwards, DoorBadge};
+use super::brogue::{BrogueLine, BrogueRun, parse_run_history_line, playname_from_file};
 use super::dcss::{DcssMilestone, DcssRun, parse_logfile_line, parse_milestone_line};
 use super::nethack::{NethackMilestone, NethackRun, parse_livelog_line, parse_xlogfile_line};
 use super::stream::{StatsFrame, StreamConfig, run_stats_stream};
@@ -60,6 +61,7 @@ pub struct DoorIngestTarget {
 enum DoorKind {
     Dcss,
     Nethack,
+    Brogue,
 }
 
 impl DoorKind {
@@ -67,6 +69,7 @@ impl DoorKind {
         match self {
             Self::Dcss => DoorGame::Dcss,
             Self::Nethack => DoorGame::Nethack,
+            Self::Brogue => DoorGame::Brogue,
         }
     }
 
@@ -74,6 +77,7 @@ impl DoorKind {
         match self {
             Self::Dcss => crate::app::door::dcss::identity::derive_client_key(secret),
             Self::Nethack => crate::app::door::nethack::identity::derive_client_key(secret),
+            Self::Brogue => crate::app::door::brogue::identity::derive_client_key(secret),
         }
     }
 }
@@ -112,6 +116,16 @@ impl DoorIngestService {
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         self.start_task(DoorKind::Nethack, target, shutdown)
+    }
+
+    /// The Brogue twin: per-player run history files (finished games only;
+    /// Brogue has no mid-run milestone log).
+    pub fn start_brogue_task(
+        self,
+        target: DoorIngestTarget,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        self.start_task(DoorKind::Brogue, target, shutdown)
     }
 
     fn start_task(
@@ -161,6 +175,7 @@ impl DoorIngestService {
             let handled = match kind {
                 DoorKind::Dcss => self.handle_dcss_frame(&frame).await,
                 DoorKind::Nethack => self.handle_nethack_frame(&frame).await,
+                DoorKind::Brogue => self.handle_brogue_frame(&frame).await,
             };
             if let Err(error) = handled {
                 // Do not advance past this line: drop the stream and let the
@@ -437,6 +452,94 @@ impl DoorIngestService {
         Ok(())
     }
 
+    /// Land one Brogue run-history line. Unlike the other doors, the line
+    /// carries no player name: identity is the per-player directory in the
+    /// frame's file id. Every path advances the cursor; only lines that map
+    /// to a live account insert a fact row.
+    pub(crate) async fn handle_brogue_frame(&self, frame: &StatsFrame) -> Result<()> {
+        let game = DoorGame::Brogue.key();
+        let Some(name) = playname_from_file(&frame.file) else {
+            tracing::warn!(file = %frame.file, "unknown brogue stats file; skipping");
+            return self.advance_cursor(game, frame).await;
+        };
+        match parse_run_history_line(&frame.line) {
+            Some(BrogueLine::Run(run)) => {
+                let name = name.to_string();
+                self.land_brogue_run(frame, &name, run).await
+            }
+            // The stats-reset marker: expected, nothing to persist.
+            Some(BrogueLine::Reset) => self.advance_cursor(game, frame).await,
+            None => {
+                tracing::warn!(line = %frame.line, "unparseable brogue run history line; skipping");
+                self.advance_cursor(game, frame).await
+            }
+        }
+    }
+
+    async fn land_brogue_run(&self, frame: &StatsFrame, name: &str, run: BrogueRun) -> Result<()> {
+        let game = DoorGame::Brogue.key();
+        let Some(user_id) = self.resolve_handle(name).await? else {
+            return self.advance_cursor(game, frame).await;
+        };
+
+        let new_run = NewDoorRun {
+            game,
+            user_id,
+            ended_at: run.ended_at,
+            result: run.result,
+            score: run.score,
+            depth: run.depth,
+            turns: run.turns,
+            raw: run.raw.clone(),
+            source_file: frame.file.clone(),
+            source_offset: frame.next_offset,
+        };
+        let mut client = self.db.get().await.context("db client for run insert")?;
+        let tx = client.transaction().await?;
+        let fresh = DoorRun::insert_ignore(&tx, &new_run).await?;
+        DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
+        tx.commit().await?;
+
+        // Awards are lifetime-idempotent, so they fire on every sighting
+        // (fresh or replayed) — that heals a crash between insert and grant.
+        // Brogue's endings are alternatives (see award.rs), so each grants
+        // only its own badge.
+        match run.result {
+            DoorRunResult::Win => self.awards.grant(user_id, DoorBadge::BrogueEscape),
+            DoorRunResult::Mastery => self.awards.grant(user_id, DoorBadge::BrogueMastery),
+            DoorRunResult::Death | DoorRunResult::Quit | DoorRunResult::Leaving => {}
+        }
+
+        let recent = Utc::now().signed_duration_since(run.ended_at) < FEED_RECENCY;
+        if fresh && recent {
+            match run.result {
+                DoorRunResult::Win => {
+                    self.activity
+                        .game_won_task(user_id, ActivityGame::Brogue, None, None);
+                }
+                DoorRunResult::Mastery => {
+                    self.activity.game_won_task(
+                        user_id,
+                        ActivityGame::Brogue,
+                        Some("mastery".to_string()),
+                        None,
+                    );
+                }
+                DoorRunResult::Death => {
+                    self.activity.game_event_task(
+                        user_id,
+                        ActivityGame::Brogue,
+                        brogue_death_action(&run),
+                    );
+                }
+                // Walking away is not a story. (`Leaving` has no Brogue
+                // mapping; the parser never produces it.)
+                DoorRunResult::Quit | DoorRunResult::Leaving => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The live account behind a playname, or `None` for names the pipe must
     /// never attribute: reserved `late`/`late_*` shapes (legacy derived
     /// playnames) and handles whose account was deleted.
@@ -475,5 +578,34 @@ fn nethack_death_action(run: &NethackRun) -> String {
     match run.death_level {
         Some(dlvl) => format!("died in NetHack on dungeon level {dlvl}, {}", run.death),
         None => format!("died in NetHack, {}", run.death),
+    }
+}
+
+/// The #lounge line for a Brogue death. The killer column is either a bare
+/// lowercase monster name ("jackal") or a capitalized full phrase ("Starved
+/// to death"), exactly as passed to `gameOver`; the case picks the phrasing.
+/// The run history has no death depth, only the run's deepest (`depth`).
+fn brogue_death_action(run: &BrogueRun) -> String {
+    let at_depth = match run.depth {
+        Some(depth) => format!(" at depth {depth}"),
+        None => String::new(),
+    };
+    match run.killed_by.chars().next() {
+        None | Some('-') => format!("died in Brogue{at_depth}"),
+        Some(first) if first.is_ascii_uppercase() => {
+            let phrase = run.killed_by.to_lowercase();
+            format!("died in Brogue{at_depth}, {phrase}")
+        }
+        Some(first) => {
+            let article = if "aeiou".contains(first.to_ascii_lowercase()) {
+                "an"
+            } else {
+                "a"
+            };
+            format!(
+                "died in Brogue{at_depth}, killed by {article} {}",
+                run.killed_by
+            )
+        }
     }
 }

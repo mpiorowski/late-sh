@@ -116,6 +116,8 @@ chip_moves!(
     NethackAscension,
     DcssOrbFound,
     DcssOrbEscape,
+    BrogueEscape,
+    BrogueMastery,
     LateaniaArchdemonDefeat,
     LateaniaFrontierKingDefeat,
 );
@@ -161,6 +163,8 @@ impl ChipMove {
             Self::NethackAscension => "nethack_ascension",
             Self::DcssOrbFound => "dcss_orb_found",
             Self::DcssOrbEscape => "dcss_orb_escape",
+            Self::BrogueEscape => "brogue_escape",
+            Self::BrogueMastery => "brogue_mastery",
             Self::LateaniaArchdemonDefeat => "lateania_archdemon_defeat",
             Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
         }
@@ -192,6 +196,8 @@ impl ChipMove {
             | Self::NethackAscension
             | Self::DcssOrbFound
             | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat => "game_payout_claims",
         }
@@ -219,6 +225,8 @@ impl ChipMove {
             | Self::NethackAscension
             | Self::DcssOrbFound
             | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat => ChipDirection::Credit,
             Self::Bet | Self::ShopPurchase => ChipDirection::Debit { floor: 0 },
@@ -255,6 +263,8 @@ impl ChipMove {
             | Self::NethackAscension
             | Self::DcssOrbFound
             | Self::DcssOrbEscape
+            | Self::BrogueEscape
+            | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
             | Self::LateaniaFrontierKingDefeat => true,
         }

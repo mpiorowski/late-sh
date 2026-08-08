@@ -476,6 +476,164 @@ async fn amulet_livelog_milestone_lands_and_pays_once_per_lifetime() {
     assert_eq!(badge, 1);
 }
 
+fn brogue_file() -> String {
+    format!("players/{HANDLE}/BrogueRunHistory.txt")
+}
+
+fn brogue_death_frame(offset: i64) -> StatsFrame {
+    StatsFrame {
+        file: brogue_file(),
+        next_offset: offset,
+        line: "8697033734589\t1754560000\tDied\tpink jelly\t1520\t1020\t0\t8\t2341".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn replayed_brogue_run_lands_one_row() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "br-replay").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    let frame = brogue_death_frame(500);
+    svc.handle_brogue_frame(&frame).await.expect("first ingest");
+    svc.handle_brogue_frame(&frame).await.expect("replay");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 1);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "brogue", &brogue_file()).await,
+        Some(500)
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT game, result, score, depth, turns, raw->>'killed_by' AS killed_by
+             FROM door_runs WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("run row");
+    assert_eq!(row.get::<_, &str>("game"), "brogue");
+    assert_eq!(row.get::<_, &str>("result"), "death");
+    assert_eq!(row.get::<_, i64>("score"), 1520);
+    assert_eq!(row.get::<_, i32>("depth"), 8);
+    assert_eq!(row.get::<_, i64>("turns"), 2341);
+    assert_eq!(row.get::<_, &str>("killed_by"), "pink jelly");
+}
+
+#[tokio::test]
+async fn brogue_endings_grant_only_their_own_badge() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "br-win").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    // An escape pays the 10k tier and nothing else (no back-grant: Brogue's
+    // endings are alternatives, not stages).
+    svc.handle_brogue_frame(&StatsFrame {
+        file: brogue_file(),
+        next_offset: 300,
+        line: "1234\t1754560000\tEscaped\t-\t4870\t4870\t0\t26\t18023".to_string(),
+    })
+    .await
+    .expect("escape ingest");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { award_chip_total_for(&db, user.id, "brogue").await == 10_000 }
+        },
+        "escape chips granted",
+    )
+    .await;
+
+    // A later mastery pays its own 20k tier; replays pay nothing more.
+    let mastery = StatsFrame {
+        file: brogue_file(),
+        next_offset: 600,
+        line: "5678\t1754560000\tMastered\t-\t18420\t9420\t3\t40\t31007".to_string(),
+    };
+    svc.handle_brogue_frame(&mastery).await.expect("mastery");
+    svc.handle_brogue_frame(&mastery).await.expect("replay");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { award_chip_total_for(&db, user.id, "brogue").await == 30_000 }
+        },
+        "mastery chips granted",
+    )
+    .await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let categories: Vec<String> = client
+        .query(
+            "SELECT category FROM profile_awards
+             WHERE user_id = $1 AND category IN ('brogue_escape', 'brogue_mastery')
+             ORDER BY category",
+            &[&user.id],
+        )
+        .await
+        .expect("award rows")
+        .into_iter()
+        .map(|row| row.get("category"))
+        .collect();
+    assert_eq!(categories, vec!["brogue_escape", "brogue_mastery"]);
+
+    let results: Vec<String> = client
+        .query(
+            "SELECT result FROM door_runs WHERE user_id = $1 ORDER BY source_offset",
+            &[&user.id],
+        )
+        .await
+        .expect("run rows")
+        .into_iter()
+        .map(|row| row.get("result"))
+        .collect();
+    assert_eq!(results, vec!["win", "mastery"]);
+}
+
+#[tokio::test]
+async fn brogue_reset_markers_and_foreign_files_only_advance_the_cursor() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "br-reset").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    // The stats-reset marker: expected shape, nothing persisted.
+    svc.handle_brogue_frame(&StatsFrame {
+        file: brogue_file(),
+        next_offset: 100,
+        line: "0\t1754560000\tReset\t-\t0\t0\t0\t0\t0".to_string(),
+    })
+    .await
+    .expect("reset ingest");
+    // A file id outside the contract (the host never streams these).
+    svc.handle_brogue_frame(&StatsFrame {
+        file: "players/nobody/RapidBrogueRunHistory.txt".to_string(),
+        next_offset: 40,
+        line: "1\t1754560000\tDied\tjackal\t1\t1\t0\t2\t3".to_string(),
+    })
+    .await
+    .expect("foreign file ingest");
+
+    assert_eq!(run_count(&test_db.db, user.id).await, 0);
+    assert_eq!(
+        cursor_for_game(&test_db.db, "brogue", &brogue_file()).await,
+        Some(100)
+    );
+    assert_eq!(
+        cursor_for_game(
+            &test_db.db,
+            "brogue",
+            "players/nobody/RapidBrogueRunHistory.txt"
+        )
+        .await,
+        Some(40)
+    );
+}
+
 #[tokio::test]
 async fn unparseable_and_untracked_lines_only_advance_the_cursor() {
     let test_db = new_test_db().await;

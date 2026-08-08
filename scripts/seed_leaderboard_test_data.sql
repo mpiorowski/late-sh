@@ -485,6 +485,35 @@ SELECT
 FROM seed_players p
 WHERE p.idx BETWEEN 5 AND 8;
 
+-- Brogue door boards, shifted again so no two doors mirror: players 9-11
+-- escaped, 12-13 mastered (both count on the wins board), every eleventh
+-- quit. Brogue has no milestone stream and the run row's deepestLevel is
+-- already the run maximum, so no milestone union is needed. The source_file
+-- mirrors the real per-player frame id shape.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'brogue',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 3 = 0 THEN (p.idx % 15) ELSE 30 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx BETWEEN 9 AND 11 THEN 'win'
+        WHEN p.idx BETWEEN 12 AND 13 THEN 'mastery'
+        WHEN p.idx % 11 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    24000 - p.idx * 430,
+    CASE
+        WHEN p.idx BETWEEN 9 AND 11 THEN 26
+        WHEN p.idx BETWEEN 12 AND 13 THEN 40
+        ELSE GREATEST(2, 24 - (p.idx % 23))
+    END,
+    9000 + p.idx * 300,
+    '{}'::jsonb,
+    'seed:players/lb_seed_' || p.idx || '/BrogueRunHistory.txt',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 28;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -606,6 +635,12 @@ ON CONFLICT (game, source_file, source_offset) DO NOTHING;
 -- And a mid-field NetHack death to match.
 INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
 SELECT 'nethack', user_id, current_timestamp - interval '5 days', 'death', 388000, 18, 52000, '{}'::jsonb, 'seed:xlogfile', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
+
+-- And a mid-field Brogue death.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'brogue', user_id, current_timestamp - interval '4 days', 'death', 12400, 14, 6200, '{}'::jsonb, 'seed:players/current/BrogueRunHistory.txt', 999999
 FROM seed_current_player
 ON CONFLICT (game, source_file, source_offset) DO NOTHING;
 

@@ -5,6 +5,9 @@
 // per enabled door, spawned from main.rs; the hosts stay stateless (no
 // cursors, no parsing, no DB), so parser fixes never need a door redeploy.
 pub mod award;
+pub mod brogue;
+#[cfg(test)]
+mod brogue_test;
 pub mod dcss;
 #[cfg(test)]
 mod dcss_test;

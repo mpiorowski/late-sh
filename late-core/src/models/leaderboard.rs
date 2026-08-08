@@ -76,9 +76,8 @@ roster!(
     /// from their host's log files into `door_runs`
     /// (devdocs/PLAN-ROGUELIKE-BOARDS.md). Each variant gets the uniform
     /// board triple: Wins (all-time), Deepest dive, and Top score (monthly +
-    /// all-time), all from the per-window union query, so Brogue joins the
-    /// boards by adding a variant once its ingestion phase lands.
-    DoorGame: Dcss, Nethack
+    /// all-time), all from the per-window union query.
+    DoorGame: Dcss, Nethack, Brogue
 );
 
 impl DailyPuzzle {
@@ -161,6 +160,7 @@ impl DoorGame {
         match self {
             Self::Dcss => "dcss",
             Self::Nethack => "nethack",
+            Self::Brogue => "brogue",
         }
     }
 
@@ -168,6 +168,7 @@ impl DoorGame {
         match self {
             Self::Dcss => "DCSS",
             Self::Nethack => "NetHack",
+            Self::Brogue => "Brogue",
         }
     }
 

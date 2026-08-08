@@ -381,7 +381,7 @@ async fn main() -> anyhow::Result<()> {
 
     // The door log pipe: tail each door host's append-only log files over the
     // stats SSH session and land runs/milestones/badges (PLAN-ROGUELIKE-BOARDS
-    // Phases 1-2). One task per door, gated on the same flag as that door's
+    // Phases 1-3). One task per door, gated on the same flag as that door's
     // client; single-replica by the same assumption as every other
     // process-global singleton here.
     let door_ingest_service = late_ssh::app::door::ingest::svc::DoorIngestService::new(
@@ -405,6 +405,16 @@ async fn main() -> anyhow::Result<()> {
                 host: state.config.nethack_host.clone(),
                 port: state.config.nethack_port,
                 secret: state.config.nethack_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _brogue_ingest_task = state.config.brogue_enabled.then(|| {
+        door_ingest_service.clone().start_brogue_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.brogue_host.clone(),
+                port: state.config.brogue_port,
+                secret: state.config.brogue_secret.clone(),
             },
             singleton_shutdown.clone(),
         )

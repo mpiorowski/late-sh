@@ -22,7 +22,7 @@ FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
-FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2 AS brogue-build
+FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3 AS brogue-build
 FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
 
 # ==============================================================================

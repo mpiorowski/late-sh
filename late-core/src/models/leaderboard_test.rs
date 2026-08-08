@@ -317,6 +317,19 @@ async fn door_boards_rank_wins_depth_and_score() {
             .expect("insert nethack run")
     );
 
+    // A Brogue escape and a mastery for the winner: both results count on
+    // the wins board (WINS = win + mastery).
+    for (result, offset) in [(DoorRunResult::Win, 700), (DoorRunResult::Mastery, 800)] {
+        let mut brogue_run = run(winner.id, result, 20_000, 26, offset);
+        brogue_run.game = DoorGame::Brogue.key();
+        brogue_run.source_file = "players/lb_door_winner/BrogueRunHistory.txt".to_string();
+        assert!(
+            DoorRun::insert_ignore(&client, &brogue_run)
+                .await
+                .expect("insert brogue run")
+        );
+    }
+
     let data = fetch_leaderboard_data(&client)
         .await
         .expect("fetch leaderboard");
@@ -327,6 +340,12 @@ async fn door_boards_rank_wins_depth_and_score() {
     assert_eq!(nethack.wins.len(), 1);
     assert_eq!(entry_for(&nethack.wins, diver.id).value, 1);
     assert_eq!(entry_for(&nethack.depth.all_time, diver.id).value, 50);
+
+    let brogue = data
+        .door_board(DoorGame::Brogue)
+        .expect("brogue boards present");
+    assert_eq!(brogue.wins.len(), 1);
+    assert_eq!(entry_for(&brogue.wins, winner.id).value, 2);
 
     let boards = data
         .door_board(DoorGame::Dcss)

@@ -63,6 +63,7 @@ pub(crate) fn legend_lines() -> Vec<Line<'static>> {
             dim,
         )),
         Line::from(Span::styled("DCO DCSS Orb of Zot  DCW DCSS Escape", dim)),
+        Line::from(Span::styled("BRE Brogue Escape  BRM Brogue Mastery", dim)),
         Line::from(Span::styled("GDS Green Dragon Slayer", dim)),
     ]
 }

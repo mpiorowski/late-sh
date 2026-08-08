@@ -1,6 +1,6 @@
 //! Chip payout + profile badge grants for door-game milestones landed by the
-//! log pipe. The shared door-award sink: DCSS and NetHack today, Brogue when
-//! its ingestion phase (Phase 3 of devdocs/PLAN-ROGUELIKE-BOARDS.md) lands.
+//! log pipe. The shared door-award sink for all three external roguelike
+//! doors (devdocs/PLAN-ROGUELIKE-BOARDS.md): DCSS, NetHack, Brogue.
 //!
 //! Same dedup story as NetHack's: once per account for life, enforced twice
 //! over — the lifetime reward template claim and the `NOT EXISTS` profile
@@ -14,19 +14,20 @@
 use late_core::db::Db;
 use late_core::models::chips::ChipMove;
 use late_core::models::profile_award::{
-    DCSS_ORB_AWARD_CATEGORY, DCSS_WIN_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY,
-    NETHACK_ASCENSION_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+    BROGUE_ESCAPE_AWARD_CATEGORY, BROGUE_MASTERY_AWARD_CATEGORY, DCSS_ORB_AWARD_CATEGORY,
+    DCSS_WIN_AWARD_CATEGORY, NETHACK_AMULET_AWARD_CATEGORY, NETHACK_ASCENSION_AWARD_CATEGORY,
+    award_badge, grant_unique_milestone_award,
 };
 use late_core::models::reward::{
-    DCSS_ORB_REWARD_KEY, DCSS_WIN_REWARD_KEY, NETHACK_AMULET_REWARD_KEY,
-    NETHACK_ASCENSION_REWARD_KEY,
+    BROGUE_ESCAPE_REWARD_KEY, BROGUE_MASTERY_REWARD_KEY, DCSS_ORB_REWARD_KEY, DCSS_WIN_REWARD_KEY,
+    NETHACK_AMULET_REWARD_KEY, NETHACK_ASCENSION_REWARD_KEY,
 };
 use uuid::Uuid;
 
 use crate::app::games::chips::svc::ChipService;
 
 /// The badge-paying door milestones, one variant per lifetime badge pair
-/// member. Phase 3 adds Brogue's.
+/// member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DoorBadge {
     /// DCSS: picked up the Orb of Zot (10k, `DCO`).
@@ -37,6 +38,10 @@ pub enum DoorBadge {
     NethackAmulet,
     /// NetHack: ascended (20k, `NHY`).
     NethackAscension,
+    /// Brogue: escaped the Dungeons of Doom (10k, `BRE`).
+    BrogueEscape,
+    /// Brogue: mastered the Dungeons of Doom, the super-victory (20k, `BRM`).
+    BrogueMastery,
 }
 
 impl DoorBadge {
@@ -46,6 +51,8 @@ impl DoorBadge {
             Self::DcssWin => DCSS_WIN_REWARD_KEY,
             Self::NethackAmulet => NETHACK_AMULET_REWARD_KEY,
             Self::NethackAscension => NETHACK_ASCENSION_REWARD_KEY,
+            Self::BrogueEscape => BROGUE_ESCAPE_REWARD_KEY,
+            Self::BrogueMastery => BROGUE_MASTERY_REWARD_KEY,
         }
     }
 
@@ -55,6 +62,8 @@ impl DoorBadge {
             Self::DcssWin => ChipMove::DcssOrbEscape,
             Self::NethackAmulet => ChipMove::NethackAmuletAcquired,
             Self::NethackAscension => ChipMove::NethackAscension,
+            Self::BrogueEscape => ChipMove::BrogueEscape,
+            Self::BrogueMastery => ChipMove::BrogueMastery,
         }
     }
 
@@ -64,6 +73,8 @@ impl DoorBadge {
             Self::DcssWin => DCSS_WIN_AWARD_CATEGORY,
             Self::NethackAmulet => NETHACK_AMULET_AWARD_CATEGORY,
             Self::NethackAscension => NETHACK_ASCENSION_AWARD_CATEGORY,
+            Self::BrogueEscape => BROGUE_ESCAPE_AWARD_CATEGORY,
+            Self::BrogueMastery => BROGUE_MASTERY_AWARD_CATEGORY,
         }
     }
 }
@@ -80,10 +91,12 @@ impl DoorAwards {
         Self { chip_svc, db }
     }
 
-    /// Grant the chips + badge for a milestone. A win implies the lesser
-    /// artifact pickup (neither game lets you win without it), so it
-    /// back-grants the pair's lesser badge in case the milestone stream
-    /// missed it; the dedup guards make the redundant grant a no-op.
+    /// Grant the chips + badge for a milestone. A DCSS or NetHack win
+    /// implies the lesser artifact pickup (neither game lets you win without
+    /// it), so it back-grants the pair's lesser badge in case the milestone
+    /// stream missed it; the dedup guards make the redundant grant a no-op.
+    /// Brogue's endings are alternatives, not stages — a Mastery run never
+    /// passes through an Escape — so its badges grant only themselves.
     pub fn grant(&self, user_id: Uuid, badge: DoorBadge) {
         match badge {
             DoorBadge::DcssOrb => self.spawn_grant(user_id, DoorBadge::DcssOrb),
@@ -96,6 +109,8 @@ impl DoorAwards {
                 self.spawn_grant(user_id, DoorBadge::NethackAmulet);
                 self.spawn_grant(user_id, DoorBadge::NethackAscension);
             }
+            DoorBadge::BrogueEscape => self.spawn_grant(user_id, DoorBadge::BrogueEscape),
+            DoorBadge::BrogueMastery => self.spawn_grant(user_id, DoorBadge::BrogueMastery),
         }
     }
 
