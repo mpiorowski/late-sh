@@ -63,6 +63,7 @@ use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
     ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
     frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
+    tutorial_start_room,
 };
 
 /// World heartbeat. One combat round resolves per tick.
@@ -2534,7 +2535,12 @@ impl WorldState {
         if self.players.contains_key(&user_id) {
             return false;
         }
-        let start = self.world.start_room;
+        // Brand-new characters land in Wayfarer's Hollow, the tutorial zone -
+        // never `World::start_room` directly, which stays Embergate's square
+        // so map anchoring, recall, and every "home is room 1" assumption
+        // elsewhere is untouched. A returning character's saved room (from
+        // `hydrate`) is unaffected by this.
+        let start = tutorial_start_room();
         let mut player = PlayerState {
             user_id,
             class: None,
@@ -2634,7 +2640,7 @@ impl WorldState {
         self.log_to(
             user_id,
             LogKind::System,
-            "New adventurers usually leave by the South Gate. Stranger paths from the square lead into much older danger."
+            "Welcome to Wayfarer's Hollow, a safe place to learn your trade before the real world asks anything of you. Explore it at your own pace - press r anytime to leave for Embergate, the real town, whenever you're ready."
                 .to_string(),
         );
         self.describe_room(user_id);
