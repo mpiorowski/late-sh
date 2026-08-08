@@ -129,7 +129,37 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
     .await
     .expect("opt author in");
 
+    // A bystander with default settings pins the opt-in gate: their send
+    // completes first (SendSucceeded lands after the pre-translate hook
+    // runs), so if the gate ever disappeared, their request would fire
+    // before the opted author's and the id assertion below would catch it.
+    let bystander = create_test_user(&test_db.db, "pretranslate_bystander").await;
+    ChatRoomMember::join(&client, room.id, bystander.id)
+        .await
+        .expect("join bystander");
+
     let mut translations = translation.subscribe();
+    let mut chat_events = service.subscribe_events();
+    let bystander_request = Uuid::now_v7();
+    service.send_message_task(
+        bystander.id,
+        room.id,
+        None,
+        "salut tout le monde".to_string(),
+        bystander_request,
+        false,
+    );
+    loop {
+        let event = timeout(Duration::from_secs(5), chat_events.recv())
+            .await
+            .expect("bystander send timeout")
+            .expect("chat channel open");
+        if matches!(event, ChatEvent::SendSucceeded { request_id, .. } if request_id == bystander_request)
+        {
+            break;
+        }
+    }
+
     service.send_message_task(
         author.id,
         room.id,
@@ -138,14 +168,26 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
         Uuid::now_v7(),
         false,
     );
+    let opted_message_id = loop {
+        let event = timeout(Duration::from_secs(5), chat_events.recv())
+            .await
+            .expect("author send timeout")
+            .expect("chat channel open");
+        if let ChatEvent::MessageCreated { message, .. } = event
+            && message.user_id == author.id
+        {
+            break message.id;
+        }
+    };
 
     // AI is disabled, so the request resolves as Failed; the event alone
-    // proves the send path fired an English request for the author's own
-    // message without any viewer asking.
+    // proves the send path fired an English request, and its message id
+    // proves it fired for the opted-in author only.
     let event = timeout(Duration::from_secs(5), translations.recv())
         .await
         .expect("translation event timeout")
         .expect("translation channel open");
+    assert_eq!(event.message_id, opted_message_id);
     assert_eq!(event.room_id, room.id);
     assert_eq!(event.target, TranslateLang::En);
     assert!(matches!(event.outcome, TranslationOutcome::Failed));

@@ -4337,8 +4337,14 @@ impl ChatState {
                             room.id == room_id && messages.iter().any(|m| m.id == message_id)
                         })
                     {
-                        self.translations
-                            .insert(message_id, TranslationDisplay::Pending);
+                        // No Pending marker here: the "translating…"
+                        // placeholder is manual-only (`t`). An auto-fired
+                        // request renders nothing until a real translation
+                        // lands, so same-language verdicts (most messages,
+                        // now that English goes to the model) never flash a
+                        // line that immediately vanishes. Duplicate requests
+                        // are the service's single-flight problem, and a `t`
+                        // pressed mid-flight just joins the same call.
                         self.translation_cache_checked.insert(message_id);
                         self.translation_service.request(
                             message_id,
