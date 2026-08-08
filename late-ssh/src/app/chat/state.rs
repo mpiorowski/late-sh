@@ -15,7 +15,7 @@ use late_core::{
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
-        message_translation::{TranslateLang, needs_translation},
+        message_translation::{TRANSLATE_MAX_BODY_CHARS, TranslateLang, needs_translation},
         voice_channel::VoiceChannel,
     },
 };
@@ -1053,6 +1053,12 @@ impl ChatState {
                 None
             }
             Some(TranslationDisplay::Failed) | None => {
+                // Length check first: `needs_translation` also returns false
+                // for over-cap bodies, and "already readable" would be a lie
+                // for a genuinely foreign wall of text.
+                if body.chars().count() > TRANSLATE_MAX_BODY_CHARS {
+                    return Some(Banner::info("Message too long to translate"));
+                }
                 if !needs_translation(&body, self.translate_to) {
                     return Some(Banner::info(&format!(
                         "Already readable in {}",
@@ -1112,7 +1118,15 @@ impl ChatState {
         loop {
             let event = match self.translation_rx.try_recv() {
                 Ok(event) => event,
-                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Lagged(_)) => {
+                    // The dropped events may have carried results for entries
+                    // this session marked Pending, and nothing else ever
+                    // clears Pending (`t` on a Pending message is a no-op).
+                    // Reset them so the marker disappears and `t` can
+                    // re-request instead of reading "translating…" forever.
+                    self.reset_pending_translations();
+                    continue;
+                }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
             if event.target != self.translate_to {
@@ -4962,6 +4976,10 @@ impl ChatState {
             messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
+                // Evicted messages can never render again this session, so
+                // their translation state is dead weight; without this a
+                // long-lived auto-translate session grows unbounded.
+                self.forget_translation(message_id);
             }
         }
         self.bump_room_version(room_id);
@@ -4998,6 +5016,39 @@ impl ChatState {
         self.translation_hidden.remove(&message_id);
         self.translation_manual.remove(&message_id);
         self.translation_cache_checked.remove(&message_id);
+    }
+
+    /// Drop every Pending translation entry so `t` can re-request. Called
+    /// when the event receiver lagged: the result for a Pending entry may
+    /// have been among the dropped events, and no later event clears it.
+    fn reset_pending_translations(&mut self) {
+        let stuck: Vec<Uuid> = self
+            .translations
+            .iter()
+            .filter(|(_, display)| **display == TranslationDisplay::Pending)
+            .map(|(message_id, _)| *message_id)
+            .collect();
+        if stuck.is_empty() {
+            return;
+        }
+        let rooms: HashSet<Uuid> = stuck
+            .iter()
+            .filter_map(|message_id| {
+                self.rooms.iter().find_map(|(room, messages)| {
+                    messages
+                        .iter()
+                        .any(|message| message.id == *message_id)
+                        .then_some(room.id)
+                })
+            })
+            .collect();
+        for message_id in stuck {
+            self.translations.remove(&message_id);
+            self.translation_manual.remove(&message_id);
+        }
+        for room_id in rooms {
+            self.bump_room_version(room_id);
+        }
     }
 
     pub(crate) fn remove_room_for_moderation(&mut self, room_id: Uuid) {

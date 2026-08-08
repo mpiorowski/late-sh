@@ -174,6 +174,11 @@ impl TranslationService {
                 tracing::warn!("translation model returned no usable text");
                 TranslationOutcome::Failed
             }
+            Ok(Resolution::Stale) => {
+                metrics::record_chat_translation(TranslationResult::Stale);
+                tracing::info!("translation discarded; message edited mid-flight");
+                TranslationOutcome::Failed
+            }
             Err(error) => {
                 metrics::record_chat_translation(TranslationResult::Failed);
                 tracing::error!(error = ?error, "translation request failed");
@@ -188,10 +193,16 @@ impl TranslationService {
         body: &str,
         target: TranslateLang,
     ) -> anyhow::Result<Resolution> {
-        let client = self.db.get().await?;
-        let cached = MessageTranslation::get_many(&client, &[message_id], target).await?;
-        if let Some(text) = cached.into_iter().next().map(|(_, text)| text) {
-            return Ok(Resolution::CacheHit(text));
+        // Acquire and release the client around the cache check: requests
+        // queue on the API gate below, and a queued request holding a pooled
+        // connection would starve the rest of the app under a burst (the news
+        // summarizer scopes its client the same way).
+        {
+            let client = self.db.get().await?;
+            let cached = MessageTranslation::get_many(&client, &[message_id], target).await?;
+            if let Some(text) = cached.into_iter().next().map(|(_, text)| text) {
+                return Ok(Resolution::CacheHit(text));
+            }
         }
 
         if !self.spend_from_daily_cap() {
@@ -224,7 +235,12 @@ impl TranslationService {
             return Ok(Resolution::NoText);
         }
 
-        MessageTranslation::upsert(&client, message_id, target, &text).await?;
+        let client = self.db.get().await?;
+        let written =
+            MessageTranslation::upsert_if_current(&client, message_id, target, body, &text).await?;
+        if !written {
+            return Ok(Resolution::Stale);
+        }
         Ok(Resolution::Translated(text))
     }
 
@@ -249,6 +265,9 @@ enum Resolution {
     Translated(String),
     CapExhausted,
     NoText,
+    /// The message was edited while the call was in flight; the result
+    /// described text that no longer exists and was not cached.
+    Stale,
 }
 
 #[cfg(test)]

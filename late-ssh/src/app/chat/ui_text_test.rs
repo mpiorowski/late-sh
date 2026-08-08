@@ -224,6 +224,56 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
 }
 
 #[test]
+fn wrap_chat_entry_to_lines_renders_ready_translation_under_the_body() {
+    let translation = TranslationDisplay::Ready("hello, i just found this place".to_string());
+    let wrapped = wrap_chat_entry_to_lines(
+        "你好，我刚发现这个地方",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        Some(&translation),
+    );
+    let rendered = lines_to_strings(&wrapped.lines).join("\n");
+    assert!(rendered.contains("你好，我刚发现这个地方"), "{rendered}");
+    assert!(
+        rendered.contains("↳ hello, i just found this place"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn wrap_chat_entry_to_lines_renders_no_translation_line_when_hidden() {
+    // A `t`-collapsed (or never-requested) message passes `None`; the body
+    // must render without any translation annotation.
+    let wrapped = wrap_chat_entry_to_lines(
+        "你好，我刚发现这个地方",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        None,
+    );
+    let rendered = lines_to_strings(&wrapped.lines).join("\n");
+    assert!(rendered.contains("你好，我刚发现这个地方"), "{rendered}");
+    assert!(!rendered.contains('↳'), "{rendered}");
+}
+
+#[test]
 fn wrap_message_has_left_padding() {
     let lines = wrap_message_to_lines(
         "hello",

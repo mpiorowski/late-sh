@@ -31,7 +31,7 @@ async fn cached_translation_is_served_without_the_api() {
     let test_db = new_test_db().await;
     let (message_id, room_id) = seeded_message(&test_db.db, "你好").await;
     let client = test_db.db.get().await.expect("db client");
-    MessageTranslation::upsert(&client, message_id, TranslateLang::En, "hello")
+    MessageTranslation::upsert_if_current(&client, message_id, TranslateLang::En, "你好", "hello")
         .await
         .expect("seed cache");
 

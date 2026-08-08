@@ -101,16 +101,42 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
     .await
     .unwrap();
 
-    MessageTranslation::upsert(&client, msg.id, TranslateLang::En, "hello")
-        .await
-        .unwrap();
+    assert!(
+        MessageTranslation::upsert_if_current(&client, msg.id, TranslateLang::En, "你好", "hello")
+            .await
+            .unwrap()
+    );
     // Re-upsert replaces, one row per (message, lang).
-    MessageTranslation::upsert(&client, msg.id, TranslateLang::En, "hello there")
+    assert!(
+        MessageTranslation::upsert_if_current(
+            &client,
+            msg.id,
+            TranslateLang::En,
+            "你好",
+            "hello there",
+        )
         .await
-        .unwrap();
-    MessageTranslation::upsert(&client, msg.id, TranslateLang::Ko, "안녕")
+        .unwrap()
+    );
+    assert!(
+        MessageTranslation::upsert_if_current(&client, msg.id, TranslateLang::Ko, "你好", "안녕")
+            .await
+            .unwrap()
+    );
+
+    // A result whose source body no longer matches (the message was edited
+    // mid-flight) must not land: it describes text that no longer exists.
+    assert!(
+        !MessageTranslation::upsert_if_current(
+            &client,
+            msg.id,
+            TranslateLang::En,
+            "pre-edit body",
+            "stale translation",
+        )
         .await
-        .unwrap();
+        .unwrap()
+    );
 
     let cached = MessageTranslation::get_many(&client, &[msg.id], TranslateLang::En)
         .await

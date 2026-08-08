@@ -309,21 +309,30 @@ impl MessageTranslation {
             .collect())
     }
 
-    pub async fn upsert(
+    /// Cache `translation` for `message_id` into `target`, but only while the
+    /// message's body is still `source_body`. Translation calls are slow; an
+    /// edit can land mid-flight, and its row delete runs before this row
+    /// exists, so an unconditional write would cache the old body's
+    /// translation against the new text forever. `FOR SHARE` makes the check
+    /// wait out a concurrent edit's row lock and re-evaluate against the
+    /// committed body. Returns whether the row landed; a `false` means the
+    /// translation described text that no longer exists and was discarded.
+    pub async fn upsert_if_current(
         client: &impl GenericClient,
         message_id: Uuid,
         target: TranslateLang,
-        body: &str,
-    ) -> Result<()> {
-        client
+        source_body: &str,
+        translation: &str,
+    ) -> Result<bool> {
+        let written = client
             .execute(
                 "INSERT INTO message_translations (message_id, target_lang, body)
-                 VALUES ($1, $2, $3)
+                 SELECT id, $2, $3 FROM chat_messages WHERE id = $1 AND body = $4 FOR SHARE
                  ON CONFLICT (message_id, target_lang) DO UPDATE SET body = EXCLUDED.body",
-                &[&message_id, &target.as_str(), &body],
+                &[&message_id, &target.as_str(), &translation, &source_body],
             )
             .await?;
-        Ok(())
+        Ok(written > 0)
     }
 
     /// Drop every cached translation of a message. Called inside the edit

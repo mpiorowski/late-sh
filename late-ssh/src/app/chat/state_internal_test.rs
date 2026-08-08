@@ -2634,10 +2634,11 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
     .expect("english message");
     // Seeded the way another viewer's earlier call would: the cache is what
     // makes a translation free for everyone who comes after the first.
-    MessageTranslation::upsert(
+    MessageTranslation::upsert_if_current(
         &client,
         foreign.id,
         TranslateLang::En,
+        "你好，我刚发现这个地方",
         "hello, i just found this place",
     )
     .await
@@ -2708,6 +2709,51 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
 }
 
 #[tokio::test]
+async fn over_cap_foreign_message_banners_too_long_not_already_readable() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "toolong_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "toolong_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    // Genuinely foreign script, but past TRANSLATE_MAX_BODY_CHARS (chat
+    // bodies go to 2000). "Already readable" would be a lie here.
+    let long = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "字".repeat(1_600),
+        },
+    )
+    .await
+    .expect("long message");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, long.id).await;
+    state.selected_message_id = Some(long.id);
+    let banner = state
+        .toggle_translation_selected_in_room(lounge.id)
+        .expect("over-cap message banners");
+    assert!(
+        banner.message.contains("too long"),
+        "unexpected banner text: {}",
+        banner.message
+    );
+    assert!(!state.translations.contains_key(&long.id));
+}
+
+#[tokio::test]
 async fn changing_the_target_language_drops_translations_for_the_old_one() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
@@ -2735,9 +2781,15 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
     )
     .await
     .expect("message");
-    MessageTranslation::upsert(&client, message.id, TranslateLang::En, "hello there")
-        .await
-        .expect("seed cache");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message.id,
+        TranslateLang::En,
+        "你好，我刚发现这个地方",
+        "hello there",
+    )
+    .await
+    .expect("seed cache");
 
     let mut state = counter_test_state(&test_db, viewer.id);
     load_room_tail(&mut state, lounge.id, message.id).await;

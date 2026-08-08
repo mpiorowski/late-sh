@@ -20,6 +20,7 @@ pub enum TranslationResult {
     Translated,
     Failed,
     CapExhausted,
+    Stale,
 }
 
 #[cfg(feature = "otel")]
@@ -294,6 +295,7 @@ mod inner {
             TranslationResult::Translated => "translated",
             TranslationResult::Failed => "failed",
             TranslationResult::CapExhausted => "cap_exhausted",
+            TranslationResult::Stale => "stale",
         }
     }
 
