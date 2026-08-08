@@ -187,6 +187,15 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (750..=1000).contains(&islands),
         "the archipelago should be ~900 rooms, got {islands}"
     );
+    // The Wildbound Waste: a fifth, pvp continent of three chained
+    // maze/cavern biomes plus their three small gate towns (rooms 30000+).
+    // Mazes fill their cell field; caverns are sparse, so the total is a sane
+    // band rather than an exact count.
+    let wildbound = count_in(WILDBOUND_BASE, WILDBOUND_BASE + 3 * WILDBOUND_BIOME_STRIDE);
+    assert!(
+        (900..=3 * WILDBOUND_BIOME_STRIDE as usize).contains(&wildbound),
+        "the Wildbound Waste should be ~1000+ rooms, got {wildbound}"
+    );
     // No stray rooms outside the known groups.
     assert_eq!(
         world.rooms.len(),
@@ -200,7 +209,8 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + lakes
             + broceliande
             + villages
-            + islands,
+            + islands
+            + wildbound,
         "every room should belong to a known region"
     );
     for spawn in &world.spawns {
@@ -1759,4 +1769,130 @@ fn non_flying_critters_never_show_a_perch_note() {
             }
         }
     }
+}
+
+#[test]
+fn wildbound_waste_is_hung_off_the_sand_wyrms_maw() {
+    let world = seed_world();
+    let gateway = world
+        .room(WILDBOUND_GATEWAY)
+        .expect("Sand-Wyrm's Maw exists");
+    let town = gateway
+        .exits
+        .get(&Dir::South)
+        .copied()
+        .expect("the Maw's south exit leads into the Waste");
+    assert_eq!(
+        town, WILDBOUND_BASE,
+        "leads straight to the first gate town"
+    );
+    assert!(
+        world
+            .room(WILDBOUND_BASE)
+            .expect("first town square")
+            .exits
+            .values()
+            .any(|to| *to == WILDBOUND_GATEWAY),
+        "the walk back out is reciprocal"
+    );
+}
+
+#[test]
+fn wildbound_towns_are_safe_islands_in_a_pvp_continent() {
+    let world = seed_world();
+    let mut safe_towns = 0;
+    let mut pvp_fields = 0;
+    for b in 0..3u32 {
+        let base = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE;
+        // The four town rooms (square, shelter, outfitter, gate) are safe
+        // havens, never pvp ground.
+        for offset in 0..4 {
+            let room = world
+                .room(base + offset)
+                .unwrap_or_else(|| panic!("town room {} of biome {b} should exist", base + offset));
+            assert!(
+                room.safe && !room.pvp,
+                "town room {} must be a safe haven",
+                room.id
+            );
+            safe_towns += 1;
+        }
+        // Every other room in the biome's block is contested: pvp, never safe.
+        for id in (base + 10)..(base + WILDBOUND_BIOME_STRIDE) {
+            if let Some(room) = world.room(id) {
+                assert!(
+                    room.pvp && !room.safe,
+                    "field room {id} in biome {b} must be pvp ground, not a haven"
+                );
+                pvp_fields += 1;
+            }
+        }
+    }
+    assert_eq!(safe_towns, 12, "three towns of four rooms each");
+    assert!(pvp_fields >= 900, "a real continent of contested ground");
+}
+
+#[test]
+fn wildbound_biomes_are_mazes_and_caverns_not_grids() {
+    let world = seed_world();
+    for b in 0..3u32 {
+        let base = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE;
+        let field: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| r.id >= base + 10 && r.id < base + WILDBOUND_BIOME_STRIDE)
+            .collect();
+        let dead_ends = field.iter().filter(|r| r.exits.len() == 1).count();
+        let junctions = field.iter().filter(|r| r.exits.len() >= 3).count();
+        assert!(
+            dead_ends > 0 && junctions > 0,
+            "biome {b} should read as a maze/cavern, not a uniform grid"
+        );
+    }
+}
+
+#[test]
+fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
+    // The *template pool* (20 base creatures x 5 tiers x 3 biomes) is exactly
+    // 300, independent of which combinations this particular seeded world
+    // happens to roll into an actual room (see the variety check below).
+    let pool: usize = WILDBOUND_BIOMES
+        .iter()
+        .map(|b| b.creatures.len() * WILDBOUND_TIER_AFFIX.len())
+        .sum();
+    assert_eq!(pool, 300, "20 creatures x 5 tiers x 3 biomes");
+    assert_eq!(
+        WILDBOUND_BIOMES.len(),
+        3,
+        "three biomes, each with its apex"
+    );
+
+    let world = seed_world();
+    let wildbound: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| s.id >= WILDBOUND_SPAWN_ID_START)
+        .collect();
+    let distinct_names: std::collections::HashSet<&str> =
+        wildbound.iter().map(|s| s.name).collect();
+    let bosses = wildbound.iter().filter(|s| s.boss).count();
+    assert_eq!(bosses, 3, "one apex boss per biome");
+    assert!(
+        distinct_names.len() >= 200,
+        "the seeded world should draw wide variety from the 300-mob pool, got {}",
+        distinct_names.len()
+    );
+    for spawn in &wildbound {
+        assert!(
+            world.rooms.contains_key(&spawn.home),
+            "{} homes to missing room {}",
+            spawn.name,
+            spawn.home
+        );
+    }
+    let levels: Vec<i32> = wildbound.iter().map(|s| s.level()).collect();
+    assert!(
+        levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 90),
+        "the Waste should span from early levels to near the cap, got {levels:?}"
+    );
 }

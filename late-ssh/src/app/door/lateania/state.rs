@@ -74,6 +74,9 @@ pub enum ClickAction {
     Ability(u8),
     /// Lock onto the foe with this spawn id (a click on its roster row).
     AttackMob(u32),
+    /// Lock onto a hostile adventurer (a click on their roster row in a
+    /// `pvp` room's "Adventurers here" list).
+    AttackPlayer(Uuid),
 }
 
 /// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
@@ -651,6 +654,7 @@ impl State {
             ClickAction::Flee => self.flee(),
             ClickAction::Ability(slot) => self.use_ability(slot),
             ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),
+            ClickAction::AttackPlayer(target_id) => self.attack_player(target_id),
         }
         true
     }
@@ -660,6 +664,14 @@ impl State {
     pub fn attack_mob(&mut self, mob_id: u32) {
         if self.ensure_player_present() {
             self.svc.engage_mob_task(self.user_id, mob_id);
+        }
+    }
+
+    /// Lock onto a hostile adventurer in a `pvp` room (a click on their
+    /// roster row) and start duelling; the combat tick carries it from there.
+    pub fn attack_player(&mut self, target_id: Uuid) {
+        if self.ensure_player_present() {
+            self.svc.engage_player_task(self.user_id, target_id);
         }
     }
 

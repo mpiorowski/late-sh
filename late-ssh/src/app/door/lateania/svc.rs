@@ -494,6 +494,12 @@ pub struct OccupantView {
     pub class_key: String,
     /// This adventurer's raw appearance selections, for composing their portrait.
     pub appearance_idx: Vec<u8>,
+    /// True when this room is a `pvp` zone and this adventurer is a valid
+    /// target: alive, classed, and not you. Drives the clickable roster row
+    /// and the hostile marker (see `engage_player`).
+    pub attackable: bool,
+    /// True when this adventurer is who you're currently duelling.
+    pub targeted: bool,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -729,6 +735,11 @@ pub struct PlayerView {
     pub room_desc: String,
     pub zone: String,
     pub safe: bool,
+    /// True in a Wildbound-style contested zone (see `Room::pvp`), where the
+    /// "Adventurers here" roster shows hostile marks and is clickable to duel.
+    pub pvp: bool,
+    /// Lifetime adventurers this character has slain in pvp combat.
+    pub pvp_kills: i64,
     pub exits: Vec<(Dir, String)>,
     pub mobs: Vec<MobView>,
     /// Rooms near you that hold a living, revealed foe, so the live field can
@@ -848,6 +859,8 @@ impl PlayerView {
             room_desc: String::new(),
             zone: String::new(),
             safe: true,
+            pvp: false,
+            pvp_kills: 0,
             exits: Vec::new(),
             mobs: Vec::new(),
             nearby_foes: Vec::new(),
@@ -1524,6 +1537,10 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.engage_mob(user_id, mob_id));
     }
 
+    pub fn engage_player_task(&self, user_id: Uuid, target_id: Uuid) {
+        self.mutate(user_id, move |s| s.engage_player(user_id, target_id));
+    }
+
     pub fn ability_task(&self, user_id: Uuid, slot: u8) {
         self.mutate(user_id, move |s| s.use_ability(user_id, slot));
     }
@@ -1782,6 +1799,14 @@ struct PlayerState {
     /// a refcount instead of a deep copy per player.
     visited: Arc<HashSet<RoomId>>,
     target: Option<u32>,
+    /// Another adventurer this character is trading blows with, in a `pvp`
+    /// room (see `Room::pvp`). Distinct from `target` (mobs) so a fight with
+    /// a mob and a duel with a player never collide. Cleared on death, flee,
+    /// or leaving the room.
+    pvp_target: Option<Uuid>,
+    /// Adventurers slain in `pvp` combat, lifetime. Drives the Wildbound
+    /// reaver title track (see `pvp_title_for`) and is persisted.
+    pvp_kills: i64,
     /// Another player this character auto-follows when they move (set with `f`).
     following: Option<Uuid>,
     /// True from engaging until the first auto-attack lands (Rogue opening crit).
@@ -1939,6 +1964,13 @@ impl PlayerState {
     fn armor(&self) -> i32 {
         let (_, _, armor) = self.equipment_mods();
         armor
+    }
+
+    /// True while trading blows with a mob or another adventurer. Movement,
+    /// recall, mounting, and waypoints all gate on this, same as a plain mob
+    /// fight - a pvp duel holds you in place exactly like combat always has.
+    fn in_combat(&self) -> bool {
+        self.target.is_some() || self.pvp_target.is_some()
     }
 
     /// Total xp trained in a gathering skill (0 if untrained).
@@ -2521,6 +2553,8 @@ impl WorldState {
             waypoint: None,
             visited: Arc::new(HashSet::from([start])),
             target: None,
+            pvp_target: None,
+            pvp_kills: 0,
             following: None,
             opening_strike: false,
             empower: 0,
@@ -2770,6 +2804,8 @@ impl WorldState {
                 .collect();
             // Restore Animal Taming xp (0 for pre-taming saves).
             p.taming_xp = saved.taming_xp.max(0);
+            // Restore lifetime PvP kills (0 for pre-Wildbound-Waste saves).
+            p.pvp_kills = saved.pvp_kills.max(0);
             p.rpg_mode = saved.rpg_mode;
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
@@ -2888,6 +2924,7 @@ impl WorldState {
                 .collect(),
             taming_xp: p.taming_xp,
             rpg_mode: p.rpg_mode,
+            pvp_kills: p.pvp_kills,
         }))
     }
 
@@ -3082,7 +3119,7 @@ impl WorldState {
             self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
             return;
         }
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -3168,7 +3205,7 @@ impl WorldState {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
-        if !player.mounted || player.target.is_some() {
+        if !player.mounted || player.in_combat() {
             return;
         }
         let stride = player
@@ -3183,7 +3220,7 @@ impl WorldState {
             let Some(player) = self.players.get(&user_id) else {
                 return;
             };
-            if player.target.is_some() || player.respawn_at.is_some() {
+            if player.in_combat() || player.respawn_at.is_some() {
                 return;
             }
             let has_way = self
@@ -3216,7 +3253,7 @@ impl WorldState {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -3472,7 +3509,7 @@ impl WorldState {
             self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
             return;
         }
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -3517,7 +3554,7 @@ impl WorldState {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -3552,7 +3589,7 @@ impl WorldState {
             self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
             return;
         }
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -3634,7 +3671,7 @@ impl WorldState {
             self.log_to(user_id, LogKind::System, "You are recovering.".to_string());
             return;
         }
-        if player.target.is_some() {
+        if player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -4336,7 +4373,7 @@ impl WorldState {
         let Some(p) = self.players.get(&user_id) else {
             return;
         };
-        if p.target.is_some() {
+        if p.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Combat,
@@ -4735,6 +4772,72 @@ impl WorldState {
             LogKind::Combat,
             format!("You close with {mob_name}!"),
         );
+    }
+
+    /// Lock onto another adventurer in a `pvp` room (a click on their roster
+    /// row in the "Adventurers here" list). Mirrors [`Self::engage_mob`] but
+    /// keeps a separate `pvp_target` so a mob fight and a duel never collide;
+    /// the victim auto-retaliates if they weren't already fighting anything.
+    fn engage_player(&mut self, user_id: Uuid, target_id: Uuid) {
+        if !self.is_classed(user_id) || user_id == target_id {
+            return;
+        }
+        let Some(player) = self.players.get(&user_id) else {
+            return;
+        };
+        if player.respawn_at.is_some() {
+            return;
+        }
+        let room_id = player.room;
+        if !self.world.room(room_id).is_some_and(|r| r.pvp) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "There's no dueling ground here.".to_string(),
+            );
+            return;
+        }
+        let valid = self
+            .players
+            .get(&target_id)
+            .is_some_and(|t| t.room == room_id && t.class.is_some() && t.respawn_at.is_none());
+        if !valid {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                "That adventurer is no longer here to fight.".to_string(),
+            );
+            return;
+        }
+        if let Some(p) = self.players.get_mut(&user_id) {
+            if p.mounted {
+                p.mounted = false;
+            }
+            p.pvp_target = Some(target_id);
+            p.target = None;
+            p.opening_strike = p.class == Some(Class::Rogue);
+        }
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            "You draw on a fellow adventurer!".to_string(),
+        );
+        // The victim rounds on their attacker at once, unless they were
+        // already mid-fight with someone or something else.
+        let victim_free = self
+            .players
+            .get(&target_id)
+            .is_some_and(|t| t.pvp_target.is_none() && t.target.is_none());
+        if victim_free {
+            if let Some(t) = self.players.get_mut(&target_id) {
+                t.pvp_target = Some(user_id);
+            }
+            self.log_to(
+                target_id,
+                LogKind::Combat,
+                "You are set upon by a fellow adventurer!".to_string(),
+            );
+        }
     }
 
     /// Cast/use the ability in the given action-bar slot (1-based).
@@ -5286,7 +5389,7 @@ impl WorldState {
         let Some(player) = self.players.get(&user_id) else {
             return;
         };
-        if player.target.is_none() {
+        if !player.in_combat() {
             self.log_to(
                 user_id,
                 LogKind::Normal,
@@ -5301,6 +5404,7 @@ impl WorldState {
             .and_then(|r| r.exits.iter().next().map(|(dir, dest)| (*dir, *dest)));
         if let Some(player) = self.players.get_mut(&user_id) {
             player.target = None;
+            player.pvp_target = None;
         }
         match exit {
             Some((dir, dest)) => {
@@ -6116,6 +6220,109 @@ impl WorldState {
             // Resolve the rest of the mob's behavior this round (cast/pack/
             // summon/steal/flee). No-op for plain Sentinels.
             self.resolve_mob_behavior(user_id, mob_id);
+        }
+
+        // Resolve a combat round for each pvp-engaged player: the same shape
+        // as the mob loop above, but the foe is another adventurer. Both
+        // sides of a duel carry their own `pvp_target` (set on the victim by
+        // `engage_player`'s auto-retaliation), so two duelling players each
+        // land a blow this same tick, same as trading blows with a mob.
+        let pvp_fighters: Vec<(Uuid, Uuid)> = self
+            .players
+            .iter()
+            .filter(|(_, p)| p.pvp_target.is_some() && p.respawn_at.is_none())
+            .filter_map(|(id, p)| p.pvp_target.map(|t| (*id, t)))
+            .collect();
+
+        for (attacker_id, victim_id) in pvp_fighters {
+            // Snapshot everything needed from the attacker up front so no
+            // live immutable borrow survives into the `get_mut` calls below.
+            let Some((room_id, atk_class, atk_level, opening, atk_hp, atk_max_hp, base_atk)) =
+                self.players.get(&attacker_id).map(|a| {
+                    (
+                        a.room,
+                        a.class,
+                        a.level,
+                        a.opening_strike,
+                        a.hp,
+                        a.max_hp(),
+                        a.attack(),
+                    )
+                })
+            else {
+                continue;
+            };
+            let room_is_pvp = self.world.room(room_id).is_some_and(|r| r.pvp);
+            let valid_victim = self.players.get(&victim_id).is_some_and(|v| {
+                room_is_pvp && v.room == room_id && v.respawn_at.is_none() && v.class.is_some()
+            });
+            if !valid_victim {
+                // The foe left, died, changed rooms, or the ground stopped
+                // being contested (e.g. dragged into a safe room). Drop the
+                // duel quietly, same as a mob fight ending.
+                if let Some(a) = self.players.get_mut(&attacker_id) {
+                    a.pvp_target = None;
+                }
+                continue;
+            }
+            let ranger_wounded = atk_class == Some(Class::Ranger)
+                && self
+                    .players
+                    .get(&victim_id)
+                    .is_some_and(|v| v.hp * 2 < v.max_hp());
+            let frenzy_pct = if atk_class == Some(Class::Berserker) {
+                let missing = ((atk_max_hp - atk_hp).max(0) * 100) / atk_max_hp.max(1);
+                (missing.saturating_sub(50)).clamp(0, 50)
+            } else {
+                0
+            };
+            let atk = if opening { base_atk * 2 } else { base_atk };
+            let atk = atk * (100 + frenzy_pct) / 100;
+            let atk = if ranger_wounded { atk + atk / 4 } else { atk };
+            if opening && let Some(a) = self.players.get_mut(&attacker_id) {
+                a.opening_strike = false;
+            }
+            let gold_before = self.players.get(&victim_id).map(|v| v.gold).unwrap_or(0);
+            let survived = self.strike_player(victim_id, atk, DamageType::Physical, "a rival");
+            self.dirty = true;
+            self.log_to(
+                attacker_id,
+                LogKind::Combat,
+                format!("You strike your rival for {atk} physical."),
+            );
+            if !survived && self.players.get(&victim_id).is_some_and(|v| v.dead) {
+                // A real kill (not a Warrior death-save or veteran rez):
+                // the gold `strike_player` already deducted from the victim's
+                // carried purse becomes the spoils of the duel.
+                let gold_gain = (gold_before
+                    - self
+                        .players
+                        .get(&victim_id)
+                        .map(|v| v.gold)
+                        .unwrap_or(gold_before))
+                .max(0);
+                let victim_level = self.players.get(&victim_id).map(|v| v.level).unwrap_or(1);
+                let xp_gain = (15 + victim_level as i64 * 5).max(15);
+                let mut new_kill_count = 0;
+                if let Some(a) = self.players.get_mut(&attacker_id) {
+                    a.pvp_target = None;
+                    a.gold += gold_gain;
+                    a.xp += xp_gain;
+                    a.pvp_kills += 1;
+                    new_kill_count = a.pvp_kills;
+                }
+                self.log_to(
+                    attacker_id,
+                    LogKind::Loot,
+                    format!(
+                        "You have slain a rival adventurer! (+{xp_gain} xp, +{gold_gain} gold)"
+                    ),
+                );
+                if let Some(title) = pvp_title_for(new_kill_count) {
+                    self.award_title(attacker_id, title.to_string(), atk_level);
+                }
+                self.check_level_up(attacker_id);
+            }
         }
 
         // No idle timeout: a player stays put in Lateania for as long as their
@@ -7382,7 +7589,7 @@ impl WorldState {
         }
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
-            let (room_name, room_desc, zone, safe, exits) = match room {
+            let (room_name, room_desc, zone, safe, pvp, exits) = match room {
                 Some(room) => {
                     let mut exits: Vec<(Dir, String)> = room
                         .exits
@@ -7395,6 +7602,7 @@ impl WorldState {
                         room.desc.to_string(),
                         room.zone.to_string(),
                         room.safe,
+                        room.pvp,
                         exits,
                     )
                 }
@@ -7403,6 +7611,7 @@ impl WorldState {
                     String::new(),
                     String::new(),
                     true,
+                    false,
                     Vec::new(),
                 ),
             };
@@ -7455,7 +7664,7 @@ impl WorldState {
                     user_id: other.user_id,
                     hp: other.hp,
                     max_hp: other.max_hp(),
-                    in_combat: other.target.is_some(),
+                    in_combat: other.in_combat(),
                     alive: !other.dead,
                     bio: appearance::compose_bio(&other.appearance),
                     class_key: other
@@ -7463,6 +7672,8 @@ impl WorldState {
                         .map(|c| c.as_key().to_string())
                         .unwrap_or_default(),
                     appearance_idx: other.appearance.to_vec(),
+                    attackable: pvp && !other.dead && other.class.is_some(),
+                    targeted: player.pvp_target == Some(other.user_id),
                 })
                 .collect();
             let corpse_here = occupants.iter().any(|o| !o.alive);
@@ -7939,6 +8150,8 @@ impl WorldState {
                     room_desc,
                     zone,
                     safe,
+                    pvp,
+                    pvp_kills: player.pvp_kills,
                     exits,
                     mobs,
                     nearby_foes,
@@ -8079,6 +8292,19 @@ fn title_for(mob_name: &str, boss: bool) -> String {
         None => "Foe".to_string(),
     };
     format!("{capitalized}bane")
+}
+
+/// The Wildbound Waste's reaver title track: awarded the tick a lifetime pvp
+/// kill count first crosses a threshold (see the pvp-fighters tick loop).
+fn pvp_title_for(kills: i64) -> Option<&'static str> {
+    match kills {
+        1 => Some("Blooded"),
+        10 => Some("Reaver of the Waste"),
+        50 => Some("Dread of the Wildbound"),
+        150 => Some("Warlord of the Waste"),
+        500 => Some("Deathless Sovereign of the Waste"),
+        _ => None,
+    }
 }
 
 fn titles_include_all(titles: &[String], required: &[&str]) -> bool {

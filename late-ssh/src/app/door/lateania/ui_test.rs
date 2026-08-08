@@ -381,7 +381,7 @@ fn room_panel_makes_each_foe_a_clickable_row() {
 
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, hits) = super::room_panel(&view, &usernames, 30);
+    let (lines, hits, _player_hits) = super::room_panel(&view, &usernames, 30);
 
     assert_eq!(hits.len(), 2, "one clickable row per foe");
     for (idx, id) in &hits {

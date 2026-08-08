@@ -41,6 +41,7 @@ fn round_trips_through_json() {
         craft_skills: vec![("smithing".to_string(), 300)],
         taming_xp: 1500,
         rpg_mode: false,
+        pvp_kills: 6,
     });
     let json = c.to_json();
     let back = SavedCharacter::from_json(&json).expect("parses");
@@ -76,6 +77,7 @@ fn round_trips_through_json() {
     );
     assert_eq!(back.craft_skills, vec![("smithing".to_string(), 300)]);
     assert_eq!(back.taming_xp, 1500);
+    assert_eq!(back.pvp_kills, 6);
 }
 
 #[test]
