@@ -2405,6 +2405,13 @@ struct WorldState {
     mob_stuns: HashMap<u32, u8>,
     /// mob id -> active damage-over-time stacks (owner, per-tick, remaining).
     mob_dots: HashMap<u32, Vec<(Uuid, i32, u8)>>,
+    /// Pvp equivalents of `mob_stuns`/`mob_dots`, keyed by the victim's user
+    /// id instead of a mob id (see `strike_pvp_target`/`seed_pvp_dot`). Each
+    /// dot stack also carries its `DamageType`, since (unlike a mob's baked-in
+    /// resist/weak) a player's `strike_player` needs the real school on every
+    /// tick to apply the right armor reduction.
+    pvp_stuns: HashMap<Uuid, u8>,
+    pvp_dots: HashMap<Uuid, Vec<(Uuid, i32, DamageType, u8)>>,
     /// Kills accumulated during a tick, drained for the activity feed.
     pending_kills: Vec<KillOutcome>,
     generation: u64,
@@ -2489,6 +2496,8 @@ impl WorldState {
             mobs,
             mob_stuns: HashMap::new(),
             mob_dots: HashMap::new(),
+            pvp_stuns: HashMap::new(),
+            pvp_dots: HashMap::new(),
             pending_kills: Vec::new(),
             generation: 0,
             dirty: false,
@@ -4896,7 +4905,7 @@ impl WorldState {
                 | AbilityEffect::Stun
                 | AbilityEffect::Finisher
         );
-        if needs_target && player.target.is_none() {
+        if needs_target && player.target.is_none() && player.pvp_target.is_none() {
             self.log_to(user_id, LogKind::Combat, "You have no target.".to_string());
             return;
         }
@@ -4975,16 +4984,31 @@ impl WorldState {
             }
             AbilityEffect::DamageOverTime => {
                 let tick = self.spell_damage(class, ability.magnitude, user_id);
-                self.seed_mob_dot(
-                    user_id,
-                    tick,
-                    ability.damage_type,
-                    ability.duration,
-                    ability.name,
-                );
+                if self
+                    .players
+                    .get(&user_id)
+                    .is_some_and(|p| p.pvp_target.is_some())
+                {
+                    self.seed_pvp_dot(
+                        user_id,
+                        tick,
+                        ability.damage_type,
+                        ability.duration,
+                        ability.name,
+                    );
+                } else {
+                    self.seed_mob_dot(
+                        user_id,
+                        tick,
+                        ability.damage_type,
+                        ability.duration,
+                        ability.name,
+                    );
+                }
             }
             AbilityEffect::Stun => {
                 let target = self.players.get(&user_id).and_then(|p| p.target);
+                let pvp_target = self.players.get(&user_id).and_then(|p| p.pvp_target);
                 let dmg = self.spell_damage(class, ability.magnitude, user_id);
                 self.damage_target(user_id, dmg, ability.damage_type, ability.name);
                 // Only stun if the target survived the hit.
@@ -4997,6 +5021,15 @@ impl WorldState {
                         user_id,
                         LogKind::Combat,
                         format!("{} leaves the foe reeling!", ability.name),
+                    );
+                } else if let Some(victim_id) = pvp_target
+                    && self.players.get(&victim_id).is_some_and(|v| !v.dead)
+                {
+                    self.pvp_stuns.insert(victim_id, ability.duration);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("{} leaves your rival reeling!", ability.name),
                     );
                 }
             }
@@ -5046,6 +5079,18 @@ impl WorldState {
     }
 
     fn damage_target(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, source: &str) {
+        // A pvp duel takes priority: `engage_player`/auto-retaliation clears
+        // the mob `target` whenever `pvp_target` is set, so the two never
+        // coexist, but checking pvp first keeps that invariant explicit here.
+        if let Some(victim_id) = self.players.get(&user_id).and_then(|p| p.pvp_target) {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{source} hits your rival for {raw} {}.", dtype.label()),
+            );
+            self.strike_pvp_target(user_id, victim_id, raw, dtype, source);
+            return;
+        }
         let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target) else {
             return;
         };
@@ -5105,6 +5150,178 @@ impl WorldState {
             format!("{source} festers in the foe ({} damage).", dtype.label()),
         );
         self.dirty = true;
+    }
+
+    /// Pvp counterpart of `seed_mob_dot`: seeds a damage-over-time on the
+    /// caster's `pvp_target`. Unlike a mob dot, the resist/weak multiplier is
+    /// *not* baked in up front - each tick goes through `strike_pvp_target`
+    /// (`strike_player`), which needs the real `DamageType` to apply the
+    /// victim's armor correctly every time.
+    fn seed_pvp_dot(
+        &mut self,
+        user_id: Uuid,
+        per_tick: i32,
+        dtype: DamageType,
+        duration: u8,
+        source: &str,
+    ) {
+        let Some(victim_id) = self.players.get(&user_id).and_then(|p| p.pvp_target) else {
+            return;
+        };
+        self.pvp_dots
+            .entry(victim_id)
+            .or_default()
+            .push((user_id, per_tick, dtype, duration));
+        self.log_to(
+            user_id,
+            LogKind::Combat,
+            format!("{source} festers in your rival ({} damage).", dtype.label()),
+        );
+        self.dirty = true;
+    }
+
+    /// Deal `raw` pvp damage from `attacker_id` to `victim_id` via
+    /// `strike_player` (armor, shields, Monk/Tank mitigation, the Warrior
+    /// death-save, and veteran in-place resurrection all apply exactly as
+    /// they do against a mob), then handle a real kill: the victim's lost
+    /// carried gold becomes the killer's spoils, plus a flat xp bonus, a
+    /// `pvp_kills` tick, and the reaver title track. Shared by the tick's
+    /// auto-attack pass, offensive abilities, pet bites, and pvp dots.
+    fn strike_pvp_target(
+        &mut self,
+        attacker_id: Uuid,
+        victim_id: Uuid,
+        raw: i32,
+        dtype: DamageType,
+        source: &str,
+    ) -> bool {
+        let gold_before = self.players.get(&victim_id).map(|v| v.gold).unwrap_or(0);
+        let survived = self.strike_player(victim_id, raw, dtype, source);
+        self.dirty = true;
+        if !survived && self.players.get(&victim_id).is_some_and(|v| v.dead) {
+            let gold_gain = (gold_before
+                - self
+                    .players
+                    .get(&victim_id)
+                    .map(|v| v.gold)
+                    .unwrap_or(gold_before))
+            .max(0);
+            let victim_level = self.players.get(&victim_id).map(|v| v.level).unwrap_or(1);
+            let xp_gain = (15 + victim_level as i64 * 5).max(15);
+            let mut new_kill_count = 0;
+            let mut atk_level = 1;
+            if let Some(a) = self.players.get_mut(&attacker_id) {
+                a.pvp_target = None;
+                a.gold += gold_gain;
+                a.xp += xp_gain;
+                a.pvp_kills += 1;
+                new_kill_count = a.pvp_kills;
+                atk_level = a.level;
+            }
+            self.log_to(
+                attacker_id,
+                LogKind::Loot,
+                format!("You have slain a rival adventurer! (+{xp_gain} xp, +{gold_gain} gold)"),
+            );
+            if let Some(title) = pvp_title_for(new_kill_count) {
+                self.award_title(attacker_id, title.to_string(), atk_level);
+            }
+            self.check_level_up(attacker_id);
+        }
+        survived
+    }
+
+    /// Pvp counterpart of `fire_pet_skills`: the owner's companion's unlocked
+    /// auto-skills fire against a `pvp_target` instead of a mob. `SavageBite`/
+    /// `Pounce` and `Rend` route through `strike_pvp_target`/`seed_pvp_dot` so
+    /// they respect the victim's armor exactly like every other pvp blow;
+    /// `Roar`/`Guard` are pure self-buffs and work identically either way.
+    /// Returns true if the companion's blow finished the victim off.
+    fn fire_pet_skills_pvp(
+        &mut self,
+        user_id: Uuid,
+        victim_id: Uuid,
+        pet_level: i32,
+        pet_atk: i32,
+        pet_name: &str,
+        beastlord: bool,
+    ) -> bool {
+        let now_tick = self.world_ticks;
+        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+            let ready = self
+                .pet_skill_cd
+                .get(&(user_id, si))
+                .is_none_or(|&next| now_tick >= next);
+            if !ready {
+                continue;
+            }
+            let base_cd = skill.cooldown as u64;
+            let cd = if beastlord {
+                (base_cd - base_cd * BEASTLORD_PET_PCT as u64 / 100).max(1)
+            } else {
+                base_cd
+            };
+            self.pet_skill_cd.insert((user_id, si), now_tick + cd);
+            match skill.effect {
+                PetSkillEffect::SavageBite | PetSkillEffect::Pounce => {
+                    let bonus = skill.power + pet_atk * skill.power / 20;
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name}'s {} rips into your rival!", skill.name),
+                    );
+                    self.strike_pvp_target(
+                        user_id,
+                        victim_id,
+                        bonus,
+                        DamageType::Physical,
+                        pet_name,
+                    );
+                    if self.players.get(&victim_id).is_some_and(|v| v.dead) {
+                        return true;
+                    }
+                }
+                PetSkillEffect::Rend => {
+                    let per_tick = skill.power + pet_atk / 8;
+                    self.seed_pvp_dot(
+                        user_id,
+                        per_tick,
+                        DamageType::Physical,
+                        3,
+                        &format!("Your {pet_name}'s Rend"),
+                    );
+                }
+                PetSkillEffect::Roar => {
+                    let mag = skill.power + pet_atk / 10;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.empower = p.empower.max(mag);
+                        p.empower_ticks = p.empower_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!(
+                            "Your {pet_name} looses an intimidating roar - you feel emboldened!"
+                        ),
+                    );
+                    self.dirty = true;
+                }
+                PetSkillEffect::Guard => {
+                    let mag = skill.power + pet_atk / 4;
+                    if let Some(p) = self.players.get_mut(&user_id) {
+                        p.shield = p.shield.max(mag);
+                        p.shield_ticks = p.shield_ticks.max(4);
+                    }
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} guards you closely, warding the next blows."),
+                    );
+                    self.dirty = true;
+                }
+            }
+        }
+        false
     }
 
     fn kill_mob(&mut self, user_id: Uuid, mob_id: u32) {
@@ -6243,12 +6460,11 @@ impl WorldState {
         for (attacker_id, victim_id) in pvp_fighters {
             // Snapshot everything needed from the attacker up front so no
             // live immutable borrow survives into the `get_mut` calls below.
-            let Some((room_id, atk_class, atk_level, opening, atk_hp, atk_max_hp, base_atk)) =
+            let Some((room_id, atk_class, opening, atk_hp, atk_max_hp, base_atk)) =
                 self.players.get(&attacker_id).map(|a| {
                     (
                         a.room,
                         a.class,
-                        a.level,
                         a.opening_strike,
                         a.hp,
                         a.max_hp(),
@@ -6271,6 +6487,22 @@ impl WorldState {
                 }
                 continue;
             }
+            // A stunned adventurer skips their own swing this round, same as
+            // a stunned mob does.
+            let stunned = self.pvp_stuns.get(&attacker_id).copied().unwrap_or(0) > 0;
+            if let Some(v) = self.pvp_stuns.get_mut(&attacker_id)
+                && *v > 0
+            {
+                *v -= 1;
+            }
+            if stunned {
+                self.log_to(
+                    attacker_id,
+                    LogKind::Combat,
+                    "You are stunned and cannot strike.".to_string(),
+                );
+                continue;
+            }
             let ranger_wounded = atk_class == Some(Class::Ranger)
                 && self
                     .players
@@ -6288,46 +6520,92 @@ impl WorldState {
             if opening && let Some(a) = self.players.get_mut(&attacker_id) {
                 a.opening_strike = false;
             }
-            let gold_before = self.players.get(&victim_id).map(|v| v.gold).unwrap_or(0);
-            let survived = self.strike_player(victim_id, atk, DamageType::Physical, "a rival");
-            self.dirty = true;
             self.log_to(
                 attacker_id,
                 LogKind::Combat,
                 format!("You strike your rival for {atk} physical."),
             );
-            if !survived && self.players.get(&victim_id).is_some_and(|v| v.dead) {
-                // A real kill (not a Warrior death-save or veteran rez):
-                // the gold `strike_player` already deducted from the victim's
-                // carried purse becomes the spoils of the duel.
-                let gold_gain = (gold_before
-                    - self
-                        .players
-                        .get(&victim_id)
-                        .map(|v| v.gold)
-                        .unwrap_or(gold_before))
-                .max(0);
-                let victim_level = self.players.get(&victim_id).map(|v| v.level).unwrap_or(1);
-                let xp_gain = (15 + victim_level as i64 * 5).max(15);
-                let mut new_kill_count = 0;
-                if let Some(a) = self.players.get_mut(&attacker_id) {
-                    a.pvp_target = None;
-                    a.gold += gold_gain;
-                    a.xp += xp_gain;
-                    a.pvp_kills += 1;
-                    new_kill_count = a.pvp_kills;
-                }
+            self.strike_pvp_target(attacker_id, victim_id, atk, DamageType::Physical, "a rival");
+            if self.players.get(&victim_id).is_some_and(|v| v.dead) {
+                continue;
+            }
+            // A living, fighting companion piles onto the same target, same as
+            // it does against a mob - biting through `strike_pvp_target` so it
+            // respects the victim's armor/shield/death-save exactly like a
+            // player's own blow does.
+            let pet_bonus = if atk_class == Some(Class::Beastlord) {
+                BEASTLORD_PET_PCT
+            } else {
+                0
+            };
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
+                .players
+                .get(&attacker_id)
+                .and_then(|p| p.pet.as_ref())
+                .filter(|pet| !pet.downed)
+                .map(|pet| {
+                    (
+                        pet.species.glyph,
+                        pet.species.name,
+                        pet.attack() + pet.attack() * pet_bonus / 100,
+                        pet.level(),
+                    )
+                })
+            {
                 self.log_to(
                     attacker_id,
-                    LogKind::Loot,
-                    format!(
-                        "You have slain a rival adventurer! (+{xp_gain} xp, +{gold_gain} gold)"
-                    ),
+                    LogKind::Combat,
+                    format!("{pet_glyph} Your {pet_name} tears into your rival for {pet_atk}."),
                 );
-                if let Some(title) = pvp_title_for(new_kill_count) {
-                    self.award_title(attacker_id, title.to_string(), atk_level);
+                self.strike_pvp_target(
+                    attacker_id,
+                    victim_id,
+                    pet_atk,
+                    DamageType::Physical,
+                    "your companion",
+                );
+                if self.players.get(&victim_id).is_some_and(|v| v.dead) {
+                    continue;
                 }
-                self.check_level_up(attacker_id);
+                let beastlord = atk_class == Some(Class::Beastlord);
+                if self.fire_pet_skills_pvp(
+                    attacker_id,
+                    victim_id,
+                    pet_level,
+                    pet_atk,
+                    pet_name,
+                    beastlord,
+                ) {
+                    continue;
+                }
+            }
+        }
+
+        // Pvp damage-over-time from player abilities (poison, DoT spells).
+        // Same shape as the mob DoT pass above, but the victim is a player,
+        // so each tick routes through `strike_pvp_target` for full armor/
+        // shield/death handling instead of a raw hp subtraction.
+        let pvp_dot_victims: Vec<Uuid> = self.pvp_dots.keys().copied().collect();
+        for victim_id in pvp_dot_victims {
+            let mut ticks: Vec<(Uuid, i32, DamageType)> = Vec::new();
+            if let Some(stacks) = self.pvp_dots.get_mut(&victim_id) {
+                for (attacker_id, per, dtype, rem) in stacks.iter_mut() {
+                    if *rem > 0 {
+                        ticks.push((*attacker_id, *per, *dtype));
+                        *rem -= 1;
+                    }
+                }
+                stacks.retain(|(_, _, _, rem)| *rem > 0);
+                if stacks.is_empty() {
+                    self.pvp_dots.remove(&victim_id);
+                }
+            }
+            for (attacker_id, per, dtype) in ticks {
+                let alive = self.players.get(&victim_id).is_some_and(|v| !v.dead);
+                if !alive {
+                    continue;
+                }
+                self.strike_pvp_target(attacker_id, victim_id, per, dtype, "A lingering wound");
             }
         }
 

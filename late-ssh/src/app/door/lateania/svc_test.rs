@@ -3184,6 +3184,131 @@ fn winning_a_pvp_duel_credits_gold_xp_a_kill_and_a_title() {
 }
 
 #[test]
+fn an_offensive_ability_strikes_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    // Slot 1 is Cleave (Strike) for a level-1 Warrior.
+    let before = s.players[&uid(2)].hp;
+    s.use_ability(uid(1), 1);
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "Cleave should damage the pvp target directly, not just the auto-attack"
+    );
+}
+
+#[test]
+fn a_damage_over_time_ability_seeds_a_pvp_dot_that_ticks_via_strike_player() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 4; // unlocks Rend (slot 2)
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    s.use_ability(uid(1), 2); // Rend: DamageOverTime
+    assert!(
+        s.pvp_dots.contains_key(&uid(2)),
+        "Rend should seed a pvp dot on the victim"
+    );
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "the dot should tick real damage into the victim via strike_player"
+    );
+}
+
+#[test]
+fn a_stun_ability_skips_the_stunned_players_next_swing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 12; // unlocks Shield Bash (slot 4)
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.players.get_mut(&uid(2)).unwrap().max_resource = 500;
+    s.engage_player(uid(1), uid(2));
+    // Victim rounds on the attacker too (auto-retaliation), so give them an
+    // ability roster of their own to prove their swing is actually skipped.
+    s.players.get_mut(&uid(2)).unwrap().level = 1;
+
+    s.use_ability(uid(1), 4); // Shield Bash: Stun
+    assert!(
+        s.pvp_stuns.get(&uid(2)).copied().unwrap_or(0) > 0,
+        "Shield Bash should stun the pvp victim"
+    );
+    let attacker_hp_before = s.players[&uid(1)].hp;
+    s.tick();
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        attacker_hp_before,
+        "a stunned adventurer should not land their own swing this round"
+    );
+}
+
+#[test]
+fn a_companions_bite_and_auto_skills_reach_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Buy the companion at Embergate's stable (room 1) before heading to the
+    // pvp ground, same as any real player would.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+    s.buy_pet(uid(1), "war_hound");
+    assert!(s.players[&uid(1)].pet.is_some(), "the companion is set");
+
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.engage_player(uid(1), uid(2));
+
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    let after_owner_and_pet = s.players[&uid(2)].hp;
+    assert!(
+        after_owner_and_pet < before,
+        "the owner's own blow should land"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("tears into your rival")),
+        "the pet's bite against the pvp target should be logged, got {:?}",
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| &l.text)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn a_brand_new_character_spawns_in_the_tutorial_and_can_recall_to_embergate() {
     let mut s = world();
     s.join(uid(1));
