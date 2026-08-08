@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
@@ -19,7 +20,7 @@ use super::{
     appearance,
     classes::Class,
     state::{ClickAction, Panel, State},
-    svc::{LogKind, PlayerView, SectionRow},
+    svc::{LeaderboardEntry, LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
 
@@ -196,8 +197,11 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
-            // Foe rows carry AttackMob, never the action bar; kept for exhaustiveness.
-            ClickAction::AttackMob(_) => Style::default().fg(theme::TEXT_DIM()),
+            // Foe/adventurer rows carry these, never the action bar; kept for
+            // exhaustiveness.
+            ClickAction::AttackMob(_) | ClickAction::AttackPlayer(_) => {
+                Style::default().fg(theme::TEXT_DIM())
+            }
         };
         spans.push(Span::styled(chip.label.clone(), style));
         col += w;
@@ -1346,6 +1350,7 @@ fn draw_side(
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
         Panel::Crafting => crafting_panel(&state.craft_rows(), view, state.cursor()),
         Panel::Map => (atlas_panel(view), None),
+        Panel::Leaderboard => (leaderboard_panel(view, usernames), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -1497,7 +1502,7 @@ fn draw_room_side(
         rows[0]
     };
 
-    let (lines, foe_hits) = room_panel(view, usernames, panel_area.width as usize);
+    let (lines, foe_hits, player_hits) = room_panel(view, usernames, panel_area.width as usize);
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -1511,6 +1516,20 @@ fn draw_room_side(
                     height: 1,
                 },
                 ClickAction::AttackMob(mob_id),
+            );
+        }
+    }
+    // Same for hostile adventurers in a pvp room's "Adventurers here" list.
+    for (idx, target_id) in player_hits {
+        if (idx as u16) < panel_area.height {
+            state.record_combat_hit(
+                Rect {
+                    x: panel_area.x,
+                    y: panel_area.y + idx as u16,
+                    width: panel_area.width,
+                    height: 1,
+                },
+                ClickAction::AttackPlayer(target_id),
             );
         }
     }
@@ -1596,6 +1615,90 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+/// One leaderboard row: rank, level + class abbreviation, name, then the
+/// board's own value column (already formatted by the caller, since its
+/// meaning - a bare level, a kill count, a gold total - differs per board).
+fn leaderboard_row(
+    rank: usize,
+    e: &LeaderboardEntry,
+    usernames: &UsernameLookup<'_>,
+    value: &str,
+) -> Line<'static> {
+    let name = usernames
+        .get(&e.user_id)
+        .cloned()
+        .unwrap_or_else(|| "adventurer".to_string());
+    let abbrev = class_abbrev(&e.class_key);
+    Line::from(Span::styled(
+        format!(
+            "  {rank:>2}. Lv{:<3} {abbrev:<3} {name:<16} {value}",
+            e.level
+        ),
+        Style::default().fg(if rank == 1 {
+            theme::BADGE_GOLD()
+        } else {
+            theme::TEXT_BRIGHT()
+        }),
+    ))
+}
+
+fn leaderboard_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Leaderboard")];
+    lines.push(Line::from(Span::styled(
+        "  the ten sharpest adventurers online right now",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+
+    lines.push(section("By Level"));
+    if view.leaderboard.by_level.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no one else is online yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in view.leaderboard.by_level.iter().enumerate() {
+        lines.push(leaderboard_row(i + 1, e, usernames, ""));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("By PvP Kills (the Wildbound Waste)"));
+    if view.leaderboard.by_pvp_kills.iter().all(|e| e.value == 0) {
+        lines.push(Line::from(Span::styled(
+            "  no rivals slain yet - the Waste awaits",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        for (i, e) in view.leaderboard.by_pvp_kills.iter().enumerate() {
+            if e.value == 0 {
+                break;
+            }
+            lines.push(leaderboard_row(
+                i + 1,
+                e,
+                usernames,
+                &format!("{} kill{}", e.value, if e.value == 1 { "" } else { "s" }),
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("By Gold"));
+    for (i, e) in view.leaderboard.by_gold.iter().enumerate() {
+        lines.push(leaderboard_row(
+            i + 1,
+            e,
+            usernames,
+            &format!("{}g", e.value),
+        ));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(hint("?", "close"));
+    lines.push(hint("[ ]", "scroll"));
+    lines
+}
+
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(vec![
@@ -1659,12 +1762,14 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
 /// The room side panel. Returns the lines plus, for each foe, the line index of
 /// its roster row and its spawn id, so the caller can record a clickable rect
 /// over each foe (click a foe to lock onto it).
+#[allow(clippy::type_complexity)]
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, u32)>) {
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
+    let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
@@ -1816,36 +1921,59 @@ fn room_panel(
         }
     }
     if !view.occupants.is_empty() {
-        lines.push(section("Adventurers here"));
+        lines.push(section(if view.pvp {
+            "Adventurers here (pvp ground)"
+        } else {
+            "Adventurers here"
+        }));
         for occ in &view.occupants {
             let name = usernames
                 .get(&occ.user_id)
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
+            let labelled = format!("Lv{:<2} {name}", occ.level);
             let following = view.following == Some(occ.user_id);
-            let (tag, color) = if !occ.alive {
+            let (status, color) = if !occ.alive {
                 ("fallen", theme::ERROR())
             } else if following {
                 ("follow", theme::MENTION())
+            } else if occ.targeted {
+                ("duel", theme::ERROR())
             } else if occ.in_combat {
                 ("fight", theme::AMBER())
+            } else if occ.attackable {
+                ("hostile", theme::ERROR())
             } else {
                 ("", theme::SUCCESS())
+            };
+            // Status (fallen/duel/fight/hostile) takes priority when there's
+            // room for only one; otherwise the class abbreviation rides
+            // alongside it so a foe's kit is visible before you ever engage.
+            let abbrev = class_abbrev(&occ.class_key);
+            let tag = match (status.is_empty(), abbrev.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => abbrev.to_string(),
+                (false, true) => status.to_string(),
+                (false, false) => format!("{status}\u{00b7}{abbrev}"),
             };
             let tag_w = if tag.is_empty() {
                 0
             } else {
-                1 + UnicodeWidthStr::width(tag)
+                1 + UnicodeWidthStr::width(tag.as_str())
             };
-            let name_w = width.saturating_sub(9 + tag_w).clamp(6, 16);
+            let name_w = width.saturating_sub(13 + tag_w).clamp(6, 16);
+            let marker = if occ.targeted { "\u{00bb} " } else { "  " };
+            if occ.attackable {
+                player_hits.push((lines.len(), occ.user_id));
+            }
             lines.push(roster_row(
-                "  ",
-                &name,
+                marker,
+                &labelled,
                 occ.hp,
                 occ.max_hp,
                 Style::default().fg(color),
                 name_w,
-                tag,
+                &tag,
             ));
         }
     }
@@ -1923,7 +2051,7 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    (lines, foe_hits)
+    (lines, foe_hits, player_hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,
@@ -2417,6 +2545,32 @@ fn class_name_of(class_key: &str) -> String {
     Class::from_key(class_key)
         .map(|c| c.name().to_string())
         .unwrap_or_default()
+}
+
+/// A three-letter class abbreviation, for roster rows too narrow for the full
+/// name (hand-picked, not a naive truncation - "Warrior"/"Warlock" would
+/// otherwise collide on "WAR").
+fn class_abbrev(class_key: &str) -> &'static str {
+    match Class::from_key(class_key) {
+        Some(Class::Warrior) => "WAR",
+        Some(Class::Mage) => "MAG",
+        Some(Class::Cleric) => "CLR",
+        Some(Class::Rogue) => "ROG",
+        Some(Class::Ranger) => "RNG",
+        Some(Class::Druid) => "DRU",
+        Some(Class::Necromancer) => "NEC",
+        Some(Class::Bard) => "BRD",
+        Some(Class::Monk) => "MNK",
+        Some(Class::Paladin) => "PAL",
+        Some(Class::Warlock) => "WLK",
+        Some(Class::Berserker) => "BRS",
+        Some(Class::Beastlord) => "BST",
+        Some(Class::Skald) => "SKD",
+        Some(Class::Runemaster) => "RUN",
+        Some(Class::Valewalker) => "VLW",
+        Some(Class::Spiritmaster) => "SPM",
+        None => "",
+    }
 }
 
 /// The accent colour that tints a class's portrait and headline.
@@ -3555,6 +3709,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("i", "the ways (portal)"));
     }
     lines.push(hint("m", "world atlas"));
+    lines.push(hint("?", "leaderboard"));
     lines.push(hint("G", "mount / dismount"));
     lines.push(hint("Esc", "leave"));
     lines
@@ -3964,13 +4119,14 @@ fn follow_panel(
             .get(&occ.user_id)
             .cloned()
             .unwrap_or_else(|| "adventurer".to_string());
+        let labelled = format!("Lv{:<2} {name}", occ.level);
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
         let following = view.following == Some(occ.user_id);
         let marker = if selected { "> " } else { "  " };
-        let tag = if !occ.alive {
+        let status = if !occ.alive {
             "fallen"
         } else if following {
             "follow"
@@ -3978,6 +4134,13 @@ fn follow_panel(
             "fight"
         } else {
             ""
+        };
+        let abbrev = class_abbrev(&occ.class_key);
+        let tag = match (status.is_empty(), abbrev.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => abbrev.to_string(),
+            (false, true) => status.to_string(),
+            (false, false) => format!("{status}\u{00b7}{abbrev}"),
         };
         let color = if selected {
             theme::TEXT_BRIGHT()
@@ -3995,12 +4158,12 @@ fn follow_panel(
         };
         lines.push(roster_row(
             marker,
-            &name,
+            &labelled,
             occ.hp,
             occ.max_hp,
             Style::default().fg(color).add_modifier(weight),
-            12,
-            tag,
+            16,
+            &tag,
         ));
     }
     // Profile the highlighted adventurer: show their composed portrait, then bio.
