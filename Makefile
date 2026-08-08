@@ -305,6 +305,17 @@ check: .env
 start: .env keys
 	docker compose -f docker-compose.yml up --build
 
+.PHONY: start-amd64
+start-amd64: .env keys
+	@set -e; for image in \
+		postgres:18 \
+		libretime/icecast:2.4.4 \
+		savonet/liquidsoap:v2.4.0 \
+		livekit/livekit-server:latest; do \
+		docker pull --platform linux/amd64 "$$image"; \
+	done
+	DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose -f docker-compose.yml up --build
+
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
 down:
