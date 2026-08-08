@@ -608,6 +608,8 @@ async fn room_tail_task_loads_favorite_room_history() {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: late_core::models::message_translation::TranslateLang::En,
+            auto_translate: false,
             favorite_room_ids: vec![favorite_room.id],
             birthday: None,
         },

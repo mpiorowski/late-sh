@@ -162,6 +162,8 @@ async fn main() -> anyhow::Result<()> {
         activity_tx.subscribe(),
     );
     let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
+    let translation_service =
+        late_ssh::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
@@ -311,6 +313,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         db: db.clone(),
         ai_service: ai_service.clone(),
+        translation_service: translation_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         chat_service: chat_service.clone(),

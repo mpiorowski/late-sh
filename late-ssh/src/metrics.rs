@@ -11,6 +11,18 @@ pub enum RenderReason {
     WorldTick,
 }
 
+/// How a chat-translation request resolved. `Translated` is the only variant
+/// that spent an API call; the others are the cache and the guardrails doing
+/// their job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslationResult {
+    CacheHit,
+    Translated,
+    Failed,
+    CapExhausted,
+    Stale,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -20,7 +32,7 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, RenderReason};
+    use super::{ActivityGame, RenderReason, TranslationResult};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -276,11 +288,38 @@ mod inner {
     pub fn record_game_win(game: ActivityGame) {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
+
+    fn translation_result_label(result: TranslationResult) -> &'static str {
+        match result {
+            TranslationResult::CacheHit => "cache_hit",
+            TranslationResult::Translated => "translated",
+            TranslationResult::Failed => "failed",
+            TranslationResult::CapExhausted => "cap_exhausted",
+            TranslationResult::Stale => "stale",
+        }
+    }
+
+    fn chat_translations_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_translations_total")
+                .with_description("Chat message translation requests by resolution")
+                .build()
+        })
+    }
+
+    pub fn record_chat_translation(result: TranslationResult) {
+        chat_translations_total().add(
+            1,
+            &[KeyValue::new("result", translation_result_label(result))],
+        );
+    }
 }
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::{ActivityGame, RenderReason};
+    use super::{ActivityGame, RenderReason, TranslationResult};
 
     pub fn record_ssh_connection() {}
     pub fn record_render(_reason: RenderReason) {}
@@ -296,6 +335,7 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_chat_translation(_result: TranslationResult) {}
 }
 
 pub use inner::*;

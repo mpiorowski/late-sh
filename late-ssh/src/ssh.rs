@@ -911,6 +911,7 @@ impl russh::server::Handler for ClientHandler {
             audio_service: self.state.audio_service.clone(),
             voice_service: self.state.voice_service.clone(),
             chat_service,
+            translation_service: self.state.translation_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
             feed_service: self.state.feed_service.clone(),

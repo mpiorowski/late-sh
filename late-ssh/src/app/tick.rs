@@ -230,6 +230,11 @@ impl App {
         }
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
+        let translate_to = self.profile_state.profile().translate_to;
+        let auto_translate = self.profile_state.profile().auto_translate;
+        changed |= self
+            .chat
+            .set_translate_settings(translate_to, auto_translate);
         changed |= self.sudoku_state.poll_daily_generation();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;

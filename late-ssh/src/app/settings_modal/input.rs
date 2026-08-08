@@ -335,6 +335,8 @@ fn activate_selected_row(app: &mut App) {
             }
         }
         Row::Theme
+        | Row::TranslateTo
+        | Row::AutoTranslate
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
