@@ -236,9 +236,9 @@ fn char_script(c: char) -> Option<Script> {
         // Hangul syllables, jamo, and compatibility jamo.
         0xAC00..=0xD7AF | 0x1100..=0x11FF | 0x3130..=0x318F => Some(Script::Hangul),
         // Hiragana and katakana.
-        0x3040..=0x309F | 0x30A0..=0x30FF => Some(Script::Kana),
+        0x3040..=0x30FF => Some(Script::Kana),
         // Cyrillic and its supplement.
-        0x0400..=0x04FF | 0x0500..=0x052F => Some(Script::Cyrillic),
+        0x0400..=0x052F => Some(Script::Cyrillic),
         // Thai.
         0x0E00..=0x0E7F => Some(Script::Thai),
         // Devanagari.
