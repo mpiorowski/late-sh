@@ -19,7 +19,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
@@ -32,6 +31,7 @@ use crate::app::{
 };
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
+use crate::proxy_protocol;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
@@ -39,7 +39,6 @@ use crate::terminal_size::clamp_terminal_size;
 use crate::usernames;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-const PROXY_V1_MAX_LEN: usize = 108;
 const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
@@ -384,70 +383,11 @@ async fn resolve_proxied_client_addr(
         return Ok(None);
     }
 
-    read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
 }
 
 fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {
-    state
-        .config
-        .ssh_proxy_trusted_cidrs
-        .iter()
-        .any(|cidr| cidr.contains(&ip))
-}
-
-async fn read_proxy_v1_client_addr(
-    stream: &mut TcpStream,
-    timeout_duration: Duration,
-) -> Result<Option<SocketAddr>> {
-    let mut line = Vec::with_capacity(PROXY_V1_MAX_LEN);
-    let mut byte = [0u8; 1];
-
-    let read_future = async {
-        while line.len() < PROXY_V1_MAX_LEN {
-            stream.read_exact(&mut byte).await?;
-            line.push(byte[0]);
-            if line.len() >= 2 && line[line.len() - 2..] == *b"\r\n" {
-                return parse_proxy_v1_addr(&line);
-            }
-        }
-        anyhow::bail!(
-            "proxy protocol v1 header exceeded {} bytes",
-            PROXY_V1_MAX_LEN
-        );
-    };
-
-    match timeout(timeout_duration, read_future).await {
-        Ok(Ok(addr)) => Ok(addr),
-        Ok(Err(e)) => Err(e.context("failed to read proxy protocol header")),
-        Err(_) => anyhow::bail!("timed out waiting for proxy protocol header"),
-    }
-}
-
-fn parse_proxy_v1_addr(line: &[u8]) -> Result<Option<SocketAddr>> {
-    let text = std::str::from_utf8(line).context("proxy v1 header is not valid UTF-8")?;
-    let text = text
-        .strip_suffix("\r\n")
-        .ok_or_else(|| anyhow::anyhow!("proxy v1 header missing CRLF terminator"))?;
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() < 2 || parts[0] != "PROXY" {
-        anyhow::bail!("proxy v1 header malformed");
-    }
-    match parts[1] {
-        "UNKNOWN" => Ok(None),
-        "TCP4" | "TCP6" => {
-            if parts.len() != 6 {
-                anyhow::bail!("proxy v1 TCP header has unexpected field count");
-            }
-            let src_ip: IpAddr = parts[2]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source IP '{}'", parts[2]))?;
-            let src_port: u16 = parts[4]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source port '{}'", parts[4]))?;
-            Ok(Some(SocketAddr::new(src_ip, src_port)))
-        }
-        fam => anyhow::bail!("unsupported proxy v1 protocol family '{fam}'"),
-    }
+    proxy_protocol::is_trusted_peer(ip, &state.config.ssh_proxy_trusted_cidrs)
 }
 
 impl Drop for ClientHandler {

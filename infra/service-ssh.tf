@@ -476,6 +476,14 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "LATE_IRC_AUTH_FAILURE_WINDOW_SECS"
             value = local.irc_auth_failure_window_secs
           }
+          env {
+            name  = "LATE_IRC_PROXY_PROTOCOL"
+            value = "1"
+          }
+          env {
+            name  = "LATE_IRC_PROXY_TRUSTED_CIDRS"
+            value = var.SSH_PROXY_TRUSTED_CIDRS
+          }
           dynamic "env" {
             for_each = local.irc_enabled_bool ? {
               LATE_IRC_TLS_CERT = "${local.irc_tls_mount_path}/tls.crt"

@@ -43,7 +43,7 @@ locals {
     backend service_ssh_ipv4
       server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
 
-    ${local.irc_enabled_bool ? format("frontend irc_ipv6\n  bind [%s]:%d v6only\n  default_backend irc_ipv4\n\nbackend irc_ipv4\n  server irc service-ssh-sv.default.svc.cluster.local:%d check inter 5s fall 2 rise 2", var.IPV6_PROXY_ADDRESS, local.irc_port, local.irc_port) : ""}
+    ${local.irc_enabled_bool ? format("frontend irc_ipv6\n  bind [%s]:%d v6only\n  default_backend irc_ipv4\n\nbackend irc_ipv4\n  server irc service-ssh-sv.default.svc.cluster.local:%d check inter 5s fall 2 rise 2 send-proxy", var.IPV6_PROXY_ADDRESS, local.irc_port, local.irc_port) : ""}
   EOT
 }
 

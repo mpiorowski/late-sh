@@ -1,9 +1,10 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use crate::app::chat::svc::SendMessageTask;
 use crate::config::IrcConfig;
 use crate::state::State;
+use late_core::MutexRecover;
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_reaction::ChatMessageReaction,
@@ -11,6 +12,7 @@ use late_core::models::{
     chat_room_member::ChatRoomMember,
     irc_token::IrcToken,
     profile::ProfileParams,
+    server_ban::{ServerBan, ServerBanActivation},
     user::{RightSidebarMode, default_right_sidebar_components},
 };
 use late_core::shutdown::CancellationToken;
@@ -32,13 +34,29 @@ struct IrcTestServer {
 
 impl IrcTestServer {
     async fn start() -> Self {
-        let db = new_test_db().await;
-        let mut config = test_config(db.db.config().clone());
-        config.irc = IrcConfig {
+        Self::start_with_irc_config(IrcConfig {
             enabled: true,
             port: 0,
             ..IrcConfig::default()
-        };
+        })
+        .await
+    }
+
+    async fn start_with_proxy_protocol() -> Self {
+        Self::start_with_irc_config(IrcConfig {
+            enabled: true,
+            port: 0,
+            proxy_protocol: true,
+            proxy_trusted_cidrs: vec!["127.0.0.0/8".parse().expect("trusted proxy CIDR")],
+            ..IrcConfig::default()
+        })
+        .await
+    }
+
+    async fn start_with_irc_config(irc_config: IrcConfig) -> Self {
+        let db = new_test_db().await;
+        let mut config = test_config(db.db.config().clone());
+        config.irc = irc_config;
         let state = test_app_state(db.db.clone(), config);
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -168,6 +186,43 @@ impl IrcClient {
         client
     }
 
+    async fn connect_with_proxy(addr: SocketAddr, token: &str, source_ip: IpAddr) -> Self {
+        let family = if source_ip.is_ipv4() { "TCP4" } else { "TCP6" };
+        let proxy_line = format!(
+            "PROXY {family} {source_ip} {} 54321 {}\r\n",
+            addr.ip(),
+            addr.port()
+        );
+        Self::connect_after_proxy_line(addr, token, &proxy_line).await
+    }
+
+    async fn connect_with_unknown_proxy(addr: SocketAddr, token: &str) -> Self {
+        Self::connect_after_proxy_line(addr, token, "PROXY UNKNOWN\r\n").await
+    }
+
+    async fn connect_after_proxy_line(addr: SocketAddr, token: &str, proxy_line: &str) -> Self {
+        let mut client = Self::open(addr).await;
+        client
+            .reader
+            .get_mut()
+            .write_all(proxy_line.as_bytes())
+            .await
+            .expect("send PROXY header");
+        client
+            .write_line(&format!("PASS {token}"))
+            .await
+            .expect("send PASS");
+        client
+            .write_line("NICK requested")
+            .await
+            .expect("send NICK");
+        client
+            .write_line("USER tester 0 * :Test User")
+            .await
+            .expect("send USER");
+        client
+    }
+
     async fn connect_for_registration(addr: SocketAddr) -> Self {
         Self::open(addr).await
     }
@@ -287,6 +342,64 @@ async fn authenticates_valid_token_and_rejects_bad_token() {
         bad_client.read_line().await.is_none(),
         "bad-token connection should close after ERROR"
     );
+}
+
+#[tokio::test]
+async fn trusted_proxy_client_ip_avoids_transport_ip_ban_and_is_tracked() {
+    let server = IrcTestServer::start_with_proxy_protocol().await;
+    let banned_transport_owner = create_test_user(&server.state.db, "irc-transport-ban").await;
+    let client = server.state.db.get().await.expect("db client");
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: banned_transport_owner.id,
+            fingerprint: Some(&banned_transport_owner.fingerprint),
+            ip_address: Some("127.0.0.1"),
+            snapshot_username: Some(&banned_transport_owner.username),
+            actor_user_id: banned_transport_owner.id,
+            reason: "test shared transport ban",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate transport IP ban");
+    drop(client);
+
+    let user = server.seed_user("irc-proxied-user").await;
+    let client_ip: IpAddr = "203.0.113.77".parse().expect("client IP");
+    let mut irc = IrcClient::connect_with_proxy(server.addr, &user.token, client_ip).await;
+
+    irc.read_until(" 001 ").await;
+    let active_users = server.state.active_users.lock_recover();
+    let active = active_users.get(&user.id).expect("active IRC user");
+    assert_eq!(active.sessions.len(), 1);
+    assert_eq!(active.sessions[0].peer_ip, Some(client_ip));
+}
+
+#[tokio::test]
+async fn unknown_proxy_address_is_never_persisted_as_transport_ip() {
+    let server = IrcTestServer::start_with_proxy_protocol().await;
+    let user = server.seed_user("irc-unknown-proxy-user").await;
+    let mut irc = IrcClient::connect_with_unknown_proxy(server.addr, &user.token).await;
+
+    irc.read_until(" 001 ").await;
+    let active_users = server.state.active_users.lock_recover();
+    let active = active_users.get(&user.id).expect("active IRC user");
+    assert_eq!(active.sessions.len(), 1);
+    assert_eq!(active.sessions[0].peer_ip, None);
+}
+
+#[tokio::test]
+async fn trusted_proxy_without_header_is_accepted_without_transport_ip() {
+    let server = IrcTestServer::start_with_proxy_protocol().await;
+    let user = server.seed_user("irc-proxy-rollout-user").await;
+    let mut irc = server.connect(&user.token).await;
+
+    irc.read_until(" 001 ").await;
+    let active_users = server.state.active_users.lock_recover();
+    let active = active_users.get(&user.id).expect("active IRC user");
+    assert_eq!(active.sessions.len(), 1);
+    assert_eq!(active.sessions[0].peer_ip, None);
 }
 
 #[tokio::test]

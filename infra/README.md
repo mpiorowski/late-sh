@@ -131,6 +131,10 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
 SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod port 2222.
+IRC traffic follows the same TCP passthrough pattern when enabled. Both NGINX
+for IPv4 and the host-network HAProxy for IPv6 send PROXY v1 metadata before the
+application's in-process TLS handshake; late-ssh accepts it only from the CIDRs
+configured by `SSH_PROXY_TRUSTED_CIDRS`.
 LiveKit signaling is routed through NGINX ingress on `rtc.<domain>`, while
 LiveKit media ports are bound directly on the node by the `livekit` pod.
 On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
@@ -185,6 +189,10 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 | `IRC_MAX_CONNS_PER_USER` | Max concurrent IRC connections per user, defaults to `3` |
 | `IRC_MAX_AUTH_FAILURES_PER_IP` | Max failed auth attempts per IP, defaults to `20` |
 | `IRC_AUTH_FAILURE_WINDOW_SECS` | Auth failure rate-limit window, defaults to `300` |
+
+Terraform enables `LATE_IRC_PROXY_PROTOCOL` for this ingress topology and gives
+IRC the same trusted proxy CIDRs as SSH. Local/direct IRC keeps it disabled by
+default.
 
 ### IPv6 edge proxy
 

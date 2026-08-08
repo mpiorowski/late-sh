@@ -57,6 +57,11 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 - A2: A connection that completes `NICK`+`USER` without a valid `PASS` is rejected with `464 ERR_PASSWDMISMATCH` followed by `ERROR` and a close. No anonymous or wrong-token access, ever.
 - A3: SASL PLAIN may be added later as an alternative carrier for the same token (some clients/networks prefer it); not required for v1 (§13).
 - A4: Because tokens carry ≥128 bits of entropy (T4), online brute force is computationally infeasible; auth rate limiting exists to curb abuse/log-spam, **not** as a security boundary, and must not burden legitimate users. Limits are per-IP on *failed* attempts only (reuse `late_core::rate_limit` sliding-window limiter), generous enough that client auto-reconnect loops and post-restart reconnect storms (§10 L3) never lock out a user with a valid token; sustained failure floods get a tarpit/disconnect.
+- A4.1: Behind a TCP proxy, client IPs come only from PROXY v1 headers sent by
+  configured trusted transport peers and consumed before in-process TLS. A
+  missing/`UNKNOWN` header yields no client IP; the proxy transport address must
+  never be used for IP-ban matching or persisted into active-session ban
+  snapshots.
 - A5: TLS: tokens must not transit plaintext in production. Production exposes **TLS only** (standard port 6697, terminated **in-process via rustls** — v1 default; IRC is raw TCP so ingress termination would need TCP passthrough anyway, and in-process keeps chain/SNI under our control; cert/key mounted from the cluster's cert-manager secret). Local dev may use plaintext 6667.
 - A6: Certificate requirements — major clients (WeeChat, irssi 1.2+, HexChat, Textual, Halloy, Igloo) verify the chain against the OS trust store **and enforce hostname matching** by default; mIRC and Quassel interrupt with an accept/pin dialog on untrusted certs. Therefore production must serve: a publicly trusted CA cert (Let's Encrypt is fine), the **full chain including intermediates** (IRC clients do not fetch missing intermediates via AIA), a subject covering the exact advertised connect hostname (e.g. `irc.late.sh`), and SNI. Met, every target client connects with zero prompts; self-signed certs are not acceptable even short-term.
 

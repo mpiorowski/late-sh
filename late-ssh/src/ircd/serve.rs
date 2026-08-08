@@ -4,7 +4,13 @@
 //! send every connection `ERROR :Server restarting` and rely on client
 //! auto-reconnect against the replacement pod.
 
-use std::{fs::File, io::BufReader, net::IpAddr, sync::Arc};
+use std::{
+    fs::File,
+    io::BufReader,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use late_core::{rate_limit::IpRateLimiter, shutdown::CancellationToken};
@@ -16,7 +22,9 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 
 use super::conn;
-use crate::{config::IrcConfig, state::State};
+use crate::{config::IrcConfig, proxy_protocol, state::State};
+
+const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()> {
     let config = state.config.irc.clone();
@@ -32,6 +40,12 @@ pub async fn run_with_listener(
     tls_acceptor: Option<TlsAcceptor>,
 ) -> Result<()> {
     let config = state.config.irc.clone();
+    if config.proxy_protocol && config.proxy_trusted_cidrs.is_empty() {
+        tracing::warn!(
+            "IRC proxy protocol is enabled but LATE_IRC_PROXY_TRUSTED_CIDRS is empty; \
+             proxy headers will be rejected"
+        );
+    }
     tracing::info!(
         port = listener
             .local_addr()
@@ -57,33 +71,72 @@ pub async fn run_with_listener(
                         continue;
                     }
                 };
-                let peer_ip: IpAddr = addr.ip();
                 if state.is_draining.load(std::sync::atomic::Ordering::Relaxed) {
-                    reject(stream, tls_acceptor.clone(), "Server restarting").await;
+                    reject(stream, tls_acceptor.clone(), &config, addr, "Server restarting").await;
                     continue;
                 }
                 let Ok(conn_permit) = conn_limit.clone().try_acquire_owned() else {
-                    reject(stream, tls_acceptor.clone(), "Too many connections").await;
+                    reject(stream, tls_acceptor.clone(), &config, addr, "Too many connections").await;
                     continue;
                 };
                 let conn_state = state.clone();
                 let conn_limiter = auth_limiter.clone();
                 let conn_tls_acceptor = tls_acceptor.clone();
+                let conn_config = config.clone();
                 tokio::spawn(async move {
                     let _conn_permit = conn_permit;
+                    let mut stream = stream;
+                    let client_ip = match resolve_client_ip(&conn_config, &mut stream, addr).await {
+                        Ok(client_ip) => client_ip,
+                        Err(err) => {
+                            tracing::warn!(
+                                transport_peer = %addr,
+                                error = %err,
+                                "ircd: failed to resolve proxy protocol header; dropping connection"
+                            );
+                            return;
+                        }
+                    };
+                    let auth_limit_ip = client_ip.unwrap_or_else(|| addr.ip());
                     let result = if let Some(acceptor) = conn_tls_acceptor {
                         match acceptor.accept(stream).await {
-                            Ok(tls_stream) => conn::handle(conn_state, tls_stream, peer_ip, conn_limiter).await,
+                            Ok(tls_stream) => {
+                                conn::handle(
+                                    conn_state,
+                                    tls_stream,
+                                    client_ip,
+                                    auth_limit_ip,
+                                    conn_limiter,
+                                )
+                                .await
+                            }
                             Err(err) => {
-                                tracing::debug!(error = %err, %peer_ip, "ircd: TLS handshake failed");
+                                tracing::debug!(
+                                    error = %err,
+                                    transport_peer = %addr,
+                                    ?client_ip,
+                                    "ircd: TLS handshake failed"
+                                );
                                 return;
                             }
                         }
                     } else {
-                        conn::handle(conn_state, stream, peer_ip, conn_limiter).await
+                        conn::handle(
+                            conn_state,
+                            stream,
+                            client_ip,
+                            auth_limit_ip,
+                            conn_limiter,
+                        )
+                        .await
                     };
                     if let Err(err) = result {
-                        tracing::debug!(error = %err, %peer_ip, "ircd: connection ended with error");
+                        tracing::debug!(
+                            error = %err,
+                            transport_peer = %addr,
+                            ?client_ip,
+                            "ircd: connection ended with error"
+                        );
                     }
                 });
             }
@@ -93,6 +146,29 @@ pub async fn run_with_listener(
     let disconnected = state.irc_registry.disconnect_all("Server restarting");
     tracing::info!(disconnected, "ircd: shutdown, disconnected clients");
     Ok(())
+}
+
+async fn resolve_client_ip(
+    config: &IrcConfig,
+    stream: &mut TcpStream,
+    transport_peer: SocketAddr,
+) -> Result<Option<IpAddr>> {
+    if !config.proxy_protocol
+        || !proxy_protocol::is_trusted_peer(transport_peer.ip(), &config.proxy_trusted_cidrs)
+    {
+        return Ok(Some(transport_peer.ip()));
+    }
+
+    match proxy_protocol::read_optional_v1_header(stream, PROXY_HEADER_TIMEOUT).await? {
+        proxy_protocol::V1Header::Present(client_addr) => Ok(client_addr.map(|addr| addr.ip())),
+        proxy_protocol::V1Header::Absent => {
+            tracing::warn!(
+                %transport_peer,
+                "ircd: trusted proxy connection omitted PROXY header; client IP unavailable"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
@@ -144,7 +220,22 @@ async fn cancelled(shutdown: &Option<CancellationToken>) {
 }
 
 /// Best-effort ERROR line for connections refused before registration.
-async fn reject(stream: TcpStream, tls_acceptor: Option<TlsAcceptor>, reason: &str) {
+async fn reject(
+    mut stream: TcpStream,
+    tls_acceptor: Option<TlsAcceptor>,
+    config: &IrcConfig,
+    transport_peer: SocketAddr,
+    reason: &str,
+) {
+    if let Err(err) = resolve_client_ip(config, &mut stream, transport_peer).await {
+        tracing::debug!(
+            error = %err,
+            %transport_peer,
+            "ircd: failed to resolve proxy header while rejecting connection"
+        );
+        return;
+    }
+
     if let Some(acceptor) = tls_acceptor {
         match acceptor.accept(stream).await {
             Ok(mut stream) => write_error_and_close(&mut stream, reason).await,
@@ -153,7 +244,6 @@ async fn reject(stream: TcpStream, tls_acceptor: Option<TlsAcceptor>, reason: &s
         return;
     }
 
-    let mut stream = stream;
     write_error_and_close(&mut stream, reason).await;
 }
 
