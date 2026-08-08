@@ -9,9 +9,9 @@ boards shipped separately.)
 Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md`
 (created during Phase 1: the whole leaderboard domain, incl. the door board
 model), and the door contexts for the phase at hand
-(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss one now
-documents the shipped log pipe, the other two name their log files in
-§9/Deferred).
+(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss and
+nethack ones document their shipped log pipes, brogue names its run-history
+file in §9/Deferred).
 
 ## Phase 2 handoff (NetHack, 2026-08-08)
 
@@ -328,11 +328,17 @@ morgue dumps per game.
 
 ## Open questions for Mat (ask before the phase that needs them)
 
-- ~~Badge codes `DCO`/`DCW` fine?~~ Approved 2026-08-07 (Phase 1). `BRE`/`BRM`
-  still pending Phase 3.
+- ~~Badge codes `DCO`/`DCW` fine?~~ Approved 2026-08-07 (Phase 1). ~~`BRE`/`BRM`?~~
+  Approved 2026-08-08 (Phase 3).
 - ~~Should backfilled historical wins grant badges/chips?~~ Yes, approved
   2026-08-07.
-- Ingress shape for the DCSS files: subdomain or path prefix?
-- Do Rapid/Bullet Brogue variant games (same run history file) count on the
-  Brogue boards, or filter to standard? (They share the player dir; the run
-  history line should identify the variant, verify while reading the format.)
+- ~~Ingress shape for the DCSS files?~~ Path prefix (`late.sh/crawl/*`),
+  decided 2026-08-08: the axum listener serves under `/crawl/...` natively (no
+  rewrite annotation), a `Prefix` path rule on the `var.DOMAIN` host out-ranks
+  late-web's `/` catch-all by longest-match, reusing the existing DNS record
+  and cert. Confirm with the dcss-stats maintainer that a path-prefixed base
+  URL suits their fetcher before building (Phase 4).
+- ~~Do Rapid/Bullet Brogue variant games count on the Brogue boards?~~ No,
+  filter to standard Brogue only. Approved 2026-08-08. (They share the player
+  dir; verify how the run history line identifies the variant while reading
+  the format.)
