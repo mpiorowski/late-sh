@@ -979,10 +979,11 @@ fn warp_to_waypoint_refuses_without_one_set_or_without_enough_gold() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    let start = s.players[&uid(1)].room;
     s.warp_to_waypoint(uid(1));
     assert_eq!(
         s.players[&uid(1)].room,
-        s.world.start_room,
+        start,
         "no waypoint set: nothing happens"
     );
 
@@ -1071,6 +1072,7 @@ fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     let home = s.world.start_room;
+    s.players.get_mut(&uid(1)).unwrap().room = home;
 
     s.move_player(uid(1), Dir::Down);
     assert_eq!(
@@ -1140,6 +1142,7 @@ fn frontier_warning_clears_when_moving_elsewhere() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
     grant_frontier_unlock_titles(&mut s, uid(1));
 
     s.move_player(uid(1), Dir::Down);
@@ -1154,6 +1157,7 @@ fn town_square_exit_labels_mark_frontier_as_dangerous() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
 
     let snap = s.snapshot();
     let view = snap.players.get(&uid(1)).expect("player view");
@@ -1236,8 +1240,9 @@ fn a_boon_creature_mends_on_arrival() {
     s.choose_class(uid(1), Class::Warrior);
     if let Some(p) = s.players.get_mut(&uid(1)) {
         p.hp = 1;
+        // Room 1, the town square, is home to the hearth-cat (Mend boon).
+        p.room = 1;
     }
-    // The player starts in the town square, home of the hearth-cat (Mend boon).
     s.apply_critter_perks(uid(1));
     assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
 }
@@ -1246,8 +1251,9 @@ fn a_boon_creature_mends_on_arrival() {
 fn unclassed_player_cannot_move_or_fight() {
     let mut s = world();
     s.join(uid(1));
+    let start = s.players[&uid(1)].room;
     s.move_player(uid(1), Dir::South);
-    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+    assert_eq!(s.players[&uid(1)].room, start);
     s.engage(uid(1));
     assert!(s.players[&uid(1)].target.is_none());
 }
@@ -1257,6 +1263,7 @@ fn buying_costs_gold_and_adds_item() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Walk to the smith (room 3, east of square).
     s.move_player(uid(1), Dir::East);
     assert_eq!(s.players[&uid(1)].room, 3);
@@ -1274,7 +1281,7 @@ fn waystone_travel_teleports_between_portals() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     // Room 1 (Embergate square) has the town waystone.
-    assert_eq!(s.players[&uid(1)].room, 1);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.travel(uid(1), village_room(0));
     assert_eq!(
         s.players[&uid(1)].room,
@@ -1305,7 +1312,7 @@ fn continent_waystones_honor_their_walking_gate_titles() {
     s.choose_class(uid(1), Class::Warrior);
     // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
     // stays sealed until the Yssgar crown is earned.
-    assert_eq!(s.players[&uid(1)].room, 1);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.travel(uid(1), super::super::world::KAELMYR_BASE);
     assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
     s.players
@@ -1384,6 +1391,7 @@ fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
     assert_eq!(s.players[&uid(1)].room, 3);
     {
@@ -1411,7 +1419,8 @@ fn buying_a_companion_costs_gold_and_sets_a_pet() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // A fresh adventurer stands in Embergate's square, which has a stable.
+    // Embergate's square (room 1) has a stable.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.players.get_mut(&uid(1)).unwrap().gold = 1000;
     s.buy_pet(uid(1), "war_hound");
     let p = &s.players[&uid(1)];
@@ -1805,6 +1814,7 @@ fn bank_toggles_between_deposit_and_withdraw_all_gold() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
 
     // Find the banker's grille by kind - feature indices shift as scenery
     // (e.g. a stable) is added to the square.
@@ -1924,6 +1934,7 @@ fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Rogue);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1939,6 +1950,7 @@ fn combat_tick_logs_player_auto_attack() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1959,6 +1971,13 @@ fn field_mode_logs_discoveries_only_and_classic_logs_every_arrival() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Mage);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1;
+        // Room 1 is "known land" for this test's purposes, same as it was
+        // when a fresh join placed a character there directly.
+        std::sync::Arc::make_mut(&mut p.visited).insert(1);
+    }
 
     // First footfall in field mode (rpg on by default): a discovery line plus
     // the room's prose, which has nowhere else to live on the field layout.
@@ -2011,6 +2030,7 @@ fn warrior_does_not_arm_opening_strike() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
     s.engage(uid(1));
@@ -3161,6 +3181,53 @@ fn winning_a_pvp_duel_credits_gold_xp_a_kill_and_a_title() {
         "a first pvp kill earns the Blooded title, got {:?}",
         attacker.titles
     );
+}
+
+#[test]
+fn a_brand_new_character_spawns_in_the_tutorial_and_can_recall_to_embergate() {
+    let mut s = world();
+    s.join(uid(1));
+    // Joining alone (before a class is chosen) already places the character
+    // in Wayfarer's Hollow, not `World::start_room` directly.
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    s.choose_class(uid(1), Class::Warrior);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("Wayfarer's Hollow") && l.text.contains('r')),
+        "the welcome message should mention the tutorial and the recall key"
+    );
+    // The existing recall (r) already works from anywhere: it's the "leave
+    // for town with a key anytime" the tutorial promises.
+    s.recall(uid(1));
+    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+}
+
+#[test]
+fn a_returning_character_reloads_where_they_saved_not_the_tutorial() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    let saved = s.export_saved(uid(1)).expect("classed character exports");
+    assert_eq!(
+        saved.room, 1,
+        "the saved room is wherever they actually stood"
+    );
+
+    // A fresh session reloads that exact room, not the tutorial.
+    let mut s2 = world();
+    s2.join(uid(1));
+    s2.hydrate(uid(1), &saved);
+    assert_eq!(s2.players[&uid(1)].room, 1);
 }
 
 #[test]

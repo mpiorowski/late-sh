@@ -196,6 +196,11 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (900..=3 * WILDBOUND_BIOME_STRIDE as usize).contains(&wildbound),
         "the Wildbound Waste should be ~1000+ rooms, got {wildbound}"
     );
+    // Wayfarer's Hollow: the five-room new-player tutorial zone (rooms
+    // 40000+), hung off the Gilded Flagon. A fixed, fully hand-authored set,
+    // so this is an exact count rather than a band.
+    let tutorial = count_in(TUTORIAL_BASE, TUTORIAL_BASE + 10);
+    assert_eq!(tutorial, 5, "five tutorial rooms");
     // No stray rooms outside the known groups.
     assert_eq!(
         world.rooms.len(),
@@ -210,7 +215,8 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + broceliande
             + villages
             + islands
-            + wildbound,
+            + wildbound
+            + tutorial,
         "every room should belong to a known region"
     );
     for spawn in &world.spawns {
@@ -1895,4 +1901,97 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
         levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 90),
         "the Waste should span from early levels to near the cap, got {levels:?}"
     );
+}
+
+#[test]
+fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
+    let world = seed_world();
+    // All five rooms exist, and every one but the training yard is safe -
+    // the yard needs `safe: false` for its dummy to be fightable at all.
+    for offset in 0..5u32 {
+        let room = world
+            .room(TUTORIAL_BASE + offset)
+            .unwrap_or_else(|| panic!("tutorial room {} should exist", TUTORIAL_BASE + offset));
+        if offset == 1 {
+            assert!(!room.safe, "the Training Yard must allow combat");
+        } else {
+            assert!(room.safe, "room {} should be a haven", room.id);
+        }
+        assert!(!room.pvp, "no tutorial room is contested ground");
+    }
+    // Reachable from the real start room by a normal walk (via the tavern).
+    let can_reach = |from: RoomId, target: RoomId| -> bool {
+        let mut seen = std::collections::HashSet::from([from]);
+        let mut stack = vec![from];
+        while let Some(r) = stack.pop() {
+            if r == target {
+                return true;
+            }
+            if let Some(room) = world.room(r) {
+                for &to in room.exits.values() {
+                    if seen.insert(to) {
+                        stack.push(to);
+                    }
+                }
+            }
+        }
+        false
+    };
+    assert!(
+        can_reach(world.start_room, TUTORIAL_BASE),
+        "Wayfarer's Hollow must be reachable from Embergate"
+    );
+    assert!(
+        can_reach(TUTORIAL_BASE, world.start_room),
+        "and there must be a normal walk back"
+    );
+    // A brand-new join lands here, not at World::start_room directly.
+    assert_eq!(tutorial_start_room(), TUTORIAL_BASE);
+    assert_ne!(
+        tutorial_start_room(),
+        world.start_room,
+        "the tutorial is distinct from Embergate itself"
+    );
+    // Combat: a near-harmless training dummy lives in the Training Yard.
+    let dummy = world
+        .spawns
+        .iter()
+        .find(|s| s.home == TUTORIAL_BASE + 1)
+        .expect("the Training Yard has a dummy");
+    assert!(!dummy.boss);
+    assert!(
+        dummy.damage <= 2,
+        "the dummy must never meaningfully hurt a newcomer"
+    );
+    assert!(dummy.max_hp >= 30, "should survive a few practice rounds");
+    // Gathering: one node per trade, all in the Gathering Glade.
+    let glade_skills: std::collections::HashSet<GatherSkill> = NODES
+        .iter()
+        .filter(|n| n.home == TUTORIAL_BASE + 2)
+        .map(|n| n.skill)
+        .collect();
+    assert_eq!(
+        glade_skills.len(),
+        5,
+        "every gathering trade has a node here"
+    );
+    // Crafting: one station per trade, all in the Tinker's Hall.
+    let stations = craft_stations_at(TUTORIAL_BASE + 3);
+    assert_eq!(stations.len(), 5, "every craft trade has a station here");
+    // Classes: the Tome of the Seventeen Callings stands in the Hall of Callings.
+    assert!(
+        features_at(TUTORIAL_BASE + 4)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Plaque && f.name.contains("Seventeen Callings")),
+        "the Hall of Callings should hold the class tome"
+    );
+    // Every safe tutorial room (all but the yard) has a villager, same
+    // invariant as everywhere else in the world.
+    for offset in [0u32, 2, 3, 4] {
+        let room = TUTORIAL_BASE + offset;
+        assert!(
+            VILLAGERS.iter().any(|v| v.room == room),
+            "safe tutorial room {room} needs a villager"
+        );
+    }
 }

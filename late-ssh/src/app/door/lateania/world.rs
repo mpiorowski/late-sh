@@ -318,6 +318,13 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         "pvp",
         "the Sand-Wyrm's Maw",
     ),
+    (
+        "Wayfarer's Hollow",
+        TUTORIAL_BASE,
+        TUTORIAL_BASE + 5,
+        "safe / tutorial",
+        "Embergate's square",
+    ),
 ];
 
 impl World {
@@ -567,6 +574,19 @@ fn draw_trail_connector(cell: &mut MapCell, dx: i32, _dy: i32) {
 pub const TASMANIA_SQUARE: RoomId = 620;
 pub const MELVANALA_SQUARE: RoomId = 660;
 pub const MATLATESH_SQUARE: RoomId = 720;
+
+/// Wayfarer's Hollow, the new-player tutorial zone: a five-room hub (hollow
+/// plus one room per core system) hung off Embergate's square. Every
+/// brand-new character spawns here (`svc::join` calls [`tutorial_start_room`]
+/// instead of using `World::start_room`, which stays Embergate's square so
+/// map anchoring, recall, and every other "home is room 1" assumption is
+/// untouched); a returning character's saved room is unaffected.
+pub const TUTORIAL_BASE: RoomId = 40_000;
+
+/// Where a brand-new character first stands. See [`TUTORIAL_BASE`].
+pub fn tutorial_start_room() -> RoomId {
+    TUTORIAL_BASE
+}
 
 /// What kind of lookable thing a feature is. Fountains restore vitals in a safe
 /// capital, banks protect gold, and the rest are pure description revealed on look.
@@ -868,6 +888,39 @@ pub const FEATURES: &[Feature] = &[
          far off a lone mesa stands against the sky like a tombstone for a giant. A caravan \
          road leaves the gate and dwindles toward it; the desert is wide, but every dune you \
          can see has a path across it.",
+    ),
+    // ---- Wayfarer's Hollow's Tinker's Hall: one scaled-down copy of every
+    // craft station, so a newcomer can open the crafting panel immediately. --
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice forge",
+        FeatureKind::CraftStation(CraftSkill::Smithing),
+        "A small forge, banked low - just hot enough to smelt a first bar of ore and \
+         see how the recipe list actually works.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice workbench",
+        FeatureKind::CraftStation(CraftSkill::Woodworking),
+        "A modest bench with one of every tool, none of them worn in yet.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice tannery",
+        FeatureKind::CraftStation(CraftSkill::Leatherworking),
+        "A single stretching-frame, kept well clear of the real tannery's smell.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice alchemy stall",
+        FeatureKind::CraftStation(CraftSkill::Alchemy),
+        "A tidy little rack of retorts, none of them bubbling with anything dangerous yet.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "the practice cook-fire",
+        FeatureKind::CraftStation(CraftSkill::Cooking),
+        "A small, well-tended fire with a spit and a single pot - enough to learn on.",
     ),
 ];
 
@@ -1827,6 +1880,31 @@ pub const VILLAGERS: &[Feature] = &[
         FeatureKind::Villager,
         "You can see it moving out there sometimes, if the light's wrong. Don't point. It notices pointing.",
     ),
+    // ---- Wayfarer's Hollow: the new-player tutorial zone ------------------
+    feat(
+        TUTORIAL_BASE,
+        "a weathered instructor",
+        FeatureKind::Villager,
+        "Take your time. Nothing here can truly hurt you, and Embergate isn't going anywhere - press r whenever you're ready to see the real town.",
+    ),
+    feat(
+        TUTORIAL_BASE + 2,
+        "a patient trade-keeper",
+        FeatureKind::Villager,
+        "Press y and you'll take from whatever's here you're able to work. Every trade in the world starts exactly this simply.",
+    ),
+    feat(
+        TUTORIAL_BASE + 3,
+        "a soot-streaked tinker",
+        FeatureKind::Villager,
+        "Stand at any station and press u. You'll see every recipe it knows, and which ones you can actually make right now.",
+    ),
+    feat(
+        TUTORIAL_BASE + 4,
+        "an old archivist",
+        FeatureKind::Villager,
+        "Whatever you chose, you chose well. But it never hurts to know what everyone else in the tavern can do.",
+    ),
 ];
 
 pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
@@ -1840,6 +1918,7 @@ pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
             .iter()
             .chain(VILLAGERS.iter())
             .chain(waystone_features().iter())
+            .chain(tome_feature().iter())
         {
             by_room.entry(f.room).or_default().push(f);
         }
@@ -1930,6 +2009,42 @@ fn waystone_features() -> &'static [Feature] {
             ));
         }
         v
+    })
+}
+
+/// Wayfarer's Hollow's Hall of Callings: one lookable tome summarising every
+/// playable class, built from the same canonical `Class::tagline`/`resource`/
+/// `trait_name` data the character sheet and class-select screen already use,
+/// so the tutorial can never drift out of sync with what a class actually
+/// does. Generated once and leaked to `'static`, same as `waystone_features`.
+fn tome_feature() -> &'static [Feature] {
+    static F: OnceLock<Vec<Feature>> = OnceLock::new();
+    F.get_or_init(|| {
+        use std::fmt::Write;
+        let mut body = String::from(
+            "Its pages turn themselves to whatever calling draws your eye. Each carries \
+             its resource, its defining trait, and a line on how it fights:\n\n",
+        );
+        for class in super::classes::Class::ALL {
+            let _ = writeln!(
+                body,
+                "{} ({}, {}): {}",
+                class.name(),
+                class.resource().label(),
+                class.trait_name(),
+                class.tagline()
+            );
+        }
+        body.push_str(
+            "\nNo entry runs longer than this - the tome believes the doing teaches \
+             better than the reading ever could.",
+        );
+        vec![feat(
+            TUTORIAL_BASE + 4,
+            "the Tome of the Seventeen Callings",
+            FeatureKind::Plaque,
+            Box::leak(body.into_boxed_str()),
+        )]
     })
 }
 
@@ -3405,6 +3520,53 @@ pub const NODES: &[ResourceNode] = &[
         55,
         600,
     ),
+    // ---- Wayfarer's Hollow's Gathering Glade: one tier-0 node per trade,
+    // all in one room, purely so `y` can be tried immediately by anyone. ----
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Woodcutting,
+        "a sapling stand",
+        "young trees planted for practising hands",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Mining,
+        "a shallow ore seam",
+        "soft ore breaking the surface",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Fishing,
+        "a stocked practice pool",
+        "slow, obliging fish",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Foraging,
+        "a patch of hardy herbs",
+        "common roadside herbs",
+        0,
+        1,
+        12,
+    ),
+    node(
+        TUTORIAL_BASE + 2,
+        GatherSkill::Skinning,
+        "a practice hide-rack",
+        "cured hides set out to learn on",
+        0,
+        1,
+        12,
+    ),
 ];
 
 pub fn nodes_at(room: RoomId) -> Vec<&'static ResourceNode> {
@@ -3436,8 +3598,6 @@ fn room(
     }
 }
 
-/// A contested-zone room (see `Room::pvp`): always unsafe for mobs, and open
-/// season for adventurers on each other. Used for the Wildbound Waste.
 /// Build the vertical-slice world: Embergate (safe hub) + the King's Road.
 pub fn seed_world() -> World {
     let rooms = vec![
@@ -3472,8 +3632,10 @@ pub fn seed_world() -> World {
              candle-wax and carved initials. Adventurers swap tall tales over tankards, \
              a card game simmers toward a brawl in the corner, and the barkeep polishes \
              a horn cup that will never come clean. It is warm, loud, and safe - the \
-             last of those rarer than the others. The square lies south.",
-            &[(Dir::South, 1)],
+             last of those rarer than the others. A side door out back leads north to \
+             Wayfarer's Hollow, where the newest faces in the room learned their trade; \
+             the square lies south.",
+            &[(Dir::South, 1), (Dir::North, TUTORIAL_BASE)],
         ),
         room(
             3,
@@ -3516,6 +3678,89 @@ pub fn seed_world() -> World {
              the road is safe only as far as he can see it. The square lies north; \
              the open road runs south.",
             &[(Dir::North, 1), (Dir::South, 6)],
+        ),
+        // ---- Wayfarer's Hollow (safe, rooms 40000+): the new-player tutorial
+        // zone. Every brand-new character spawns here (see `join`/`tutorial_
+        // start_room`), never dangerous, one room per core system, hung off
+        // the Gilded Flagon (room 2) by a normal walk north - room 1 itself
+        // has no free direction left (Down is Frontier, Up is the city
+        // district). `r` (recall) already works from anywhere in the game, so
+        // leaving for the real Embergate is always just a keypress away - the
+        // join-time message says so.
+        room(
+            TUTORIAL_BASE,
+            "Wayfarer's Hollow",
+            "Wayfarer's Hollow",
+            true,
+            "A round, sheltered yard behind the Gilded Flagon, floored in raked sand \
+             and ringed by low benches, built for exactly one purpose: teaching \
+             newcomers the shape of the world before it teaches them the hard way. \
+             A weathered instructor in a patched coat watches over the yard, \
+             unhurried, ready to point anyone in whatever direction they're curious \
+             about. A training yard for the sword lies north, a gathering glade east, \
+             the Hall of Callings west, steps lead down to a tinker's hall, and the \
+             tavern's side door leads back south to Embergate proper.",
+            &[
+                (Dir::North, TUTORIAL_BASE + 1),
+                (Dir::East, TUTORIAL_BASE + 2),
+                (Dir::South, 2),
+                (Dir::West, TUTORIAL_BASE + 4),
+                (Dir::Down, TUTORIAL_BASE + 3),
+            ],
+        ),
+        room(
+            TUTORIAL_BASE + 1,
+            "Wayfarer's Hollow - the Training Yard",
+            "Wayfarer's Hollow",
+            false,
+            "A ring of packed earth, scuffed pale by countless practice bouts, holds a \
+             stuffed straw dummy lashed to a stout post at its center - patched, \
+             re-patched, and clearly none the worse for it. It swings back with a \
+             padded fist when struck, just hard enough to teach without ever really \
+             hurting: a fair place to learn to close for the attack, work an ability \
+             off the bar, and flee before real harm ever finds you. The Hollow lies \
+             south.",
+            &[(Dir::South, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 2,
+            "Wayfarer's Hollow - the Gathering Glade",
+            "Wayfarer's Hollow",
+            true,
+            "A tidy little clearing planted, a touch too conveniently, with one of \
+             everything: a stand of saplings, a vein of soft ore breaking the surface, \
+             a stocked fishing pool, a patch of hardy herbs, and the hide-strewn \
+             remains of a hunter's practice runs. Every gathering trade can be tried \
+             here at once, tools or none - the glade wants you to learn the reach of \
+             `y`, not to make you go looking for it. The Hollow lies west.",
+            &[(Dir::West, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 3,
+            "Wayfarer's Hollow - the Tinker's Hall",
+            "Wayfarer's Hollow",
+            true,
+            "A small covered hall below the Hollow's yard, holding a scaled-down copy \
+             of every craft station Market Row has to offer - forge, workbench, \
+             tannery, alchemy lab, and cooking fire, all cold and quiet and waiting. \
+             Nothing here is rare or valuable; it exists purely so a newcomer can open \
+             the crafting panel, see what each trade actually makes, and understand \
+             the shape of the gather-then-craft chain before it matters. Steps lead \
+             back up to the Hollow.",
+            &[(Dir::Up, TUTORIAL_BASE)],
+        ),
+        room(
+            TUTORIAL_BASE + 4,
+            "Wayfarer's Hollow - the Hall of Callings",
+            "Wayfarer's Hollow",
+            true,
+            "Portraits line this quiet round room, one for each calling a soul might \
+             answer in Lateania, painted in a style too old for any of these young \
+             instructors to have made themselves. A great iron-bound tome rests open \
+             on a lectern at the room's heart, its pages turning slowly on their own \
+             to whichever calling a reader's attention settles on. It is a place for \
+             reading, not fighting - the Hollow lies east.",
+            &[(Dir::East, TUTORIAL_BASE)],
         ),
         // ---- Embergate shop district (safe) -----------------------------
         room(
@@ -5182,6 +5427,21 @@ pub fn seed_world() -> World {
                 Some(DamageType::Shadow),
                 Some(DamageType::Holy),
             ),
+        },
+        // Wayfarer's Hollow's training dummy: generous hp so a fight lasts a
+        // few rounds, near-nothing damage so it can never actually kill a
+        // fresh level-1 character, fast respawn so the yard is never empty.
+        MobSpawn {
+            id: 40_000,
+            name: "a straw training dummy",
+            home: TUTORIAL_BASE + 1,
+            max_hp: 60,
+            damage: 1,
+            xp: 5,
+            respawn_secs: 15,
+            loot: &[],
+            boss: false,
+            profile: DamageProfile::new(DamageType::Physical, None, None),
         },
     ];
 
