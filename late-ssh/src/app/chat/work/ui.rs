@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -73,16 +73,10 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
             .marker_read_at
             .map(|last_read_at| p.updated > last_read_at)
             .unwrap_or(true);
-        let bg = if is_selected {
-            theme::BG_SELECTION()
-        } else {
-            Color::Reset
-        };
-
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
-            .style(Style::default().bg(bg));
+            .style(theme::row_style(is_selected));
         let content_area = item_block.inner(item_area);
         frame.render_widget(item_block, item_area);
 

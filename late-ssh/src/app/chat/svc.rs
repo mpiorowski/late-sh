@@ -2746,6 +2746,11 @@ impl ChatService {
 
         let tx = client.transaction().await?;
         let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
+        // Cached translations describe the pre-edit body; they die with it.
+        late_core::models::message_translation::MessageTranslation::delete_for_message(
+            &tx, message_id,
+        )
+        .await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(is_owner),

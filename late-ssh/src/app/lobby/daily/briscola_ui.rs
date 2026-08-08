@@ -265,10 +265,15 @@ fn table_lines(
         .map(|index| match table.hands[my_seat].get(index) {
             Some(_) if spectating => (Slot::Back, Style::default().fg(theme::BORDER_DIM())),
             Some(&card) => {
-                let mut style = Style::default().fg(suit_color(card));
-                if cursor == Some(index) {
-                    style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
-                }
+                // Suit color goes on after the selection swap so the card
+                // under the cursor keeps its red/black identity.
+                let style = if cursor == Some(index) {
+                    theme::selection_style()
+                        .fg(suit_color(card))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(suit_color(card))
+                };
                 (Slot::Face(card), style)
             }
             None => (Slot::Empty, Style::default().fg(theme::TEXT_FAINT())),

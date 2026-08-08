@@ -4357,6 +4357,41 @@ pub fn BG_SELECTION() -> Color {
     current_palette().bg_selection
 }
 
+/// Style for a selected row or cell whose text must stay readable on it.
+/// Palettes with a paintable canvas keep the flat `bg_selection` fill. A
+/// `Color::Reset` canvas means the text follows the terminal's own
+/// foreground, and no fixed fill can guarantee contrast against an unknown
+/// color, so those palettes invert instead: `REVERSED` swaps the terminal's
+/// own fg/bg pair, the one pair the user has already made legible.
+///
+/// The invert arm carries explicit `Reset` colors because call sites compose
+/// via `Style::patch`, which only overwrites `Some` fields: without them a
+/// pre-set accent fg or board fill would survive the patch and the swapped
+/// pair would not be the terminal's own. The tradeoff is that the swap wins
+/// over any color set before the patch; a color that must survive because it
+/// means something (a piece, a suit) goes on after the patch, where it
+/// becomes the fill of the swapped cell.
+pub fn selection_style() -> Style {
+    match BG_CANVAS() {
+        Color::Reset => Style::default()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED),
+        _ => Style::default().bg(BG_SELECTION()),
+    }
+}
+
+/// Base style for a list row: the selection treatment when selected,
+/// otherwise an explicit default background so unselected rows clear any
+/// inherited fill.
+pub fn row_style(selected: bool) -> Style {
+    if selected {
+        selection_style()
+    } else {
+        Style::default().bg(Color::Reset)
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
@@ -4405,15 +4440,15 @@ pub fn CHAT_REPLY_BG() -> Color {
 /// An accent color blended most of the way to the active canvas, so it reads
 /// as a quiet wash behind body text on dark and light themes alike. Derived,
 /// so no per-palette field is needed. When the accent or the canvas has no
-/// RGB reading, the wash falls back to the flat highlight background: these
-/// washes sit under body text, and on the terminal palette that text follows
-/// the terminal's own foreground, which a black-anchored blend would swallow
-/// on a light profile.
+/// RGB reading, the wash is dropped entirely (`Color::Reset`): these washes
+/// sit under body text, and on the terminal palette that text follows the
+/// terminal's own foreground, so no fixed wash color can promise contrast.
+/// The mention/author accents on the text itself carry the emphasis there.
 fn attention_bg(accent: Color) -> Color {
     const TOWARD_CANVAS: f32 = 0.84;
     match (color_rgb(accent), color_rgb(BG_CANVAS())) {
         (Some(_), Some(_)) => blend_toward_canvas(accent, TOWARD_CANVAS),
-        _ => BG_HIGHLIGHT(),
+        _ => Color::Reset,
     }
 }
 

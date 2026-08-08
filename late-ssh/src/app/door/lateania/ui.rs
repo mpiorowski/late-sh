@@ -1136,7 +1136,7 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
         let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -1540,7 +1540,7 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else if active {
             Style::default()
@@ -2610,7 +2610,7 @@ fn examine_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else if actionable {
             Style::default()
@@ -2730,7 +2730,7 @@ fn inventory_panel(
                 let style = if selected {
                     Style::default()
                         .fg(theme::TEXT_BRIGHT())
-                        .bg(theme::BG_SELECTION())
+                        .patch(theme::selection_style())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(rarity_color(&it.rarity))
@@ -2870,7 +2870,7 @@ fn shop_panel(
                 let name_style = if selected {
                     Style::default()
                         .fg(theme::TEXT_BRIGHT())
-                        .bg(theme::BG_SELECTION())
+                        .patch(theme::selection_style())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(rarity_color(&e.rarity))
@@ -2919,7 +2919,7 @@ fn section_header_line(
     let style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -2983,7 +2983,7 @@ fn crafting_panel(
                 let name_style = if selected {
                     Style::default()
                         .fg(theme::TEXT_BRIGHT())
-                        .bg(theme::BG_SELECTION())
+                        .patch(theme::selection_style())
                         .add_modifier(Modifier::BOLD)
                 } else if e.craftable {
                     Style::default().fg(theme::TEXT())
@@ -3077,7 +3077,7 @@ fn stable_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
@@ -3134,7 +3134,7 @@ fn taming_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
@@ -3303,13 +3303,13 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         } else if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
         };
         let style = if selected && (*here || *sealed) {
-            style.bg(theme::BG_SELECTION())
+            style.patch(theme::selection_style())
         } else {
             style
         };
@@ -3366,7 +3366,7 @@ fn housing_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Optio
         let name_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
@@ -3432,7 +3432,7 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
         let row_style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())

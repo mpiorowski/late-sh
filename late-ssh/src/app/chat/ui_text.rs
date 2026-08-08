@@ -4,6 +4,7 @@ use ratatui::{
 };
 
 use crate::app::chat::action::parse_action_body;
+use crate::app::chat::state::TranslationDisplay;
 use crate::app::chat::svc::ReportKind;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
@@ -137,6 +138,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
+    translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
     let pad = if mentions_us {
         Span::styled("│", Style::default().fg(theme::MENTION()))
@@ -165,6 +167,13 @@ pub(super) fn wrap_chat_entry_to_lines(
         && action_payload.is_none()
         && !continuation)
         .then_some(0);
+    // The translation block rides under the body of plain messages (and /me
+    // actions) only: news/report cards and system lines have their own
+    // layouts and are never translated.
+    let translation_slot =
+        (system_text.is_none() && news_payload.is_none() && report_payload.is_none())
+            .then_some(translation)
+            .flatten();
     let mut lines = if let Some(system) = system_text {
         wrap_system_to_lines(system, width)
     } else if let Some(news) = news_payload {
@@ -199,11 +208,51 @@ pub(super) fn wrap_chat_entry_to_lines(
         None
     };
 
+    if let Some(translation) = translation_slot {
+        lines.extend(translation_lines(translation, width, &pad));
+    }
+
     lines.extend(render_reaction_footer_lines(reactions, width, pad));
     WrappedChatEntry {
         lines,
         header_line_index,
         image_line_range,
+    }
+}
+
+/// The `↳` block under a translated message: dim italic so it reads as an
+/// annotation, never as text the author typed. Pending shows a one-line
+/// placeholder that the result replaces on the next drain; Failed renders
+/// nothing (the requester already got a banner, and `t` retries).
+fn translation_lines(
+    translation: &TranslationDisplay,
+    width: usize,
+    pad: &Span<'static>,
+) -> Vec<Line<'static>> {
+    let style = Style::default()
+        .fg(theme::TEXT_DIM())
+        .add_modifier(Modifier::ITALIC);
+    match translation {
+        TranslationDisplay::Pending => vec![Line::from(vec![
+            pad.clone(),
+            Span::styled(" ↳ translating…", style),
+        ])],
+        TranslationDisplay::Failed => Vec::new(),
+        TranslationDisplay::Ready(text) => {
+            // pad + " ↳ " prefix on the first row, matching indent after.
+            let budget = width.saturating_sub(5).max(8);
+            wrap_plain_display_width(text, budget)
+                .into_iter()
+                .enumerate()
+                .map(|(i, segment)| {
+                    let marker = if i == 0 { " ↳ " } else { "   " };
+                    Line::from(vec![
+                        pad.clone(),
+                        Span::styled(format!("{marker}{segment}"), style),
+                    ])
+                })
+                .collect()
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use late_core::{
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
+        message_translation::{TRANSLATE_MAX_BODY_CHARS, TranslateLang, needs_translation},
         voice_channel::VoiceChannel,
     },
 };
@@ -29,6 +30,7 @@ use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::ai::ladder::MentionLadders;
+use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
 
@@ -549,6 +551,25 @@ pub struct ChatState {
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
+    /// Translation handle + result feed (`app/ai/translate.rs`). Requests are
+    /// fire-and-forget; results land on `translation_rx` and drain in tick.
+    translation_service: TranslationService,
+    translation_rx: tokio::sync::broadcast::Receiver<TranslationEvent>,
+    /// This session's translations for the current target language, keyed by
+    /// message id. Cleared when the target language changes.
+    pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
+    /// Messages whose shown translation was collapsed with `t`. Session-local
+    /// override; wins over auto mode and the cache at render time.
+    pub(crate) translation_hidden: HashSet<Uuid>,
+    /// Message ids this session requested via `t`, so a failure banners only
+    /// for the requester, never for auto-mode bystanders.
+    translation_manual: HashSet<Uuid>,
+    /// Message ids already sent through the bulk cache lookup, so re-entering
+    /// a room does not requery its history. Cleared when the target changes.
+    translation_cache_checked: HashSet<Uuid>,
+    /// Mirrors of the profile's translation settings, synced by `App::tick`.
+    translate_to: TranslateLang,
+    auto_translate: bool,
     pub(crate) selected_message_id: Option<Uuid>,
     /// Armed by a first `d` press on a message; a second `d` on the same
     /// still-selected message confirms the delete. Any selection change or
@@ -653,8 +674,18 @@ pub struct ChatState {
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
+/// What the UI knows about one message's translation into the session's
+/// target language. `Failed` renders nothing but lets `t` retry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranslationDisplay {
+    Pending,
+    Ready(String),
+    Failed,
+}
+
 pub(crate) struct ChatServices {
     pub chat: ChatService,
+    pub translation: crate::app::ai::translate::TranslationService,
     pub notifications: NotificationService,
     pub articles: news::svc::ArticleService,
     pub feeds: feeds::svc::FeedService,
@@ -680,6 +711,7 @@ impl ChatState {
     ) -> Self {
         let ChatServices {
             chat: service,
+            translation: translation_service,
             notifications: notification_service,
             articles: article_service,
             feeds: feed_service,
@@ -755,6 +787,14 @@ impl ChatState {
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
             voice_channels_by_room_id: HashMap::new(),
+            translation_rx: translation_service.subscribe(),
+            translation_service,
+            translations: HashMap::new(),
+            translation_hidden: HashSet::new(),
+            translation_manual: HashSet::new(),
+            translation_cache_checked: HashSet::new(),
+            translate_to: TranslateLang::En,
+            auto_translate: false,
             selected_message_id: None,
             pending_delete_message_id: None,
             reaction_leader_active: false,
@@ -962,10 +1002,171 @@ impl ChatState {
     }
 
     pub fn set_visible_room_id(&mut self, room_id: Option<Uuid>) {
-        if self.visible_room_id != room_id {
+        let changed = self.visible_room_id != room_id;
+        if changed {
             self.flush_pending_read_cursors();
         }
         self.visible_room_id = room_id;
+        if changed {
+            self.request_cached_translations_for_visible_room();
+        }
+    }
+
+    /// Sync the profile's translation settings into this session. Called from
+    /// `App::tick`; a target change drops every per-message translation state
+    /// (it all describes the old language) and invalidates row caches.
+    pub fn set_translate_settings(&mut self, target: TranslateLang, auto: bool) -> bool {
+        let mut changed = false;
+        if self.translate_to != target {
+            self.translate_to = target;
+            self.translations.clear();
+            self.translation_hidden.clear();
+            self.translation_manual.clear();
+            self.translation_cache_checked.clear();
+            self.context_epoch += 1;
+            changed = true;
+        }
+        if self.auto_translate != auto {
+            self.auto_translate = auto;
+            changed = true;
+        }
+        if changed {
+            self.request_cached_translations_for_visible_room();
+        }
+        changed
+    }
+
+    /// `t` on the selected message: show a translation (cache or API), or
+    /// collapse/re-open one already shown. Failed entries retry.
+    pub fn toggle_translation_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
+        let (message_id, message_room_id, body) = {
+            let message = self.selected_message_in_room(room_id)?;
+            (message.id, message.room_id, message.body.clone())
+        };
+        match self.translations.get(&message_id) {
+            Some(TranslationDisplay::Pending) => None,
+            Some(TranslationDisplay::Ready(_)) => {
+                if !self.translation_hidden.remove(&message_id) {
+                    self.translation_hidden.insert(message_id);
+                }
+                self.bump_room_version(message_room_id);
+                None
+            }
+            Some(TranslationDisplay::Failed) | None => {
+                // Length check first: `needs_translation` also returns false
+                // for over-cap bodies, and "already readable" would be a lie
+                // for a genuinely foreign wall of text.
+                if body.chars().count() > TRANSLATE_MAX_BODY_CHARS {
+                    return Some(Banner::info("Message too long to translate"));
+                }
+                if !needs_translation(&body, self.translate_to) {
+                    return Some(Banner::info(&format!(
+                        "Already readable in {}",
+                        self.translate_to.prompt_name()
+                    )));
+                }
+                self.translations
+                    .insert(message_id, TranslationDisplay::Pending);
+                self.translation_manual.insert(message_id);
+                self.translation_cache_checked.insert(message_id);
+                self.translation_service.request(
+                    message_id,
+                    message_room_id,
+                    body,
+                    self.translate_to,
+                );
+                self.bump_room_version(message_room_id);
+                None
+            }
+        }
+    }
+
+    /// Auto mode entering a room (or settings change): one bulk cache-only
+    /// lookup over the foreign-script history already loaded. Cache hits
+    /// render pre-expanded; misses stay collapsed until `t`, which is what
+    /// keeps auto mode's cost bound to live messages.
+    fn request_cached_translations_for_visible_room(&mut self) {
+        if !self.auto_translate {
+            return;
+        }
+        let Some(room_id) = self.visible_room_id else {
+            return;
+        };
+        let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
+            return;
+        };
+        let ids: Vec<Uuid> = messages
+            .iter()
+            .filter(|message| {
+                message.user_id != self.user_id
+                    && !self.translations.contains_key(&message.id)
+                    && !self.translation_cache_checked.contains(&message.id)
+                    && needs_translation(&message.body, self.translate_to)
+            })
+            .map(|message| message.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.translation_cache_checked.extend(ids.iter().copied());
+        self.translation_service
+            .load_cached(room_id, ids, self.translate_to);
+    }
+
+    fn drain_translation_events(&mut self) -> Option<Banner> {
+        let mut banner = None;
+        loop {
+            let event = match self.translation_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => {
+                    // The dropped events may have carried results for entries
+                    // this session marked Pending, and nothing else ever
+                    // clears Pending (`t` on a Pending message is a no-op).
+                    // Reset them so the marker disappears and `t` can
+                    // re-request instead of reading "translating…" forever.
+                    self.reset_pending_translations();
+                    continue;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            if event.target != self.translate_to {
+                continue;
+            }
+            let loaded = self.rooms.iter().any(|(room, messages)| {
+                room.id == event.room_id && messages.iter().any(|m| m.id == event.message_id)
+            });
+            if !loaded {
+                self.translation_manual.remove(&event.message_id);
+                continue;
+            }
+            match event.outcome {
+                TranslationOutcome::Translated(text) => {
+                    // Requested here (pending), or free coverage from another
+                    // session's call while this one runs auto mode.
+                    let show =
+                        self.auto_translate || self.translations.contains_key(&event.message_id);
+                    if show {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::Ready(text));
+                        self.translation_manual.remove(&event.message_id);
+                        self.bump_room_version(event.room_id);
+                    }
+                }
+                TranslationOutcome::Failed => {
+                    if self.translations.get(&event.message_id)
+                        == Some(&TranslationDisplay::Pending)
+                    {
+                        self.translations
+                            .insert(event.message_id, TranslationDisplay::Failed);
+                        self.bump_room_version(event.room_id);
+                    }
+                    if self.translation_manual.remove(&event.message_id) {
+                        banner = Some(Banner::error("Translation unavailable right now"));
+                    }
+                }
+            }
+        }
+        banner
     }
 
     fn flush_pending_read_cursors(&mut self) {
@@ -3447,10 +3648,12 @@ impl ChatState {
         let changed = self.username_rx.has_changed().unwrap_or(false)
             || !self.targeted_event_rx.is_empty()
             || !self.event_rx.is_empty()
-            || !self.moderation_event_rx.is_empty();
+            || !self.moderation_event_rx.is_empty()
+            || !self.translation_rx.is_empty();
         self.drain_username_directory();
         let changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
+        let translation_banner = self.drain_translation_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
@@ -3467,6 +3670,7 @@ impl ChatState {
         self.flush_pending_read_cursors_if_due();
         let banner = moderation_banner
             .or(banner)
+            .or(translation_banner)
             .or(feeds_tick.banner)
             .or(news_tick.banner)
             .or(notif_tick.banner)
@@ -4089,7 +4293,33 @@ impl ChatState {
                         message.user_id,
                         author_profile_award_badges.as_deref(),
                     );
+                    // Auto-translate applies to live messages in the room on
+                    // screen only; history stays on-demand (`t`). Decided
+                    // before the push (which consumes the message), fired
+                    // after it, and only if the message actually landed as a
+                    // chat row (not ignored/system/duplicate).
+                    let translate_candidate = (self.auto_translate
+                        && message.user_id != self.user_id
+                        && Some(message.room_id) == self.visible_room_id
+                        && !self.translations.contains_key(&message.id)
+                        && needs_translation(&message.body, self.translate_to))
+                    .then(|| (message.id, message.room_id, message.body.clone()));
                     self.push_message(message);
+                    if let Some((message_id, room_id, body)) = translate_candidate
+                        && self.rooms.iter().any(|(room, messages)| {
+                            room.id == room_id && messages.iter().any(|m| m.id == message_id)
+                        })
+                    {
+                        self.translations
+                            .insert(message_id, TranslationDisplay::Pending);
+                        self.translation_cache_checked.insert(message_id);
+                        self.translation_service.request(
+                            message_id,
+                            room_id,
+                            body,
+                            self.translate_to,
+                        );
+                    }
                 }
                 ChatEvent::SendSucceeded {
                     user_id,
@@ -4167,6 +4397,7 @@ impl ChatState {
                     }
                     if self.visible_room_id == Some(room_id) {
                         self.mark_room_read(room_id);
+                        self.request_cached_translations_for_visible_room();
                     }
                     if let Some((jump_room_id, message_id)) = self.pending_search_jump
                         && jump_room_id == room_id
@@ -4745,6 +4976,10 @@ impl ChatState {
             messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
+                // Evicted messages can never render again this session, so
+                // their translation state is dead weight; without this a
+                // long-lived auto-translate session grows unbounded.
+                self.forget_translation(message_id);
             }
         }
         self.bump_room_version(room_id);
@@ -4767,7 +5002,51 @@ impl ChatState {
         if self.message_reactions.remove(&message_id).is_some() {
             changed = true;
         }
+        self.forget_translation(message_id);
         if changed {
+            self.bump_room_version(room_id);
+        }
+    }
+
+    /// Drop every per-message translation trace: the message was deleted or
+    /// its body changed, so what we knew describes text that no longer
+    /// exists. An edit can be re-translated fresh (`t` or auto).
+    fn forget_translation(&mut self, message_id: Uuid) {
+        self.translations.remove(&message_id);
+        self.translation_hidden.remove(&message_id);
+        self.translation_manual.remove(&message_id);
+        self.translation_cache_checked.remove(&message_id);
+    }
+
+    /// Drop every Pending translation entry so `t` can re-request. Called
+    /// when the event receiver lagged: the result for a Pending entry may
+    /// have been among the dropped events, and no later event clears it.
+    fn reset_pending_translations(&mut self) {
+        let stuck: Vec<Uuid> = self
+            .translations
+            .iter()
+            .filter(|(_, display)| **display == TranslationDisplay::Pending)
+            .map(|(message_id, _)| *message_id)
+            .collect();
+        if stuck.is_empty() {
+            return;
+        }
+        let rooms: HashSet<Uuid> = stuck
+            .iter()
+            .filter_map(|message_id| {
+                self.rooms.iter().find_map(|(room, messages)| {
+                    messages
+                        .iter()
+                        .any(|message| message.id == *message_id)
+                        .then_some(room.id)
+                })
+            })
+            .collect();
+        for message_id in stuck {
+            self.translations.remove(&message_id);
+            self.translation_manual.remove(&message_id);
+        }
+        for room_id in rooms {
             self.bump_room_version(room_id);
         }
     }
@@ -4825,6 +5104,7 @@ impl ChatState {
 
     fn replace_message(&mut self, message: ChatMessage) {
         let room_id = message.room_id;
+        let message_id = message.id;
         let mut replaced = false;
         if let Some((_, messages)) = self
             .rooms
@@ -4836,6 +5116,7 @@ impl ChatState {
             replaced = true;
         }
         if replaced {
+            self.forget_translation(message_id);
             self.bump_room_version(room_id);
         }
     }

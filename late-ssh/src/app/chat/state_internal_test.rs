@@ -2132,11 +2132,13 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
     ChatState::new(
         ChatServices {
             chat,
+            translation,
             notifications,
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -2555,4 +2557,259 @@ async fn bot_cooldown_banner_warns_only_for_the_hot_bot_and_room() {
             .bot_cooldown_banner(other_room, "@bot hello")
             .is_none()
     );
+}
+
+/// Load a room's messages the way entering the room does. Snapshots carry
+/// rooms with EMPTY message vectors; the messages arrive on the room-tail
+/// event, so any test that needs a concrete message must pull the tail.
+async fn load_room_tail(state: &mut ChatState, room_id: Uuid, message_id: Uuid) {
+    wait_for_snapshot(state).await;
+    state.drain_snapshot();
+    state.request_room_tail(room_id);
+    drain_events_until(state, "room tail loads the message", |state| {
+        state.rooms.iter().any(|(room, messages)| {
+            room.id == room_id && messages.iter().any(|m| m.id == message_id)
+        })
+    })
+    .await;
+}
+
+/// Pump translation results the way the app tick loop does. Mirrors
+/// `drain_events_until`, but for the translation channel.
+async fn drain_translations_until(
+    state: &mut ChatState,
+    label: &str,
+    ready: impl Fn(&ChatState) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        state.drain_translation_events();
+        if ready(state) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for condition: {label}");
+}
+
+#[tokio::test]
+async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::message_translation::{MessageTranslation, TranslateLang};
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "translate_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "translate_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    let foreign = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "你好，我刚发现这个地方".to_string(),
+        },
+    )
+    .await
+    .expect("foreign message");
+    let english = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "what a cozy little place".to_string(),
+        },
+    )
+    .await
+    .expect("english message");
+    // Seeded the way another viewer's earlier call would: the cache is what
+    // makes a translation free for everyone who comes after the first.
+    MessageTranslation::upsert_if_current(
+        &client,
+        foreign.id,
+        TranslateLang::En,
+        "你好，我刚发现这个地方",
+        "hello, i just found this place",
+    )
+    .await
+    .expect("seed cache");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, foreign.id).await;
+
+    // `t` on a foreign-script message asks for a translation and shows the
+    // pending marker until the result lands.
+    state.selected_message_id = Some(foreign.id);
+    let version_before = state.room_version(lounge.id);
+    assert!(
+        state
+            .toggle_translation_selected_in_room(lounge.id)
+            .is_none(),
+        "a translatable message banners nothing"
+    );
+    assert_eq!(
+        state.translations.get(&foreign.id),
+        Some(&TranslationDisplay::Pending)
+    );
+    assert!(
+        state.room_version(lounge.id) > version_before,
+        "the pending marker changes the painted rows, so the cache must rebuild"
+    );
+
+    drain_translations_until(&mut state, "cached translation arrives", |state| {
+        matches!(
+            state.translations.get(&foreign.id),
+            Some(TranslationDisplay::Ready(_))
+        )
+    })
+    .await;
+    assert_eq!(
+        state.translations.get(&foreign.id),
+        Some(&TranslationDisplay::Ready(
+            "hello, i just found this place".to_string()
+        ))
+    );
+    assert!(!state.translation_hidden.contains(&foreign.id));
+
+    // A second `t` collapses it, a third brings it back, and the text is
+    // never re-fetched.
+    state.toggle_translation_selected_in_room(lounge.id);
+    assert!(state.translation_hidden.contains(&foreign.id));
+    state.toggle_translation_selected_in_room(lounge.id);
+    assert!(!state.translation_hidden.contains(&foreign.id));
+    assert_eq!(
+        state.translations.get(&foreign.id),
+        Some(&TranslationDisplay::Ready(
+            "hello, i just found this place".to_string()
+        ))
+    );
+
+    // `t` on a message already in the viewer's language spends no API call:
+    // it says so and leaves no translation state behind.
+    state.selected_message_id = Some(english.id);
+    let banner = state
+        .toggle_translation_selected_in_room(lounge.id)
+        .expect("same-script message banners");
+    assert!(
+        banner.message.contains("Already readable"),
+        "unexpected banner text: {}",
+        banner.message
+    );
+    assert!(!state.translations.contains_key(&english.id));
+}
+
+#[tokio::test]
+async fn over_cap_foreign_message_banners_too_long_not_already_readable() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "toolong_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "toolong_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    // Genuinely foreign script, but past TRANSLATE_MAX_BODY_CHARS (chat
+    // bodies go to 2000). "Already readable" would be a lie here.
+    let long = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "字".repeat(1_600),
+        },
+    )
+    .await
+    .expect("long message");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, long.id).await;
+    state.selected_message_id = Some(long.id);
+    let banner = state
+        .toggle_translation_selected_in_room(lounge.id)
+        .expect("over-cap message banners");
+    assert!(
+        banner.message.contains("too long"),
+        "unexpected banner text: {}",
+        banner.message
+    );
+    assert!(!state.translations.contains_key(&long.id));
+}
+
+#[tokio::test]
+async fn changing_the_target_language_drops_translations_for_the_old_one() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::message_translation::{MessageTranslation, TranslateLang};
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "retarget_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "retarget_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "你好，我刚发现这个地方".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+    MessageTranslation::upsert_if_current(
+        &client,
+        message.id,
+        TranslateLang::En,
+        "你好，我刚发现这个地方",
+        "hello there",
+    )
+    .await
+    .expect("seed cache");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, message.id).await;
+    state.selected_message_id = Some(message.id);
+    state.toggle_translation_selected_in_room(lounge.id);
+    drain_translations_until(&mut state, "english translation arrives", |state| {
+        matches!(
+            state.translations.get(&message.id),
+            Some(TranslationDisplay::Ready(_))
+        )
+    })
+    .await;
+
+    // Switching target language: everything stored described the old
+    // language, so none of it may survive the switch.
+    assert!(state.set_translate_settings(TranslateLang::Ko, false));
+    assert!(state.translations.is_empty());
+    assert!(state.translation_hidden.is_empty());
+
+    // A late English result for the pre-switch request must not paint over
+    // the new target's view.
+    state.drain_translation_events();
+    assert!(state.translations.is_empty());
 }

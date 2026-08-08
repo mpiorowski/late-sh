@@ -515,6 +515,15 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  e                  edit selected message",
         "  dd                 delete selected message (press d twice)",
         "  c                  copy selected message to clipboard",
+        "  t                  translate selected message (press again to hide)",
+        "",
+        "Translation",
+        "  t                  translate the selected message into your language",
+        "  ↳ line             the translation renders dim under the original",
+        "  target language    Ctrl+O → Settings → Translation → Translate to",
+        "  auto mode          same menu: auto-translate new messages in the open room",
+        "  history            older messages stay on demand; press t on any of them",
+        "  shared             a translation is cached, so everyone after you reads it free",
         "",
         "Rooms",
         "  h / l  or  ← / →   previous / next room",
@@ -859,6 +868,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
+        "  t                 translate the selected chat message",
         "  g                 jump to a reply's original even if it has an image",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
@@ -1141,13 +1151,13 @@ fn settings_help_lines() -> Vec<String> {
         "What you can set".to_string(),
         "  username".to_string(),
         "  birthday as month/day".to_string(),
-        "  theme and background color".to_string(),
+        "  theme and terminal background sync".to_string(),
         "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: background color, text brightness, right sidebar mode, room list, pet strip, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, pet strip, composer send behavior, music mute-on-start, chat flag fallback, land on Home"
             .to_string(),
         "  private RSS/Atom subscriptions".to_string(),
         "  IRC access token for external IRC clients".to_string(),
@@ -1184,7 +1194,7 @@ fn settings_help_lines() -> Vec<String> {
         "Tweaks tab".to_string(),
         "  Power-user toggles, grouped by area:".to_string(),
         "  Appearance".to_string(),
-        "    Background color        theme background fill on/off; off keeps text colors on your terminal's own background"
+        "    Sync terminal background  paint your terminal's background to match the theme; off (or the Terminal theme) leaves your terminal's own background alone. Selections and highlights inside the app are part of the theme itself, not this toggle"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down".to_string(),
         "    Right sidebar           on / off / auto for Home and Arcade; Enter opens a panel checklist"

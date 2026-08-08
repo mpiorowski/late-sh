@@ -111,7 +111,7 @@ fn draw_submit(
     let prefix_style = if focused {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -119,13 +119,13 @@ fn draw_submit(
     let label_style = if focused {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
     let trailing_style = if focused {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -152,7 +152,9 @@ fn draw_submit(
         }
     };
     let value_style = if focused {
-        Style::default().fg(value_color).bg(theme::BG_SELECTION())
+        Style::default()
+            .fg(value_color)
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(value_color)
     };
@@ -378,7 +380,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -386,7 +388,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let label_style = if active {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
@@ -394,12 +396,12 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
     let meta_style = if active {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -409,14 +411,14 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD);
         if active {
-            base.bg(theme::BG_SELECTION())
+            base.patch(theme::selection_style())
         } else {
             base
         }
     } else if item.vote_score < 0 {
         let base = Style::default().fg(theme::TEXT_DIM());
         if active {
-            base.bg(theme::BG_SELECTION())
+            base.patch(theme::selection_style())
         } else {
             base
         }
@@ -492,7 +494,7 @@ fn history_line(
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if currently_playing {
         Style::default()
@@ -504,7 +506,7 @@ fn history_line(
     let label_style = if active {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if currently_playing {
         Style::default()
@@ -516,12 +518,12 @@ fn history_line(
     let meta_style = if active {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };

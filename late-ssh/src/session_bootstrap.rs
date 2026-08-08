@@ -395,6 +395,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
         chat_service: state.chat_service.clone(),
+        translation_service: state.translation_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),

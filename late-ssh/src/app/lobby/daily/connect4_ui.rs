@@ -205,9 +205,10 @@ fn board_lines(
                     ),
                     Some(disc) if last == Some((row, col)) => Span::styled(
                         piece_cell(PUCK_SOLID, '●', tier, sub),
-                        Style::default()
+                        // Disc color goes on after the selection swap so the
+                        // last-played side stays readable on every palette.
+                        theme::selection_style()
                             .fg(disc_color(disc))
-                            .bg(theme::BG_SELECTION())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Some(disc) => Span::styled(

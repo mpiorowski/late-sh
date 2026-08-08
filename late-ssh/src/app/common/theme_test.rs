@@ -139,20 +139,60 @@ fn canvas_relative_blends_darken_when_the_canvas_has_no_rgb() {
 }
 
 #[test]
-fn attention_washes_fall_back_to_the_highlight_bg_when_the_canvas_has_no_rgb() {
+fn attention_washes_drop_out_when_the_canvas_has_no_rgb() {
     // The mention/reply washes sit under body text, and on the terminal
-    // palette body text is the terminal's own default foreground. A wash
-    // blended toward the black anchor goes unreadable under a light
-    // profile's dark text, so the washes take the flat highlight background
-    // instead, the same fallback an accent with no RGB reading gets.
+    // palette body text is the terminal's own default foreground. No fixed
+    // wash color can promise contrast against an unknown foreground (the
+    // flat highlight fallback painted solid ANSI-blue bars that swallowed a
+    // light profile's dark text), so the wash drops out entirely and the
+    // mention/author accents on the text carry the emphasis.
     set_current_by_id("terminal");
     let mention = CHAT_MENTION_BG();
     let reply = CHAT_REPLY_BG();
-    let highlight = BG_HIGHLIGHT();
     set_current_by_id("contrast");
 
-    assert_eq!(mention, highlight);
-    assert_eq!(reply, highlight);
+    assert_eq!(mention, Color::Reset);
+    assert_eq!(reply, Color::Reset);
+}
+
+#[test]
+fn selection_inverts_on_reset_canvas_palettes_and_fills_elsewhere() {
+    // A Reset canvas means text follows the terminal's own foreground, and
+    // no fixed selection fill can guarantee contrast against it, so those
+    // palettes invert the terminal's own fg/bg pair instead of painting
+    // `bg_selection`. The helper composes via `Style::patch`, which only
+    // overwrites `Some` fields, so the swap must carry explicit Reset
+    // colors: a call site's pre-set accent fg or board fill would otherwise
+    // survive and the swapped pair would not be the terminal's own.
+    set_current_by_id("terminal");
+    let inverted = Style::default()
+        .fg(Color::Indexed(11))
+        .bg(Color::Indexed(4))
+        .patch(selection_style());
+    set_current_by_id("contrast");
+    let filled = Style::default()
+        .fg(Color::Indexed(11))
+        .patch(selection_style());
+    let filled_bg = BG_SELECTION();
+
+    assert!(inverted.add_modifier.contains(Modifier::REVERSED));
+    assert_eq!(
+        inverted.fg,
+        Some(Color::Reset),
+        "inherited accent fg survived the swap"
+    );
+    assert_eq!(
+        inverted.bg,
+        Some(Color::Reset),
+        "inherited fill survived the swap"
+    );
+    assert_eq!(filled.bg, Some(filled_bg));
+    assert_eq!(
+        filled.fg,
+        Some(Color::Indexed(11)),
+        "paintable palettes keep the accent fg over the fill"
+    );
+    assert!(!filled.add_modifier.contains(Modifier::REVERSED));
 }
 
 #[test]

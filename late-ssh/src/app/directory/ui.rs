@@ -180,15 +180,10 @@ fn draw_people_list(
         let entry_idx = start_index + row;
         let entry = &entries[entry_idx];
         let is_selected = entry_idx == selected;
-        let bg = if is_selected {
-            theme::BG_SELECTION()
-        } else {
-            Color::Reset
-        };
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
-            .style(Style::default().bg(bg));
+            .style(theme::row_style(is_selected));
         let content = block.inner(row_area);
         frame.render_widget(block, row_area);
 

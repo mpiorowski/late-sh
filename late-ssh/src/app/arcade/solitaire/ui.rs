@@ -611,19 +611,27 @@ fn tableau_span_multiline(
 }
 
 fn block_style(focused: bool, selected: bool, suit: Option<Suit>) -> Style {
-    let mut style = Style::default().fg(match suit {
+    let fg = match suit {
         Some(Suit::Hearts | Suit::Diamonds) => theme::ERROR(),
         Some(_) => theme::TEXT_BRIGHT(),
         None => theme::TEXT(),
-    });
+    };
 
-    if selected {
-        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
-    }
+    // Focus beats selection, and the branches stay exclusive: the selection
+    // swap is a `REVERSED` modifier a later `.bg()` cannot clear. The suit
+    // color rides on after the swap so red stays red.
     if focused {
-        style = style.bg(theme::BG_HIGHLIGHT()).add_modifier(Modifier::BOLD);
+        Style::default()
+            .fg(fg)
+            .bg(theme::BG_HIGHLIGHT())
+            .add_modifier(Modifier::BOLD)
+    } else if selected {
+        theme::selection_style()
+            .fg(fg)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(fg)
     }
-    style
 }
 
 fn to_playing_card(card: Card) -> PlayingCard {

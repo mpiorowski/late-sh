@@ -60,6 +60,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         None,
         None,
         &[],
+        None,
     );
     let lines = lines_to_strings(&wrapped.lines);
     assert_eq!(lines[0], " mat filed a bug [now]");
@@ -85,6 +86,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         None,
         None,
         &[],
+        None,
     );
     assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
     assert_eq!(wrapped.header_line_index, None);
@@ -214,10 +216,61 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
                 count: 1,
             },
         ],
+        None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
     assert!(rendered.contains("[🧡 3]"));
     assert!(rendered.contains("[🔥 1]"));
+}
+
+#[test]
+fn wrap_chat_entry_to_lines_renders_ready_translation_under_the_body() {
+    let translation = TranslationDisplay::Ready("hello, i just found this place".to_string());
+    let wrapped = wrap_chat_entry_to_lines(
+        "你好，我刚发现这个地方",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        Some(&translation),
+    );
+    let rendered = lines_to_strings(&wrapped.lines).join("\n");
+    assert!(rendered.contains("你好，我刚发现这个地方"), "{rendered}");
+    assert!(
+        rendered.contains("↳ hello, i just found this place"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn wrap_chat_entry_to_lines_renders_no_translation_line_when_hidden() {
+    // A `t`-collapsed (or never-requested) message passes `None`; the body
+    // must render without any translation annotation.
+    let wrapped = wrap_chat_entry_to_lines(
+        "你好，我刚发现这个地方",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        None,
+    );
+    let rendered = lines_to_strings(&wrapped.lines).join("\n");
+    assert!(rendered.contains("你好，我刚发现这个地方"), "{rendered}");
+    assert!(!rendered.contains('↳'), "{rendered}");
 }
 
 #[test]

@@ -5,16 +5,17 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::chips::INITIAL_CHIP_BALANCE;
+use super::message_translation::TranslateLang;
 use super::user::{
-    RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_bio,
-    extract_birthday, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
+    RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_auto_translate,
+    extract_bio, extract_birthday, extract_country, extract_enable_background_color,
+    extract_favorite_room_ids, extract_ide, extract_keep_composer_focused, extract_land_on_home,
+    extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
     extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
     extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
     extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_translate_to, normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -58,6 +59,10 @@ pub struct Profile {
     pub show_flag_fallback: bool,
     /// Tweak: show the pet strip above the chat composer (pet owners only).
     pub show_pet_strip: bool,
+    /// Target language for chat message translation (`t` and auto mode).
+    pub translate_to: TranslateLang,
+    /// Tweak: auto-translate foreign-script messages in the viewed room.
+    pub auto_translate: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -99,6 +104,8 @@ impl Default for Profile {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: TranslateLang::En,
+            auto_translate: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -132,6 +139,8 @@ pub struct ProfileParams {
     pub land_on_home: bool,
     pub show_flag_fallback: bool,
     pub show_pet_strip: bool,
+    pub translate_to: TranslateLang,
+    pub auto_translate: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -288,10 +297,12 @@ impl Profile {
                          'start_with_music_muted', $24::bool,
                          'show_flag_fallback', $25::bool,
                          'land_on_home', $26::bool,
-                         'show_pet_strip', $27::bool
+                         'show_pet_strip', $27::bool,
+                         'translate_to', $28::text,
+                         'auto_translate', $29::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $28
+                 WHERE id = $30
                  RETURNING *",
                 &[
                     &params.username,
@@ -321,6 +332,8 @@ impl Profile {
                     &params.show_flag_fallback,
                     &params.land_on_home,
                     &params.show_pet_strip,
+                    &params.translate_to.as_str(),
+                    &params.auto_translate,
                     &user_id,
                 ],
             )
@@ -357,6 +370,8 @@ impl Profile {
             land_on_home: extract_land_on_home(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
             show_pet_strip: extract_show_pet_strip(&user.settings),
+            translate_to: extract_translate_to(&user.settings),
+            auto_translate: extract_auto_translate(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }
