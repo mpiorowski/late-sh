@@ -59,6 +59,10 @@ pub enum Panel {
     /// The whole-world atlas: exploration progress per region (read-only,
     /// scrollable with `[` / `]`). Toggled with `m`.
     Map,
+    /// The leaderboard: top adventurers currently online, by level, pvp
+    /// kills, and gold (read-only, scrollable with `[` / `]`). Toggled
+    /// with `?`.
+    Leaderboard,
 }
 
 /// A combat action a player can trigger by clicking its on-screen chip, mapping

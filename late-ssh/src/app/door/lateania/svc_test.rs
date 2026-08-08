@@ -3356,6 +3356,72 @@ fn a_returning_character_reloads_where_they_saved_not_the_tutorial() {
 }
 
 #[test]
+fn leaderboard_ranks_by_level_pvp_kills_and_gold_and_skips_unclassed() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3)); // never classed - must not appear on any board
+
+    {
+        let p1 = s.players.get_mut(&uid(1)).unwrap();
+        p1.level = 10;
+        p1.pvp_kills = 3;
+        p1.gold = 50;
+        p1.banked_gold = 0;
+    }
+    {
+        let p2 = s.players.get_mut(&uid(2)).unwrap();
+        p2.level = 20;
+        p2.pvp_kills = 1;
+        p2.gold = 10;
+        p2.banked_gold = 500;
+    }
+
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 2, "unclassed players are excluded");
+    assert_eq!(
+        board.by_level[0].user_id,
+        uid(2),
+        "higher level ranks first"
+    );
+    assert_eq!(
+        board.by_pvp_kills[0].user_id,
+        uid(1),
+        "more pvp kills ranks first"
+    );
+    assert_eq!(
+        board.by_gold[0].user_id,
+        uid(2),
+        "carried + banked gold ranks first"
+    );
+    assert_eq!(board.by_gold[0].value, 510, "gold is carried plus banked");
+    assert!(
+        board
+            .by_level
+            .iter()
+            .chain(&board.by_pvp_kills)
+            .chain(&board.by_gold)
+            .all(|e| e.user_id != uid(3)),
+        "an unclassed character never appears on any board"
+    );
+}
+
+#[test]
+fn leaderboard_caps_at_ten_entries() {
+    let mut s = world();
+    for i in 0..15u128 {
+        s.join(uid(100 + i));
+        s.choose_class(uid(100 + i), Class::Warrior);
+        s.players.get_mut(&uid(100 + i)).unwrap().level = i as i32;
+    }
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 10, "top ten only, not all fifteen");
+    assert_eq!(board.by_level[0].level, 14, "the highest level leads");
+}
+
+#[test]
 fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
     // There used to be a 10-minute inactivity kick. It's gone: only an
     // explicit leave (closing the session) removes a player now.
