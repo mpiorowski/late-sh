@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh as a personal client for cyberspace.online: the Cyberspace rail entry/pane, `/cs` commands, account linking, and the typed v1 API client
 - Primary audience: LLM agents working in `late-ssh/src/app/chat/cyberspace`, the `/cs` commands, the `cyberspace_accounts` table, or the AI blocklist for cyberspace.online URLs
-- Last updated: 2026-08-08 (cIRC ships: the rail row is now a `cyberspace` section holding the pane plus user-pinned chat rooms, live over SSE while a room is open and fetching nothing in the background; see section 9)
+- Last updated: 2026-08-08 (cIRC ships: the rail row is now a `cyberspace` section holding `feeds` plus chat rooms the user adds through the `/cs chat` picker, each its own rail entry, live over SSE while open and fetching nothing in the background; see section 9)
 - Status: Active (v1)
 - Parent context: `../CONTEXT.md` (chat), root `../../../../../CONTEXT.md`
 - Related context: `../news/` (`is_ai_blocklisted_url` lives in `news/svc.rs`)
@@ -16,7 +16,7 @@ Owned by this domain:
 - The typed reqwest client for the cyberspace.online v1 API (`api.rs`): login/refresh, feed, threads, replies, posting, notifications, unread count, and the cIRC roster/history/send/presence calls, all through the `{data}/{error}` envelope, plus the pure SSE frame parser for their realtime database.
 - `CyberspaceService` (`svc.rs`): fire-and-forget tasks, the `CsEvent` broadcast, the in-memory per-user id-token cache (with the realtime-database URL that came with it), and `CircRoomSession`, the handle whose lifetime *is* a room's stream and presence.
 - The `cyberspace_accounts` row model (`late-core/src/models/cyberspace_account.rs`, migrations 133 + 136 + 137): one row per user, storing the Firebase refresh token (never the password), the feed read cursor, and the pinned cIRC room slugs.
-- Per-session pane state (`state.rs`): feed/thread/notifications/rooms views, the open chat room, the link/compose/reply modals, the unread badge and its poll gating.
+- Per-session pane state (`state.rs`): feed/thread/notifications views, the pinned chat rooms and the open one, the link/compose/reply/rooms modals, the unread badge and its poll gating.
 - Pane and room input (`input.rs`) and rendering (`ui.rs`), including the unlinked pitch + login funnel.
 
 Out of scope (deliberate boundaries):
@@ -35,7 +35,7 @@ late-ssh/src/app/chat/cyberspace/
 ├── svc.rs       # CyberspaceService: tasks, CsEvent broadcast, id-token cache, CircRoomSession
 ├── state.rs     # per-session State: views, modals, poll gating, notification grouping, pinned rooms, the open room, event drain
 ├── input.rs     # pane/room byte+arrow routing, the room composer, modal keystrokes
-└── ui.rs        # pane views, the room surface, the three modals, the unlinked funnel
+└── ui.rs        # pane views, the room surface, the four modals, the unlinked funnel
 ```
 
 Cross-crate/cross-module touchpoints:
@@ -83,7 +83,7 @@ Their API terms ban bots, scraping/caching for redistribution, and feeding their
 
 ## 6. Pane State, Views, and Modals
 
-Three views (`View::Feed`/`Thread`/`Notifications`), three modals (`Modal::Link`/`Compose`/`Reply`, boxed because each carries its own `TextArea`s).
+Three views (`View::Feed`/`Thread`/`Notifications`) and four modals (`Modal::Link`/`Compose`/`Reply`/`Rooms`, boxed because the first three carry their own `TextArea`s). `Rooms` is the odd one: a list that moves and toggles rather than a form, so `handle_modal_input` resolves it before the text-field arms and it is never "busy".
 
 - Keys (linked): `j/k` move, `g` top of the current view, Enter opens the selected thread (or the notification's entry), `r` refreshes the feed / opens reply in a thread / reloads notifications, `p` compose, `n` notifications, `b` (or Esc via the shell's escape chain, `escape_to_feed`) back to the feed. Unlinked, the pane is the pitch funnel: Enter opens the link modal, everything else falls through so global keys keep working.
 - **Entering the pane always lands on the newest entry** (`opened()` clears the thread and zeroes both selections). Keeping a selection across visits points it into a feed that has been refetched since, so it lands on whichever entry now occupies that row.
@@ -132,9 +132,9 @@ Three views (`View::Feed`/`Thread`/`Notifications`), three modals (`Modal::Link`
 
 Their API docs are public at https://api.cyberspace.online/docs (markdown at `/docs.md`; their WAF 403s non-browser user agents, so fetch with a browser UA).
 
-**Shape.** Linking cyberspace gives the rail its own collapsible `cyberspace` section (`RoomSection::Cyberspace`, shortcut `y`) holding the pane (`RoomSlot::Cyberspace`, the feed/thread/notifications surface, moved out of Core) plus one row per **pinned** chat room. The section renders only while `cyberspace_linked`, so an unlinked user's rail is untouched.
+**Shape.** Linking cyberspace gives the rail its own collapsible `cyberspace` section (`RoomSection::Cyberspace`, shortcut `y`) holding **`feeds`** (`RoomSlot::Cyberspace`, the feed/thread/notifications pane, moved out of Core and relabelled, because the chat rooms beside it are cyberspace too) plus one row per added chat room. The section renders only while `cyberspace_linked`, so an unlinked user's rail is untouched.
 
-**Pinning is our bookmark, not a join.** There is no join/leave over there: `GET /v1/circ` returns the rooms this account may read and that roster is what it is. `c` from the feed (or `/cs chat`) opens the roster view with online counts; `a` toggles a room onto the rail, Enter opens it either way, so a room can be read before it earns a row.
+**Rooms are added through a picker, and adding one is what creates its rail entry.** There is no join/leave over there: `GET /v1/circ` returns the rooms this account may read and that roster is what it is, so our list is a bookmark. `c` from the feed (or `/cs chat`) opens `Modal::Rooms`, a checklist of their roster with online counts; Enter adds the highlighted room to the section or takes it off. The picker deliberately does **not** open rooms: a room is entered by selecting its rail entry, like every other room in the rail.
 
 **Persistence is ours and tiny.** `cyberspace_accounts.circ_rooms` (migration 137) is the ordered pinned slugs, replaced wholesale on every change. Nothing else lands in our DB: names and online counts come from their roster on demand, and per-room read state lives on their side (`POST /v1/circ/:roomId/read`, written when a room opens). `LinkStatus` carries the list at session init, beside the feed cursor.
 
@@ -144,7 +144,7 @@ Their API docs are public at https://api.cyberspace.online/docs (markdown at `/d
 
 **Navigation lands in five mirrors**, and invariant 3 covers all of them: `visual_order_for_rooms`, `build_cozy_room_rail_rows` and `build_room_list_rows` (the two rail builders, whose `hit_slots` are the click mirror), `RoomSection` (label/shortcut/`from_label`), and the `Ctrl+/` jump modal (`room_search_modal/state.rs`). `Space` room-jump comes free once the slots are in `visual_order`.
 
-**The slot is dynamic, unlike every synthetic entry before it.** `SelectedRoomSlotState` is `Copy` and a slug is not, so `RoomSlot::CyberspaceRoom(usize)` carries the index into the pinned list and `ChatState::cyberspace_room_selected` is the same index. `toggle_selected_pin` is therefore the one place that can invalidate a selection. The bool-per-entry selection now clears through `clear_synthetic_selection`, so a new entry cannot half-clear the others.
+**The slot is dynamic, unlike every synthetic entry before it.** `SelectedRoomSlotState` is `Copy` and a slug is not, so `RoomSlot::CyberspaceRoom(usize)` carries the index into the pinned list and `ChatState::cyberspace_room_selected` is the same index. `toggle_selected_room` is therefore the one place that can invalidate a selection, and it is only reachable from the picker, which is only reachable from the pane, where no room row is selected. The bool-per-entry selection now clears through `clear_synthetic_selection`, so a new entry cannot half-clear the others.
 
 **Rendering, from their docs** (`CircMessage::display_text`, tested in `api_test.rs`): `content` can be empty (an image, GIF or song is the whole message, and a website post sometimes repeats the attachment URL as `content`, which prints the link twice if taken literally); a delete arrives as a `patch` that rewrites a message already on screen, so it is applied in place and never appended; `style: "art"` means `content` is base64 ASCII art; `isAction` renders `* username content`. `/me` and friends expand server-side, so they are sent as plain text. Messages cap at 2,048 chars; sending is 15/min, 150/hour, 300/day.
 

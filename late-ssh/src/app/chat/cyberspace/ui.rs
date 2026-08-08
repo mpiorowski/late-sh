@@ -15,16 +15,16 @@ use crate::app::common::theme;
 use super::api::{CircMessage, CsNotification, CsPost};
 use super::state::{
     ComposeField, ComposeModal, LinkField, LinkModal, LinkStatus, Modal, OpenRoom, ReplyModal,
-    State, TITLE_MAX_CHARS, View,
+    RoomsModal, State, TITLE_MAX_CHARS, View,
 };
 use super::svc::CsThread;
 
 const FEED_ITEM_HEIGHT: u16 = 4;
 
 pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
-    // An open chat room owns the pane whichever entry the rail has selected:
-    // a room opened from the roster has no rail row of its own until it is
-    // pinned, and it still has to render somewhere.
+    // A chat room is its own rail entry, and the pane is where that entry
+    // renders: selecting the row is what opened the room, so the room wins
+    // over the feed views below.
     if let Some(room) = &state.open_room {
         draw_room(frame, area, room);
         return;
@@ -42,7 +42,6 @@ pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
             View::Feed => draw_feed(frame, area, state, username),
             View::Thread => draw_thread(frame, area, state),
             View::Notifications => draw_notifications(frame, area, state),
-            View::Rooms => draw_rooms(frame, area, state),
         },
     }
 }
@@ -61,11 +60,10 @@ pub fn footer_hint(state: &State) -> &'static str {
     }
     match state.view {
         View::Feed => {
-            " j/k navigate · g top · Enter open · p post · c chat · n notifications · r refresh"
+            " j/k navigate · g top · Enter open · p post · c add chat rooms · n notifications · r refresh"
         }
         View::Thread => " j/k scroll · g top · r reply · b back",
         View::Notifications => " j/k navigate · g top · Enter open the entry · b back",
-        View::Rooms => " j/k navigate · Enter open · a add to rail · r refresh · b back",
     }
 }
 
@@ -452,70 +450,119 @@ fn wrap_paragraph(paragraph: &str, width: usize) -> Vec<String> {
     rows
 }
 
-/// Their chat roster: every room this account may read, with the ones pinned
-/// into the rail marked. There is no join or leave over there, so the mark is
-/// about our rail and says so.
-fn draw_rooms(frame: &mut Frame, area: Rect, state: &State) {
-    if state.roster.is_empty() {
-        let text = match state.loading {
-            true => "Loading cyberspace chat rooms...",
+/// The room picker: their whole chat roster, with a check against the rooms
+/// already on the rail. There is no join or leave over there, so the check is
+/// about our own rail and says so.
+fn draw_rooms_modal(frame: &mut Frame, area: Rect, rooms: &RoomsModal, state: &State) {
+    let popup = centered_rect(area, 56, 20);
+    frame.render_widget(Clear, popup);
+    let block = modal_block(" Add cyberspace chat rooms ");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let areas = Layout::vertical([
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // blank
+        Constraint::Min(3),    // roster
+        Constraint::Length(1), // status
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(theme::SUCCESS())),
+            Span::styled(
+                " add or remove  ".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("j/k", Style::default().fg(theme::AMBER())),
+            Span::styled(
+                " move  ".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("Esc", Style::default().fg(theme::ERROR())),
+            Span::styled(" close".to_string(), Style::default().fg(theme::TEXT_DIM())),
+        ]))
+        .style(Style::default().bg(theme::BG_CANVAS())),
+        areas[0],
+    );
+
+    if rooms.roster.is_empty() {
+        let text = match rooms.loading {
+            true => "Loading their chat rooms...",
             false => "No chat rooms available to your account.",
         };
         frame.render_widget(
             Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM())),
-            area,
+            areas[2],
         );
-        return;
+    } else {
+        let height = areas[2].height.max(1) as usize;
+        let selected = rooms.selected.min(rooms.roster.len().saturating_sub(1));
+        let start = selected.saturating_sub(height.saturating_sub(1));
+        let lines: Vec<Line<'static>> = rooms
+            .roster
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(height)
+            .map(|(index, room)| {
+                let is_selected = index == selected;
+                let on_rail = state.is_pinned(room.key());
+                let mut spans = vec![
+                    Span::styled(
+                        match is_selected {
+                            true => "> ",
+                            false => "  ",
+                        },
+                        Style::default().fg(theme::AMBER()),
+                    ),
+                    Span::styled(
+                        match on_rail {
+                            true => "[x] ",
+                            false => "[ ] ",
+                        },
+                        Style::default().fg(match on_rail {
+                            true => theme::SUCCESS(),
+                            false => theme::TEXT_FAINT(),
+                        }),
+                    ),
+                    Span::styled(
+                        format!("#{}", room.key()),
+                        match is_selected {
+                            true => Style::default()
+                                .fg(theme::TEXT_BRIGHT())
+                                .add_modifier(Modifier::BOLD),
+                            false => Style::default().fg(theme::TEXT()),
+                        },
+                    ),
+                ];
+                if room.online_count > 0 {
+                    spans.push(Span::styled(
+                        format!("  {} here", room.online_count),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ));
+                }
+                Line::from(spans)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), areas[2]);
     }
 
-    let visible = area.height.max(1) as usize;
-    let selected = state
-        .roster_selected
-        .min(state.roster.len().saturating_sub(1));
-    let start = selected.saturating_sub(visible.saturating_sub(1));
-    let lines: Vec<Line<'static>> = state
-        .roster
-        .iter()
-        .enumerate()
-        .skip(start)
-        .take(visible)
-        .map(|(index, room)| {
-            let is_selected = index == selected;
-            let pinned = state.is_pinned(room.key());
-            let mut spans = vec![
-                Span::styled(
-                    match is_selected {
-                        true => "> ",
-                        false => "  ",
-                    },
-                    Style::default().fg(theme::AMBER()),
-                ),
-                Span::styled(
-                    format!("#{}", room.key()),
-                    match is_selected {
-                        true => Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::BOLD),
-                        false => Style::default().fg(theme::TEXT()),
-                    },
-                ),
-            ];
-            if room.online_count > 0 {
-                spans.push(Span::styled(
-                    format!("  {} here", room.online_count),
-                    Style::default().fg(theme::TEXT_DIM()),
-                ));
-            }
-            if pinned {
-                spans.push(Span::styled(
-                    "  · on your rail",
-                    Style::default().fg(theme::SUCCESS()),
-                ));
-            }
-            Line::from(spans)
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
+    let status = match &rooms.error {
+        Some(error) => Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme::ERROR()),
+        )),
+        None => Line::from(Span::styled(
+            "Rooms you add become entries under cyberspace in your rail.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+    };
+    frame.render_widget(
+        Paragraph::new(status).style(Style::default().bg(theme::BG_CANVAS())),
+        areas[3],
+    );
 }
 
 /// One of their chat rooms, live. Everything on screen arrived through this
@@ -734,11 +781,18 @@ fn describe_notification(kind: &str) -> String {
     }
 }
 
-pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, modal: &Modal) {
+pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &State) {
+    let Some(modal) = &state.modal else {
+        return;
+    };
     match modal {
         Modal::Link(link) => draw_link_modal(frame, area, link),
         Modal::Compose(compose) => draw_compose_modal(frame, area, compose),
         Modal::Reply(reply) => draw_reply_modal(frame, area, reply),
+        // The picker needs the pinned list to check its rows, which lives on
+        // the pane rather than in the modal: the rail is the truth about what
+        // was added, and the modal is a view onto it.
+        Modal::Rooms(rooms) => draw_rooms_modal(frame, area, rooms, state),
     }
 }
 

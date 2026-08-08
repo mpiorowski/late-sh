@@ -279,7 +279,7 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
-- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) their chat roster, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
+- `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` and `/pet water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
@@ -603,9 +603,9 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
-| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `c` chat rooms, `n` notifications, `r` refresh/reply, `b` back |
-| Cyberspace rooms (`c`) | `j/k` navigate, Enter read the room, `a` pin it into the rail section, `r` reload the roster, `b` back |
-| Cyberspace room | `j/k` scroll, `g` newest, `i`/Enter write, Enter send, Esc cancel the draft then leave the room, `b` leave |
+| Cyberspace feeds | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `c` add chat rooms, `n` notifications, `r` refresh/reply, `b` back |
+| Cyberspace room picker (`c`, `/cs chat`) | `j/k` move, Enter add the room to the rail section or take it off, Esc close |
+| Cyberspace room (a rail entry) | `j/k` scroll, `g` newest, `i`/Enter write, Enter send, Esc cancel the draft then leave the room, `b` leave |
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 

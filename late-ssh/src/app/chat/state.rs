@@ -2502,8 +2502,7 @@ impl ChatState {
                 CyberspaceCommand::Chat => {
                     self.select_cyberspace();
                     self.pending_chat_screen_switch = true;
-                    self.cyberspace.open_rooms_view();
-                    return None;
+                    return self.cyberspace.open_rooms_modal();
                 }
                 CyberspaceCommand::Link => {
                     self.cyberspace.open_link_modal();

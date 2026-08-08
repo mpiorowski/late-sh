@@ -115,28 +115,14 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                         app.banner = Some(banner);
                     }
                 }
-                // Enter opens a room whether or not it is pinned, so one can
-                // be read before it earns a rail row.
-                View::Rooms => {
-                    if let Some(slug) = state.selected_roster_room() {
-                        app.open_cyberspace_room(slug);
-                    }
-                }
                 View::Thread => {}
             }
             true
         }
-        b'a' | b'A' => match state.view {
-            View::Rooms => {
-                if let Some(banner) = state.toggle_selected_pin() {
-                    app.banner = Some(banner);
-                }
-                true
-            }
-            View::Feed | View::Thread | View::Notifications => false,
-        },
         b'c' | b'C' => {
-            state.open_rooms_view();
+            if let Some(banner) = state.open_rooms_modal() {
+                app.banner = Some(banner);
+            }
             true
         }
         b'r' | b'R' => {
@@ -147,7 +133,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 }
                 View::Thread => state.open_reply_modal(),
                 View::Notifications => state.open_notifications(),
-                View::Rooms => state.open_rooms_view(),
             }
             true
         }
@@ -186,8 +171,15 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
         handle_modal_escape(app);
         return;
     }
+    // The room picker is a list, not a form: it moves and toggles rather than
+    // editing text, so it is resolved before the text-field modals.
+    if matches!(app.chat.cyberspace.modal, Some(Modal::Rooms(_))) {
+        handle_rooms_modal_input(app, event);
+        return;
+    }
     let action = match &mut app.chat.cyberspace.modal {
-        None => ModalAction::None,
+        // Handled above; the arm keeps the match exhaustive over the roster.
+        None | Some(Modal::Rooms(_)) => ModalAction::None,
         // While a submit is in flight the draft is locked; Esc above still works.
         Some(modal) if modal_busy(modal) => ModalAction::None,
         Some(Modal::Link(link)) => match event {
@@ -270,6 +262,26 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// The room picker: move the highlight, toggle a room onto the rail, close.
+/// Nothing here opens a room, because the rail entry is how a room is entered.
+fn handle_rooms_modal_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
+            app.chat.cyberspace.move_rooms_modal_selection(1);
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
+            app.chat.cyberspace.move_rooms_modal_selection(-1);
+        }
+        ParsedInput::Byte(b'\r' | b'\n' | b' ') => {
+            if let Some(banner) = app.chat.cyberspace.toggle_selected_room() {
+                app.banner = Some(banner);
+            }
+        }
+        // Everything else is swallowed: an open modal owns the keyboard.
+        _ => {}
+    }
+}
+
 pub(crate) fn handle_modal_escape(app: &mut App) {
     app.chat.cyberspace.close_modal();
 }
@@ -279,6 +291,9 @@ fn modal_busy(modal: &Modal) -> bool {
         Modal::Link(link) => link.busy,
         Modal::Compose(compose) => compose.busy,
         Modal::Reply(reply) => reply.busy,
+        // The picker is never busy in this sense: it holds no draft to
+        // protect, and toggling stays usable while its roster loads.
+        Modal::Rooms(_) => false,
     }
 }
 

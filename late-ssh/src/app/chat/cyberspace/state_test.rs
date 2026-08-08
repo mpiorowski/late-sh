@@ -471,7 +471,7 @@ async fn frames_for_another_room_never_touch_the_open_one() {
 }
 
 #[tokio::test]
-async fn pinning_a_room_adds_it_to_the_rail_and_unpinning_removes_it() {
+async fn the_picker_adds_a_room_to_the_rail_and_takes_it_back_off() {
     let mut state = test_state().await;
     let user_id = state.user_id;
     let _ = state.apply_event(CsEvent::LinkStatus {
@@ -480,20 +480,32 @@ async fn pinning_a_room_adds_it_to_the_rail_and_unpinning_removes_it() {
         feed_read_at: None,
         circ_rooms: Vec::new(),
     });
+    assert!(
+        state.open_rooms_modal().is_none(),
+        "a linked user gets the picker, not an error"
+    );
     let _ = state.apply_event(CsEvent::CircRooms {
         user_id,
         rooms: vec![
             serde_json::from_str(r#"{"id":"r1","slug":"general","name":"General"}"#).expect("room"),
+            serde_json::from_str(r#"{"id":"r2","slug":"ideas","name":"Ideas"}"#).expect("room"),
         ],
     });
 
+    // Adding is what creates the rail entry; it does not open the room.
     assert!(state.pinned_rooms().is_empty());
-    assert!(state.toggle_selected_pin().is_some());
-    assert_eq!(state.pinned_rooms(), ["general".to_string()]);
-    assert!(state.is_pinned("general"));
+    state.move_rooms_modal_selection(1);
+    assert!(state.toggle_selected_room().is_some());
+    assert_eq!(state.pinned_rooms(), ["ideas".to_string()]);
+    assert!(state.is_pinned("ideas"));
+    assert_eq!(
+        state.open_room_slug(),
+        None,
+        "adding a room does not enter it"
+    );
 
-    // Pinning is a toggle: the same key takes the row back off the rail.
-    assert!(state.toggle_selected_pin().is_some());
+    // The same key takes the row back off the rail.
+    assert!(state.toggle_selected_room().is_some());
     assert!(state.pinned_rooms().is_empty());
 }
 

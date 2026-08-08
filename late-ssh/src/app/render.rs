@@ -236,7 +236,9 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
-    cyberspace_modal: Option<&'a chat::cyberspace::state::Modal>,
+    /// The pane state, not just its modal: the room picker checks its rows
+    /// against the pinned rail list, which lives on the pane.
+    cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -1046,7 +1048,11 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
-                        cyberspace_modal: self.chat.cyberspace.modal.as_ref(),
+                        cyberspace_modal: self
+                            .chat
+                            .cyberspace
+                            .modal_active()
+                            .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,

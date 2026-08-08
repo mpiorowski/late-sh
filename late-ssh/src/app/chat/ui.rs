@@ -3014,7 +3014,7 @@ pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String
         return Some("rss".to_string());
     }
     if view.cyberspace_selected {
-        return Some("cyberspace".to_string());
+        return Some("cyberspace feeds".to_string());
     }
     if let Some(index) = view.cyberspace_room_selected {
         return view
@@ -3246,11 +3246,11 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             };
             let label = if view.cyberspace_unread_count > 0 {
                 format!(
-                    "{prefix}cyberspace ({})",
+                    "{prefix}feeds ({})",
                     format_unread_badge(view.cyberspace_unread_count)
                 )
             } else {
-                format!("{prefix}cyberspace")
+                format!("{prefix}feeds")
             };
             Line::from(Span::styled(label, style))
         };
@@ -3997,7 +3997,9 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         }
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
-        RoomSlot::Cyberspace => ("cyberspace".to_string(), view.cyberspace_unread_count),
+        // Under the `cyberspace` header this row is their feed, not the whole
+        // site: the chat rooms beside it are cyberspace too.
+        RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_unread_count),
         // No badge: a chat room is only read while you are inside it, so
         // there is no unread state to show without fetching in the background.
         RoomSlot::CyberspaceRoom(index) => (

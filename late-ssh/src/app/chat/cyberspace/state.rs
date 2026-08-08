@@ -60,8 +60,6 @@ pub(crate) enum View {
     Feed,
     Thread,
     Notifications,
-    /// Their chat roster, where rooms get pinned into the rail.
-    Rooms,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +92,16 @@ pub(crate) struct ComposeModal {
     pub busy: bool,
 }
 
+/// The room picker: their whole roster, with the rooms already on the rail
+/// marked. Adding one is what creates its rail entry; nothing here opens a
+/// room, since the rail entry is how a room is entered afterwards.
+pub(crate) struct RoomsModal {
+    pub roster: Vec<CircRoom>,
+    pub selected: usize,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 pub(crate) struct ReplyModal {
     pub post: CsPost,
     pub body: TextArea<'static>,
@@ -108,6 +116,7 @@ pub(crate) enum Modal {
     Link(Box<LinkModal>),
     Compose(Box<ComposeModal>),
     Reply(Box<ReplyModal>),
+    Rooms(Box<RoomsModal>),
 }
 
 /// A room the user is currently inside. Its `session` is what makes it fetch:
@@ -134,9 +143,6 @@ pub struct State {
     /// Rooms pinned into the rail, in the user's order. Their API has no join
     /// or leave, so this list is ours: a bookmark, not their state.
     pub(crate) pinned: Vec<String>,
-    /// Their roster, loaded only while the rooms view is open.
-    pub(crate) roster: Vec<CircRoom>,
-    pub(crate) roster_selected: usize,
     pub(crate) open_room: Option<OpenRoom>,
     pub(crate) link: LinkStatus,
     pub(crate) view: View,
@@ -187,8 +193,6 @@ impl State {
             user_id,
             event_rx,
             pinned: Vec::new(),
-            roster: Vec::new(),
-            roster_selected: 0,
             open_room: None,
             link: LinkStatus::Unknown,
             view: View::Feed,
@@ -324,9 +328,6 @@ impl State {
                 self.notif_selected =
                     step_index(self.notif_selected, delta, self.notifications.len());
             }
-            View::Rooms => {
-                self.roster_selected = step_index(self.roster_selected, delta, self.roster.len());
-            }
         }
     }
 
@@ -336,7 +337,6 @@ impl State {
             View::Feed => self.selected = 0,
             View::Thread => self.thread_scroll = 0,
             View::Notifications => self.notif_selected = 0,
-            View::Rooms => self.roster_selected = 0,
         }
     }
 
@@ -458,7 +458,7 @@ impl State {
         match self.view {
             View::Thread => self.thread.as_ref().map(|thread| thread.post.clone()),
             View::Feed => self.posts.get(self.selected).cloned(),
-            View::Notifications | View::Rooms => None,
+            View::Notifications => None,
         }
     }
 
@@ -476,17 +476,53 @@ impl State {
         self.open_room.as_ref().map(|room| room.slug.as_str())
     }
 
-    /// `c`: their roster, so the user can pin a room into the rail. Rooms are
-    /// listed on demand, never on a timer: this is the only call that fetches
-    /// it, and a human asked for it.
-    pub(crate) fn open_rooms_view(&mut self) {
+    /// `c` (or `/cs chat`): the room picker. Their roster is fetched here and
+    /// nowhere else, on demand and never on a timer, because a human asked
+    /// for it.
+    pub(crate) fn open_rooms_modal(&mut self) -> Option<Banner> {
         if !self.is_linked() {
-            return;
+            return Some(Banner::error(
+                "Link your cyberspace account first: /cs link",
+            ));
         }
-        self.view = View::Rooms;
-        self.roster_selected = 0;
-        self.loading = true;
+        self.modal = Some(Modal::Rooms(Box::new(RoomsModal {
+            roster: Vec::new(),
+            selected: 0,
+            loading: true,
+            error: None,
+        })));
         self.service.load_circ_rooms_task(self.user_id);
+        None
+    }
+
+    /// Move the picker's selection. Its own list, so it does not share the
+    /// pane's view-based movement.
+    pub(crate) fn move_rooms_modal_selection(&mut self, delta: isize) {
+        if let Some(Modal::Rooms(rooms)) = &mut self.modal {
+            rooms.selected = step_index(rooms.selected, delta, rooms.roster.len());
+        }
+    }
+
+    /// Add the highlighted room to the rail, or take it off again. This is
+    /// the only way a chat room becomes a rail entry.
+    pub(crate) fn toggle_selected_room(&mut self) -> Option<Banner> {
+        let Some(Modal::Rooms(rooms)) = &self.modal else {
+            return None;
+        };
+        let slug = rooms.roster.get(rooms.selected)?.key().to_string();
+        let banner = match self.pinned.iter().position(|pinned| *pinned == slug) {
+            Some(index) => {
+                self.pinned.remove(index);
+                Banner::success(&format!("Removed #{slug} from your rail."))
+            }
+            None => {
+                self.pinned.push(slug.clone());
+                Banner::success(&format!("Added #{slug} to your rail."))
+            }
+        };
+        self.service
+            .set_circ_pinned_task(self.user_id, self.pinned.clone());
+        Some(banner)
     }
 
     /// Enter a room: everything it fetches hangs off the session held here, so
@@ -602,37 +638,8 @@ impl State {
         None
     }
 
-    /// `a` on the roster: pin the selected room into the rail, or unpin it.
-    /// The rail moves now and the write follows, because this is our own list
-    /// and a lost write costs a re-pin, not data.
-    pub(crate) fn toggle_selected_pin(&mut self) -> Option<Banner> {
-        let room = self.roster.get(self.roster_selected)?;
-        let slug = room.key().to_string();
-        let banner = match self.pinned.iter().position(|pinned| *pinned == slug) {
-            Some(index) => {
-                self.pinned.remove(index);
-                Banner::success(&format!("Removed #{slug} from your rail."))
-            }
-            None => {
-                self.pinned.push(slug.clone());
-                Banner::success(&format!("Added #{slug} to your rail."))
-            }
-        };
-        self.service
-            .set_circ_pinned_task(self.user_id, self.pinned.clone());
-        Some(banner)
-    }
-
     pub(crate) fn is_pinned(&self, slug: &str) -> bool {
         self.pinned.iter().any(|pinned| pinned == slug)
-    }
-
-    /// Enter on the roster opens the room whether or not it is pinned, so a
-    /// room can be read before it earns a rail row.
-    pub(crate) fn selected_roster_room(&self) -> Option<String> {
-        self.roster
-            .get(self.roster_selected)
-            .map(|room| room.key().to_string())
     }
 
     /// Submit whichever modal is open. Validation happens here (the boundary);
@@ -687,7 +694,9 @@ impl State {
                 self.service
                     .reply_task(self.user_id, reply.post.clone(), body);
             }
-            None => {}
+            // The picker has nothing to submit: toggling a room is the whole
+            // interaction, and it takes effect as it is pressed.
+            Some(Modal::Rooms(_)) | None => {}
         }
     }
 
@@ -778,7 +787,6 @@ impl State {
                 // an unlinked account must not still be present in a room.
                 self.open_room = None;
                 self.pinned.clear();
-                self.roster.clear();
                 self.unread_notifications = 0;
                 self.unread_entries = 0;
                 self.feed_read_at = None;
@@ -840,9 +848,11 @@ impl State {
                 Some(Banner::success("Reply posted on cyberspace."))
             }
             CsEvent::CircRooms { user_id, rooms } if user_id == self.user_id => {
-                self.roster = rooms;
-                self.roster_selected = clamp_index(self.roster_selected, self.roster.len());
-                self.loading = false;
+                if let Some(Modal::Rooms(modal)) = &mut self.modal {
+                    modal.roster = rooms;
+                    modal.selected = clamp_index(modal.selected, modal.roster.len());
+                    modal.loading = false;
+                }
                 None
             }
             CsEvent::CircPinned { user_id, rooms } if user_id == self.user_id => {
@@ -908,6 +918,13 @@ impl State {
                     Some(Modal::Link(link)) if link.busy => {
                         link.error = Some(error);
                         link.busy = false;
+                        None
+                    }
+                    // The picker shows its own failure: a roster that never
+                    // arrived is the modal's problem, not a page-level banner.
+                    Some(Modal::Rooms(rooms)) => {
+                        rooms.error = Some(error);
+                        rooms.loading = false;
                         None
                     }
                     _ => Some(Banner::error(&error)),
