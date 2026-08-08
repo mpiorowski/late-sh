@@ -405,6 +405,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // OS row
         Constraint::Length(1), // Languages row
         Constraint::Length(1), // breathing room
+        Constraint::Length(1), // Translation heading
+        Constraint::Length(1), // Translate to row
+        Constraint::Length(1), // Auto-translate row
+        Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
         Constraint::Length(1), // Mentions
@@ -547,9 +551,31 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         sections[11],
     );
 
+    frame.render_widget(Paragraph::new(section_heading("Translation")), sections[13]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::TranslateTo,
+            width,
+            "Translate to",
+            translate_to_span(state.draft().translate_to),
+        )),
+        sections[14],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::AutoTranslate,
+            width,
+            "Auto-translate new messages",
+            toggle_span(state.draft().auto_translate),
+        )),
+        sections[15],
+    );
+
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[13],
+        sections[17],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -559,7 +585,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[14],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -569,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[15],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -579,7 +605,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[16],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -589,7 +615,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[17],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -606,7 +632,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[18],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -619,10 +645,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[19],
+        sections[23],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[21]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[25]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {
@@ -677,10 +703,6 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
-        Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // Translation subsection heading
-        Constraint::Length(1),                // translate-to row
-        Constraint::Length(1),                // auto-translate row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Music subsection heading
         Constraint::Length(1),                // start-with-music-muted row
@@ -764,29 +786,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Translation")), sections[10]);
-    frame.render_widget(
-        Paragraph::new(tweak_row_line(
-            state,
-            TweakRow::TranslateTo,
-            width,
-            "Translate to",
-            translate_to_span(state.draft().translate_to),
-        )),
-        sections[11],
-    );
-    frame.render_widget(
-        Paragraph::new(tweak_row_line(
-            state,
-            TweakRow::AutoTranslate,
-            width,
-            "Auto-translate new messages",
-            toggle_span(state.draft().auto_translate),
-        )),
-        sections[12],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[14]);
+    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -795,10 +795,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Start app with music muted",
             toggle_span(state.draft().start_with_music_muted),
         )),
-        sections[15],
+        sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[17]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -807,10 +807,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[18],
+        sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[20]);
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -819,10 +819,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Land on Home page",
             toggle_span(state.draft().land_on_home),
         )),
-        sections[21],
+        sections[17],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Input")), sections[23]);
+    frame.render_widget(Paragraph::new(section_heading("Input")), sections[19]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -831,7 +831,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Interaction mode",
             interaction_mode_span(state.interaction_mode()),
         )),
-        sections[24],
+        sections[20],
     );
 
     if gem_strip_height > 0 {
@@ -2569,8 +2569,6 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
     }
 }
 
-/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
-/// editor affordance: the rail has no panel list of its own.
 fn translate_to_span(lang: late_core::models::message_translation::TranslateLang) -> ValueSpan {
     ValueSpan {
         text: lang.label().to_string(),
@@ -2580,6 +2578,8 @@ fn translate_to_span(lang: late_core::models::message_translation::TranslateLang
     }
 }
 
+/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
+/// editor affordance: the rail has no panel list of its own.
 fn room_list_mode_span(mode: RoomListMode) -> ValueSpan {
     match mode {
         RoomListMode::On => ValueSpan {

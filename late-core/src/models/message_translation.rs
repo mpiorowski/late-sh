@@ -26,14 +26,64 @@ pub enum TranslateLang {
     En,
     ZhHans,
     Ko,
+    Ja,
+    Es,
+    Fr,
+    Pt,
+    De,
+    It,
+    Pl,
+    Ru,
+    Uk,
+    Tr,
+    Vi,
+    Id,
+    Th,
+    Hi,
 }
 
 impl TranslateLang {
+    /// Settings-row cycle order. Every variant must appear exactly once;
+    /// `cycle` walks this list.
+    pub const ALL: [Self; 17] = [
+        Self::En,
+        Self::ZhHans,
+        Self::Ko,
+        Self::Ja,
+        Self::Es,
+        Self::Fr,
+        Self::Pt,
+        Self::De,
+        Self::It,
+        Self::Pl,
+        Self::Ru,
+        Self::Uk,
+        Self::Tr,
+        Self::Vi,
+        Self::Id,
+        Self::Th,
+        Self::Hi,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::En => "en",
             Self::ZhHans => "zh-hans",
             Self::Ko => "ko",
+            Self::Ja => "ja",
+            Self::Es => "es",
+            Self::Fr => "fr",
+            Self::Pt => "pt",
+            Self::De => "de",
+            Self::It => "it",
+            Self::Pl => "pl",
+            Self::Ru => "ru",
+            Self::Uk => "uk",
+            Self::Tr => "tr",
+            Self::Vi => "vi",
+            Self::Id => "id",
+            Self::Th => "th",
+            Self::Hi => "hi",
         }
     }
 
@@ -42,6 +92,20 @@ impl TranslateLang {
             "en" => Some(Self::En),
             "zh-hans" => Some(Self::ZhHans),
             "ko" => Some(Self::Ko),
+            "ja" => Some(Self::Ja),
+            "es" => Some(Self::Es),
+            "fr" => Some(Self::Fr),
+            "pt" => Some(Self::Pt),
+            "de" => Some(Self::De),
+            "it" => Some(Self::It),
+            "pl" => Some(Self::Pl),
+            "ru" => Some(Self::Ru),
+            "uk" => Some(Self::Uk),
+            "tr" => Some(Self::Tr),
+            "vi" => Some(Self::Vi),
+            "id" => Some(Self::Id),
+            "th" => Some(Self::Th),
+            "hi" => Some(Self::Hi),
             _ => None,
         }
     }
@@ -53,6 +117,20 @@ impl TranslateLang {
             Self::En => "English",
             Self::ZhHans => "Chinese 简体中文",
             Self::Ko => "Korean 한국어",
+            Self::Ja => "Japanese 日本語",
+            Self::Es => "Spanish Español",
+            Self::Fr => "French Français",
+            Self::Pt => "Portuguese Português",
+            Self::De => "German Deutsch",
+            Self::It => "Italian Italiano",
+            Self::Pl => "Polish Polski",
+            Self::Ru => "Russian Русский",
+            Self::Uk => "Ukrainian Українська",
+            Self::Tr => "Turkish Türkçe",
+            Self::Vi => "Vietnamese Tiếng Việt",
+            Self::Id => "Indonesian Bahasa Indonesia",
+            Self::Th => "Thai ไทย",
+            Self::Hi => "Hindi हिन्दी",
         }
     }
 
@@ -62,42 +140,94 @@ impl TranslateLang {
             Self::En => "English",
             Self::ZhHans => "Simplified Chinese",
             Self::Ko => "Korean",
+            Self::Ja => "Japanese",
+            Self::Es => "Spanish",
+            Self::Fr => "French",
+            Self::Pt => "Portuguese",
+            Self::De => "German",
+            Self::It => "Italian",
+            Self::Pl => "Polish",
+            Self::Ru => "Russian",
+            Self::Uk => "Ukrainian",
+            Self::Tr => "Turkish",
+            Self::Vi => "Vietnamese",
+            Self::Id => "Indonesian",
+            Self::Th => "Thai",
+            Self::Hi => "Hindi",
         }
     }
 
-    fn script(self) -> Script {
+    /// The script the pre-flight check treats as "already this language".
+    /// `None` means the check can never clear a message locally: the Latin
+    /// roster shares its script with English (and each other), and Russian
+    /// and Ukrainian share Cyrillic, so a same-script body may or may not
+    /// already be in the target; those targets send everything scripted to
+    /// the model and let the cache absorb the cost. English still claims
+    /// Latin: the chat is English-dominant, and an English reader shouldn't
+    /// have every message qualify. Japanese claims Kana; a kanji-only
+    /// Japanese message counts as Han and gets one redundant (cached) call,
+    /// the price of keeping Chinese translatable for Japanese readers.
+    fn script(self) -> Option<Script> {
         match self {
-            Self::En => Script::Latin,
-            Self::ZhHans => Script::Han,
-            Self::Ko => Script::Hangul,
+            Self::En => Some(Script::Latin),
+            Self::ZhHans => Some(Script::Han),
+            Self::Ko => Some(Script::Hangul),
+            Self::Ja => Some(Script::Kana),
+            Self::Es
+            | Self::Fr
+            | Self::Pt
+            | Self::De
+            | Self::It
+            | Self::Pl
+            | Self::Tr
+            | Self::Vi
+            | Self::Id => None,
+            Self::Ru | Self::Uk => None,
+            Self::Th => Some(Script::Thai),
+            Self::Hi => Some(Script::Devanagari),
         }
     }
 
     pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::En, true) => Self::ZhHans,
-            (Self::ZhHans, true) => Self::Ko,
-            (Self::Ko, true) => Self::En,
-            (Self::En, false) => Self::Ko,
-            (Self::ZhHans, false) => Self::En,
-            (Self::Ko, false) => Self::ZhHans,
-        }
+        let idx = Self::ALL
+            .iter()
+            .position(|lang| *lang == self)
+            .expect("every variant is in ALL");
+        let next = if forward {
+            (idx + 1) % Self::ALL.len()
+        } else {
+            (idx + Self::ALL.len() - 1) % Self::ALL.len()
+        };
+        Self::ALL[next]
     }
 }
 
 /// Writing systems the pre-flight check can classify. This is a script
 /// detector, not a language detector: it exists to answer "could this
 /// message already be in the viewer's language?" cheaply and locally, so
-/// same-script messages never reach the API. Latin-script languages other
-/// than English are deliberately lumped together; the feature targets
-/// CJK↔EN chat, where script alone separates the two sides.
+/// same-script messages never reach the API. All Latin-script languages are
+/// deliberately lumped together; only English claims the Latin script as
+/// "already readable" (see `TranslateLang::script`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Script {
     Latin,
     Han,
     Hangul,
     Kana,
+    Cyrillic,
+    Thai,
+    Devanagari,
 }
+
+const SCRIPT_ROSTER: [Script; 7] = [
+    Script::Latin,
+    Script::Han,
+    Script::Hangul,
+    Script::Kana,
+    Script::Cyrillic,
+    Script::Thai,
+    Script::Devanagari,
+];
 
 fn char_script(c: char) -> Option<Script> {
     match c as u32 {
@@ -107,6 +237,14 @@ fn char_script(c: char) -> Option<Script> {
         0xAC00..=0xD7AF | 0x1100..=0x11FF | 0x3130..=0x318F => Some(Script::Hangul),
         // Hiragana and katakana.
         0x3040..=0x309F | 0x30A0..=0x30FF => Some(Script::Kana),
+        // Cyrillic and its supplement.
+        0x0400..=0x04FF | 0x0500..=0x052F => Some(Script::Cyrillic),
+        // Thai.
+        0x0E00..=0x0E7F => Some(Script::Thai),
+        // Devanagari.
+        0x0900..=0x097F => Some(Script::Devanagari),
+        // Latin Extended Additional carries most Vietnamese diacritics.
+        0x1E00..=0x1EFF => Some(Script::Latin),
         _ if c.is_ascii_alphabetic() || matches!(c as u32, 0xC0..=0x24F) => Some(Script::Latin),
         _ => None,
     }
@@ -115,14 +253,16 @@ fn char_script(c: char) -> Option<Script> {
 /// Whether `body` is worth translating for a viewer reading `target`: it has
 /// enough scripted text to mean something, its dominant script differs from
 /// the target's, and it fits the length cap. Numbers, emoji, URLs-only and
-/// other unscripted bodies never qualify. Kana counts as foreign for every
-/// current target, so Japanese messages translate even though Japanese is
-/// not yet a target language.
+/// other unscripted bodies never qualify. Targets without a script of their
+/// own (the Latin roster, and Russian/Ukrainian on shared Cyrillic)
+/// translate every scripted body: the check can't prove a same-script
+/// message is already in the target language, so the model decides and the
+/// cache remembers.
 pub fn needs_translation(body: &str, target: TranslateLang) -> bool {
     if body.chars().count() > TRANSLATE_MAX_BODY_CHARS {
         return false;
     }
-    let mut counts = [0usize; 4];
+    let mut counts = [0usize; SCRIPT_ROSTER.len()];
     for c in body.chars() {
         if let Some(script) = char_script(c) {
             counts[script as usize] += 1;
@@ -134,11 +274,14 @@ pub fn needs_translation(body: &str, target: TranslateLang) -> bool {
     if total < 3 {
         return false;
     }
-    let dominant = [Script::Latin, Script::Han, Script::Hangul, Script::Kana]
+    let dominant = SCRIPT_ROSTER
         .into_iter()
         .max_by_key(|script| counts[*script as usize])
         .expect("script roster is non-empty");
-    dominant != target.script()
+    match target.script() {
+        Some(script) => dominant != script,
+        None => true,
+    }
 }
 
 pub struct MessageTranslation;

@@ -50,6 +50,8 @@ pub(crate) enum Row {
     Theme,
     Country,
     Timezone,
+    TranslateTo,
+    AutoTranslate,
     DirectMessages,
     Mentions,
     GameEvents,
@@ -59,7 +61,7 @@ pub(crate) enum Row {
 }
 
 impl Row {
-    pub(crate) const ALL: [Row; 15] = [
+    pub(crate) const ALL: [Row; 17] = [
         Row::Username,
         Row::Country,
         Row::Timezone,
@@ -69,6 +71,8 @@ impl Row {
         Row::Terminal,
         Row::Os,
         Row::Langs,
+        Row::TranslateTo,
+        Row::AutoTranslate,
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
@@ -101,10 +105,8 @@ pub(crate) enum TweakRow {
     RightSidebar,
     RoomListSidebar,
     PetStrip,
-    // Compose / Translation / Music / Display / Startup groups.
+    // Compose / Music / Display / Startup groups.
     ComposerKeepFocused,
-    TranslateTo,
-    AutoTranslate,
     StartWithMusicMuted,
     FlagFallback,
     LandOnHome,
@@ -113,15 +115,13 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 12] = [
+    pub(crate) const ALL: [TweakRow; 10] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
-        TweakRow::TranslateTo,
-        TweakRow::AutoTranslate,
         TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
@@ -819,12 +819,6 @@ impl SettingsModalState {
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
-            TweakRow::TranslateTo => {
-                self.draft.translate_to = self.draft.translate_to.cycle(true);
-            }
-            TweakRow::AutoTranslate => {
-                self.draft.auto_translate ^= true;
-            }
             TweakRow::StartWithMusicMuted => {
                 self.draft.start_with_music_muted ^= true;
             }
@@ -846,10 +840,6 @@ impl SettingsModalState {
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
-            TweakRow::TranslateTo => {
-                self.draft.translate_to = self.draft.translate_to.cycle(forward);
-                self.save();
-            }
             _ => self.toggle_selected_tweak(),
         }
     }
@@ -1927,6 +1917,14 @@ impl SettingsModalState {
                 self.draft.notify_format = Some(
                     cycle_notify_format(self.draft.notify_format.as_deref(), forward).to_string(),
                 );
+                true
+            }
+            Row::TranslateTo => {
+                self.draft.translate_to = self.draft.translate_to.cycle(forward);
+                true
+            }
+            Row::AutoTranslate => {
+                self.draft.auto_translate ^= true;
                 true
             }
             Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
