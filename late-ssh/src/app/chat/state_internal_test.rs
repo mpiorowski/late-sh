@@ -2132,8 +2132,7 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
-    let translation =
-        crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
     ChatState::new(

@@ -1143,8 +1143,8 @@ impl ChatState {
                 TranslationOutcome::Translated(text) => {
                     // Requested here (pending), or free coverage from another
                     // session's call while this one runs auto mode.
-                    let show = self.auto_translate
-                        || self.translations.contains_key(&event.message_id);
+                    let show =
+                        self.auto_translate || self.translations.contains_key(&event.message_id);
                     if show {
                         self.translations
                             .insert(event.message_id, TranslationDisplay::Ready(text));

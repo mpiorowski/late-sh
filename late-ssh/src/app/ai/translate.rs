@@ -154,7 +154,12 @@ impl TranslationService {
 
     /// The full resolution pipeline for one message. This is the single
     /// match listing every way a translation request can end.
-    async fn resolve(&self, message_id: Uuid, body: String, target: TranslateLang) -> TranslationOutcome {
+    async fn resolve(
+        &self,
+        message_id: Uuid,
+        body: String,
+        target: TranslateLang,
+    ) -> TranslationOutcome {
         match self.resolve_inner(message_id, &body, target).await {
             Ok(Resolution::CacheHit(text)) => {
                 metrics::record_chat_translation(TranslationResult::CacheHit);

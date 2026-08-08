@@ -11,9 +11,15 @@ use crate::{
 #[test]
 fn needs_translation_compares_dominant_script_against_target() {
     // Foreign script for the target -> translate.
-    assert!(needs_translation("你好，我刚发现这个地方", TranslateLang::En));
+    assert!(needs_translation(
+        "你好，我刚发现这个地方",
+        TranslateLang::En
+    ));
     assert!(needs_translation("서버 너무 좋다", TranslateLang::En));
-    assert!(needs_translation("what a cozy place", TranslateLang::ZhHans));
+    assert!(needs_translation(
+        "what a cozy place",
+        TranslateLang::ZhHans
+    ));
     assert!(needs_translation("check the arcade", TranslateLang::Ko));
     assert!(needs_translation("これはすごいですね", TranslateLang::En));
     assert!(needs_translation("यह जगह बहुत अच्छी है", TranslateLang::En));
@@ -24,7 +30,10 @@ fn needs_translation_compares_dominant_script_against_target() {
     assert!(needs_translation("what a cozy place", TranslateLang::Hi));
 
     // Same script as the target -> nothing to do.
-    assert!(!needs_translation("just chatting in english", TranslateLang::En));
+    assert!(!needs_translation(
+        "just chatting in english",
+        TranslateLang::En
+    ));
     assert!(!needs_translation("你好你好你好", TranslateLang::ZhHans));
     assert!(!needs_translation("좋아요 좋아요", TranslateLang::Ko));
     assert!(!needs_translation("これはすごいですね", TranslateLang::Ja));
@@ -34,12 +43,21 @@ fn needs_translation_compares_dominant_script_against_target() {
     // Targets sharing a script (the Latin roster; Russian/Ukrainian on
     // Cyrillic) can't be cleared by script alone: everything scripted goes
     // to the model, even same-language bodies.
-    assert!(needs_translation("just chatting in english", TranslateLang::Es));
+    assert!(needs_translation(
+        "just chatting in english",
+        TranslateLang::Es
+    ));
     assert!(needs_translation("hola a todos", TranslateLang::Es));
-    assert!(needs_translation("bonjour tout le monde", TranslateLang::Fr));
+    assert!(needs_translation(
+        "bonjour tout le monde",
+        TranslateLang::Fr
+    ));
     assert!(needs_translation("cześć wszystkim", TranslateLang::Pl));
     assert!(needs_translation("привет, как дела", TranslateLang::Uk));
-    assert!(needs_translation("你好，我刚发现这个地方", TranslateLang::Pt));
+    assert!(needs_translation(
+        "你好，我刚发现这个地方",
+        TranslateLang::Pt
+    ));
 
     // Mixed bodies go by the dominant script.
     assert!(needs_translation("看看这个 lol", TranslateLang::En));
@@ -50,10 +68,7 @@ fn needs_translation_compares_dominant_script_against_target() {
     assert!(!needs_translation("42", TranslateLang::ZhHans));
     assert!(!needs_translation("ok", TranslateLang::ZhHans));
     assert!(!needs_translation("", TranslateLang::En));
-    assert!(!needs_translation(
-        &"字".repeat(2_000),
-        TranslateLang::En
-    ));
+    assert!(!needs_translation(&"字".repeat(2_000), TranslateLang::En));
 }
 
 #[test]
