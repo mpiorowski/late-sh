@@ -546,7 +546,11 @@ impl State {
             return;
         };
         if room.composer.is_none() {
-            room.composer = Some(new_themed_textarea("Say something...", WrapMode::Word, true));
+            room.composer = Some(new_themed_textarea(
+                "Say something...",
+                WrapMode::Word,
+                true,
+            ));
         }
         self.note_room_activity();
     }

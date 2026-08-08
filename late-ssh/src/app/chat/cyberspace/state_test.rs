@@ -386,7 +386,10 @@ async fn room_history_and_the_live_window_land_as_one_conversation() {
     let _ = state.apply_event(CsEvent::CircHistoryLoaded {
         user_id,
         room: "general".to_string(),
-        messages: vec![circ_message("m1", 1, "first"), circ_message("m2", 2, "second")],
+        messages: vec![
+            circ_message("m1", 1, "first"),
+            circ_message("m2", 2, "second"),
+        ],
     });
 
     // The stream's opening window replays part of the same tail: the overlap
@@ -480,8 +483,7 @@ async fn pinning_a_room_adds_it_to_the_rail_and_unpinning_removes_it() {
     let _ = state.apply_event(CsEvent::CircRooms {
         user_id,
         rooms: vec![
-            serde_json::from_str(r#"{"id":"r1","slug":"general","name":"General"}"#)
-                .expect("room"),
+            serde_json::from_str(r#"{"id":"r1","slug":"general","name":"General"}"#).expect("room"),
         ],
     });
 

@@ -61,28 +61,25 @@ pub fn handle_room_byte(app: &mut App, byte: u8) -> bool {
     }
 }
 
-/// Keystrokes while the room composer is open. It owns every byte, the same
-/// way the Discover filter does, so a message can say anything.
-pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) -> bool {
+/// Keystrokes while the room composer is open. It owns every one of them, the
+/// same way an open modal does, so a message can contain a space or an `h`
+/// without the rail stealing it. Reached from `app::input`'s modal chain,
+/// which runs before any chat routing.
+pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     let Some(composer) = app.chat.cyberspace.room_composer_mut() else {
-        return false;
+        return;
     };
     match handle_multiline_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
         EditOutcome::Submit => {
             if let Some(banner) = app.chat.cyberspace.submit_room_composer() {
                 app.banner = Some(banner);
             }
-            true
         }
         EditOutcome::Cancel => {
             app.chat.cyberspace.cancel_room_composer();
-            true
         }
-        EditOutcome::Handled => {
-            app.chat.cyberspace.note_composer_activity();
-            true
-        }
-        EditOutcome::Ignored => false,
+        EditOutcome::Handled => app.chat.cyberspace.note_composer_activity(),
+        EditOutcome::Ignored => {}
     }
 }
 
@@ -129,17 +126,15 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
-        b'a' | b'A' => {
-            match state.view {
-                View::Rooms => {
-                    if let Some(banner) = state.toggle_selected_pin() {
-                        app.banner = Some(banner);
-                    }
-                    true
+        b'a' | b'A' => match state.view {
+            View::Rooms => {
+                if let Some(banner) = state.toggle_selected_pin() {
+                    app.banner = Some(banner);
                 }
-                View::Feed | View::Thread | View::Notifications => false,
+                true
             }
-        }
+            View::Feed | View::Thread | View::Notifications => false,
+        },
         b'c' | b'C' => {
             state.open_rooms_view();
             true

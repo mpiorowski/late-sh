@@ -133,9 +133,13 @@ fn circ_message_parses_both_style_shapes() {
     let many: CircMessage =
         serde_json::from_str(r#"{"id":"m2","content":"hi","style":["rainbow","blink"]}"#)
             .expect("chained styles");
-    assert_eq!(many.styles, vec!["rainbow".to_string(), "blink".to_string()]);
+    assert_eq!(
+        many.styles,
+        vec!["rainbow".to_string(), "blink".to_string()]
+    );
 
-    let none: CircMessage = serde_json::from_str(r#"{"id":"m3","content":"hi"}"#).expect("no style");
+    let none: CircMessage =
+        serde_json::from_str(r#"{"id":"m3","content":"hi"}"#).expect("no style");
     assert!(none.styles.is_empty());
 }
 
@@ -213,8 +217,8 @@ fn stream_frames_carry_window_arrival_and_deletion() {
         other => panic!("expected a patch, got {other:?}"),
     }
 
-    let removal =
-        parse_circ_stream_frame("event: put\ndata: {\"path\":\"/m3\",\"data\":null}").expect("null");
+    let removal = parse_circ_stream_frame("event: put\ndata: {\"path\":\"/m3\",\"data\":null}")
+        .expect("null");
     assert!(matches!(removal, CircStreamEvent::Removed(id) if id == "m3"));
 
     // Keep-alives and unmodelled paths say nothing about the room.

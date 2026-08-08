@@ -792,7 +792,9 @@ pub fn parse_circ_stream_frame(frame: &str) -> Option<CircStreamEvent> {
     let id = path.to_string();
     match (event, frame.data) {
         (_, serde_json::Value::Null) => Some(CircStreamEvent::Removed(id)),
-        ("put", value) => message_from_entry(&id, value).map(|m| CircStreamEvent::Upsert(Box::new(m))),
+        ("put", value) => {
+            message_from_entry(&id, value).map(|m| CircStreamEvent::Upsert(Box::new(m)))
+        }
         ("patch", value) => Some(CircStreamEvent::Patch {
             content: value
                 .get("content")

@@ -683,15 +683,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::discover::input::handle_byte(app, byte);
     }
 
-    // Same rule for the cyberspace room composer: while it is open every byte
-    // is message text, including space and h/l.
-    if app.chat.cyberspace.room_composer_mut().is_some() {
-        return super::cyberspace::input::handle_room_composer_input(
-            app,
-            crate::app::input::ParsedInput::Byte(byte),
-        );
-    }
-
     if app.chat.room_jump_active {
         match byte {
             b' ' => {
