@@ -493,6 +493,8 @@ pub struct OccupantView {
     pub bio: String,
     /// This adventurer's stable class key (empty if unclassed), for their portrait.
     pub class_key: String,
+    /// This adventurer's character level, shown alongside their name.
+    pub level: i32,
     /// This adventurer's raw appearance selections, for composing their portrait.
     pub appearance_idx: Vec<u8>,
     /// True when this room is a `pvp` zone and this adventurer is a valid
@@ -501,6 +503,28 @@ pub struct OccupantView {
     pub attackable: bool,
     /// True when this adventurer is who you're currently duelling.
     pub targeted: bool,
+}
+
+/// One row of a leaderboard: who, their level and class (for the portrait
+/// glyph/colour), and the ranked value itself (meaning depends on which
+/// board it's in - level, pvp kills, or total gold).
+#[derive(Clone, Debug)]
+pub struct LeaderboardEntry {
+    pub user_id: Uuid,
+    pub level: i32,
+    pub class_key: String,
+    pub value: i64,
+}
+
+/// The top ten currently-connected, classed adventurers by three measures.
+/// Identical for every player this tick (nothing here depends on who's
+/// asking), so `WorldState::snapshot` computes it once and shares it via
+/// `Arc` rather than rebuilding/cloning it per player.
+#[derive(Clone, Debug, Default)]
+pub struct LeaderboardView {
+    pub by_level: Vec<LeaderboardEntry>,
+    pub by_pvp_kills: Vec<LeaderboardEntry>,
+    pub by_gold: Vec<LeaderboardEntry>,
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -741,6 +765,9 @@ pub struct PlayerView {
     pub pvp: bool,
     /// Lifetime adventurers this character has slain in pvp combat.
     pub pvp_kills: i64,
+    /// Top-ten currently-connected adventurers by level/pvp kills/gold.
+    /// Shared (not per-player data), see `LeaderboardView`. Opened with `?`.
+    pub leaderboard: Arc<LeaderboardView>,
     pub exits: Vec<(Dir, String)>,
     pub mobs: Vec<MobView>,
     /// Rooms near you that hold a living, revealed foe, so the live field can
@@ -862,6 +889,7 @@ impl PlayerView {
             safe: true,
             pvp: false,
             pvp_kills: 0,
+            leaderboard: Arc::new(LeaderboardView::default()),
             exits: Vec::new(),
             mobs: Vec::new(),
             nearby_foes: Vec::new(),
@@ -7834,6 +7862,46 @@ impl WorldState {
         }
     }
 
+    /// Top-ten currently-connected, classed adventurers by level, lifetime
+    /// pvp kills, and total gold (carried + banked). See `LeaderboardView`.
+    fn build_leaderboard(&self) -> LeaderboardView {
+        const TOP_N: usize = 10;
+        fn entry(p: &PlayerState, value: i64) -> LeaderboardEntry {
+            LeaderboardEntry {
+                user_id: p.user_id,
+                level: p.level,
+                class_key: p.class.map(|c| c.as_key().to_string()).unwrap_or_default(),
+                value,
+            }
+        }
+        let classed: Vec<&PlayerState> = self
+            .players
+            .values()
+            .filter(|p| p.class.is_some())
+            .collect();
+
+        let mut by_level = classed.clone();
+        by_level.sort_by_key(|p| std::cmp::Reverse(p.level));
+        by_level.truncate(TOP_N);
+
+        let mut by_pvp_kills = classed.clone();
+        by_pvp_kills.sort_by_key(|p| std::cmp::Reverse(p.pvp_kills));
+        by_pvp_kills.truncate(TOP_N);
+
+        let mut by_gold = classed;
+        by_gold.sort_by_key(|p| std::cmp::Reverse(p.gold + p.banked_gold));
+        by_gold.truncate(TOP_N);
+
+        LeaderboardView {
+            by_level: by_level.iter().map(|p| entry(p, p.level as i64)).collect(),
+            by_pvp_kills: by_pvp_kills.iter().map(|p| entry(p, p.pvp_kills)).collect(),
+            by_gold: by_gold
+                .iter()
+                .map(|p| entry(p, p.gold + p.banked_gold))
+                .collect(),
+        }
+    }
+
     fn snapshot(&self) -> MudSnapshot {
         let mut players = HashMap::new();
         let time_of_day = self.time_of_day().label();
@@ -7871,6 +7939,10 @@ impl WorldState {
                 }
             }
         }
+        // Computed once for every player this snapshot, not per-player: the
+        // three top-ten boards only depend on who's classed and online right
+        // now, never on who's asking.
+        let leaderboard = Arc::new(self.build_leaderboard());
         for (user_id, player) in &self.players {
             let room = self.world.room(player.room);
             let (room_name, room_desc, zone, safe, pvp, exits) = match room {
@@ -7955,6 +8027,7 @@ impl WorldState {
                         .class
                         .map(|c| c.as_key().to_string())
                         .unwrap_or_default(),
+                    level: other.level,
                     appearance_idx: other.appearance.to_vec(),
                     attackable: pvp && !other.dead && other.class.is_some(),
                     targeted: player.pvp_target == Some(other.user_id),
@@ -8436,6 +8509,7 @@ impl WorldState {
                     safe,
                     pvp,
                     pvp_kills: player.pvp_kills,
+                    leaderboard: leaderboard.clone(),
                     exits,
                     mobs,
                     nearby_foes,

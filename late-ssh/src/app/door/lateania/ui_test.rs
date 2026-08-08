@@ -398,3 +398,73 @@ fn room_panel_makes_each_foe_a_clickable_row() {
         "the targeted foe is marked with »"
     );
 }
+
+#[test]
+fn leaderboard_panel_shows_rank_level_class_and_value_per_board() {
+    use super::super::svc::{LeaderboardEntry, LeaderboardView, empty_player_view};
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let bob = uuid::Uuid::from_u128(1);
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.leaderboard = Arc::new(LeaderboardView {
+        by_level: vec![LeaderboardEntry {
+            user_id: bob,
+            level: 42,
+            class_key: "warrior".to_string(),
+            value: 42,
+        }],
+        by_pvp_kills: vec![LeaderboardEntry {
+            user_id: bob,
+            level: 42,
+            class_key: "warrior".to_string(),
+            value: 7,
+        }],
+        by_gold: vec![LeaderboardEntry {
+            user_id: bob,
+            level: 42,
+            class_key: "warrior".to_string(),
+            value: 999,
+        }],
+    });
+
+    let mut names: HashMap<uuid::Uuid, String> = HashMap::new();
+    names.insert(bob, "Bob".to_string());
+    let usernames = UsernameLookup::new(&names, None);
+    let lines = super::leaderboard_panel(&view, &usernames);
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    assert!(
+        joined.contains("Bob"),
+        "the resolved name is shown: {joined}"
+    );
+    assert!(joined.contains("Lv42"), "the level is shown: {joined}");
+    assert!(
+        joined.contains("WAR"),
+        "the class abbreviation is shown: {joined}"
+    );
+    assert!(
+        joined.contains("7 kills"),
+        "the pvp kill count is shown: {joined}"
+    );
+    assert!(joined.contains("999g"), "the gold total is shown: {joined}");
+}
+
+#[test]
+fn leaderboard_panel_handles_nobody_online_yet() {
+    use super::super::svc::empty_player_view;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let mut view = empty_player_view();
+    view.classed = true;
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    // Must not panic on an empty leaderboard (the default `PlayerView`).
+    let lines = super::leaderboard_panel(&view, &usernames);
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(joined.contains("no one else is online yet"));
+    assert!(joined.contains("no rivals slain yet"));
+}

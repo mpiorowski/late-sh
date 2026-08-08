@@ -27,6 +27,8 @@
 //     u opens the crafting panel where a craft station stands.
 //   - Map: m overview atlas (pan around); M toggles RPG mode (the live
 //     walk-around field beside the room) on/off - off is a plain text MUD.
+//   - ? opens the Leaderboard: top adventurers currently online by level,
+//     pvp kills, and gold (read-only).
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
@@ -330,6 +332,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'j' | b'J' => {
             // Quest journal (read-only).
             state.toggle_panel(Panel::Quests);
+            InputAction::Handled
+        }
+        b'?' => {
+            // Leaderboard: top adventurers currently online (read-only).
+            state.toggle_panel(Panel::Leaderboard);
             InputAction::Handled
         }
         b';' => {
