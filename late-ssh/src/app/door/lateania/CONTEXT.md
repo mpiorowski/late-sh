@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-10 (player-feedback pass: Esc no longer closes the game while chatting and now requires a confirming second press to actually leave; the Mend boon heals fully; the day/night clock got a glyph + danger colour; stray-feeding messages spell out the real UTC-midnight countdown; the Leaderboard moved off `?`, which is globally reserved - see §9 Critical Invariants)
+- Last updated: 2026-08-10 (player-feedback pass: Esc no longer closes the game while chatting and now requires a confirming second press to actually leave; the Mend boon heals fully; the day/night clock got a glyph + danger colour; stray-feeding messages spell out the real UTC-midnight countdown; the Leaderboard moved off `?`, which is globally reserved - see §9 Critical Invariants; selling a loose duplicate of worn gear no longer requires unequipping first)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -174,7 +174,7 @@ Before class choice:
 - `Room`: current room, vitals, exits, mobs, occupants, wildlife, features, minimap, hints.
 - `Character`: class, trait, scores, stats, titles, resurrection charges.
 - `Abilities`: unlocked abilities, cost/readiness/effect.
-- `Inventory`: pack items plus equipped items as rows. Enter on a row is context-sensitive via `state::inv_action`: worn gear comes **off** (`unequip_task`), loose gear goes on, a consumable is used. Worn gear cannot be sold; the refusal says so rather than doing nothing.
+- `Inventory`: pack items plus equipped items as rows. Enter on a row is context-sensitive via `state::inv_action`: worn gear comes **off** (`unequip_task`), loose gear goes on, a consumable is used. Selling checks the `equipped` row specifically, not the item id: a worn item refuses with a reason, but a loose duplicate of that same item id sells fine while the worn copy stays on (`svc::sell`).
 - `Map`: the graphical overhead world map (§5.1), or the text atlas on small terminals.
 - `Shop`: merchant stock if `shop_at(room)` exists.
 - `Examine`: room features; fountains can restore vitals.

@@ -6054,11 +6054,14 @@ impl WorldState {
         let Some(it) = item(item_id) else { return };
         let price = it.sell_price();
         // Worn gear is listed in the inventory panel but lives in `equipped`,
-        // so say why rather than doing nothing.
+        // so say why rather than doing nothing. A loose duplicate in the pack
+        // is still fair game even while the other copy is worn.
         let worn = self
             .players
             .get(&user_id)
-            .map(|p| p.equipped.values().any(|id| *id == item_id))
+            .map(|p| {
+                p.equipped.values().any(|id| *id == item_id) && !p.inventory.contains(&item_id)
+            })
             .unwrap_or(false);
         if worn {
             self.log_to(

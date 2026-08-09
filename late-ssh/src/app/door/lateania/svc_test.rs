@@ -1972,6 +1972,35 @@ fn worn_gear_cannot_be_sold_out_from_under_you() {
 }
 
 #[test]
+fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
+    // The bug: selling required unequipping first even when a second, loose
+    // copy of the same item sat right there in the pack.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    s.equip(uid(1), 1006);
+    // A second copy, still loose in the pack.
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let gold = s.players[&uid(1)].gold;
+    let price = item(1006).unwrap().sell_price();
+
+    s.sell(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, gold + price, "the loose copy sold");
+    assert!(
+        p.equipped.values().any(|id| *id == 1006),
+        "the worn copy stayed on"
+    );
+    assert!(
+        !p.inventory.contains(&1006),
+        "the loose copy left the pack: {:?}",
+        p.inventory
+    );
+}
+
+#[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));
