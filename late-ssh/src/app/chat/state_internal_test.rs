@@ -719,15 +719,19 @@ fn visual_order_matches_cozy_rail_grouping() {
 }
 
 #[test]
-fn room_section_label_round_trips() {
-    for section in [
-        RoomSection::Favorites,
-        RoomSection::Core,
-        RoomSection::Cyberspace,
-        RoomSection::Channels,
-        RoomSection::Dms,
-    ] {
+fn every_section_round_trips_its_label_and_owns_a_unique_fold_key() {
+    let mut shortcuts = HashSet::new();
+    for section in RoomSection::ALL {
+        // Clicking a header maps its text back to the section.
         assert_eq!(RoomSection::from_label(section.label()), Some(section));
+        // `z` + this key folds it. A section whose key another one already
+        // claimed is unreachable, and one missing from the `z` handler's own
+        // key map is a section the rail draws but nothing can fold.
+        assert!(
+            shortcuts.insert(section.shortcut()),
+            "two sections claim '{}'",
+            section.shortcut() as char
+        );
     }
     assert_eq!(RoomSection::from_label("not-a-section"), None);
 }

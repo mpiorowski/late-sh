@@ -312,6 +312,17 @@ pub enum RoomSection {
 }
 
 impl RoomSection {
+    /// Every section. Key maps and tests iterate this rather than repeating a
+    /// hand-written list: a copy of the roster somewhere else silently misses
+    /// a new section, which is how `z`-folding lost the cyberspace header.
+    pub(crate) const ALL: [RoomSection; 5] = [
+        RoomSection::Favorites,
+        RoomSection::Core,
+        RoomSection::Cyberspace,
+        RoomSection::Channels,
+        RoomSection::Dms,
+    ];
+
     /// The header label as rendered in the rail. Used to map a clicked header
     /// row back to its section.
     pub(crate) fn label(self) -> &'static str {

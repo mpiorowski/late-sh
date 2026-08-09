@@ -3358,14 +3358,14 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_lobby_modal = true;
 }
 
+/// The `z`-prefix suffix key, resolved through `RoomSection::shortcut` so the
+/// keys live in one place. Spelling them out again here left a section the
+/// rail drew but nothing could fold.
 fn room_section_suffix(byte: u8) -> Option<RoomSection> {
-    match byte {
-        b'f' | b'F' => Some(RoomSection::Favorites),
-        b'o' | b'O' => Some(RoomSection::Core),
-        b'c' | b'C' => Some(RoomSection::Channels),
-        b'd' | b'D' => Some(RoomSection::Dms),
-        _ => None,
-    }
+    let pressed = byte.to_ascii_lowercase();
+    RoomSection::ALL
+        .into_iter()
+        .find(|section| section.shortcut() == pressed)
 }
 
 pub(crate) fn trigger_global_quit(app: &mut App) {
