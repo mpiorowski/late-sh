@@ -61,7 +61,8 @@ pub enum Panel {
     Map,
     /// The leaderboard: top adventurers currently online, by level, pvp
     /// kills, and gold (read-only, scrollable with `[` / `]`). Toggled
-    /// with `?`.
+    /// with `!` (not `?`, which late.sh reserves globally for a cross-door
+    /// help overlay).
     Leaderboard,
 }
 
@@ -96,6 +97,13 @@ fn hit_at(hits: &[(Rect, ClickAction)], x: u16, y: u16) -> Option<ClickAction> {
         .map(|(_, action)| *action)
 }
 
+/// Whether a leave-confirmation deadline is still live at `now`. Pure so the
+/// "press Esc twice to leave" window logic can be unit-tested without
+/// standing up a whole `State` (which needs a real service to construct).
+fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
+    until.is_some_and(|deadline| now < deadline)
+}
+
 pub struct State {
     user_id: Uuid,
     session_id: Uuid,
@@ -126,6 +134,11 @@ pub struct State {
     /// mode captures keys). Chat is world-local via the service's `say`, so it
     /// never leaks into late.sh's global feed.
     chat_buffer: Option<String>,
+    /// Set by a first Esc press outside of chat: the deadline by which a
+    /// confirming second Esc must land to actually leave Lateania (see
+    /// `arm_leave_confirm`/`confirm_leave`). A single stray Esc - an easy
+    /// slip in a persistent world - must never instantly drop a player out.
+    leave_confirm_until: Option<Instant>,
     /// Where the overhead world map (Panel::Map) is looking, relative to the
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
@@ -160,6 +173,7 @@ impl State {
             reset_version,
             reset_elsewhere: false,
             chat_buffer: None,
+            leave_confirm_until: None,
             map_camera: MapCamera::default(),
         };
         state.svc.join_task(user_id, session_id);
@@ -488,6 +502,35 @@ impl State {
     /// True while the player is typing a chat line (input capture is active).
     pub fn chat_active(&self) -> bool {
         self.chat_buffer.is_some()
+    }
+
+    /// How long a first Esc press keeps the "press again to leave" window
+    /// open (see `arm_leave_confirm`).
+    const LEAVE_CONFIRM_SECS: u64 = 6;
+
+    /// True while a first Esc press is waiting on a confirming second one.
+    /// The title bar shows a warning for as long as this is true. Factored
+    /// out as a pure function of the deadline so it can be unit-tested
+    /// without a live `State` (which needs a real service to construct).
+    pub fn leave_confirm_pending(&self) -> bool {
+        is_leave_confirm_pending(self.leave_confirm_until, Instant::now())
+    }
+
+    /// Arm the leave-confirmation window: called on a first Esc press
+    /// outside of chat compose. Any key other than a confirming second Esc
+    /// just lets the window lapse on its own.
+    pub fn arm_leave_confirm(&mut self) {
+        self.leave_confirm_until =
+            Some(Instant::now() + Duration::from_secs(Self::LEAVE_CONFIRM_SECS));
+    }
+
+    /// Consume the confirmation window: true only if it was armed and still
+    /// live, meaning this Esc is the confirming second press that should
+    /// actually leave Lateania.
+    pub fn confirm_leave(&mut self) -> bool {
+        let confirmed = self.leave_confirm_pending();
+        self.leave_confirm_until = None;
+        confirmed
     }
 
     /// The line being composed, for the input prompt (None when not composing).

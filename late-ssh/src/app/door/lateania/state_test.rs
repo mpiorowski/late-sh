@@ -1,5 +1,6 @@
-use super::{InvAction, inv_action};
+use super::{InvAction, inv_action, is_leave_confirm_pending};
 use crate::app::door::lateania::svc::InvView;
+use std::time::{Duration, Instant};
 
 fn row(slot: Option<&str>, equipped: bool) -> InvView {
     InvView {
@@ -71,5 +72,30 @@ fn a_click_resolves_to_the_chip_under_it() {
         hit_at(&hits, 40, 20),
         None,
         "a click past the last chip misses"
+    );
+}
+
+// ---- the "press Esc twice to leave" confirmation window -------------------
+
+#[test]
+fn leave_confirm_is_pending_only_within_its_window() {
+    // The bug this guards: a single stray Esc used to log a player straight
+    // out of Lateania instantly, with no way to back out of it.
+    let now = Instant::now();
+    assert!(
+        !is_leave_confirm_pending(None, now),
+        "no deadline armed at all: not pending"
+    );
+    assert!(
+        is_leave_confirm_pending(Some(now + Duration::from_secs(6)), now),
+        "a deadline still ahead of now is pending"
+    );
+    assert!(
+        !is_leave_confirm_pending(Some(now), now),
+        "the exact deadline instant itself has already lapsed"
+    );
+    assert!(
+        !is_leave_confirm_pending(Some(now - Duration::from_secs(1)), now),
+        "a deadline already in the past is not pending"
     );
 }

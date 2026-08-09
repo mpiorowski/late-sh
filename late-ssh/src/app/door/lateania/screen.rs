@@ -171,11 +171,12 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
 }
 
 fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
-    if byte == 0x1B {
-        app.leave_lateania();
-        return true;
-    }
-
+    // Esc must route through `input::handle_key` like every other byte, not
+    // be special-cased here: that function is what cancels an in-progress
+    // chat compose on Esc instead of leaving, and what gates a genuine leave
+    // behind a confirming second press. Short-circuiting Esc here used to
+    // skip both, so Esc while chatting closed the game and a single
+    // accidental Esc always logged the player straight out.
     let Some(state) = app.lateania_state.as_mut() else {
         return true;
     };

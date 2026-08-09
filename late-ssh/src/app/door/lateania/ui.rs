@@ -240,15 +240,21 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
             state.player_count()
         )
     };
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(vec![Span::styled(
-            title,
+    let mut title_lines = vec![Line::from(vec![Span::styled(
+        title,
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )])];
+    if state.leave_confirm_pending() {
+        title_lines.push(Line::from(Span::styled(
+            "Press Esc again to leave Lateania - any other key stays.",
             Style::default()
-                .fg(theme::AMBER_GLOW())
+                .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
-        )])]),
-        rows[0],
-    );
+        )));
+    }
+    frame.render_widget(Paragraph::new(title_lines), rows[0]);
     // While composing a chat line, reserve the bottom row for the say prompt.
     // The body above it keeps drawing whatever panel is open, map included, so
     // pressing `'` never swaps the view out from under you.
@@ -1694,7 +1700,7 @@ fn leaderboard_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<L
     }
     lines.push(Line::raw(""));
 
-    lines.push(hint("?", "close"));
+    lines.push(hint("!", "close"));
     lines.push(hint("[ ]", "scroll"));
     lines
 }
@@ -1774,10 +1780,20 @@ fn room_panel(
     lines.push(Line::raw(""));
     lines.push(section("Here"));
     lines.extend(side_text_wrap(&view.zone, LAT_TEXT, width));
-    // The living-world clock: time of day and weather.
+    // The living-world clock: time of day and weather. A phase glyph plus a
+    // danger colour during dusk/night (when mobs hit 25% harder) makes the
+    // clock legible at a glance instead of reading as pure flavour text.
+    let clock_color = if view.time_of_day_dark {
+        theme::ERROR()
+    } else {
+        theme::AMBER_DIM()
+    };
     lines.push(Line::from(Span::styled(
-        format!("  {} · {}", view.time_of_day, view.weather),
-        Style::default().fg(theme::AMBER_DIM()),
+        format!(
+            "  {} {} · {}",
+            view.time_of_day_glyph, view.time_of_day, view.weather
+        ),
+        Style::default().fg(clock_color),
     )));
     // An active escort: who you're leading, their health, and where to.
     if let Some((name, hp, max_hp, dest)) = &view.escort {
@@ -3709,9 +3725,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("i", "the ways (portal)"));
     }
     lines.push(hint("m", "world atlas"));
-    lines.push(hint("?", "leaderboard"));
+    lines.push(hint("!", "leaderboard"));
     lines.push(hint("G", "mount / dismount"));
-    lines.push(hint("Esc", "leave"));
+    lines.push(hint("Esc", "leave (press twice)"));
     lines
 }
 

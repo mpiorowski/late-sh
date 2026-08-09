@@ -464,6 +464,40 @@ fn world_clock_cycles_through_day_phases_and_weather() {
         Weather::from_ticks(0),
         Weather::from_ticks(WEATHER_TICKS * 2)
     );
+    // Every phase gets its own glyph, and "dark" lines up with dusk/night
+    // exactly (the UI colours the clock as a danger cue from this flag).
+    let phases = [
+        TimeOfDay::Dawn,
+        TimeOfDay::Day,
+        TimeOfDay::Dusk,
+        TimeOfDay::Night,
+    ];
+    let glyphs: std::collections::HashSet<&str> = phases.iter().map(|p| p.glyph()).collect();
+    assert_eq!(glyphs.len(), 4, "every phase has a distinct glyph");
+    assert!(!TimeOfDay::Dawn.is_dark());
+    assert!(!TimeOfDay::Day.is_dark());
+    assert!(TimeOfDay::Dusk.is_dark());
+    assert!(TimeOfDay::Night.is_dark());
+}
+
+#[test]
+fn stray_feeding_day_boundary_is_spelled_out_in_real_time() {
+    // The bug: "come back tomorrow" left players guessing when "tomorrow"
+    // actually starts, and easy to confuse with the much faster in-game
+    // Dawn/Day/Dusk/Night clock (a ~16-minute cycle, not a real day).
+    let countdown = time_until_next_utc_day();
+    assert!(
+        countdown.ends_with('m'),
+        "always at least a minutes component: {countdown}"
+    );
+    // Never a full day or more, and never negative/absurd - it counts down
+    // to the *next* midnight, always less than 24h away.
+    if let Some(h) = countdown.split('h').next()
+        && countdown.contains('h')
+    {
+        let hours: i64 = h.trim().parse().expect("leading hours are numeric");
+        assert!((0..24).contains(&hours), "got {countdown}");
+    }
 }
 
 #[test]
@@ -1235,16 +1269,24 @@ fn hunting_small_game_grants_xp_then_cools_down() {
 
 #[test]
 fn a_boon_creature_mends_on_arrival() {
+    // The bug: Mend used to be a small partial heal, so fully healing meant
+    // walking in and out of the room over and over. It should just heal you
+    // all the way in one visit.
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    let max = s.players[&uid(1)].max_hp();
     if let Some(p) = s.players.get_mut(&uid(1)) {
         p.hp = 1;
         // Room 1, the town square, is home to the hearth-cat (Mend boon).
         p.room = 1;
     }
     s.apply_critter_perks(uid(1));
-    assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        max,
+        "the hearth-cat should mend you all the way, not partway"
+    );
 }
 
 #[test]

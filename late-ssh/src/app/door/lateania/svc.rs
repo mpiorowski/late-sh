@@ -88,6 +88,23 @@ fn now_unix_secs() -> u64 {
     Utc::now().timestamp().max(0) as u64
 }
 
+/// A short "Xh Ym" (or "Ym") countdown to the next UTC midnight, for
+/// once-a-real-day mechanics (currently just stray adoption). Spelled out in
+/// player-facing messages rather than a bare "come back tomorrow", since the
+/// day boundary here is a real calendar day at UTC midnight - easy to
+/// confuse with the visible in-game Dawn/Day/Dusk/Night clock, which is a
+/// completely different, much faster (~16 real minutes) cycle.
+fn time_until_next_utc_day() -> String {
+    let remaining = 86_400 - (now_unix_secs() % 86_400);
+    let hours = remaining / 3600;
+    let minutes = (remaining % 3600) / 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 /// The world clock's coarse phase, derived from the tick count. Dusk and Night
 /// count as "dark", when the dead grow bolder and stronger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +130,18 @@ impl TimeOfDay {
             Self::Day => "day",
             Self::Dusk => "dusk",
             Self::Night => "night",
+        }
+    }
+    /// A phase-of-the-sun glyph (same `●○` dot family the character sheet's
+    /// ability scores already use, so it reads as an existing house style,
+    /// not a new one), so the world clock is legible at a glance instead of
+    /// blending into the rest of the room panel's dim text.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Dawn => "\u{25D0}",  // ◐
+            Self::Day => "\u{25CB}",   // ○
+            Self::Dusk => "\u{25D1}",  // ◑
+            Self::Night => "\u{25CF}", // ●
         }
     }
     fn is_dark(self) -> bool {
@@ -847,6 +876,14 @@ pub struct PlayerView {
     pub atlas: Vec<RegionProgress>,
     /// The world clock phase, e.g. "dawn"/"day"/"dusk"/"night".
     pub time_of_day: &'static str,
+    /// A phase-of-the-sun glyph for `time_of_day` (see `TimeOfDay::glyph`),
+    /// so the clock reads at a glance rather than blending into dim text.
+    pub time_of_day_glyph: &'static str,
+    /// True during dusk/night, when mobs hit 25% harder (`TimeOfDay::is_dark`).
+    /// Surfaced so the UI can colour the clock as a real danger cue, not
+    /// just flavour text - the day/night cycle otherwise reads as
+    /// decoration even though it has a real mechanical effect.
+    pub time_of_day_dark: bool,
     /// The current weather, e.g. "clear"/"rain"/"fog"/"storm".
     pub weather: &'static str,
     /// An active escort, if any: (name, hp, max_hp, destination zone).
@@ -932,6 +969,8 @@ impl PlayerView {
             minimap: MiniMap::default(),
             atlas: Vec::new(),
             time_of_day: "day",
+            time_of_day_glyph: "\u{25CB}",
+            time_of_day_dark: false,
             weather: "clear",
             escort: None,
             archetype: None,
@@ -3888,9 +3927,12 @@ impl WorldState {
                         p.empower = p.empower.max(3);
                         p.empower_ticks = p.empower_ticks.max(6);
                     }
+                    // A full heal, not a small top-up: the old partial-heal
+                    // amount meant walking in and out of the room over and
+                    // over just to fully mend, which reads as tedious rather
+                    // than as a real rest stop.
                     Perk::Mend => {
-                        let max = p.max_hp();
-                        p.hp = (p.hp + max / 8 + 2).min(max);
+                        p.hp = p.max_hp();
                     }
                     Perk::Quicken => {
                         p.resource = (p.resource + p.max_resource / 4 + 1).min(p.max_resource);
@@ -7358,11 +7400,19 @@ impl WorldState {
         let same_critter = matches!(bond, Some((bi, ..)) if bi == idx);
         let already_today = matches!(bond, Some((bi, _, ld)) if bi == idx && ld == today);
 
+        // The streak tracks real calendar days (UTC midnight), not the
+        // visible in-game Dawn/Day/Dusk/Night clock (which cycles every
+        // ~16 minutes) - the two are easy to conflate, so every message here
+        // spells out the concrete real-world countdown rather than just
+        // saying "today"/"tomorrow" and leaving the player to guess.
+        let until_reset = time_until_next_utc_day();
         if already_today {
             self.log_to(
                 user_id,
                 LogKind::System,
-                format!("You've already fed {name} today. Come back tomorrow."),
+                format!(
+                    "You've already fed {name} today. The day resets at midnight UTC, in {until_reset} - come back after that."
+                ),
             );
             return;
         }
@@ -7382,7 +7432,7 @@ impl WorldState {
                     (
                         Some((idx, new_streak, today)),
                         format!(
-                            "You feed {name} again. It trusts you a little more. ({new_streak}/{STRAY_ADOPTION_DAYS} days)"
+                            "You feed {name} again. It trusts you a little more. ({new_streak}/{STRAY_ADOPTION_DAYS} days; next feed opens at midnight UTC, in {until_reset})"
                         ),
                         false,
                     )
@@ -7391,14 +7441,14 @@ impl WorldState {
             Some(_) if same_critter => (
                 Some((idx, 1, today)),
                 format!(
-                    "{name} has grown wary again - you'll need to start over. (1/{STRAY_ADOPTION_DAYS} days)"
+                    "{name} has grown wary again - you'll need to start over. (1/{STRAY_ADOPTION_DAYS} days; next feed opens at midnight UTC, in {until_reset})"
                 ),
                 false,
             ),
             _ => (
                 Some((idx, 1, today)),
                 format!(
-                    "You offer {name} something to eat. It watches you carefully, but doesn't run. (1/{STRAY_ADOPTION_DAYS} days)"
+                    "You offer {name} something to eat. It watches you carefully, but doesn't run. (1/{STRAY_ADOPTION_DAYS} days; next feed opens at midnight UTC, in {until_reset})"
                 ),
                 false,
             ),
@@ -7904,7 +7954,10 @@ impl WorldState {
 
     fn snapshot(&self) -> MudSnapshot {
         let mut players = HashMap::new();
-        let time_of_day = self.time_of_day().label();
+        let time_of_day_now = self.time_of_day();
+        let time_of_day = time_of_day_now.label();
+        let time_of_day_glyph = time_of_day_now.glyph();
+        let time_of_day_dark = time_of_day_now.is_dark();
         let weather = self.weather().label();
         // ONE pass over the world's mobs and players per snapshot, shared by
         // every player's view below. Snapshots run on every publish inside the
@@ -8566,6 +8619,8 @@ impl WorldState {
                     minimap,
                     atlas,
                     time_of_day,
+                    time_of_day_glyph,
+                    time_of_day_dark,
                     weather,
                     escort: player
                         .escort
