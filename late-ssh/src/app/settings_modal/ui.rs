@@ -406,7 +406,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Languages row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // Translation heading
-        Constraint::Length(1), // Translate to row
+        Constraint::Length(1), // Target language row
         Constraint::Length(1), // Auto-translate row
         Constraint::Length(1), // Translate mine row
         Constraint::Length(1), // breathing room
@@ -558,7 +558,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             state,
             Row::TranslateTo,
             width,
-            "Translate to",
+            "Target language",
             translate_to_span(state.draft().translate_to),
         )),
         sections[14],

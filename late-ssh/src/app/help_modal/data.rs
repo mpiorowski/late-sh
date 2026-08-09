@@ -520,7 +520,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Translation",
         "  t                  translate the selected message into your language",
         "  ↳ line             the translation renders dim under the original",
-        "  target language    Ctrl+O → Settings → Translation → Translate to",
+        "  target language    Ctrl+O → Settings → Translation → Target language",
         "  auto mode          same menu: auto-translate new messages in the open room",
         "  share yours        same menu: translate my messages to English, so English",
         "                     readers see your messages without asking",

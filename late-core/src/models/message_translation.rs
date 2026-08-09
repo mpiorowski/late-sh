@@ -320,6 +320,17 @@ pub enum CachedTranslation {
     SameLanguage,
 }
 
+/// One cached row as read back: the verdict plus whether the message's
+/// author chose to share it. Author-shared rows (written by the "translate
+/// my messages to English" opt-in) display to every viewer reading the
+/// target language; private rows (a reader's `t`) display only to sessions
+/// that asked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CachedTranslationRow {
+    pub verdict: CachedTranslation,
+    pub author_shared: bool,
+}
+
 pub struct MessageTranslation;
 
 impl MessageTranslation {
@@ -328,13 +339,13 @@ impl MessageTranslation {
         client: &impl GenericClient,
         message_ids: &[Uuid],
         target: TranslateLang,
-    ) -> Result<HashMap<Uuid, CachedTranslation>> {
+    ) -> Result<HashMap<Uuid, CachedTranslationRow>> {
         if message_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let rows = client
             .query(
-                "SELECT message_id, body, same_language FROM message_translations
+                "SELECT message_id, body, same_language, author_shared FROM message_translations
                  WHERE message_id = ANY($1) AND target_lang = $2",
                 &[&message_ids, &target.as_str()],
             )
@@ -342,10 +353,14 @@ impl MessageTranslation {
         Ok(rows
             .into_iter()
             .map(|row| {
-                let cached = if row.get::<_, bool>("same_language") {
+                let verdict = if row.get::<_, bool>("same_language") {
                     CachedTranslation::SameLanguage
                 } else {
                     CachedTranslation::Translated(row.get("body"))
+                };
+                let cached = CachedTranslationRow {
+                    verdict,
+                    author_shared: row.get("author_shared"),
                 };
                 (row.get("message_id"), cached)
             })
@@ -366,25 +381,31 @@ impl MessageTranslation {
         target: TranslateLang,
         source_body: &str,
         verdict: &CachedTranslation,
+        author_shared: bool,
     ) -> Result<bool> {
         // A same-language row stores the judged text in body, so the row
-        // always says exactly what was cached about what.
+        // always says exactly what was cached about what. The conflict arm
+        // ORs author_shared: once the author shared a translation it stays
+        // shared, even if a reader's private request rewrites the row.
         let (body, same_language) = match verdict {
             CachedTranslation::Translated(text) => (text.as_str(), false),
             CachedTranslation::SameLanguage => (translation_source_text(source_body), true),
         };
         let written = client
             .execute(
-                "INSERT INTO message_translations (message_id, target_lang, body, same_language)
-                 SELECT id, $2, $3, $5 FROM chat_messages WHERE id = $1 AND body = $4 FOR SHARE
+                "INSERT INTO message_translations
+                     (message_id, target_lang, body, same_language, author_shared)
+                 SELECT id, $2, $3, $5, $6 FROM chat_messages WHERE id = $1 AND body = $4 FOR SHARE
                  ON CONFLICT (message_id, target_lang)
-                 DO UPDATE SET body = EXCLUDED.body, same_language = EXCLUDED.same_language",
+                 DO UPDATE SET body = EXCLUDED.body, same_language = EXCLUDED.same_language,
+                     author_shared = message_translations.author_shared OR EXCLUDED.author_shared",
                 &[
                     &message_id,
                     &target.as_str(),
                     &body,
                     &source_body,
                     &same_language,
+                    &author_shared,
                 ],
             )
             .await?;

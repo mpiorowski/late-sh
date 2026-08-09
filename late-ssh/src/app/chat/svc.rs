@@ -2642,11 +2642,12 @@ impl ChatService {
         Ok(())
     }
 
-    /// Warm the shared English translation cache for an author who opted
-    /// into "Translate my messages to English" (send and edit paths, after
-    /// the row exists). Fire-and-forget on top of a fire-and-forget service:
-    /// a failed settings lookup only means the cache warms on first view
-    /// instead, so it logs here and never fails the send.
+    /// Translate an opted-in author's message to English up front (send and
+    /// edit paths, after the row exists) and mark it author-shared, so every
+    /// English-reading session shows it without auto mode or a `t`.
+    /// Fire-and-forget on top of a fire-and-forget service: a failed
+    /// settings lookup only means the message goes out unshared (readers
+    /// can still `t` it), so it logs here and never fails the send.
     async fn pretranslate_for_author(&self, client: &tokio_postgres::Client, chat: &ChatMessage) {
         let Some(translation_svc) = &self.translation_svc else {
             return;
@@ -2668,7 +2669,7 @@ impl ChatService {
         if !opted_in {
             return;
         }
-        translation_svc.request(chat.id, chat.room_id, chat.body.clone(), TranslateLang::En);
+        translation_svc.request_shared(chat.id, chat.room_id, chat.body.clone(), TranslateLang::En);
     }
 
     /// The patron's message after the bar gets a say in it: a drink deep

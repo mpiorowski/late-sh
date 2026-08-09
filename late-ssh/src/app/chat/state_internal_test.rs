@@ -2653,6 +2653,7 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
         TranslateLang::En,
         "你好，我刚发现这个地方",
         &CachedTranslation::Translated("hello, i just found this place".to_string()),
+        false,
     )
     .await
     .expect("seed cache");
@@ -2662,6 +2663,7 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
         TranslateLang::En,
         "what a cozy little place",
         &CachedTranslation::SameLanguage,
+        false,
     )
     .await
     .expect("seed same-language cache");
@@ -2845,6 +2847,150 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
 }
 
 #[tokio::test]
+async fn author_shared_translations_show_without_auto_mode_or_t() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::message_translation::{
+        CachedTranslation, MessageTranslation, TranslateLang,
+    };
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "shared_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "shared_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    // Three cached rows, one per display rule: the author's shared message
+    // (shows to everyone), another author message a reader once translated
+    // privately (stays private), and the viewer's own shared message (the
+    // author never sees their own text echoed back translated).
+    let shared = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "bonjour tout le monde".to_string(),
+        },
+    )
+    .await
+    .expect("shared message");
+    let private = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "salut la compagnie".to_string(),
+        },
+    )
+    .await
+    .expect("private message");
+    let own = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: viewer.id,
+            body: "je vous salue bien".to_string(),
+        },
+    )
+    .await
+    .expect("own message");
+    MessageTranslation::upsert_if_current(
+        &client,
+        shared.id,
+        TranslateLang::En,
+        "bonjour tout le monde",
+        &CachedTranslation::Translated("hello everyone".to_string()),
+        true,
+    )
+    .await
+    .expect("seed shared row");
+    MessageTranslation::upsert_if_current(
+        &client,
+        private.id,
+        TranslateLang::En,
+        "salut la compagnie",
+        &CachedTranslation::Translated("hi folks".to_string()),
+        false,
+    )
+    .await
+    .expect("seed private row");
+    MessageTranslation::upsert_if_current(
+        &client,
+        own.id,
+        TranslateLang::En,
+        "je vous salue bien",
+        &CachedTranslation::Translated("i salute you".to_string()),
+        true,
+    )
+    .await
+    .expect("seed own shared row");
+
+    // Inline harness keeping a witness receiver: the test waits until every
+    // broadcast event exists before draining, so the whole-map assertion
+    // below judges all three rules at once instead of racing the sweep.
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let mut translation_events = translation.subscribe();
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = ChatState::new(
+        ChatServices {
+            chat,
+            translation: translation.clone(),
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
+        },
+        viewer.id,
+        crate::authz::Permissions::new(false, false),
+        None,
+        notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
+    );
+    load_room_tail(&mut state, lounge.id, own.id).await;
+
+    // No auto mode, no `t`. Making the room visible runs the sweep over the
+    // two messages by others; the viewer's own message is swept out, so its
+    // event is forced through the service directly to pin the drain's
+    // own-message guard too.
+    assert!(!state.auto_translate);
+    state.set_visible_room_id(Some(lounge.id));
+    translation.load_cached(lounge.id, vec![own.id], TranslateLang::En);
+    for _ in 0..3 {
+        tokio::time::timeout(std::time::Duration::from_secs(5), translation_events.recv())
+            .await
+            .expect("translation event timeout")
+            .expect("translation channel open");
+    }
+
+    state.drain_translation_events();
+    assert_eq!(
+        state.translations,
+        std::collections::HashMap::from([(
+            shared.id,
+            TranslationDisplay::Ready("hello everyone".to_string())
+        )]),
+        "only the author-shared message by someone else displays"
+    );
+}
+
+#[tokio::test]
 async fn over_cap_foreign_message_banners_too_long_not_already_readable() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
@@ -2925,6 +3071,7 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
         TranslateLang::En,
         "你好，我刚发现这个地方",
         &CachedTranslation::Translated("hello there".to_string()),
+        false,
     )
     .await
     .expect("seed cache");

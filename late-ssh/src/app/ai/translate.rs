@@ -15,7 +15,8 @@ use std::sync::{Arc, Mutex};
 use chrono::{NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::message_translation::{
-    CachedTranslation, MessageTranslation, TranslateLang, translation_source_text,
+    CachedTranslation, CachedTranslationRow, MessageTranslation, TranslateLang,
+    translation_source_text,
 };
 use serde::Deserialize;
 use tokio::sync::{Semaphore, broadcast};
@@ -45,6 +46,11 @@ pub struct TranslationEvent {
     pub room_id: Uuid,
     pub target: TranslateLang,
     pub outcome: TranslationOutcome,
+    /// The author asked for this translation to be shown to everyone reading
+    /// `target` (the "translate my messages to English" opt-in). Sessions
+    /// display these without auto mode or a `t`; private results still only
+    /// show to sessions that asked.
+    pub author_shared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +100,30 @@ impl TranslationService {
     /// Fire-and-forget: the result arrives as a [`TranslationEvent`] for
     /// every subscriber, including the single-flight losers' sessions.
     pub fn request(&self, message_id: Uuid, room_id: Uuid, body: String, target: TranslateLang) {
+        self.request_inner(message_id, room_id, body, target, false);
+    }
+
+    /// Same pipeline, but on behalf of the author's "translate my messages"
+    /// opt-in: the cache row is marked author_shared and the event carries
+    /// the flag, so every session reading `target` displays the result.
+    pub fn request_shared(
+        &self,
+        message_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        target: TranslateLang,
+    ) {
+        self.request_inner(message_id, room_id, body, target, true);
+    }
+
+    fn request_inner(
+        &self,
+        message_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        target: TranslateLang,
+        author_shared: bool,
+    ) {
         {
             let mut inflight = self.inflight.lock().expect("inflight lock poisoned");
             if !inflight.insert((message_id, target)) {
@@ -103,7 +133,9 @@ impl TranslationService {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let outcome = service.resolve(message_id, body, target).await;
+                let (outcome, author_shared) = service
+                    .resolve(message_id, body, target, author_shared)
+                    .await;
                 service
                     .inflight
                     .lock()
@@ -114,6 +146,7 @@ impl TranslationService {
                     room_id,
                     target,
                     outcome,
+                    author_shared,
                 });
             }
             .instrument(tracing::info_span!(
@@ -124,9 +157,10 @@ impl TranslationService {
         );
     }
 
-    /// Bulk cache-only lookup for messages already on screen (auto mode
-    /// entering a room). Hits broadcast like live translations; misses stay
-    /// silent, since history is translated on demand only.
+    /// Bulk cache-only lookup for messages already on screen (every session
+    /// entering a room; auto mode pre-expands hits, other sessions display
+    /// only author-shared rows). Hits broadcast like live translations;
+    /// misses stay silent, since history is translated on demand only.
     pub fn load_cached(&self, room_id: Uuid, message_ids: Vec<Uuid>, target: TranslateLang) {
         if message_ids.is_empty() {
             return;
@@ -147,9 +181,9 @@ impl TranslationService {
                     return;
                 }
             };
-            for (message_id, cached) in cached {
+            for (message_id, row) in cached {
                 metrics::record_chat_translation(TranslationResult::CacheHit);
-                let outcome = match cached {
+                let outcome = match row.verdict {
                     CachedTranslation::Translated(body) => TranslationOutcome::Translated(body),
                     CachedTranslation::SameLanguage => TranslationOutcome::SameLanguage,
                 };
@@ -158,55 +192,63 @@ impl TranslationService {
                     room_id,
                     target,
                     outcome,
+                    author_shared: row.author_shared,
                 });
             }
         });
     }
 
     /// The full resolution pipeline for one message. This is the single
-    /// match listing every way a translation request can end.
+    /// match listing every way a translation request can end. Returns the
+    /// outcome plus the author_shared flag the event should carry: the
+    /// request's own flag, except a cache hit reports what the row says
+    /// (a private `t` on an author-shared message still shares the event).
     async fn resolve(
         &self,
         message_id: Uuid,
         body: String,
         target: TranslateLang,
-    ) -> TranslationOutcome {
-        match self.resolve_inner(message_id, &body, target).await {
-            Ok(Resolution::CacheHit(CachedTranslation::Translated(text))) => {
+        author_shared: bool,
+    ) -> (TranslationOutcome, bool) {
+        match self
+            .resolve_inner(message_id, &body, target, author_shared)
+            .await
+        {
+            Ok(Resolution::CacheHit(row)) => {
                 metrics::record_chat_translation(TranslationResult::CacheHit);
-                TranslationOutcome::Translated(text)
-            }
-            Ok(Resolution::CacheHit(CachedTranslation::SameLanguage)) => {
-                metrics::record_chat_translation(TranslationResult::CacheHit);
-                TranslationOutcome::SameLanguage
+                let outcome = match row.verdict {
+                    CachedTranslation::Translated(text) => TranslationOutcome::Translated(text),
+                    CachedTranslation::SameLanguage => TranslationOutcome::SameLanguage,
+                };
+                (outcome, row.author_shared || author_shared)
             }
             Ok(Resolution::Translated(text)) => {
                 metrics::record_chat_translation(TranslationResult::Translated);
-                TranslationOutcome::Translated(text)
+                (TranslationOutcome::Translated(text), author_shared)
             }
             Ok(Resolution::SameLanguage) => {
                 metrics::record_chat_translation(TranslationResult::SameLanguage);
-                TranslationOutcome::SameLanguage
+                (TranslationOutcome::SameLanguage, author_shared)
             }
             Ok(Resolution::CapExhausted) => {
                 metrics::record_chat_translation(TranslationResult::CapExhausted);
                 tracing::warn!("translation daily cap exhausted; refusing until utc rollover");
-                TranslationOutcome::Failed
+                (TranslationOutcome::Failed, author_shared)
             }
             Ok(Resolution::NoText) => {
                 metrics::record_chat_translation(TranslationResult::Failed);
                 tracing::warn!("translation model returned no usable text");
-                TranslationOutcome::Failed
+                (TranslationOutcome::Failed, author_shared)
             }
             Ok(Resolution::Stale) => {
                 metrics::record_chat_translation(TranslationResult::Stale);
                 tracing::info!("translation discarded; message edited mid-flight");
-                TranslationOutcome::Failed
+                (TranslationOutcome::Failed, author_shared)
             }
             Err(error) => {
                 metrics::record_chat_translation(TranslationResult::Failed);
                 tracing::error!(error = ?error, "translation request failed");
-                TranslationOutcome::Failed
+                (TranslationOutcome::Failed, author_shared)
             }
         }
     }
@@ -216,6 +258,7 @@ impl TranslationService {
         message_id: Uuid,
         body: &str,
         target: TranslateLang,
+        author_shared: bool,
     ) -> anyhow::Result<Resolution> {
         // Acquire and release the client around the cache check: requests
         // queue on the API gate below, and a queued request holding a pooled
@@ -280,9 +323,15 @@ impl TranslationService {
         // The staleness guard compares the full stored body: that is what
         // an edit rewrites, quote line included.
         let client = self.db.get().await?;
-        let written =
-            MessageTranslation::upsert_if_current(&client, message_id, target, body, &verdict)
-                .await?;
+        let written = MessageTranslation::upsert_if_current(
+            &client,
+            message_id,
+            target,
+            body,
+            &verdict,
+            author_shared,
+        )
+        .await?;
         if !written {
             return Ok(Resolution::Stale);
         }
@@ -309,7 +358,7 @@ impl TranslationService {
 }
 
 enum Resolution {
-    CacheHit(CachedTranslation),
+    CacheHit(CachedTranslationRow),
     Translated(String),
     /// The model judged the message already in the target language (or the
     /// echo guard did); cached so nobody pays for the call again.

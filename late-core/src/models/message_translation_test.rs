@@ -3,8 +3,8 @@ use crate::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_room::ChatRoom,
         message_translation::{
-            CachedTranslation, MessageTranslation, TranslateLang, needs_translation,
-            translation_source_text,
+            CachedTranslation, CachedTranslationRow, MessageTranslation, TranslateLang,
+            needs_translation, translation_source_text,
         },
         user::{User, UserParams},
     },
@@ -188,6 +188,7 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
             TranslateLang::En,
             "你好",
             &CachedTranslation::Translated("hello".to_string()),
+            false,
         )
         .await
         .unwrap()
@@ -200,6 +201,7 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
             TranslateLang::En,
             "你好",
             &CachedTranslation::Translated("hello there".to_string()),
+            false,
         )
         .await
         .unwrap()
@@ -213,6 +215,7 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
             TranslateLang::ZhHans,
             "你好",
             &CachedTranslation::SameLanguage,
+            false,
         )
         .await
         .unwrap()
@@ -227,6 +230,7 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
             TranslateLang::En,
             "pre-edit body",
             &CachedTranslation::Translated("stale translation".to_string()),
+            false,
         )
         .await
         .unwrap()
@@ -237,12 +241,21 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
         .unwrap();
     assert_eq!(
         cached.get(&msg.id),
-        Some(&CachedTranslation::Translated("hello there".to_string()))
+        Some(&CachedTranslationRow {
+            verdict: CachedTranslation::Translated("hello there".to_string()),
+            author_shared: false,
+        })
     );
     let cached = MessageTranslation::get_many(&client, &[msg.id], TranslateLang::ZhHans)
         .await
         .unwrap();
-    assert_eq!(cached.get(&msg.id), Some(&CachedTranslation::SameLanguage));
+    assert_eq!(
+        cached.get(&msg.id),
+        Some(&CachedTranslationRow {
+            verdict: CachedTranslation::SameLanguage,
+            author_shared: false,
+        })
+    );
 
     let deleted = MessageTranslation::delete_for_message(&client, msg.id)
         .await
@@ -252,4 +265,69 @@ async fn cache_rows_upsert_read_and_die_with_the_message() {
         .await
         .unwrap();
     assert!(cached.is_empty());
+}
+
+#[tokio::test]
+async fn author_shared_survives_a_later_private_rewrite() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let user = User::create(
+        &client,
+        UserParams {
+            fingerprint: "translation-user-2".to_string(),
+            username: "tr2".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let msg = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "bonjour tout le monde".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The author's opt-in writes a shared row.
+    assert!(
+        MessageTranslation::upsert_if_current(
+            &client,
+            msg.id,
+            TranslateLang::En,
+            "bonjour tout le monde",
+            &CachedTranslation::Translated("hello everyone".to_string()),
+            true,
+        )
+        .await
+        .unwrap()
+    );
+    // A reader's private request rewriting the row must not un-share it:
+    // once the author shared a translation it stays shared.
+    assert!(
+        MessageTranslation::upsert_if_current(
+            &client,
+            msg.id,
+            TranslateLang::En,
+            "bonjour tout le monde",
+            &CachedTranslation::Translated("hello everybody".to_string()),
+            false,
+        )
+        .await
+        .unwrap()
+    );
+    let cached = MessageTranslation::get_many(&client, &[msg.id], TranslateLang::En)
+        .await
+        .unwrap();
+    assert_eq!(
+        cached.get(&msg.id),
+        Some(&CachedTranslationRow {
+            verdict: CachedTranslation::Translated("hello everybody".to_string()),
+            author_shared: true,
+        })
+    );
 }

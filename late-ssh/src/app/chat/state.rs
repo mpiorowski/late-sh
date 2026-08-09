@@ -1117,14 +1117,13 @@ impl ChatState {
         }
     }
 
-    /// Auto mode entering a room (or settings change): one bulk cache-only
-    /// lookup over the foreign-script history already loaded. Cache hits
-    /// render pre-expanded; misses stay collapsed until `t`, which is what
-    /// keeps auto mode's cost bound to live messages.
+    /// Entering a room (or settings change, or the tail loading): one bulk
+    /// cache-only lookup over the translatable history already loaded. Every
+    /// session sweeps, auto mode or not; the drain decides what to display
+    /// (auto mode pre-expands all hits, everyone else gets author-shared
+    /// rows only). Misses stay collapsed until `t`, which is what keeps the
+    /// sweep free of API calls.
     fn request_cached_translations_for_visible_room(&mut self) {
-        if !self.auto_translate {
-            return;
-        }
         let Some(room_id) = self.visible_room_id else {
             return;
         };
@@ -1168,19 +1167,31 @@ impl ChatState {
             if event.target != self.translate_to {
                 continue;
             }
-            let loaded = self.rooms.iter().any(|(room, messages)| {
-                room.id == event.room_id && messages.iter().any(|m| m.id == event.message_id)
+            let author = self.rooms.iter().find_map(|(room, messages)| {
+                if room.id != event.room_id {
+                    return None;
+                }
+                messages
+                    .iter()
+                    .find(|m| m.id == event.message_id)
+                    .map(|m| m.user_id)
             });
-            if !loaded {
+            let Some(author) = author else {
                 self.translation_manual.remove(&event.message_id);
                 continue;
-            }
+            };
+            // Author-shared results display to everyone reading the target
+            // language, except the author's own session: they wrote the
+            // original and don't need it echoed back translated.
+            let shared_for_me = event.author_shared && author != self.user_id;
             match event.outcome {
                 TranslationOutcome::Translated(text) => {
-                    // Requested here (pending), or free coverage from another
-                    // session's call while this one runs auto mode.
-                    let show =
-                        self.auto_translate || self.translations.contains_key(&event.message_id);
+                    // Requested here (pending), free coverage from another
+                    // session's call while this one runs auto mode, or the
+                    // author chose to share it with this target language.
+                    let show = self.auto_translate
+                        || self.translations.contains_key(&event.message_id)
+                        || shared_for_me;
                     if show {
                         self.translations
                             .insert(event.message_id, TranslationDisplay::Ready(text));
@@ -1192,8 +1203,9 @@ impl ChatState {
                     // Remembered so the message is never re-requested; renders
                     // as nothing. A manual `t` gets told instead of left
                     // staring at a spinner that produced no line.
-                    let show =
-                        self.auto_translate || self.translations.contains_key(&event.message_id);
+                    let show = self.auto_translate
+                        || self.translations.contains_key(&event.message_id)
+                        || shared_for_me;
                     if show {
                         self.translations
                             .insert(event.message_id, TranslationDisplay::SameLanguage);

@@ -191,6 +191,10 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
     assert_eq!(event.room_id, room.id);
     assert_eq!(event.target, TranslateLang::En);
     assert!(matches!(event.outcome, TranslationOutcome::Failed));
+    assert!(
+        event.author_shared,
+        "the author's opt-in marks the request shared, so every English reader displays it"
+    );
 }
 
 #[tokio::test]
