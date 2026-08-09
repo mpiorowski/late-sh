@@ -2651,6 +2651,9 @@ pub(crate) struct ChatRoomListView<'a> {
     /// Pinned cyberspace chat rooms, in rail order. Slots carry the index.
     pub cyberspace_rooms: &'a [String],
     pub cyberspace_room_selected: Option<usize>,
+    /// One flag per pinned room, aligned with `cyberspace_rooms`: the rail
+    /// dot for "messages since this user last sat in the room".
+    pub cyberspace_room_unread: Vec<bool>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub notifications_selected: bool,
@@ -3002,6 +3005,10 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         cyberspace_unread_saturated: view.cyberspace_unread_saturated,
         cyberspace_rooms: view.cyberspace_rooms,
         cyberspace_room_selected: view.cyberspace_room_selected,
+        cyberspace_room_unread: view
+            .cyberspace
+            .map(super::cyberspace::state::State::room_unread_flags)
+            .unwrap_or_default(),
         news_selected: view.news_selected,
         news_unread_count: view.news_unread_count,
         notifications_selected: view.notifications_selected,
@@ -3277,8 +3284,17 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
                     .add_modifier(Modifier::BOLD),
                 false => Style::default().fg(theme::TEXT()),
             };
+            let mut spans = vec![Span::styled(format!("{prefix}{slug}"), style)];
+            let unread = view
+                .cyberspace_room_unread
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            if unread {
+                spans.push(Span::styled(" ●", Style::default().fg(theme::AMBER_DIM())));
+            }
             push_row(
-                Line::from(Span::styled(format!("{prefix}{slug}"), style)),
+                Line::from(spans),
                 Some(RoomSlot::CyberspaceRoom(index)),
                 selected,
             );
@@ -3996,6 +4012,9 @@ fn format_unread_badge(unread: i64) -> String {
 fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
     match slot {
         RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
+        // A dot, never a number: their roster names a room's last_message_at
+        // but counting would take a per-room history fetch every poll.
+        RoomSlot::CyberspaceRoom(_) => "●".to_string(),
         _ => format_unread_badge(unread),
     }
 }
@@ -4016,15 +4035,20 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         // Under the `cyberspace` header this row is their feed, not the whole
         // site: the chat rooms beside it are cyberspace too.
         RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_unread_count),
-        // Bare slugs, like every other room row in this rail. No badge either:
-        // a chat room is only read while you are inside it, so there is no
-        // unread state to show without fetching in the background.
+        // Bare slugs, like every other room row in this rail. The "unread" is
+        // a flag, not a count: the roster's last_message_at against this
+        // user's read cursor, rendered as a dot by `room_slot_badge`.
         RoomSlot::CyberspaceRoom(index) => (
             match view.cyberspace_rooms.get(index) {
                 Some(slug) => slug.clone(),
                 None => "room".to_string(),
             },
-            0,
+            i64::from(
+                view.cyberspace_room_unread
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false),
+            ),
         ),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),

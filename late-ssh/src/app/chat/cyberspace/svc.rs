@@ -58,6 +58,10 @@ pub enum CsEvent {
         username: Option<String>,
         feed_read_at: Option<DateTime<Utc>>,
         circ_rooms: Vec<String>,
+        /// Per-room read cursors (slug -> newest message ts seen, their
+        /// clock), landing with the pins so the rail's unread dots have
+        /// something to compare against from the first roster fetch.
+        circ_room_reads: HashMap<String, i64>,
     },
     LinkSucceeded {
         user_id: Uuid,
@@ -271,6 +275,9 @@ impl CyberspaceService {
                     }
                 };
                 let linked = account.is_some();
+                let has_rooms = account
+                    .as_ref()
+                    .is_some_and(|account| !account.circ_rooms.is_empty());
                 // The cursor lands before any entries do, so the session has
                 // something to count them against, and the pinned rooms land
                 // before the rail is drawn.
@@ -278,10 +285,14 @@ impl CyberspaceService {
                     user_id,
                     username: account.as_ref().map(|a| a.cs_username.clone()),
                     feed_read_at: account.as_ref().and_then(|a| a.feed_read_at),
+                    circ_room_reads: account
+                        .as_ref()
+                        .map(|a| a.room_read_cursors())
+                        .unwrap_or_default(),
                     circ_rooms: account.map(|a| a.circ_rooms).unwrap_or_default(),
                 });
                 if linked {
-                    service.refresh_unread(user_id).await;
+                    service.refresh_unread(user_id, has_rooms).await;
                 }
             }
             .instrument(info_span!("cyberspace.session_init", user_id = %user_id)),
@@ -318,10 +329,15 @@ impl CyberspaceService {
         tokio::spawn(
             async move {
                 match service.do_link(user_id, email, password).await {
-                    Ok(username) => {
-                        service.publish(CsEvent::LinkSucceeded { user_id, username });
+                    Ok(account) => {
+                        service.publish(CsEvent::LinkSucceeded {
+                            user_id,
+                            username: account.cs_username.clone(),
+                        });
                         service.load_feed(user_id).await;
-                        service.refresh_unread(user_id).await;
+                        service
+                            .refresh_unread(user_id, !account.circ_rooms.is_empty())
+                            .await;
                     }
                     Err(error) => service.publish(CsEvent::LinkFailed { user_id, error }),
                 }
@@ -740,7 +756,7 @@ impl CyberspaceService {
         user_id: Uuid,
         email: String,
         password: String,
-    ) -> Result<String, String> {
+    ) -> Result<CyberspaceAccount, String> {
         let tokens = match self.api.login(&email, &password).await {
             Ok(tokens) => tokens,
             Err(e) => return Err(format!("login failed: {e}")),
@@ -765,9 +781,9 @@ impl CyberspaceService {
         }
         .await;
         match result {
-            Ok(_) => {
+            Ok(account) => {
                 self.cache_token(user_id, tokens.id_token, tokens.rtdb_url);
-                Ok(identity.cs_username)
+                Ok(account)
             }
             Err(e) => {
                 late_core::error_span!(
@@ -794,19 +810,23 @@ impl CyberspaceService {
 
     /// Fire-and-forget badge refresh, driven by the session tick. Failures
     /// are logged inside `refresh_unread`: nobody upstream is waiting on it,
-    /// and a stale badge is not worth a banner.
-    pub fn refresh_unread_task(&self, user_id: Uuid) {
+    /// and a stale badge is not worth a banner. `include_circ_roster` comes
+    /// from the caller, who knows whether any rooms are pinned: a roster
+    /// fetch that decorates nothing is a call their terms have no answer for.
+    pub fn refresh_unread_task(&self, user_id: Uuid, include_circ_roster: bool) {
         let service = self.clone();
         tokio::spawn(
-            async move { service.refresh_unread(user_id).await }
+            async move { service.refresh_unread(user_id, include_circ_roster).await }
                 .instrument(info_span!("cyberspace.unread", user_id = %user_id)),
         );
     }
 
-    /// Both halves of the rail badge on one token: the notification count from
-    /// their counter endpoint, and the newest entries for the session to count
-    /// unread ones out of.
-    async fn refresh_unread(&self, user_id: Uuid) {
+    /// Every badge on one token: the notification count from their counter
+    /// endpoint, the newest entries for the session to count unread ones out
+    /// of, and (when rooms are pinned) the chat roster, whose
+    /// `last_message_at` stamps are what the rail's room dots compare
+    /// against.
+    async fn refresh_unread(&self, user_id: Uuid, include_circ_roster: bool) {
         let token = match self.id_token(user_id).await {
             Ok(token) => token,
             Err(_) => return,
@@ -819,6 +839,38 @@ impl CyberspaceService {
             Ok(posts) => self.publish(CsEvent::RecentEntries { user_id, posts }),
             Err(e) => tracing::debug!(%e, "cyberspace recent entries failed"),
         }
+        if include_circ_roster {
+            match self.api.list_circ_rooms(&token).await {
+                Ok(rooms) => self.publish(CsEvent::CircRooms { user_id, rooms }),
+                Err(e) => tracing::debug!(%e, "cyberspace chat roster refresh failed"),
+            }
+        }
+    }
+
+    /// Fire-and-forget per-room read-cursor write. Nobody upstream waits on
+    /// it: the session already moved its own copy, and a lost write only
+    /// re-dots a room the user has seen.
+    pub fn mark_circ_room_read_task(&self, user_id: Uuid, slug: String, last_message_ts: i64) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    CyberspaceAccount::mark_circ_room_read(&client, user_id, &slug, last_message_ts)
+                        .await
+                }
+                .await;
+                if let Err(e) = result {
+                    late_core::error_span!(
+                        "cyberspace_mark_circ_room_read_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to move a cyberspace chat room read cursor"
+                    );
+                }
+            }
+            .instrument(info_span!("cyberspace.mark_circ_room_read", user_id = %user_id)),
+        );
     }
 
     async fn linked_account(&self, user_id: Uuid) -> anyhow::Result<Option<CyberspaceAccount>> {

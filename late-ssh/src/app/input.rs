@@ -2478,6 +2478,7 @@ fn chat_room_list_view<'a>(
         cyberspace_rooms: app.chat.cyberspace.pinned_rooms(),
         cyberspace_selected: app.chat.cyberspace_selected,
         cyberspace_room_selected: app.chat.cyberspace_room_selected,
+        cyberspace_room_unread: app.chat.cyberspace.room_unread_flags(),
         cyberspace_unread_count: app.chat.cyberspace.unread_count(),
         cyberspace_unread_saturated: app.chat.cyberspace.unread_saturated(),
         news_selected: app.chat.news_selected,

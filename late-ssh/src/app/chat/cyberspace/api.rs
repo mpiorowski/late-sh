@@ -206,7 +206,8 @@ pub struct CircMessage {
     #[serde(default)]
     pub gif_url: Option<String>,
     /// One style name or several; parsed into the same shape either way.
-    #[serde(default, deserialize_with = "deserialize_styles")]
+    /// Their wire name is singular whatever the shape.
+    #[serde(default, rename = "style", deserialize_with = "deserialize_styles")]
     pub styles: Vec<String>,
 }
 

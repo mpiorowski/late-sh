@@ -118,6 +118,7 @@ async fn the_rail_badge_sums_notifications_and_new_entries() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
     });
     let _ = state.apply_event(CsEvent::UnreadCount { user_id, count: 4 });
     let _ = state.apply_event(CsEvent::RecentEntries {
@@ -145,6 +146,7 @@ async fn opening_the_pane_clears_the_count_but_keeps_the_marks_being_read() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
     });
     let fresh: CsPost =
         serde_json::from_str(r#"{"postId":"p1","createdAt":"2026-08-07T13:00:00Z"}"#)
@@ -190,6 +192,7 @@ async fn reentering_inside_the_reload_interval_keeps_unseen_entries_unread() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
     });
     // First visit: the feed arrives with its newest entry at 13:00, which is
     // as far as this user has demonstrably read.
@@ -479,6 +482,7 @@ async fn the_picker_adds_a_room_to_the_rail_and_takes_it_back_off() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
     });
     assert!(
         state.open_rooms_modal().is_none(),
@@ -510,6 +514,63 @@ async fn the_picker_adds_a_room_to_the_rail_and_takes_it_back_off() {
 }
 
 #[tokio::test]
+async fn room_dots_follow_the_roster_against_the_read_cursor() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: None,
+        circ_rooms: vec!["general".to_string(), "quiet".to_string()],
+        circ_room_reads: std::collections::HashMap::from([("general".to_string(), 1_000)]),
+    });
+
+    // No roster yet: nothing may claim unread.
+    assert_eq!(state.room_unread_flags(), vec![false, false]);
+
+    // The badge poll's roster lands: general moved past the cursor. Quiet
+    // was never visited, and a room with no cursor shows nothing rather
+    // than claiming a backlog the user was never behind on.
+    let _ = state.apply_event(CsEvent::CircRooms {
+        user_id,
+        rooms: vec![
+            serde_json::from_str(r#"{"id":"r1","slug":"general","lastMessageAt":2000}"#)
+                .expect("room"),
+            serde_json::from_str(r#"{"id":"r2","slug":"quiet","lastMessageAt":500}"#)
+                .expect("room"),
+        ],
+    });
+    assert_eq!(state.room_unread_flags(), vec![true, false]);
+
+    // Being inside the room is reading it: no dot while open.
+    state.enter_room("general".to_string());
+    assert_eq!(state.room_unread_flags(), vec![false, false]);
+
+    // History landing moves the cursor to the newest message seen, so the
+    // dot stays off after leaving rather than re-marking a read room.
+    let _ = state.apply_event(CsEvent::CircHistoryLoaded {
+        user_id,
+        room: "general".to_string(),
+        messages: vec![
+            serde_json::from_str(r#"{"id":"m1","content":"hi","timestamp":2000}"#)
+                .expect("message"),
+        ],
+    });
+    state.leave_room();
+    assert_eq!(state.room_unread_flags(), vec![false, false]);
+
+    // The next roster naming a newer message dots the room again.
+    let _ = state.apply_event(CsEvent::CircRooms {
+        user_id,
+        rooms: vec![
+            serde_json::from_str(r#"{"id":"r1","slug":"general","lastMessageAt":3000}"#)
+                .expect("room"),
+        ],
+    });
+    assert_eq!(state.room_unread_flags(), vec![true, false]);
+}
+
+#[tokio::test]
 async fn unlinking_closes_the_open_room_and_clears_the_rail() {
     let mut state = test_state().await;
     let user_id = state.user_id;
@@ -518,6 +579,7 @@ async fn unlinking_closes_the_open_room_and_clears_the_rail() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: vec!["general".to_string()],
+        circ_room_reads: std::collections::HashMap::new(),
     });
     state.enter_room("general".to_string());
     assert_eq!(state.open_room_slug(), Some("general"));

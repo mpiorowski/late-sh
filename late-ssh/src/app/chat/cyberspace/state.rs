@@ -5,7 +5,7 @@
 //! server-side or shown to anyone but the user who fetched it.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -149,6 +149,15 @@ pub struct State {
     /// Rooms pinned into the rail, in the user's order. Their API has no join
     /// or leave, so this list is ours: a bookmark, not their state.
     pub(crate) pinned: Vec<String>,
+    /// Per-room read cursors: slug -> newest message timestamp seen while the
+    /// user was inside (their clock, epoch ms). Seeded from the account row
+    /// at session init, advanced locally as rooms are read, persisted
+    /// fire-and-forget through `mark_circ_room_read_task`.
+    room_reads: HashMap<String, i64>,
+    /// The roster's `last_message_at` per room, refreshed by the 10-minute
+    /// badge poll. Compared against `room_reads` for the rail's unread dots;
+    /// same clock on both sides, so skew never enters into it.
+    room_last_message: HashMap<String, i64>,
     pub(crate) open_room: Option<OpenRoom>,
     pub(crate) link: LinkStatus,
     pub(crate) view: View,
@@ -199,6 +208,8 @@ impl State {
             user_id,
             event_rx,
             pinned: Vec::new(),
+            room_reads: HashMap::new(),
+            room_last_message: HashMap::new(),
             open_room: None,
             link: LinkStatus::Unknown,
             view: View::Feed,
@@ -546,9 +557,9 @@ impl State {
         if self.open_room_slug() == Some(slug.as_str()) {
             return;
         }
-        // Dropping the previous session closes its stream and announces the
-        // user out of that room before the new one opens.
-        self.open_room = None;
+        // Leaving the previous room closes its stream, announces the user out
+        // of it, and stamps its read cursor before the new one opens.
+        self.leave_room();
         let session = self.service.open_circ_room(self.user_id, slug.clone());
         self.open_room = Some(OpenRoom {
             slug,
@@ -563,9 +574,51 @@ impl State {
     }
 
     /// Leaving the room surface for anything else. Dropping the session is
-    /// what stops the stream, the heartbeat, and any further fetching.
+    /// what stops the stream, the heartbeat, and any further fetching; the
+    /// read cursor stamps on the way out, so what was on screen stays read.
     pub fn leave_room(&mut self) {
+        self.stamp_open_room_read();
         self.open_room = None;
+    }
+
+    /// Move the open room's read cursor to the newest message on screen.
+    /// Runs when history lands and when the user leaves, the two moments the
+    /// session knows what was seen. Only a cursor that actually advances is
+    /// persisted, so re-visiting a quiet room writes nothing.
+    fn stamp_open_room_read(&mut self) {
+        let Some(room) = &self.open_room else {
+            return;
+        };
+        let Some(newest) = room.messages.iter().map(|message| message.timestamp).max() else {
+            return;
+        };
+        let slug = room.slug.clone();
+        let known = self.room_reads.get(&slug).copied().unwrap_or(i64::MIN);
+        if newest <= known {
+            return;
+        }
+        self.room_reads.insert(slug.clone(), newest);
+        self.service
+            .mark_circ_room_read_task(self.user_id, slug, newest);
+    }
+
+    /// One flag per pinned room, aligned with `pinned_rooms`: does the rail
+    /// row get an unread dot? The open room never does (being in it is
+    /// reading it), and a room never visited shows nothing rather than
+    /// claiming unread history the user was never behind on.
+    pub(crate) fn room_unread_flags(&self) -> Vec<bool> {
+        self.pinned
+            .iter()
+            .map(|slug| {
+                if self.open_room_slug() == Some(slug.as_str()) {
+                    return false;
+                }
+                match (self.room_last_message.get(slug), self.room_reads.get(slug)) {
+                    (Some(last_message), Some(read)) => last_message > read,
+                    _ => false,
+                }
+            })
+            .collect()
     }
 
     /// The user did something in the open room, which is what keeps them from
@@ -743,7 +796,8 @@ impl State {
             return;
         }
         self.last_unread_poll = Instant::now();
-        self.service.refresh_unread_task(self.user_id);
+        self.service
+            .refresh_unread_task(self.user_id, !self.pinned.is_empty());
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -772,6 +826,7 @@ impl State {
                 username,
                 feed_read_at,
                 circ_rooms,
+                circ_room_reads,
             } if user_id == self.user_id => {
                 self.link = match username {
                     Some(username) => LinkStatus::Linked { username },
@@ -780,6 +835,7 @@ impl State {
                 self.feed_read_at = feed_read_at;
                 self.feed_marker_at = feed_read_at;
                 self.pinned = circ_rooms;
+                self.room_reads = circ_room_reads;
                 None
             }
             CsEvent::LinkSucceeded { user_id, username } if user_id == self.user_id => {
@@ -809,8 +865,12 @@ impl State {
                 self.thread = None;
                 // Dropping the open room closes its stream and heartbeat:
                 // an unlinked account must not still be present in a room.
+                // Directly, not via `leave_room`: the account row is gone,
+                // so there is no cursor left to stamp.
                 self.open_room = None;
                 self.pinned.clear();
+                self.room_reads.clear();
+                self.room_last_message.clear();
                 self.unread_notifications = 0;
                 self.unread_entries = 0;
                 self.feed_read_at = None;
@@ -872,6 +932,15 @@ impl State {
                 Some(Banner::success("Reply posted on cyberspace."))
             }
             CsEvent::CircRooms { user_id, rooms } if user_id == self.user_id => {
+                // The roster answers two consumers: the picker (when open)
+                // and the rail's unread dots, which compare each room's
+                // last_message_at against this session's read cursor.
+                self.room_last_message = rooms
+                    .iter()
+                    .filter_map(|room| {
+                        Some((room.key().to_string(), room.last_message_at?))
+                    })
+                    .collect();
                 if let Some(Modal::Rooms(modal)) = &mut self.modal {
                     modal.roster = rooms;
                     modal.selected = clamp_index(modal.selected, modal.roster.len());
@@ -890,7 +959,7 @@ impl State {
                 room,
                 messages,
             } if user_id == self.user_id => {
-                if let Some(open) = &mut self.open_room
+                let loaded = if let Some(open) = &mut self.open_room
                     && open.slug == room
                 {
                     open.loading = false;
@@ -898,6 +967,15 @@ impl State {
                         merge_message(&mut open.messages, message);
                     }
                     trim_messages(&mut open.messages);
+                    true
+                } else {
+                    false
+                };
+                // History landing is the room being read: the cursor moves
+                // now, not only on the way out, so a session that ends
+                // abruptly still remembers this visit.
+                if loaded {
+                    self.stamp_open_room_read();
                 }
                 None
             }

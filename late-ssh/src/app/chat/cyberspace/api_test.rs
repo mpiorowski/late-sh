@@ -147,7 +147,7 @@ fn circ_message_parses_both_style_shapes() {
 fn display_text_decodes_art_and_drops_duplicated_attachment_captions() {
     // `style: "art"` is the one style that changes how content reads.
     let art: CircMessage =
-        serde_json::from_str(r#"{"id":"m1","content":"XF8oId4pXy8=","style":"art"}"#)
+        serde_json::from_str(r#"{"id":"m1","content":"XF8o44OEKV8v","style":"art"}"#)
             .expect("art message");
     assert_eq!(art.display_text(), r"\_(ツ)_/");
 
