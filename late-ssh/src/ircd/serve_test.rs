@@ -53,6 +53,19 @@ impl IrcTestServer {
         .await
     }
 
+    /// Proxy parsing is on, but a loopback transport peer is outside the
+    /// trusted list, so any header such a peer sends must be ignored.
+    async fn start_with_untrusted_proxy_peer() -> Self {
+        Self::start_with_irc_config(IrcConfig {
+            enabled: true,
+            port: 0,
+            proxy_protocol: true,
+            proxy_trusted_cidrs: vec!["10.42.0.0/16".parse().expect("trusted proxy CIDR")],
+            ..IrcConfig::default()
+        })
+        .await
+    }
+
     async fn start_with_irc_config(irc_config: IrcConfig) -> Self {
         let db = new_test_db().await;
         let mut config = test_config(db.db.config().clone());
@@ -374,6 +387,77 @@ async fn trusted_proxy_client_ip_avoids_transport_ip_ban_and_is_tracked() {
     let active = active_users.get(&user.id).expect("active IRC user");
     assert_eq!(active.sessions.len(), 1);
     assert_eq!(active.sessions[0].peer_ip, Some(client_ip));
+}
+
+/// The complement of the test above: demoting the transport IP must not have
+/// demoted IP bans themselves. A ban on the address the trusted proxy reports
+/// still has to bite, ahead of the token lookup.
+#[tokio::test]
+async fn trusted_proxy_client_ip_is_still_matched_against_ip_bans() {
+    let server = IrcTestServer::start_with_proxy_protocol().await;
+    let banned_ip: IpAddr = "203.0.113.99".parse().expect("banned client IP");
+    let banned_ip_text = banned_ip.to_string();
+    let ban_owner = create_test_user(&server.state.db, "irc-client-ip-ban").await;
+    let client = server.state.db.get().await.expect("db client");
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: ban_owner.id,
+            fingerprint: Some(&ban_owner.fingerprint),
+            ip_address: Some(&banned_ip_text),
+            snapshot_username: Some(&ban_owner.username),
+            actor_user_id: ban_owner.id,
+            reason: "test client IP ban",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate client IP ban");
+    drop(client);
+
+    let user = server.seed_user("irc-banned-client-ip-user").await;
+    let mut irc = IrcClient::connect_with_proxy(server.addr, &user.token, banned_ip).await;
+
+    let banned = irc.read_until(" 465 ").await;
+    assert!(
+        banned.contains("You are banned from this server"),
+        "a valid token from a banned proxy-supplied IP must still be refused: {banned}"
+    );
+}
+
+/// Only peers inside the trusted CIDRs may state a client IP. A header from
+/// anyone else is ordinary connection data, and the transport address it tried
+/// to talk its way out of still applies.
+#[tokio::test]
+async fn untrusted_peer_cannot_forge_a_client_ip_to_evade_an_ip_ban() {
+    let server = IrcTestServer::start_with_untrusted_proxy_peer().await;
+    let ban_owner = create_test_user(&server.state.db, "irc-forged-header-ban").await;
+    let client = server.state.db.get().await.expect("db client");
+    ServerBan::activate(
+        &client,
+        ServerBanActivation {
+            target_user_id: ban_owner.id,
+            fingerprint: Some(&ban_owner.fingerprint),
+            ip_address: Some("127.0.0.1"),
+            snapshot_username: Some(&ban_owner.username),
+            actor_user_id: ban_owner.id,
+            reason: "test transport IP ban",
+            expires_at: None,
+        },
+    )
+    .await
+    .expect("activate transport IP ban");
+    drop(client);
+
+    let user = server.seed_user("irc-forging-user").await;
+    let forged_ip: IpAddr = "203.0.113.200".parse().expect("forged client IP");
+    let mut irc = IrcClient::connect_with_proxy(server.addr, &user.token, forged_ip).await;
+
+    let banned = irc.read_until(" 465 ").await;
+    assert!(
+        banned.contains("You are banned from this server"),
+        "a PROXY header from an untrusted peer must not replace the transport IP: {banned}"
+    );
 }
 
 #[tokio::test]
