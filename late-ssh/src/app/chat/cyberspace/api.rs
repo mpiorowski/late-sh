@@ -25,7 +25,7 @@ const FEED_PAGE_LIMIT: u8 = 30;
 /// How many entries the recurring unread probe pulls. The feed is newest-first
 /// and this page only feeds a badge, so a small one is enough however long the
 /// user has been away, and it keeps the poll cheap against a third party.
-const UNREAD_PROBE_LIMIT: u8 = 10;
+pub(crate) const UNREAD_PROBE_LIMIT: u8 = 10;
 const REPLIES_PAGE_LIMIT: u8 = 50;
 const NOTIFICATIONS_PAGE_LIMIT: u8 = 20;
 

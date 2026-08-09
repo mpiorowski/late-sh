@@ -16,7 +16,9 @@ use uuid::Uuid;
 use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
 use crate::app::common::primitives::Banner;
 
-use super::api::{CircMessage, CircRoom, CircStreamEvent, CsNotification, CsPost, NewPost};
+use super::api::{
+    CircMessage, CircRoom, CircStreamEvent, CsNotification, CsPost, NewPost, UNREAD_PROBE_LIMIT,
+};
 use super::svc::{CircRoomSession, CsEvent, CsThread, CyberspaceService};
 
 pub(crate) const TITLE_MAX_CHARS: usize = 100;
@@ -128,8 +130,12 @@ pub(crate) struct OpenRoom {
     pub loading: bool,
     /// `None` while reading; `Some` once the user starts writing.
     pub composer: Option<TextArea<'static>>,
-    /// Rows scrolled back from the newest message. 0 is the live bottom.
+    /// Rendered rows scrolled back from the newest. 0 is the live bottom.
     pub scroll: usize,
+    /// How far back the conversation can scroll, written by the renderer once
+    /// it knows how many rows the messages wrapped to. Counting messages
+    /// instead would stop `k` short of the top of a room full of long lines.
+    pub max_scroll: Cell<usize>,
     /// Their stream gave up. Reading still works, the room is just no longer
     /// live, and the user is told rather than left staring at a frozen room.
     pub stream_down: bool,
@@ -231,6 +237,14 @@ impl State {
 
     pub(crate) fn unread_entries(&self) -> i64 {
         self.unread_entries
+    }
+
+    /// Whether the unread count is a floor rather than a number. The probe
+    /// page is `UNREAD_PROBE_LIMIT` entries, so a full one means "at least
+    /// this many": the badge has to say so instead of naming a count it
+    /// cannot stand behind.
+    pub fn unread_saturated(&self) -> bool {
+        self.unread_entries >= i64::from(UNREAD_PROBE_LIMIT)
     }
 
     /// Whether a feed row gets the new-entry mark, against the cursor as it
@@ -542,6 +556,7 @@ impl State {
             loading: true,
             composer: None,
             scroll: 0,
+            max_scroll: Cell::new(0),
             stream_down: false,
             session,
         });
@@ -565,8 +580,10 @@ impl State {
         let Some(room) = &mut self.open_room else {
             return;
         };
-        // Scroll counts back from the newest message, so up means older.
-        let ceiling = room.messages.len().saturating_sub(1);
+        // Scroll counts rendered rows back from the newest, so up means older.
+        // The ceiling comes from the renderer, which is the only thing that
+        // knows how many rows the conversation wrapped to.
+        let ceiling = room.max_scroll.get();
         room.scroll = room.scroll.saturating_add_signed(-delta).min(ceiling);
     }
 
@@ -583,12 +600,10 @@ impl State {
         };
         if room.composer.is_none() {
             // One line: it draws in the chat composer slot, which is a single
-            // row, and their cap is one message rather than a document.
-            room.composer = Some(new_themed_textarea(
-                "Enter send · Esc cancel",
-                WrapMode::None,
-                true,
-            ));
+            // row, and their cap is one message rather than a document. No
+            // placeholder here: `chat::ui` draws the empty state itself so the
+            // cursor sits on the hint's first character instead of before it.
+            room.composer = Some(new_themed_textarea("", WrapMode::None, true));
         }
         self.note_room_activity();
     }

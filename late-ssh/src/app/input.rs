@@ -2479,6 +2479,7 @@ fn chat_room_list_view<'a>(
         cyberspace_selected: app.chat.cyberspace_selected,
         cyberspace_room_selected: app.chat.cyberspace_room_selected,
         cyberspace_unread_count: app.chat.cyberspace.unread_count(),
+        cyberspace_unread_saturated: app.chat.cyberspace.unread_saturated(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,

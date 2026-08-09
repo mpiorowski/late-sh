@@ -407,11 +407,21 @@ fn wrapped_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
 /// the widget, dropping text off the right edge. Breaks at the last whitespace
 /// that fits, hard-breaking words wider than the pane.
 fn wrap_paragraph(paragraph: &str, width: usize) -> Vec<String> {
+    wrap_paragraph_hanging(paragraph, width, width)
+}
+
+/// Wrap with a narrower first row, for text that follows a prefix on its own
+/// line (a chat message's stamp and author) and hangs under it afterwards.
+fn wrap_paragraph_hanging(paragraph: &str, first_width: usize, rest_width: usize) -> Vec<String> {
     let chars: Vec<char> = paragraph.chars().collect();
     let mut rows = Vec::new();
     let mut start = 0;
 
     while start < chars.len() {
+        let width = match rows.is_empty() {
+            true => first_width.max(1),
+            false => rest_width.max(1),
+        };
         let mut cols = 0;
         let mut end = start;
         while end < chars.len() {
@@ -607,77 +617,115 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
             body_area,
         );
     } else {
-        let lines = room_lines(&room.messages);
-        // Scroll counts back from the newest line, so a room opens live at
-        // the bottom the way a chat room should.
+        let lines = room_lines(&room.messages, body_area.width as usize);
+        // Scroll counts rendered rows back from the newest, so a room opens
+        // live at the bottom the way a chat room should. Only the renderer
+        // knows how many rows the conversation wrapped to, so it writes the
+        // ceiling back for `room_scroll` to clamp against (same contract as
+        // the thread view's `thread_max_scroll`).
         let height = body_area.height as usize;
-        let end = lines.len().saturating_sub(room.scroll);
+        let max_scroll = lines.len().saturating_sub(height);
+        room.max_scroll.set(max_scroll);
+        let end = lines.len().saturating_sub(room.scroll.min(max_scroll));
         let start = end.saturating_sub(height);
         let visible: Vec<Line<'static>> = lines[start..end].to_vec();
         frame.render_widget(Paragraph::new(visible), body_area);
     }
 }
 
-/// One rendered row per message. Their conventions live in `display_text`, so
-/// this only decides what a row looks like.
-fn room_lines(messages: &[CircMessage]) -> Vec<Line<'static>> {
-    messages
-        .iter()
-        .map(|message| {
-            let stamp = message
-                .at()
-                .map(|at| at.format("%H:%M").to_string())
-                .unwrap_or_else(|| "     ".to_string());
-            let text = message.display_text();
-            let mut spans = vec![Span::styled(
-                format!("{stamp} "),
-                Style::default().fg(theme::TEXT_FAINT()),
-            )];
-            if message.deleted {
-                spans.push(Span::styled(
+/// The conversation as rendered rows, pre-wrapped so one `Line` is one row.
+/// Handing `Wrap` to the paragraph instead would make the scroll window lie:
+/// it counts rows, and a wrapped message occupies more than the one it is
+/// counted as, which pushes the newest messages off the bottom of the pane.
+///
+/// Continuations hang under the author rather than restarting at the margin,
+/// so a long message still reads as one message.
+fn room_lines(messages: &[CircMessage], width: usize) -> Vec<Line<'static>> {
+    const STAMP: &str = "%H:%M";
+    // "HH:MM " plus the indent continuations hang at.
+    let indent_cols = 6usize;
+    let mut rows: Vec<Line<'static>> = Vec::new();
+
+    for message in messages {
+        let stamp = message
+            .at()
+            .map(|at| at.format(STAMP).to_string())
+            .unwrap_or_else(|| "     ".to_string());
+        let stamp_span = Span::styled(
+            format!("{stamp} "),
+            Style::default().fg(theme::TEXT_FAINT()),
+        );
+        let text = message.display_text();
+
+        // Each shape is a styled prefix on the first row plus one body of
+        // text that wraps under it.
+        let (prefix, body, body_style) = if message.deleted {
+            (
+                Span::styled(
                     format!("{} ", message.username),
                     Style::default().fg(theme::TEXT_FAINT()),
-                ));
-                spans.push(Span::styled(
-                    text,
-                    Style::default()
-                        .fg(theme::TEXT_FAINT())
-                        .add_modifier(Modifier::ITALIC),
-                ));
-                return Line::from(spans);
-            }
-            // `/me` and the emotes read as third person on their side too.
-            if message.is_action {
-                spans.push(Span::styled(
-                    format!("* {} {text}", message.username),
-                    Style::default()
-                        .fg(theme::TEXT_DIM())
-                        .add_modifier(Modifier::ITALIC),
-                ));
-                return Line::from(spans);
-            }
-            spans.push(Span::styled(
-                format!("{}: ", message.username),
+                ),
+                text,
                 Style::default()
-                    .fg(theme::AMBER_DIM())
-                    .add_modifier(Modifier::BOLD),
-            ));
-            let had_text = !text.is_empty();
-            if had_text {
-                spans.push(Span::styled(text, Style::default().fg(theme::TEXT())));
-            }
+                    .fg(theme::TEXT_FAINT())
+                    .add_modifier(Modifier::ITALIC),
+            )
+        } else if message.is_action {
+            // `/me` and the emotes read as third person on their side too.
+            (
+                Span::raw(""),
+                format!("* {} {text}", message.username),
+                Style::default()
+                    .fg(theme::TEXT_DIM())
+                    .add_modifier(Modifier::ITALIC),
+            )
+        } else {
+            let mut body = text;
             if let Some(label) = message.attachment_label() {
-                spans.push(Span::styled(
-                    match had_text {
-                        true => format!(" {label}"),
-                        false => label.to_string(),
-                    },
-                    Style::default().fg(theme::TEXT_DIM()),
-                ));
+                match body.is_empty() {
+                    true => body = label.to_string(),
+                    false => body = format!("{body} {label}"),
+                }
             }
-            Line::from(spans)
-        })
-        .collect()
+            (
+                Span::styled(
+                    format!("{}: ", message.username),
+                    Style::default()
+                        .fg(theme::AMBER_DIM())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                body,
+                Style::default().fg(theme::TEXT()),
+            )
+        };
+
+        let prefix_cols: usize = prefix
+            .content
+            .chars()
+            .map(|ch| ch.width().unwrap_or(0))
+            .sum();
+        let first_width = width.saturating_sub(indent_cols + prefix_cols);
+        let rest_width = width.saturating_sub(indent_cols);
+        let wrapped = wrap_paragraph_hanging(&body, first_width, rest_width);
+
+        match wrapped.split_first() {
+            None => rows.push(Line::from(vec![stamp_span, prefix])),
+            Some((first, rest)) => {
+                rows.push(Line::from(vec![
+                    stamp_span,
+                    prefix,
+                    Span::styled(first.clone(), body_style),
+                ]));
+                for row in rest {
+                    rows.push(Line::from(vec![
+                        Span::raw(" ".repeat(indent_cols)),
+                        Span::styled(row.clone(), body_style),
+                    ]));
+                }
+            }
+        }
+    }
+    rows
 }
 
 fn draw_notifications(frame: &mut Frame, area: Rect, state: &State) {

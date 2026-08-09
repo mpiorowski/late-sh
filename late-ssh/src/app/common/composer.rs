@@ -5,6 +5,7 @@
 //! refresh after the active theme changes.
 
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui_textarea::{TextArea, WrapMode};
 
 use super::theme;
@@ -116,6 +117,25 @@ pub fn set_themed_textarea_cursor_visible(ta: &mut TextArea<'static>, visible: b
         hidden_textarea_cursor_style()
     };
     ta.set_cursor_style(style);
+}
+
+/// An empty input's hint, drawn with the block cursor sitting **on** its first
+/// character rather than in a cell of its own before it. A `TextArea` renders
+/// its own placeholder after the cursor cell, which reads as a stray block
+/// floating to the left of the text; every composer in the app draws the empty
+/// state itself for that reason.
+pub fn placeholder_with_cursor(text: &str) -> Line<'static> {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return Line::from(Span::styled(" ", visible_textarea_cursor_style()));
+    };
+    Line::from(vec![
+        Span::styled(first.to_string(), visible_textarea_cursor_style()),
+        Span::styled(
+            chars.collect::<String>(),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
 }
 
 fn hidden_textarea_cursor_style() -> Style {

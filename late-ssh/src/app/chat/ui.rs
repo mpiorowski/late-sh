@@ -2505,6 +2505,8 @@ pub struct ChatRenderInput<'a> {
     pub feeds_view: super::feeds::ui::FeedListView<'a>,
     pub cyberspace_selected: bool,
     pub cyberspace_unread_count: i64,
+    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_unread_saturated: bool,
     pub cyberspace_rooms: &'a [String],
     pub cyberspace_room_selected: Option<usize>,
     /// `None` only in pure render tests; the app always passes the state.
@@ -2644,6 +2646,8 @@ pub(crate) struct ChatRoomListView<'a> {
     pub cyberspace_linked: bool,
     pub cyberspace_selected: bool,
     pub cyberspace_unread_count: i64,
+    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_unread_saturated: bool,
     /// Pinned cyberspace chat rooms, in rail order. Slots carry the index.
     pub cyberspace_rooms: &'a [String],
     pub cyberspace_room_selected: Option<usize>,
@@ -2995,6 +2999,7 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
             .is_some_and(super::cyberspace::state::State::is_linked),
         cyberspace_selected: view.cyberspace_selected,
         cyberspace_unread_count: view.cyberspace_unread_count,
+        cyberspace_unread_saturated: view.cyberspace_unread_saturated,
         cyberspace_rooms: view.cyberspace_rooms,
         cyberspace_room_selected: view.cyberspace_room_selected,
         news_selected: view.news_selected,
@@ -3247,7 +3252,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             let label = if view.cyberspace_unread_count > 0 {
                 format!(
                     "{prefix}feeds ({})",
-                    format_unread_badge(view.cyberspace_unread_count)
+                    room_slot_badge(view, RoomSlot::Cyberspace, view.cyberspace_unread_count)
                 )
             } else {
                 format!("{prefix}feeds")
@@ -3709,6 +3714,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     let item_row = |label: String,
                     unread: i64,
+                    badge: String,
                     active: bool,
                     jump_key: Option<u8>,
                     effects: &[ActiveChatRoomEffect]|
@@ -3742,11 +3748,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         };
         let display = format!("{key_prefix}{display_label}");
         let used = UnicodeWidthStr::width(display.as_str());
-        let unread_str = if unread > 0 {
-            format_unread_badge(unread)
-        } else {
-            String::new()
-        };
+        let unread_str = if unread > 0 { badge } else { String::new() };
         let pad = inner_width.saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
         let mut spans = Vec::new();
         if active {
@@ -3791,11 +3793,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         |slot: RoomSlot, push_row: &mut dyn FnMut(Line<'static>, Option<RoomSlot>, bool)| {
             let active = cozy_slot_selected(view, slot);
             let (label, unread) = room_slot_label_and_unread(view, slot);
+            let badge = room_slot_badge(view, slot, unread);
             let effects = room_slot_effects(view, slot);
             push_row(
                 item_row(
                     label,
                     unread,
+                    badge,
                     active,
                     jump_targets.get(&slot).copied(),
                     effects,
@@ -3981,6 +3985,18 @@ fn format_unread_badge(unread: i64) -> String {
         format!("{}+", ChatRoomMember::UNREAD_COUNT_CAP - 1)
     } else {
         unread.to_string()
+    }
+}
+
+/// The badge text for a slot. Rooms saturate at their SQL cap (`99+`), while
+/// the cyberspace feeds row saturates far earlier: it counts unread entries
+/// out of a probe page of ten, so a full page means "at least this many" and
+/// the badge has to read as a floor rather than name a total it cannot stand
+/// behind.
+fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
+    match slot {
+        RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
+        _ => format_unread_badge(unread),
     }
 }
 
@@ -4475,9 +4491,23 @@ fn draw_selected_content(
         // into, so the room reads like a room.
         match view.cyberspace.and_then(|state| state.room_composer()) {
             Some(composer) => {
-                let inner = hint_block.inner(composer_area);
+                // Inset by a column so the text (and the cursor sitting on its
+                // first character) is padded off the border, same as the main
+                // chat composer's text area.
+                let inner = horizontal_inset(hint_block.inner(composer_area), 1);
                 frame.render_widget(hint_block, composer_area);
-                frame.render_widget(composer, inner);
+                // An empty composer draws its own hint so the cursor lands on
+                // the first character, the same reason the main chat composer
+                // does (a `TextArea` placeholder renders after the cursor cell).
+                match composer.is_empty() {
+                    true => frame.render_widget(
+                        Paragraph::new(crate::app::common::composer::placeholder_with_cursor(
+                            "Enter send · Esc cancel",
+                        )),
+                        inner,
+                    ),
+                    false => frame.render_widget(composer, inner),
+                }
             }
             None => {
                 let hint = view

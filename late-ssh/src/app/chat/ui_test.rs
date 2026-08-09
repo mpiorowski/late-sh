@@ -552,6 +552,7 @@ fn chat_view<'a>(
         cyberspace_rooms: &[],
         cyberspace_room_selected: None,
         cyberspace_unread_count: 0,
+        cyberspace_unread_saturated: false,
         cyberspace: None,
         feeds_view: crate::app::chat::feeds::ui::FeedListView {
             entries: &[],

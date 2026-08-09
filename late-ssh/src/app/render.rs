@@ -655,6 +655,7 @@ impl App {
             feeds_view,
             cyberspace_selected: self.chat.cyberspace_selected,
             cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace_unread_saturated: self.chat.cyberspace.unread_saturated(),
             cyberspace_rooms: self.chat.cyberspace.pinned_rooms(),
             cyberspace_room_selected: self.chat.cyberspace_room_selected,
             cyberspace: Some(&self.chat.cyberspace),
