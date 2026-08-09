@@ -230,3 +230,50 @@ fn stream_frames_carry_window_arrival_and_deletion() {
         .is_none()
     );
 }
+
+#[test]
+fn presence_heartbeat_is_floored_against_a_hot_loop() {
+    // A misbehaving response naming a zero cadence must not turn the
+    // presence loop into a hot cycle of authenticated POSTs.
+    let hot: CircPresence =
+        parse_envelope(200, r#"{ "data": { "heartbeatMs": 0, "idleAfterMs": 60000 } }"#)
+            .expect("parse hot presence");
+    assert_eq!(hot.heartbeat_ms, CIRC_PRESENCE_MIN_HEARTBEAT_MS);
+
+    // The cadence they actually publish stays theirs, untouched.
+    let sane: CircPresence = parse_envelope(200, r#"{ "data": { "heartbeatMs": 30000 } }"#)
+        .expect("parse sane presence");
+    assert_eq!(sane.heartbeat_ms, 30_000);
+}
+
+#[test]
+fn stream_buffer_keeps_multibyte_chars_whole_across_chunk_splits() {
+    let frame =
+        "event: put\ndata: {\"path\":\"/m1\",\"data\":{\"content\":\"caffè 🦀\",\"timestamp\":1}}\n\n";
+    // Cut inside the 4-byte crab: each half alone is invalid UTF-8, which is
+    // exactly where a TCP chunk boundary is allowed to land.
+    let split = frame.find('🦀').expect("crab in frame") + 2;
+    let bytes = frame.as_bytes();
+
+    let mut buffer = CircStreamBuffer::default();
+    assert!(
+        buffer.push(&bytes[..split]).is_empty(),
+        "half a frame must wait, not decode"
+    );
+    assert_eq!(buffer.push(&bytes[split..]), vec![frame.to_string()]);
+    assert_eq!(buffer.pending_len(), 0);
+}
+
+#[test]
+fn stream_buffer_drains_every_completed_frame_and_keeps_the_tail() {
+    let mut buffer = CircStreamBuffer::default();
+    let frames = buffer.push(b"event: put\ndata: 1\n\nevent: put\ndata: 2\n\nevent: pu");
+    assert_eq!(
+        frames,
+        vec![
+            "event: put\ndata: 1\n\n".to_string(),
+            "event: put\ndata: 2\n\n".to_string(),
+        ]
+    );
+    assert_eq!(buffer.pending_len(), "event: pu".len());
+}

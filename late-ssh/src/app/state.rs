@@ -1833,6 +1833,13 @@ impl App {
             return;
         }
 
+        // Leaving Home is leaving the open cyberspace chat room: its stream
+        // and presence heartbeat exist only while the user is on the surface,
+        // and Esc is not the only way off it (digits, Tab, door chords).
+        if self.screen == Screen::Dashboard {
+            self.chat.close_cyberspace_room();
+        }
+
         if self.screen == Screen::Artboard {
             self.deactivate_artboard_interaction();
             self.leave_dartboard();

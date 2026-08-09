@@ -21,8 +21,8 @@ use uuid::Uuid;
 use crate::app::activity::publisher::ActivityPublisher;
 
 use super::api::{
-    CircMessage, CircRoom, CircStreamEvent, CsApi, CsApiError, CsNotification, CsPost, CsReply,
-    NewPost, parse_circ_stream_frame,
+    CircMessage, CircRoom, CircStreamBuffer, CircStreamEvent, CsApi, CsApiError, CsNotification,
+    CsPost, CsReply, NewPost, parse_circ_stream_frame,
 };
 
 /// Firebase id tokens live ~60 minutes; refresh with slack so a token handed
@@ -188,6 +188,7 @@ fn now_ms() -> i64 {
 /// Why a usable id token could not be produced. `NotLinked` renders as the
 /// login form; `Broken` means the stored refresh token was rejected (password
 /// change, revocation) and the user must re-link.
+#[derive(Debug)]
 enum TokenError {
     NotLinked,
     Broken(String),
@@ -209,6 +210,10 @@ pub struct CyberspaceService {
     db: Db,
     api: CsApi,
     tokens: Arc<Mutex<HashMap<Uuid, CachedToken>>>,
+    /// One refresh per user at a time: opening a room fires three tasks at
+    /// once, and each hitting a cold or expired cache would otherwise POST
+    /// its own refresh with the same stored refresh token.
+    refresh_guards: Arc<Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>>,
     evt_tx: broadcast::Sender<CsEvent>,
     activity: Option<ActivityPublisher>,
 }
@@ -220,6 +225,7 @@ impl CyberspaceService {
             db,
             api: CsApi::new(base_url),
             tokens: Arc::new(Mutex::new(HashMap::new())),
+            refresh_guards: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
             activity: None,
         }
@@ -668,17 +674,12 @@ impl CyberspaceService {
             .map_err(|e| e.to_string())?;
 
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        // Frames are blank-line separated; a partial tail waits for the next
+        // chunk rather than being parsed half-formed or decoded half-charred.
+        let mut buffer = CircStreamBuffer::default();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| e.without_url().to_string())?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
-            if buffer.len() > CIRC_STREAM_BUFFER_CAP {
-                return Err("chat stream sent an oversized frame".to_string());
-            }
-            // Frames are blank-line separated; a partial tail waits for the
-            // next chunk rather than being parsed half-formed.
-            while let Some(split) = buffer.find("\n\n") {
-                let frame: String = buffer.drain(..split + 2).collect();
+            for frame in buffer.push(&chunk) {
                 if let Some(event) = parse_circ_stream_frame(&frame) {
                     self.publish(CsEvent::CircStreamed {
                         user_id,
@@ -686,6 +687,9 @@ impl CyberspaceService {
                         event,
                     });
                 }
+            }
+            if buffer.pending_len() > CIRC_STREAM_BUFFER_CAP {
+                return Err("chat stream sent an oversized frame".to_string());
             }
         }
         Ok(())
@@ -858,17 +862,39 @@ impl CyberspaceService {
         }
     }
 
+    fn cached_token(&self, user_id: Uuid) -> Option<String> {
+        let tokens = self.tokens.lock().expect("token cache lock");
+        match tokens.get(&user_id) {
+            Some(cached) if cached.fetched_at.elapsed() < TOKEN_CACHE_TTL => {
+                Some(cached.id_token.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// The user's refresh lock. Guards nobody holds are swept on the way,
+    /// the same hygiene as the token cache: without it the map keeps an
+    /// entry for every user who ever refreshed, for the life of the process.
+    fn refresh_guard(&self, user_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+        let mut guards = self.refresh_guards.lock().expect("refresh guard lock");
+        guards.retain(|_, guard| Arc::strong_count(guard) > 1);
+        guards.entry(user_id).or_default().clone()
+    }
+
     /// A usable id token for the user: cache hit inside the TTL, otherwise a
     /// refresh with the stored refresh token. A rejected refresh token means
     /// the link is broken (password change, revocation) and needs a re-link.
+    /// Concurrent callers on a cold cache (a room open fires three tasks at
+    /// once) serialize on the per-user guard and share the one refresh the
+    /// winner cached.
     async fn id_token(&self, user_id: Uuid) -> Result<String, TokenError> {
-        {
-            let tokens = self.tokens.lock().expect("token cache lock");
-            if let Some(cached) = tokens.get(&user_id)
-                && cached.fetched_at.elapsed() < TOKEN_CACHE_TTL
-            {
-                return Ok(cached.id_token.clone());
-            }
+        if let Some(token) = self.cached_token(user_id) {
+            return Ok(token);
+        }
+        let guard = self.refresh_guard(user_id);
+        let _held = guard.lock().await;
+        if let Some(token) = self.cached_token(user_id) {
+            return Ok(token);
         }
         let refresh_token = {
             let client = self

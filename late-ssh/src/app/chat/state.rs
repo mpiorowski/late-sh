@@ -3750,6 +3750,27 @@ impl ChatState {
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
         let cyberspace_tick = self.cyberspace.tick();
+        // The pinned list can change under the rail cursor (another session
+        // of the same account pinning, unpinning, or unlinking), so the
+        // selected index is re-derived from the open room's slug instead of
+        // trusted. A room the rail can no longer name gets left, dropping
+        // its stream and heartbeat, and the user lands back on the pane.
+        if self.cyberspace_room_selected.is_some() {
+            let derived = self.cyberspace.open_room_slug().and_then(|slug| {
+                self.cyberspace
+                    .pinned_rooms()
+                    .iter()
+                    .position(|room| room == slug)
+            });
+            match derived {
+                Some(index) => self.cyberspace_room_selected = Some(index),
+                None => {
+                    self.cyberspace.leave_room();
+                    self.cyberspace_room_selected = None;
+                    self.cyberspace_selected = true;
+                }
+            }
+        }
         // Unlinking in one session broadcasts to the others. The rail entry
         // and the navigation order both go with the link, so a session left
         // sitting in the pane would be on a slot neither of them has.
@@ -3816,6 +3837,21 @@ impl ChatState {
         if entering {
             self.cyberspace.opened();
         }
+    }
+
+    /// Leaving the Home surface entirely (a screen switch), not just moving
+    /// within the rail. The open room's session drops with the selection:
+    /// its stream and presence heartbeat must not outlive the user's
+    /// presence on the surface. The rail lands back on the cyberspace slot,
+    /// same as Esc, but without `select_cyberspace`'s feed load, since the
+    /// user is on their way out, not in.
+    pub fn close_cyberspace_room(&mut self) {
+        if self.cyberspace_room_selected.is_none() && self.cyberspace.open_room_slug().is_none() {
+            return;
+        }
+        self.cyberspace.leave_room();
+        self.cyberspace_room_selected = None;
+        self.cyberspace_selected = true;
     }
 
     /// Select a pinned chat room by its position in the pinned list. Entering

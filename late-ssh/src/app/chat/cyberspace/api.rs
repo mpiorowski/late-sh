@@ -279,14 +279,27 @@ pub struct CircHistory {
     pub cursor: Option<i64>,
 }
 
+/// The floor under the presence cadence. Their response names the interval
+/// and is normally far above this; a zero or near-zero value from a
+/// misbehaving response would otherwise turn the presence loop into a hot
+/// cycle of authenticated POSTs.
+pub const CIRC_PRESENCE_MIN_HEARTBEAT_MS: u64 = 5_000;
+
 /// How often to heartbeat presence, read off their answer rather than
 /// hard-coded: they publish the cadence precisely so clients do not guess it.
+/// Floored at parse time, so a `CircPresence` can never carry a hot value.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CircPresence {
+    #[serde(deserialize_with = "floored_heartbeat")]
     pub heartbeat_ms: u64,
     #[serde(default)]
     pub idle_after_ms: u64,
+}
+
+fn floored_heartbeat<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let value = u64::deserialize(deserializer)?;
+    Ok(value.max(CIRC_PRESENCE_MIN_HEARTBEAT_MS))
 }
 
 #[derive(Clone, Debug)]
@@ -737,6 +750,38 @@ pub enum CircStreamEvent {
         deleted: bool,
     },
     Removed(String),
+}
+
+/// Reassembles the stream's blank-line-separated frames from raw network
+/// chunks. Chunk boundaries fall wherever TCP cuts them, including inside a
+/// multi-byte character, so bytes stay bytes until a frame is complete and
+/// each frame is decoded exactly once.
+#[derive(Default)]
+pub struct CircStreamBuffer {
+    bytes: Vec<u8>,
+}
+
+impl CircStreamBuffer {
+    /// Append a network chunk and drain every frame it completed, in order.
+    pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.bytes.extend_from_slice(chunk);
+        let mut frames = Vec::new();
+        while let Some(split) = self
+            .bytes
+            .windows(2)
+            .position(|window| window == b"\n\n")
+        {
+            let frame: Vec<u8> = self.bytes.drain(..split + 2).collect();
+            frames.push(String::from_utf8_lossy(&frame).into_owned());
+        }
+        frames
+    }
+
+    /// Bytes still waiting for their frame to complete, for the caller's
+    /// oversized-frame cap.
+    pub fn pending_len(&self) -> usize {
+        self.bytes.len()
+    }
 }
 
 /// Parse one Server-Sent Events frame. `None` covers every frame that says
