@@ -562,6 +562,9 @@ pub struct App {
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
     pub(crate) door_delete_confirm: bool,
+    /// Highlighted row on the Lateania character-select landing (0-based
+    /// slot index). Also which slot a confirmed `d` delete targets.
+    pub(crate) lateania_slot_cursor: usize,
     pub(crate) lateania_service: crate::app::door::lateania::svc::LateaniaService,
     pub(crate) greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub(crate) darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
@@ -1332,6 +1335,7 @@ impl App {
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
             door_delete_confirm: false,
+            lateania_slot_cursor: 0,
             games_hub_state: crate::app::door::hub::state::State::default(),
             lateania_service: config.lateania_service,
             greendragon_service: config.greendragon_service,
@@ -1495,6 +1499,9 @@ impl App {
 
     pub(crate) fn leave_lateania(&mut self) {
         self.lateania_state = None;
+        // Refresh the landing's slot list so a level/class change from the
+        // adventure just left shows up without needing to leave the screen.
+        self.lateania_service.character_slots_task(self.user_id);
     }
 
     pub(crate) fn enter_greendragon(&mut self) {
@@ -1952,6 +1959,11 @@ impl App {
 
         if self.screen == Screen::Artboard {
             self.enter_dartboard();
+        }
+        if self.screen == Screen::Lateania {
+            // Refresh the character-select landing's slot list; the landing
+            // itself only shows once an explicit Enter joins a slot.
+            self.lateania_service.character_slots_task(self.user_id);
         }
         if self.screen == Screen::Rebels {
             self.enter_rebels();

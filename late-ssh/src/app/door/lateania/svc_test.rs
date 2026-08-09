@@ -2000,6 +2000,44 @@ fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
     );
 }
 
+// ---- character slots (multiple saved characters per account) -------------
+
+#[test]
+fn empty_slot_summary_reads_as_unoccupied() {
+    let summary = SlotSummary::empty(3);
+    assert_eq!(summary.slot, 3);
+    assert!(!summary.occupied);
+    assert_eq!(summary.class, None);
+    assert_eq!(summary.level, 0);
+}
+
+#[test]
+fn slot_summary_from_a_save_reads_its_class_and_level() {
+    let saved = SavedCharacter::from_json(&serde_json::json!({
+        "class": "warrior",
+        "level": 14,
+    }))
+    .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(2, &saved);
+    assert_eq!(summary.slot, 2);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, Some(Class::Warrior));
+    assert_eq!(summary.level, 14);
+}
+
+#[test]
+fn slot_summary_before_a_class_is_chosen_still_reads_as_occupied() {
+    // A character mid-tutorial (joined, never picked a class) has a real save
+    // to resume or delete, even with no class to show yet.
+    let saved = SavedCharacter::from_json(&serde_json::json!({ "level": 1 }))
+        .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(0, &saved);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, None);
+}
+
 #[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();

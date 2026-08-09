@@ -1,9 +1,10 @@
 // Persistent Lateania (MUD) character storage.
 //
-// One row per user holding a schema-versioned JSON blob. The MUD game owns the
-// blob's shape; this model only loads and upserts it. Keeping the character as
-// opaque JSON lets the game add fields (new stats, inventory, quest flags)
-// without a migration each time.
+// Up to a handful of rows per user (one per character slot), each holding a
+// schema-versioned JSON blob. The MUD game owns the blob's shape; this model
+// only loads and upserts it. Keeping the character as opaque JSON lets the
+// game add fields (new stats, inventory, quest flags) without a migration
+// each time.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -16,41 +17,59 @@ crate::model! {
     struct MudCharacter {
         @data
         pub user_id: Uuid,
+        pub slot: i16,
         pub data: Value,
     }
 }
 
 impl MudCharacter {
-    /// Load a user's saved character blob, if they have one.
-    pub async fn load(client: &Client, user_id: Uuid) -> Result<Option<Value>> {
+    /// Load one character slot's saved blob, if it has one.
+    pub async fn load(client: &Client, user_id: Uuid, slot: i16) -> Result<Option<Value>> {
         let row = client
             .query_opt(
-                "SELECT data FROM mud_characters WHERE user_id = $1",
-                &[&user_id],
+                "SELECT data FROM mud_characters WHERE user_id = $1 AND slot = $2",
+                &[&user_id, &slot],
             )
             .await?;
         Ok(row.map(|r| r.get::<_, Value>("data")))
     }
 
-    /// Insert or overwrite a user's character blob.
-    pub async fn save(client: &Client, user_id: Uuid, data: Value) -> Result<()> {
+    /// Every character slot a user has saved, as (slot, blob) pairs.
+    pub async fn list(client: &Client, user_id: Uuid) -> Result<Vec<(i16, Value)>> {
+        let rows = client
+            .query(
+                "SELECT slot, data FROM mud_characters WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<_, i16>("slot"), r.get::<_, Value>("data")))
+            .collect())
+    }
+
+    /// Insert or overwrite one character slot's blob.
+    pub async fn save(client: &Client, user_id: Uuid, slot: i16, data: Value) -> Result<()> {
         client
             .execute(
-                "INSERT INTO mud_characters (user_id, data)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE
+                "INSERT INTO mud_characters (user_id, slot, data)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (user_id, slot) DO UPDATE
                  SET data = EXCLUDED.data,
                      updated = current_timestamp",
-                &[&user_id, &data],
+                &[&user_id, &slot, &data],
             )
             .await?;
         Ok(())
     }
 
-    /// Delete a user's saved character, if present.
-    pub async fn delete_by_user_id(client: &Client, user_id: Uuid) -> Result<()> {
+    /// Delete one character slot, if present.
+    pub async fn delete_slot(client: &Client, user_id: Uuid, slot: i16) -> Result<()> {
         client
-            .execute("DELETE FROM mud_characters WHERE user_id = $1", &[&user_id])
+            .execute(
+                "DELETE FROM mud_characters WHERE user_id = $1 AND slot = $2",
+                &[&user_id, &slot],
+            )
             .await?;
         Ok(())
     }

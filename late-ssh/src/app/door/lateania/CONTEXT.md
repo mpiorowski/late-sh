@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-10 (player-feedback pass: Esc no longer closes the game while chatting and now requires a confirming second press to actually leave; the Mend boon heals fully; the day/night clock got a glyph + danger colour; stray-feeding messages spell out the real UTC-midnight countdown; the Leaderboard moved off `?`, which is globally reserved - see §9 Critical Invariants; selling a loose duplicate of worn gear no longer requires unequipping first)
+- Last updated: 2026-08-10 (player-feedback pass: Esc no longer closes the game while chatting and now requires a confirming second press to actually leave; the Mend boon heals fully; the day/night clock got a glyph + danger colour; stray-feeding messages spell out the real UTC-midnight countdown; the Leaderboard moved off `?`, which is globally reserved - see §9 Critical Invariants; selling a loose duplicate of worn gear no longer requires unequipping first; accounts can now keep up to 5 character slots - see §8 Character slots)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -418,6 +418,16 @@ Transient by design:
 
 Unclassed characters are not exported. Empty or unreadable blobs are treated as no save.
 
+### Character slots
+
+An account can keep up to `svc::CHARACTER_SLOTS` (5) saved characters, so trying another class never means wiping the one you already have. `mud_characters` is keyed by `(user_id, slot)`; every character predating this feature landed in slot 0 unchanged when the `slot` column was added, so nobody's save moved.
+
+The world identity a session plays is always still the account's own `user_id` - only the DB row `join`/`leave`/autosave read and write changes with the slot. `LateaniaService::select_slot` (called from the landing before `enter_lateania`) records which slot a soon-to-join session should use in an in-memory `active_slot: HashMap<Uuid, i16>`, defaulting to 0 for any account that never touches the picker. Everything downstream of join (combat, pvp, leaderboard, inventory, the whole `WorldState.players` map) is completely unaware slots exist.
+
+The landing (`screen.rs`) is a character-select list, not a single "Enter"/"d" pair: `j`/`k`/arrows move a slot cursor (`App::lateania_slot_cursor`), Enter calls `select_slot` then `enter_lateania`, and `d` resets whichever slot is highlighted (not necessarily the one currently live). `LateaniaService::character_slots_task` refreshes the cached `SlotSummary` list (occupied?, class, level) shown there; it's kicked off when the screen is entered and again on `leave_lateania` so a just-finished adventure's level/class shows without leaving the screen. The Games-hub "launch immediately" shortcut for Lateania now only navigates to the screen (it can't skip character-select), and the hub's own quick-delete shortcut excludes Lateania entirely - only the landing's own per-slot delete is safe now that there's more than one character to lose.
+
+Deleting a slot only touches the live in-memory player and kicks a session out (via the existing `reset_versions` "reset elsewhere" signal) when the deleted slot equals that account's `active_slot` right now; deleting an idle slot from a second tab never disturbs a session mid-adventure on a different one. Internally, `persist_versions`/`persist_locks`/`prepared_saves`/`character_resets`/`character_reset_versions` are all keyed by `(user_id, slot)` (a `CharKey`), not just `user_id` - this is load-bearing: without it, a fast slot switch could hydrate a join from a different slot's still-in-flight save.
+
 ### Shared world save
 
 Shared world persistence uses `late_core::models::mud_world_state` / `mud_world_states` with key `lateania`.
@@ -445,6 +455,7 @@ Character save schema v5 stores class, XP/level, carried/banked gold, HP, last s
 - Do not save mid-fight player state. Characters reload combat-ready in safe rooms.
 - Do not wipe shared world state during per-character reset.
 - Do not create a fresh starter character if DB load fails; that risks overwriting an existing save later.
+- **Keep the account/character distinction sharp.** The live world identity is always the account's `user_id`; the slot (which of up to `CHARACTER_SLOTS` saves is loaded) is a separate, in-memory-only `active_slot` selection made before join. Never key `WorldState.players` or anything downstream of it by slot - only the DB read/write path (`join_task`/`leave_task`/autosave/`delete_character_task`) and the internal `persist_versions`/`persist_locks`/`prepared_saves`/`character_resets`/`character_reset_versions` maps (all keyed by the `CharKey = (Uuid, i16)` pair) need to know slots exist.
 - Keep class keys and item IDs stable once persisted.
 - Keep generated Frontier ID ranges aligned: 20 zones, 20 item tiers, IDs `3000..3200`, Frontier rooms at `2000+`, Frontier mob IDs at `900000..950000`.
 - Keep generated Reaches ID ranges aligned: 20 zones, 20 item tiers, IDs `3200..3400`, Reaches rooms at `10000+`, Reaches mob IDs at `950000..960000`. `tune_spawn_balance` classifies by these ranges; the Reaches intentionally share the Frontier's endgame multipliers.

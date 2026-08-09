@@ -292,6 +292,9 @@ const VETERAN_DAYS: i64 = 20;
 /// fountain). Newer accounts get none and respawn at the temple as before.
 const VETERAN_RESURRECTIONS: u8 = 2;
 
+/// A character within an account: which slot of whose saves.
+type CharKey = (Uuid, i16);
+
 #[derive(Clone)]
 pub struct LateaniaService {
     activity: ActivityPublisher,
@@ -301,11 +304,21 @@ pub struct LateaniaService {
     snapshot_rx: watch::Receiver<MudSnapshot>,
     state: Arc<Mutex<WorldState>>,
     active_sessions: Arc<StdMutex<HashMap<Uuid, HashSet<Uuid>>>>,
-    persist_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
-    persist_locks: Arc<StdMutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
-    prepared_saves: Arc<StdMutex<HashMap<Uuid, (u64, SavedCharacter)>>>,
-    character_resets: Arc<StdMutex<HashSet<Uuid>>>,
-    character_reset_versions: Arc<StdMutex<HashMap<Uuid, u64>>>,
+    // Keyed by (account, slot): a save in flight for one slot must never be
+    // mistaken for another slot's, or a fast slot switch could hydrate a join
+    // from the wrong character's still-in-flight blob.
+    persist_versions: Arc<StdMutex<HashMap<CharKey, u64>>>,
+    persist_locks: Arc<StdMutex<HashMap<CharKey, Arc<Mutex<()>>>>>,
+    prepared_saves: Arc<StdMutex<HashMap<CharKey, (u64, SavedCharacter)>>>,
+    character_resets: Arc<StdMutex<HashSet<CharKey>>>,
+    character_reset_versions: Arc<StdMutex<HashMap<CharKey, u64>>>,
+    /// Which character slot a session is playing, set by `select_slot` before
+    /// `join_task` fires. Absent means slot 0, so accounts that never see the
+    /// slot picker (or predate it) keep loading their one existing character.
+    active_slot: Arc<StdMutex<HashMap<Uuid, i16>>>,
+    /// Cached slot summaries for the character-select landing, refreshed by
+    /// `character_slots_task` and read synchronously by the render path.
+    slot_summaries: Arc<StdMutex<HashMap<Uuid, Vec<SlotSummary>>>>,
 }
 
 // ---- Snapshot (what sessions render) -------------------------------------
@@ -554,6 +567,41 @@ pub struct LeaderboardView {
     pub by_level: Vec<LeaderboardEntry>,
     pub by_pvp_kills: Vec<LeaderboardEntry>,
     pub by_gold: Vec<LeaderboardEntry>,
+}
+
+/// How many characters an account may keep, so trying another class doesn't
+/// mean wiping the one you already have.
+pub const CHARACTER_SLOTS: i16 = 5;
+
+/// One row of the character-select landing: a slot is either empty (never
+/// saved, or just reset) or shows enough of the saved character to recognize
+/// it at a glance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlotSummary {
+    pub slot: i16,
+    pub occupied: bool,
+    pub class: Option<Class>,
+    pub level: i32,
+}
+
+impl SlotSummary {
+    fn empty(slot: i16) -> Self {
+        Self {
+            slot,
+            occupied: false,
+            class: None,
+            level: 0,
+        }
+    }
+
+    fn from_saved(slot: i16, saved: &SavedCharacter) -> Self {
+        Self {
+            slot,
+            occupied: true,
+            class: saved.class.as_deref().and_then(Class::from_key),
+            level: saved.level,
+        }
+    }
 }
 
 /// One lookable thing in the current room, as shown in the Examine panel.
@@ -1033,6 +1081,8 @@ impl LateaniaService {
             prepared_saves: Arc::new(StdMutex::new(HashMap::new())),
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
             character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
+            active_slot: Arc::new(StdMutex::new(HashMap::new())),
+            slot_summaries: Arc::new(StdMutex::new(HashMap::new())),
         };
         // Build the overhead map's coordinate field and POI index now. Both are
         // lazy statics costing a world-gen apiece, and their first caller is
@@ -1070,6 +1120,69 @@ impl LateaniaService {
             .is_some_and(|p| p.joined)
     }
 
+    // ---- Character slots ---------------------------------------------------
+    //
+    // An account can keep up to `CHARACTER_SLOTS` saved characters, but only
+    // ever plays one at a time. `select_slot` (called from the landing,
+    // before `join_task`) picks which slot that session's `join`/`leave`/
+    // autosave cycle reads and writes; everything downstream of join still
+    // keys off the account's own `user_id`, unchanged.
+
+    /// The slot a session should load/save for this account. Defaults to 0 so
+    /// accounts that never touch the slot picker keep their one character.
+    fn active_slot(&self, user_id: Uuid) -> i16 {
+        self.active_slot
+            .lock_recover()
+            .get(&user_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Pick which character slot the next `join_task` for this account loads.
+    pub fn select_slot(&self, user_id: Uuid, slot: i16) {
+        self.active_slot.lock_recover().insert(user_id, slot);
+    }
+
+    /// Cached slot summaries for the character-select landing; empty until
+    /// `character_slots_task` resolves at least once (the landing then just
+    /// shows every slot as empty for a frame or two).
+    pub fn character_slots(&self, user_id: Uuid) -> Vec<SlotSummary> {
+        self.slot_summaries
+            .lock_recover()
+            .get(&user_id)
+            .cloned()
+            .unwrap_or_else(|| (0..CHARACTER_SLOTS).map(SlotSummary::empty).collect())
+    }
+
+    /// Refresh the cached slot summaries for the landing. Safe to call often;
+    /// it's a handful of small-blob reads, not the world lock.
+    pub fn character_slots_task(&self, user_id: Uuid) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            let Ok(client) = svc.db.get().await else {
+                return;
+            };
+            let rows = match MudCharacter::list(&client, user_id).await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%user_id, ?error, "failed to list mud character slots");
+                    return;
+                }
+            };
+            let mut by_slot: HashMap<i16, SavedCharacter> = rows
+                .into_iter()
+                .filter_map(|(slot, blob)| SavedCharacter::from_json(&blob).map(|s| (slot, s)))
+                .collect();
+            let summaries = (0..CHARACTER_SLOTS)
+                .map(|slot| match by_slot.remove(&slot) {
+                    Some(saved) => SlotSummary::from_saved(slot, &saved),
+                    None => SlotSummary::empty(slot),
+                })
+                .collect();
+            svc.slot_summaries.lock_recover().insert(user_id, summaries);
+        });
+    }
+
     // ---- Commands (fire-and-forget, *_task convention) -------------------
 
     fn mutate<F: FnOnce(&mut WorldState) + Send + 'static>(&self, user_id: Uuid, f: F) {
@@ -1105,31 +1218,32 @@ impl LateaniaService {
         self.mark_session_joined(user_id, session_id);
         let svc = self.clone();
         tokio::spawn(async move {
+            let slot = svc.active_slot(user_id);
             if !svc.has_active_session(user_id) {
                 return;
             }
-            if svc.character_reset_in_progress(user_id) {
+            if svc.character_reset_in_progress(user_id, slot) {
                 return;
             }
-            let load_version = svc.current_persist_version(user_id);
+            let load_version = svc.current_persist_version(user_id, slot);
 
             // Load any saved character before exposing a fresh player. A DB
             // failure must not become "no save", otherwise later autosave or
             // logout can overwrite an existing character with a starter one.
-            let saved = if let Some(saved) = svc.prepared_saved(user_id) {
+            let saved = if let Some(saved) = svc.prepared_saved(user_id, slot) {
                 Some(saved)
             } else {
                 match svc.db.get().await {
-                    Ok(client) => match MudCharacter::load(&client, user_id).await {
+                    Ok(client) => match MudCharacter::load(&client, user_id, slot).await {
                         Ok(Some(blob)) => SavedCharacter::from_json(&blob),
                         Ok(None) => None,
                         Err(error) => {
-                            tracing::warn!(%user_id, ?error, "failed to load mud character");
+                            tracing::warn!(%user_id, slot, ?error, "failed to load mud character");
                             return;
                         }
                     },
                     Err(error) => {
-                        tracing::warn!(%user_id, ?error, "no db client for mud character load");
+                        tracing::warn!(%user_id, slot, ?error, "no db client for mud character load");
                         return;
                     }
                 }
@@ -1149,13 +1263,13 @@ impl LateaniaService {
             if !svc.has_active_session(user_id) {
                 return;
             }
-            if svc.character_reset_in_progress(user_id) {
+            if svc.character_reset_in_progress(user_id, slot) {
                 return;
             }
-            let saved = if svc.current_persist_version(user_id) == load_version {
+            let saved = if svc.current_persist_version(user_id, slot) == load_version {
                 saved
             } else {
-                svc.prepared_saved(user_id)
+                svc.prepared_saved(user_id, slot)
             };
             if !state.players.contains_key(&user_id) {
                 state.join(user_id);
@@ -1187,9 +1301,10 @@ impl LateaniaService {
                 if svc.has_active_session(user_id) {
                     return;
                 }
+                let slot = svc.active_slot(user_id);
                 let saved = state
                     .export_saved(user_id)
-                    .and_then(|saved| svc.prepare_persist(user_id, saved));
+                    .and_then(|saved| svc.prepare_persist(user_id, slot, saved));
                 state.leave(user_id);
                 svc.publish(&state);
                 saved
@@ -1235,97 +1350,110 @@ impl LateaniaService {
         self.active_sessions.lock_recover().remove(&user_id);
     }
 
-    fn begin_character_reset(&self, user_id: Uuid) {
-        self.character_resets.lock_recover().insert(user_id);
+    fn begin_character_reset(&self, user_id: Uuid, slot: i16) {
+        let key = (user_id, slot);
+        self.character_resets.lock_recover().insert(key);
         self.character_reset_versions
             .lock_recover()
-            .entry(user_id)
+            .entry(key)
             .and_modify(|version| *version += 1)
             .or_insert(1);
         let mut versions = self.persist_versions.lock_recover();
         versions
-            .entry(user_id)
+            .entry(key)
             .and_modify(|version| *version += 1)
             .or_insert(1);
-        self.prepared_saves.lock_recover().remove(&user_id);
+        self.prepared_saves.lock_recover().remove(&key);
     }
 
-    fn finish_character_reset(&self, user_id: Uuid) {
-        self.character_resets.lock_recover().remove(&user_id);
+    fn finish_character_reset(&self, user_id: Uuid, slot: i16) {
+        self.character_resets
+            .lock_recover()
+            .remove(&(user_id, slot));
     }
 
-    fn character_reset_in_progress(&self, user_id: Uuid) -> bool {
-        self.character_resets.lock_recover().contains(&user_id)
+    fn character_reset_in_progress(&self, user_id: Uuid, slot: i16) -> bool {
+        self.character_resets
+            .lock_recover()
+            .contains(&(user_id, slot))
     }
 
-    fn current_persist_version(&self, user_id: Uuid) -> u64 {
+    fn current_persist_version(&self, user_id: Uuid, slot: i16) -> u64 {
         self.persist_versions
             .lock_recover()
-            .get(&user_id)
+            .get(&(user_id, slot))
             .copied()
             .unwrap_or(0)
     }
 
-    fn prepare_persist(&self, user_id: Uuid, saved: SavedCharacter) -> Option<PendingSave> {
+    fn prepare_persist(
+        &self,
+        user_id: Uuid,
+        slot: i16,
+        saved: SavedCharacter,
+    ) -> Option<PendingSave> {
+        let key = (user_id, slot);
         let resets = self.character_resets.lock_recover();
-        if resets.contains(&user_id) {
+        if resets.contains(&key) {
             return None;
         }
         let mut versions = self.persist_versions.lock_recover();
-        let version = versions.entry(user_id).and_modify(|v| *v += 1).or_insert(1);
+        let version = versions.entry(key).and_modify(|v| *v += 1).or_insert(1);
         self.prepared_saves
             .lock_recover()
-            .insert(user_id, (*version, saved.clone()));
+            .insert(key, (*version, saved.clone()));
         Some(PendingSave {
             user_id,
+            slot,
             version: *version,
             saved,
         })
     }
 
-    fn prepared_saved(&self, user_id: Uuid) -> Option<SavedCharacter> {
+    fn prepared_saved(&self, user_id: Uuid, slot: i16) -> Option<SavedCharacter> {
         self.prepared_saves
             .lock_recover()
-            .get(&user_id)
+            .get(&(user_id, slot))
             .map(|(_, saved)| saved.clone())
     }
 
     fn clear_prepared_save(&self, save: &PendingSave) {
+        let key = (save.user_id, save.slot);
         let mut prepared_saves = self.prepared_saves.lock_recover();
         if prepared_saves
-            .get(&save.user_id)
+            .get(&key)
             .is_some_and(|(version, _)| *version == save.version)
         {
-            prepared_saves.remove(&save.user_id);
+            prepared_saves.remove(&key);
         }
     }
 
     fn is_latest_persist(&self, save: &PendingSave) -> bool {
         self.persist_versions
             .lock_recover()
-            .get(&save.user_id)
+            .get(&(save.user_id, save.slot))
             .is_some_and(|version| *version == save.version)
     }
 
-    fn persist_lock(&self, user_id: Uuid) -> Arc<Mutex<()>> {
+    fn persist_lock(&self, user_id: Uuid, slot: i16) -> Arc<Mutex<()>> {
         self.persist_locks
             .lock_recover()
-            .entry(user_id)
+            .entry((user_id, slot))
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone()
     }
 
     /// Write one character blob to the database (best-effort).
     async fn persist(&self, save: PendingSave) {
-        if self.character_reset_in_progress(save.user_id) {
+        if self.character_reset_in_progress(save.user_id, save.slot) {
             return;
         }
         if !self.is_latest_persist(&save) {
             return;
         }
-        let lock = self.persist_lock(save.user_id);
+        let lock = self.persist_lock(save.user_id, save.slot);
         let _guard = lock.lock().await;
-        if self.character_reset_in_progress(save.user_id) {
+        if self.character_reset_in_progress(save.user_id, save.slot) {
             return;
         }
         if !self.is_latest_persist(&save) {
@@ -1333,15 +1461,17 @@ impl LateaniaService {
         }
         match self.db.get().await {
             Ok(client) => {
-                match MudCharacter::save(&client, save.user_id, save.saved.to_json()).await {
+                match MudCharacter::save(&client, save.user_id, save.slot, save.saved.to_json())
+                    .await
+                {
                     Ok(()) => self.clear_prepared_save(&save),
                     Err(error) => {
-                        tracing::warn!(user_id = %save.user_id, ?error, "failed to save mud character");
+                        tracing::warn!(user_id = %save.user_id, slot = save.slot, ?error, "failed to save mud character");
                     }
                 }
             }
             Err(error) => {
-                tracing::warn!(user_id = %save.user_id, ?error, "no db client for mud character save");
+                tracing::warn!(user_id = %save.user_id, slot = save.slot, ?error, "no db client for mud character save");
             }
         }
     }
@@ -1358,7 +1488,10 @@ impl LateaniaService {
                     state
                         .export_all_saved()
                         .into_iter()
-                        .filter_map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
+                        .filter_map(|(user_id, saved)| {
+                            let slot = svc.active_slot(user_id);
+                            svc.prepare_persist(user_id, slot, saved)
+                        })
                         .collect()
                 };
                 for save in saves {
@@ -1456,7 +1589,10 @@ impl LateaniaService {
             let saves = state
                 .export_all_saved()
                 .into_iter()
-                .filter_map(|(user_id, saved)| self.prepare_persist(user_id, saved))
+                .filter_map(|(user_id, saved)| {
+                    let slot = self.active_slot(user_id);
+                    self.prepare_persist(user_id, slot, saved)
+                })
                 .collect();
             let world_save = if state.world_dirty {
                 state.world_dirty = false;
@@ -1664,32 +1800,37 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.travel(user_id, dest));
     }
 
-    pub fn delete_character_task(&self, user_id: Uuid) {
+    /// Delete one character slot. Only kicks a live session out (and clears
+    /// its sessions/in-memory player) when that slot is the one actually
+    /// being played right now - deleting an idle slot from the landing must
+    /// never disturb a session mid-adventure on a different one.
+    pub fn delete_character_task(&self, user_id: Uuid, slot: i16) {
         let svc = self.clone();
         tokio::spawn(async move {
-            svc.begin_character_reset(user_id);
-            svc.clear_sessions(user_id);
-
-            {
+            svc.begin_character_reset(user_id, slot);
+            let is_live_slot = svc.active_slot(user_id) == slot;
+            if is_live_slot {
+                svc.clear_sessions(user_id);
                 let mut state = svc.state.lock().await;
                 state.delete_character(user_id);
                 svc.publish(&state);
             }
 
-            let lock = svc.persist_lock(user_id);
+            let lock = svc.persist_lock(user_id, slot);
             let _guard = lock.lock().await;
             match svc.db.get().await {
                 Ok(client) => {
-                    if let Err(error) = MudCharacter::delete_by_user_id(&client, user_id).await {
-                        tracing::warn!(%user_id, ?error, "failed to delete mud character");
+                    if let Err(error) = MudCharacter::delete_slot(&client, user_id, slot).await {
+                        tracing::warn!(%user_id, slot, ?error, "failed to delete mud character");
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(%user_id, ?error, "no db client for mud character delete");
+                    tracing::warn!(%user_id, slot, ?error, "no db client for mud character delete");
                 }
             }
-            svc.prepared_saves.lock_recover().remove(&user_id);
-            svc.finish_character_reset(user_id);
+            svc.prepared_saves.lock_recover().remove(&(user_id, slot));
+            svc.character_slots_task(user_id);
+            svc.finish_character_reset(user_id, slot);
         });
     }
 
@@ -1808,7 +1949,16 @@ impl LateaniaService {
 
     fn publish(&self, state: &WorldState) {
         let mut snapshot = state.snapshot();
-        snapshot.reset_versions = self.character_reset_versions.lock_recover().clone();
+        // A session only ever plays its account's currently active slot, so
+        // the reset signal it needs is scoped to that one slot even though
+        // the version counter underneath is tracked per (account, slot).
+        snapshot.reset_versions = self
+            .character_reset_versions
+            .lock_recover()
+            .iter()
+            .filter(|((user_id, slot), _)| *slot == self.active_slot(*user_id))
+            .map(|((user_id, _), version)| (*user_id, *version))
+            .collect();
         let _ = self.snapshot_tx.send(snapshot);
     }
 }
@@ -1826,6 +1976,7 @@ struct TickOutput {
 
 struct PendingSave {
     user_id: Uuid,
+    slot: i16,
     version: u64,
     saved: SavedCharacter,
 }
