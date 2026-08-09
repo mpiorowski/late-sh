@@ -2150,7 +2150,10 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
 fn chat_state_with_cyberspace(
     test_db: &late_core::test_utils::TestDb,
     user_id: Uuid,
-) -> (ChatState, crate::app::chat::cyberspace::svc::CyberspaceService) {
+) -> (
+    ChatState,
+    crate::app::chat::cyberspace::svc::CyberspaceService,
+) {
     let db = test_db.db.clone();
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
@@ -2232,11 +2235,10 @@ async fn remote_pin_changes_re_derive_the_rail_room_selection() {
 
     // Another session of the same account pins a room in front: beta moves
     // to index 2, and the rail cursor must follow the room, not the slot.
-    cyberspace.set_circ_pinned_task(user.id, vec![
-        "zeta".to_string(),
-        "alpha".to_string(),
-        "beta".to_string(),
-    ]);
+    cyberspace.set_circ_pinned_task(
+        user.id,
+        vec!["zeta".to_string(), "alpha".to_string(), "beta".to_string()],
+    );
     tick_until(&mut state, "pinned list grows", |state| {
         state.cyberspace.pinned_rooms().len() == 3
     })

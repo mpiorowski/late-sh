@@ -937,9 +937,7 @@ impl State {
                 // last_message_at against this session's read cursor.
                 self.room_last_message = rooms
                     .iter()
-                    .filter_map(|room| {
-                        Some((room.key().to_string(), room.last_message_at?))
-                    })
+                    .filter_map(|room| Some((room.key().to_string(), room.last_message_at?)))
                     .collect();
                 if let Some(Modal::Rooms(modal)) = &mut self.modal {
                     modal.roster = rooms;

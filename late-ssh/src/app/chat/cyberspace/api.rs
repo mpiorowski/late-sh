@@ -767,11 +767,7 @@ impl CircStreamBuffer {
     pub fn push(&mut self, chunk: &[u8]) -> Vec<String> {
         self.bytes.extend_from_slice(chunk);
         let mut frames = Vec::new();
-        while let Some(split) = self
-            .bytes
-            .windows(2)
-            .position(|window| window == b"\n\n")
-        {
+        while let Some(split) = self.bytes.windows(2).position(|window| window == b"\n\n") {
             let frame: Vec<u8> = self.bytes.drain(..split + 2).collect();
             frames.push(String::from_utf8_lossy(&frame).into_owned());
         }

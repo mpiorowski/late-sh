@@ -235,9 +235,11 @@ fn stream_frames_carry_window_arrival_and_deletion() {
 fn presence_heartbeat_is_floored_against_a_hot_loop() {
     // A misbehaving response naming a zero cadence must not turn the
     // presence loop into a hot cycle of authenticated POSTs.
-    let hot: CircPresence =
-        parse_envelope(200, r#"{ "data": { "heartbeatMs": 0, "idleAfterMs": 60000 } }"#)
-            .expect("parse hot presence");
+    let hot: CircPresence = parse_envelope(
+        200,
+        r#"{ "data": { "heartbeatMs": 0, "idleAfterMs": 60000 } }"#,
+    )
+    .expect("parse hot presence");
     assert_eq!(hot.heartbeat_ms, CIRC_PRESENCE_MIN_HEARTBEAT_MS);
 
     // The cadence they actually publish stays theirs, untouched.
@@ -248,8 +250,7 @@ fn presence_heartbeat_is_floored_against_a_hot_loop() {
 
 #[test]
 fn stream_buffer_keeps_multibyte_chars_whole_across_chunk_splits() {
-    let frame =
-        "event: put\ndata: {\"path\":\"/m1\",\"data\":{\"content\":\"caffè 🦀\",\"timestamp\":1}}\n\n";
+    let frame = "event: put\ndata: {\"path\":\"/m1\",\"data\":{\"content\":\"caffè 🦀\",\"timestamp\":1}}\n\n";
     // Cut inside the 4-byte crab: each half alone is invalid UTF-8, which is
     // exactly where a TCP chunk boundary is allowed to land.
     let split = frame.find('🦀').expect("crab in frame") + 2;
