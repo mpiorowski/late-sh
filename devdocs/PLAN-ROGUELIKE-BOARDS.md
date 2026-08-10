@@ -1,25 +1,37 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
-Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07; Phase 2 (NetHack +
-scrape removal) IMPLEMENTED 2026-08-08; Phase 3 (Brogue) IMPLEMENTED
-2026-08-08, both uncommitted on branch `mateu/roguelikes_leaderboards`; Phase 4
-(dcss-stats publishing) not started, blocked on maintainer contact. All three
-external roguelike doors now run on the log pipe. (The Lateania Games boards
-shipped separately.)
+Status: Phases 1-3 IMPLEMENTED (DCSS 2026-08-07, NetHack + scrape removal
+2026-08-08, Brogue 2026-08-08). **All three external roguelike doors now run on
+the log pipe; only Phase 4 (dcss-stats publishing) remains, and it is blocked
+on maintainer contact, not on code.** (The Lateania Games boards shipped
+separately.)
 
-Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md`
-(created during Phase 1: the whole leaderboard domain, incl. the door board
-model), and the door contexts for the phase at hand
-(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss and
-nethack ones document their shipped log pipes, brogue names its run-history
-file in §9/Deferred).
+**Working-tree state as of 2026-08-08, read before touching anything:** all of
+Phases 1-3 sit uncommitted on branch `mateu/roguelikes_leaderboards`, and that
+branch has an **in-progress merge from `main`** (`git merge main`). The only
+conflict was root `CONTEXT.md`; it is resolved and staged, so the tree is ready
+for the human to commit. Two resolution notes: the `Last updated` line was
+overwritten with the Phase 3 entry per that file's own no-chain rule (main's
+chat-translation note was dropped; its real documentation lives in
+`late-ssh/src/app/chat/CONTEXT.md` §14), and the Brogue migration was renumbered
+`137 -> 140` because main landed its own 137/138/139. Merged tree verified:
+`cargo check` clean, `cargo fmt` applied, `make test-llm` green at 195/195 over
+the brogue, ingest, leaderboard, activity, chips, profile-award, and user
+suites. `make check` is human-owned and NOT run.
+
+Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md` (the
+whole leaderboard domain, incl. the door board model), and the door contexts
+(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md` — all three now
+document their shipped log pipes; brogue's §1 covers the per-player-directory
+identity shape that makes it the odd one out).
 
 ## Phase 3 handoff (Brogue, 2026-08-08)
 
-Green under targeted `make test-llm` (late-brogue, ingest, brogue door, door
-board suites: 70/70); the broader leaderboard/chips/award sweep and `make
-check` are not run (human-owned). The Brogue-shaped deltas from the Phase 1-2
-pattern, all of which fall out of "identity is a directory, not a field":
+Green under targeted `make test-llm` (195/195 across late-brogue, ingest,
+brogue door, leaderboard, activity, chips, profile-award, and user suites, run
+against the merged tree); `make check` not run (human-owned). The Brogue-shaped
+deltas from the Phase 1-2 pattern, all of which fall out of "identity is a
+directory, not a field":
 
 - **No single log file, and no name on the line.** Each player's run history
   lives in their own save dir, so the host tailer (`late-brogue/src/stats.rs`)
@@ -191,8 +203,11 @@ non-empty; historical wins grant badges/chips by owner decision).
      was chosen over first rune deliberately: it is the exact twin of the
      Amulet badge.
    - Brogue: Escaped 10k, Mastered 20k. Brogue's run history only records
-     end-of-run results (Killed / Escaped / Mastered), so the pair falls out
-     of the data source; there is no mid-game milestone log.
+     end-of-run results (`Died` / `Quit` / `Escaped` / `Mastered`), so the pair
+     falls out of the data source; there is no mid-game milestone log.
+     *Correction from Phase 3: unlike the other two pairs, these are
+     alternative endings rather than stages, so a Mastery does NOT back-grant
+     an Escape.*
 3. **Boards per door, uniform:** Wins (all-time count), Deepest dive (monthly
    + all-time), Top score (monthly + all-time). They join the existing "Games"
    section on the Leaderboards page, which leads the board rail.
@@ -213,7 +228,7 @@ non-empty; historical wins grant badges/chips by owner decision).
 | NetHack | xlogfile in `VAR_PLAYGROUND` (`/var/games/nethack-var`) | at game end | `key=value` fields: `name`, `death`, `points`, `deathlev`, `maxlvl`, `turns`, `achieve` bitmask (includes "obtained the Amulet"), ascension as the death/end reason |
 | DCSS | `$HOME/.crawl/logfile` | at game end | colon-delimited `key=value`: `name`, `sc` (score), `xl`, `place`, `ktyp` (`winning` = escaped with the Orb), `urune`, `turn` |
 | DCSS | `$HOME/.crawl/milestones` | live, mid-run | same format, `type=` field: rune pickups, `br.enter`, Zot entry, `orb` (Orb pickup) |
-| Brogue | run history file in each player dir (`players/<handle>/`) | at game end | seed, date, result (Killed / Escaped / Mastered), killer, score, gold, lumenstones, deepest level, turns |
+| Brogue | `BrogueRunHistory.txt` in each player dir (`players/<handle>/`) | at game end | TAB-separated positional fields, no keys and **no player name**: seed, unix epoch, result (`Died` / `Quit` / `Escaped` / `Mastered`, plus a `Reset` marker line), killedBy, score, gold, lumenstones, deepestLevel, turns |
 
 Verification steps before trusting them:
 
@@ -224,16 +239,14 @@ Verification steps before trusting them:
   the Phase 2 handoff).
 - **DCSS:** nothing to build; the files exist today. Confirm exact field names
   against the pinned 0.34.1 source in the `dcss-build` stage or a local run.
-- **Brogue:** upstream 1.15.1 has the victory-logging condition inverted
-  (`mode != EASY && mode != NORMAL` on the victory path, so only wizard-mode
-  victories land in the run history; documented in the brogue CONTEXT §9).
-  Extend our patch set (we already carry `scripts/brogue_hangup_save.patch`)
-  with a one-line fix restoring normal-mode victory logging, applied with a
-  fail-closed grep in the `brogue-build` stage. Upstream already skips
-  easy/wizard deaths in the file, which conveniently keeps cheat modes off the
-  boards. AGPL note: the patch lives in this repo like the hangup patch, which
-  is our section 13 source offer. Read the exact run-history write path in
-  `upstream-brogue/` (re-pin if stale) before writing the parser.
+- **Brogue:** VERIFIED and FIXED in Phase 3. The inverted victory condition was
+  real (`mode != EASY && mode != NORMAL` on the victory path, so only
+  wizard-mode victories were logged); `scripts/brogue_victory_log.patch` now
+  restores normal-mode victory logging, applied with a fail-closed grep in the
+  `brogue-build` stage beside the existing hangup patch. Upstream skips
+  easy/wizard deaths on its own, so with the patch every cheat-mode game is
+  absent from the file and cannot reach boards or badges. AGPL note: both
+  patches live in this repo, which is our section 13 source offer.
 
 ## Identity mapping
 
@@ -267,7 +280,16 @@ child opens a log-streaming session:
 - Idempotency: unique `(game, source_file, source_offset)` on the fact tables;
   re-ingest after a cursor reset is a no-op.
 
-## Data model
+## Data model — SHIPPED as designed (Phases 1-3)
+
+The section below is the original design and still describes what exists; it is
+kept as the rationale record. Two deltas landed during implementation: the
+`Standings` enum got its own `AllTimeOnly` arm for the Wins boards (rather than
+reusing `Snapshot`), and the query-count bookkeeping moved to
+`late-ssh/src/app/leaderboard/CONTEXT.md`, which owns the current number
+(thirteen). **Adding a door costs zero extra queries** — each board family is
+one union query per window regardless of roster size — so the last bullet's
+"the pass grows" warning does not apply to a fourth door.
 
 - `door_runs`: one row per finished game. `game` (text key: `nethack`, `dcss`,
   `brogue`), `user_id`, `ended_at`, `result` (text from a closed Rust enum:
@@ -292,14 +314,16 @@ child opens a log-streaming session:
   enum already models single-window boards (Wins is all-time only; give it its
   own arm or reuse `Snapshot` with an honest heading, decide in-session).
   `format_value` per board ("N wins", "depth N", raw score).
-- The leaderboard pass grows by a known number of queries: update the count in
-  `hub/svc.rs` comments, `hub/CONTEXT.md`, and root `CONTEXT.md` (currently
-  eleven).
+- ~~The leaderboard pass grows by a known number of queries~~ — settled: the
+  pass is thirteen queries and does not grow per door. The count lives in
+  `late-ssh/src/app/leaderboard/CONTEXT.md` (the hub/root copies were trimmed
+  to pointers during the Phase 1 refactor rider).
 
-## Badges and payouts
+## Badges and payouts — SHIPPED for all three doors
 
-Mirror the NetHack award machinery (`door/nethack/award.rs`), generalized into
-a shared door-award sink fed by ingestion instead of per-door screen scrapes:
+The design below is what exists. The sink is `app/door/ingest/award.rs`
+(`DoorAwards`/`DoorBadge`); the one behavioral delta from this design is that
+Brogue's pair does not back-grant (see decision 2's correction).
 
 - Reward templates (migration, lifetime claim policy like
   `nethack_amulet`/`nethack_ascension`): `dcss_orb` 10,000, `dcss_win` 20,000,
@@ -308,14 +332,15 @@ a shared door-award sink fed by ingestion instead of per-door screen scrapes:
   (`profile_award.rs`, chat label logic in `user.rs`): DCSS `DCO` (Orb),
   `DCW` (win); Brogue `BRE` (Escaped), `BRM` (Mastered). Same collapse rule as
   NHA/NHY: the lesser badge collapses in chat labels when the greater is
-  present, profile views show both. Update the Badge Codes legend.
+  present, profile views show both. Update the Badge Codes legend. Note the
+  collapse is a *display* rule only and says nothing about granting: BRM
+  collapses BRE in chat, but does not award it.
 - Grants are once per lifetime per account: lifetime payout claim + the
   `NOT EXISTS` award insert, both idempotent, so re-wins and re-ingests pay
   nothing. NetHack keeps NHA/NHY codes and history; existing holders are
   naturally protected by the same idempotent inserts when the xlogfile
-  backfill replays their old games. Decide explicitly whether backfilled
-  historical wins should grant (recommended: yes, it is the same achievement;
-  the idempotence makes it safe).
+  backfill replays their old games. ~~Decide whether backfilled historical wins
+  should grant~~ — yes, approved 2026-08-07; the idempotence makes it safe.
 - Feed events from ingestion: deaths (with depth) and wins post
   `ActivityKind::GameEvent`/`GameWon` lines like the current NetHack scrape
   does, now for all three games. "Started a game" stays connect-based in the
@@ -337,19 +362,28 @@ Once xlogfile ingestion grants badges and posts death events:
   LIVELOG exists, its achievement moments (quest artifact, Gehennom entry,
   amulet pickup) are better flavor than the level-band lines anyway.
 
-## dcss-stats.com publishing (Phase 4)
+## dcss-stats.com publishing (Phase 4) — THE ONLY REMAINING WORK
 
 Goal: late.sh joins the public-server ecosystem, whose tooling (dcss-stats,
 Sequell) ingests servers by fetching logfile/milestones over HTTP and links
 morgue dumps per game.
 
+**Blocked on Mat's conversation with the dcss-stats maintainer, not on code.**
+Do not start building URL shapes before that answer lands.
+
 - Serve `$HOME/.crawl/logfile`, `milestones`, and `morgue/` read-only over
   HTTP from the `late-dcss` pod: a small axum listener in the crate (second
-  port), path-sanitized, directory listing for morgues. Ingress route TBD
-  with Mat (`crawl.late.sh` or `late.sh/crawl/*`), TLS via existing ingress.
+  port), path-sanitized, directory listing for morgues.
+- Ingress: **path prefix, decided 2026-08-08** (see the answered question at
+  the bottom). The listener serves under `/crawl/...` natively, with no
+  rewrite annotation; a `Prefix` path rule on the `var.DOMAIN` host out-ranks
+  late-web's `/` catch-all by ingress-nginx's longest-match, so the existing
+  DNS record and TLS cert are reused and late-web needs no change. The new rule
+  belongs in `infra/service-dcss.tf` beside the door's other resources.
 - Coordinate with the dcss-stats maintainer before building URL shapes: what
-  layout their fetcher expects, whether 0.34.1 is fine, whether the server
-  needs registering in Sequell's server list first.
+  layout their fetcher expects, whether a path-prefixed base URL suits it,
+  whether 0.34.1 is fine, whether the server needs registering in Sequell's
+  server list first.
 - Player names are arcade handles, public by design; no privacy gate needed.
 - Nice property: their fetcher and our ingestion read the same files, so each
   validates the other.
