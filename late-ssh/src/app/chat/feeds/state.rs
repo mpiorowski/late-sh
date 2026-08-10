@@ -221,7 +221,7 @@ impl State {
         let mut banner = None;
         loop {
             match self.article_event_rx.try_recv() {
-                Ok(ArticleEvent::Created { user_id, url })
+                Ok(ArticleEvent::Created { user_id, url, .. })
                     if user_id == self.user_id
                         && self
                             .pending_share

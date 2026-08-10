@@ -55,6 +55,10 @@ pub enum ArticleEvent {
     Created {
         user_id: Uuid,
         url: String,
+        /// The extracted title, carried so surfaces that offer the fresh
+        /// share onward (the cyberspace cross-post) do not have to go
+        /// looking for the row that just landed.
+        title: String,
     },
     Failed {
         user_id: Uuid,

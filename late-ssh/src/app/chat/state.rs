@@ -3746,6 +3746,17 @@ impl ChatState {
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
+        // Sharing a link to news is the moment to offer it onward: the title
+        // that landed on the article and the URL, with the human pressing
+        // publish. Never over a modal already up, and never for an account
+        // with nowhere to post it.
+        if let Some(shared) = news_tick.shared.as_ref()
+            && self.cyberspace.is_linked()
+            && !self.cyberspace.modal_active()
+        {
+            self.cyberspace
+                .open_compose_modal_for_link(&shared.title, &shared.url);
+        }
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();

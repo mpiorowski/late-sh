@@ -349,6 +349,7 @@ impl ArticleService {
 
         let announcement =
             build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
+        let title = extraction.title.trim().to_string();
 
         // 4. Save to database — scoped so the client is dropped before helper calls
         tracing::info!(%url, "saving article to database");
@@ -360,7 +361,7 @@ impl ArticleService {
                 ArticleParams {
                     user_id,
                     url: url.to_string(),
-                    title: extraction.title.trim().to_string(),
+                    title: title.clone(),
                     summary: extraction.summary.trim().to_string(),
                     ascii_art,
                 },
@@ -405,6 +406,7 @@ impl ArticleService {
         self.publish_event(ArticleEvent::Created {
             user_id,
             url: url.to_string(),
+            title,
         });
 
         Ok(())

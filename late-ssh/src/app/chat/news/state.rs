@@ -13,6 +13,23 @@ use super::svc::ArticleService;
 pub struct NewsTick {
     pub banner: Option<Banner>,
     pub changed: bool,
+    /// A link this user just finished sharing to news, offered onward to
+    /// surfaces that can repost it. `None` on every other tick.
+    pub shared: Option<SharedLink>,
+}
+
+/// The identity of a freshly shared link: what the extractor read off the
+/// page, and the page itself. Nothing summarized, nothing generated.
+#[derive(Clone, Debug)]
+pub struct SharedLink {
+    pub title: String,
+    pub url: String,
+}
+
+/// What one drain of the article event stream produced.
+struct Drained {
+    banner: Option<Banner>,
+    shared: Option<SharedLink>,
 }
 
 pub struct State {
@@ -333,9 +350,11 @@ impl State {
         // (badge counts, article list), so it counts as changed.
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
+        let drained = self.drain_events();
         NewsTick {
-            banner: self.drain_events(),
+            banner: drained.banner,
             changed,
+            shared: drained.shared,
         }
     }
 
@@ -347,17 +366,23 @@ impl State {
         }
     }
 
-    fn drain_events(&mut self) -> Option<Banner> {
+    fn drain_events(&mut self) -> Drained {
         let mut banner = None;
+        let mut shared = None;
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => match event {
-                    ArticleEvent::Created { user_id, .. } if self.user_id == user_id => {
+                    ArticleEvent::Created {
+                        user_id,
+                        url,
+                        title,
+                    } if self.user_id == user_id => {
                         self.current_task = None;
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
                         banner = Some(Banner::success("Article shared!"));
+                        shared = Some(SharedLink { title, url });
                     }
                     ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;
@@ -408,7 +433,7 @@ impl State {
                 }
             }
         }
-        banner
+        Drained { banner, shared }
     }
 }
 

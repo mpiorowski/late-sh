@@ -5,8 +5,8 @@ use late_core::test_utils::{create_test_user, test_db};
 
 use crate::app::chat::cyberspace::api::{CircMessage, CircStreamEvent, CsNotification, CsPost};
 use crate::app::chat::cyberspace::state::{
-    Modal, State, View, count_unread_entries, dedupe_notifications, feed_reload_due, parse_topics,
-    unread_poll_due,
+    ComposeField, Modal, State, TITLE_MAX_CHARS, View, count_unread_entries, dedupe_notifications,
+    feed_reload_due, parse_topics, unread_poll_due,
 };
 use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
@@ -370,6 +370,32 @@ async fn compose_modal_submit_requires_a_body() {
     let banner = state.open_compose_modal();
     assert!(banner.is_some(), "unlinked compose should be refused");
     assert!(state.modal.is_none());
+}
+
+#[tokio::test]
+async fn a_shared_link_prefills_compose_with_the_title_and_the_url_and_nothing_else() {
+    let mut state = test_state().await;
+    // What news extracted, exactly as it will be published: a headline that
+    // arrived wrapped and overlong, and the page itself. No summary rides
+    // along, and nothing is sent until a human presses publish.
+    let headline = format!("Some\n  wrapped   headline {}", "x".repeat(TITLE_MAX_CHARS));
+    state.open_compose_modal_for_link(&headline, "https://example.com/a-post");
+
+    match &state.modal {
+        Some(Modal::Compose(compose)) => {
+            let title = compose.title.lines().join("\n");
+            assert_eq!(title.chars().count(), TITLE_MAX_CHARS);
+            assert!(
+                title.starts_with("Some wrapped headline xxx"),
+                "title collapses to one line: {title:?}"
+            );
+            assert_eq!(compose.body.lines().join("\n"), "https://example.com/a-post");
+            assert_eq!(compose.topics.lines().join("\n"), "");
+            assert_eq!(compose.focus, ComposeField::Title);
+            assert!(!compose.busy, "the offer opens editable, not in flight");
+        }
+        _ => panic!("compose modal should be open"),
+    }
 }
 
 fn circ_message(id: &str, timestamp: i64, content: &str) -> CircMessage {

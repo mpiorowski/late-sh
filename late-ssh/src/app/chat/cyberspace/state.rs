@@ -456,15 +456,24 @@ impl State {
                 "Link your cyberspace account first: /cs link",
             ));
         }
-        self.modal = Some(Modal::Compose(Box::new(ComposeModal {
-            title: new_themed_textarea("Title (optional)", WrapMode::None, true),
-            topics: new_themed_textarea("Topics, up to 3 (optional)", WrapMode::None, false),
-            body: new_themed_textarea("Write your entry (markdown)...", WrapMode::Word, false),
-            focus: ComposeField::Title,
-            error: None,
-            busy: false,
-        })));
+        self.modal = Some(Modal::Compose(Box::new(blank_compose_modal())));
         None
+    }
+
+    /// A link the user just shared to news, offered on to their cyberspace
+    /// feed: the extracted title in the title field, the URL as the body,
+    /// and nothing else. No summary, no ASCII art, nothing this app wrote.
+    /// The modal is only ever an offer: it opens prefilled and a human
+    /// presses publish, so no post reaches their API unread.
+    pub(crate) fn open_compose_modal_for_link(&mut self, title: &str, url: &str) {
+        let mut modal = blank_compose_modal();
+        // The title field is one line: a headline that arrived wrapped would
+        // otherwise open as two rows in a box that only ever submits one.
+        modal
+            .title
+            .insert_str(truncate_chars(&collapse_whitespace(title), TITLE_MAX_CHARS));
+        modal.body.insert_str(truncate_chars(url, BODY_MAX_CHARS));
+        self.modal = Some(Modal::Compose(Box::new(modal)));
     }
 
     pub(crate) fn open_reply_modal(&mut self) {
@@ -1121,6 +1130,31 @@ fn trim_messages(messages: &mut Vec<CircMessage>) {
 
 pub(crate) fn single_line(input: &TextArea<'static>) -> String {
     input.lines().join(" ").trim().to_string()
+}
+
+fn blank_compose_modal() -> ComposeModal {
+    ComposeModal {
+        title: new_themed_textarea("Title (optional)", WrapMode::None, true),
+        topics: new_themed_textarea("Topics, up to 3 (optional)", WrapMode::None, false),
+        body: new_themed_textarea("Write your entry (markdown)...", WrapMode::Word, false),
+        focus: ComposeField::Title,
+        error: None,
+        busy: false,
+    }
+}
+
+fn collapse_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Prefilled fields land inside the same limits the submit validates, so a
+/// long headline opens as an editable title rather than an error the user
+/// has to trim themselves.
+fn truncate_chars(input: &str, max_chars: usize) -> &str {
+    match input.char_indices().nth(max_chars) {
+        Some((end, _)) => &input[..end],
+        None => input,
+    }
 }
 
 /// Topics: comma or whitespace separated, lowercased, deduped, max 3.

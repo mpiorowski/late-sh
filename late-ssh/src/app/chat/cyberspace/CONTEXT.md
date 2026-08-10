@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh as a personal client for cyberspace.online: the Cyberspace rail entry/pane, `/cs` commands, account linking, and the typed v1 API client
 - Primary audience: LLM agents working in `late-ssh/src/app/chat/cyberspace`, the `/cs` commands, the `cyberspace_accounts` table, or the AI blocklist for cyberspace.online URLs
-- Last updated: 2026-08-09 (room unread dots: the 10-minute badge poll also fetches the chat roster while rooms are pinned, and each rail room row shows a `●` when its `last_message_at` passed our per-room read cursor, migration 139; see section 9)
+- Last updated: 2026-08-10 (sharing a link to News now offers it on to their feed: the finished share opens the compose modal prefilled with the extracted title and the URL as the body, nothing generated, and a human presses publish; see section 6b)
 - Status: Active (v1)
 - Parent context: `../CONTEXT.md` (chat), root `../../../../../CONTEXT.md`
 - Related context: `../news/` (`is_ai_blocklisted_url` lives in `news/svc.rs`)
@@ -47,7 +47,7 @@ Cross-crate/cross-module touchpoints:
 - `app/render.rs`: modal draw arm + `modal_active()` in the input-capture gates.
 - `chat/commands.rs`: `/cs` and `/cyberspace` autocomplete entries.
 - `app/activity/event.rs` / `publisher.rs`: `ActivityKind::CyberspacePosted` and `cyberspace_posted_task`.
-- `chat/news/svc.rs`: `is_ai_blocklisted_url` (the AI wall, see section 3).
+- `chat/news/svc.rs`: `is_ai_blocklisted_url` (the AI wall, see section 3), and `ArticleEvent::Created`, which carries the extracted title so a finished News share can be offered on to their feed (section 6b).
 
 Keep `mod.rs` declaration-only.
 
@@ -107,6 +107,15 @@ Three views (`View::Feed`/`Thread`/`Notifications`) and four modals (`Modal::Lin
 - **Modals stay open and busy while a submit is in flight, so a failed publish, reply, or login never eats the draft.** Esc still closes; a busy modal ignores every other keystroke.
 - A created entry publishes `ActivityKind::CyberspacePosted`: a #lounge story line naming the title, throttle-keyed on it so retries collapse but distinct entries both announce.
 
+### 6b. Sharing A Link Onward
+
+Finishing a News share (`ArticleEvent::Created`, whether it started in the News composer or as an RSS entry shared from Feeds) opens the compose modal prefilled: the extracted title in the title field, the URL as the body, topics empty. `NewsTick::shared` carries the pair up to `ChatState::tick`, which is the one place that decides to offer it, and only for a linked account with no cyberspace modal already up.
+
+- **The post carries nothing this app wrote.** Title and URL, no summary, no ASCII art, none of the `---NEWS---` announcement. The AI wall in section 3 is about their content going into a model; this is the other direction, and the rule it follows is that we do not publish generated prose to their feed under a user's name.
+- **The modal is an offer, never a send.** It opens editable and idle, and the same human keystroke that publishes any other entry is what publishes this one. Esc drops it and the News share still stands.
+- The title is collapsed to one line and truncated to `TITLE_MAX_CHARS` before it lands in the field, so a wrapped or overlong headline opens editable rather than as a validation error the user has to clean up.
+- It pops wherever the user is standing, because `draw_modal` runs from the one global draw and the modal captures input globally. Processing a URL can take minutes, so the share and the offer are not always on the same screen.
+
 ## 7. Invariants
 
 1. **The terms contract in section 3.** Per-user token on human action, no server-side content cache, no cross-user rendering, no AI on their content. Treat an erosion of any of these as a correctness bug.
@@ -117,6 +126,7 @@ Three views (`View::Feed`/`Thread`/`Notifications`) and four modals (`Modal::Lin
 6. **Migrations 133, 136, 137, and 139 are history.** Any schema change ships as a new forward migration.
 7. **A chat room fetches only while its `CircRoomSession` is alive.** Every exit path drops it (see section 9); a stream, heartbeat, or poll that outlives the user's presence in the room is a terms bug, not a leak.
 8. **`mod.rs` stays declaration-only.**
+9. **Nothing reaches their API without a keystroke behind it.** The news-share offer (section 6b) opens a modal and stops there; any future surface that fills a post for the user stops in the same place. A path that publishes on its own is a bot on their side of the line, whatever triggered it.
 
 ---
 
@@ -161,7 +171,7 @@ Their API docs are public at https://api.cyberspace.online/docs (markdown at `/d
 Run via `ARGS="-p late-ssh -E 'test(cyberspace)'" make test-llm`.
 
 - `api_test.rs`: envelope parsing (data/error/neither), `parse_void` on bodyless 2xx, error mapping, notification `post_id()` target shapes.
-- `state_test.rs`: topic parsing, `feed_reload_due`/`unread_poll_due` gating, modal validation, stale-thread drop, notification dedupe, the reset on re-entering the pane, the unread-entry count and the badge sum, and the marks surviving the visit that clears the count.
+- `state_test.rs`: topic parsing, `feed_reload_due`/`unread_poll_due` gating, modal validation, the shared-link prefill carrying only the title and the URL (`a_shared_link_prefills_compose_with_the_title_and_the_url_and_nothing_else`), stale-thread drop, notification dedupe, the reset on re-entering the pane, the unread-entry count and the badge sum, and the marks surviving the visit that clears the count.
 - `ui_test.rs`: `thread_lines` height for a long entry (the scroll ceiling that pins the wrapping fix) and rows staying inside the pane for wide (CJK) glyphs.
 - `svc_test.rs`: DB-backed link status/unlink against a dead base URL so nothing touches the network, plus the shared-refresh dedup against a counting fake HTTP server (the one exception to "dead base URL", and still never their real API).
 - cIRC: `api_test.rs` covers the style shapes, `display_text` (art decode, duplicated caption, tombstone), the SSE frames (window/upsert/patch/removal/keep-alive), `CircStreamBuffer` chunk reassembly (the multi-byte split), and the presence floor; `state_test.rs` covers the history+window merge, deletion applied in place, frames for another room being ignored, pin toggling, unlink closing the room, and the unread-dot lifecycle (`room_dots_follow_the_roster_against_the_read_cursor`); `late-core` covers the cursor round-trip and prune (`circ_room_read_cursors_round_trip_and_prune_with_the_pins`); `chat/state_internal_test.rs::the_cyberspace_section_carries_the_pane_and_the_pinned_rooms` pins the rail section against navigation, and `remote_pin_changes_re_derive_the_rail_room_selection` pins the tick reconcile; `app/input_flow_test.rs::switching_screens_drops_the_open_cyberspace_room` pins the screen-switch exit path.
