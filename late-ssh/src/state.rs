@@ -108,6 +108,7 @@ pub struct State {
     pub config: Config,
     pub db: Db,
     pub ai_service: AiService,
+    pub translation_service: crate::app::ai::translate::TranslationService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
     pub chat_service: ChatService,

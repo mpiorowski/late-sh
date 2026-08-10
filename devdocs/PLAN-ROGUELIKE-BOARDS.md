@@ -1,10 +1,11 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
 Status: Phase 1 (DCSS end-to-end) IMPLEMENTED 2026-08-07; Phase 2 (NetHack +
-scrape removal) IMPLEMENTED 2026-08-08, uncommitted on branch
-`mateu/roguelikes_leaderboards`; Phases 3-4 not started. This plan covers the
-three external roguelike doors: NetHack, DCSS, Brogue. (The Lateania Games
-boards shipped separately.)
+scrape removal) IMPLEMENTED 2026-08-08; Phase 3 (Brogue) IMPLEMENTED
+2026-08-08, both uncommitted on branch `mateu/roguelikes_leaderboards`; Phase 4
+(dcss-stats publishing) not started, blocked on maintainer contact. All three
+external roguelike doors now run on the log pipe. (The Lateania Games boards
+shipped separately.)
 
 Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md`
 (created during Phase 1: the whole leaderboard domain, incl. the door board
@@ -12,6 +13,63 @@ model), and the door contexts for the phase at hand
 (`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md`; the dcss and
 nethack ones document their shipped log pipes, brogue names its run-history
 file in §9/Deferred).
+
+## Phase 3 handoff (Brogue, 2026-08-08)
+
+Green under targeted `make test-llm` (late-brogue, ingest, brogue door, door
+board suites: 70/70); the broader leaderboard/chips/award sweep and `make
+check` are not run (human-owned). The Brogue-shaped deltas from the Phase 1-2
+pattern, all of which fall out of "identity is a directory, not a field":
+
+- **No single log file, and no name on the line.** Each player's run history
+  lives in their own save dir, so the host tailer (`late-brogue/src/stats.rs`)
+  rediscovers `players/*/` on every poll pass and streams the frame id
+  `players/<handle>/BrogueRunHistory.txt`, which is both the cursor key and
+  the identity (`ingest/brogue.rs::playname_from_file`). A directory name that
+  could break the frame or cursor encodings (`\t`, `:`, `,`, `/`, `.`) is
+  skipped: `playname::sanitize` can never produce one, so such a dir was not
+  created by this host.
+- **Variants are excluded by file, not by field** (owner decision): Rapid and
+  Bullet Brogue write `RapidBrogueRunHistory.txt` /
+  `BulletBrogueRunHistory.txt` beside the standard file, and the host simply
+  never opens them.
+- **The victory-logging bug is real and now patched.** 1.15.1's victory path
+  tests `mode != EASY && mode != NORMAL` (the death path correctly tests
+  `!= EASY && != WIZARD`), so normal wins were never logged and wizard wins
+  were. `scripts/brogue_victory_log.patch` flips it; the Dockerfile asserts it
+  fail-closed by grepping that `GAME_MODE_NORMAL` (exactly one occurrence in
+  `RogueMain.c`, the buggy line) is gone. `door-brogue` image tag bumped to
+  `1.15.1-r3`. With the patch, upstream's own self-policing is what keeps
+  Easy/Wizard games off the boards: they write no run-history line at all.
+- **Correction to this plan's badge assumption:** Escaped and Mastered are
+  *alternative* endings, not stages of one run, so `DoorBadge::BrogueMastery`
+  does NOT back-grant `BrogueEscape` (unlike NHY→NHA and DCW→DCO). Chat labels
+  still collapse BRE into BRM, which is a display rule only.
+- **No milestone stream at all.** Brogue writes nothing until a game ends, so
+  `door_milestones` stays empty for this game and the dive board needs no
+  union (`deepestLevel` is already the run maximum). `saveResetRun`'s `Reset`
+  marker line parses to its own variant so it advances the cursor without a
+  warning.
+- **Line format** (positional, TAB-separated, from `saveRunHistory`): `seed,
+  epoch, result, killedBy, score, gold, lumenstones, deepestLevel, turns`.
+  `killedBy` is `-` for non-deaths; for deaths it is either a bare lowercase
+  monster name or a capitalized custom phrase, and the feed line branches on
+  that case. A CE bump must re-read this field order.
+- **Implementation map:** host `late-brogue/src/stats.rs` + `server.rs`
+  `SessionHost` split + `env_request`; client `app/door/ingest/brogue.rs`
+  (+`brogue_test.rs`), `DoorKind::Brogue` in `ingest/svc.rs`,
+  `DoorBadge::{BrogueEscape, BrogueMastery}`, `DoorGame::Brogue` in the roster
+  (page arms exhaustive-matched), `ActivityGame::Brogue` through the lounge
+  filter, migration `140_seed_brogue_milestone_rewards.sql`, main.rs task
+  behind `LATE_BROGUE_ENABLED`, seed script Brogue rows.
+- **Prod bring-up order matters, same as Phases 1-2:** deploy the new
+  `late-brogue` host (a `-brogue` release, which also rebuilds the r3 game
+  image) before or with the service-ssh release. No infra manifest change this
+  time: the existing initContainer only chowns the mount, and the host mkdirs
+  player dirs itself. First connect backfills every player's whole run history
+  (boards launch non-empty; historical wins back-grant badges by owner
+  decision). Runs logged *before* the r3 image lands are still only deaths and
+  quits for normal players, since upstream never wrote their victories.
 
 ## Phase 2 handoff (NetHack, 2026-08-08)
 
@@ -306,10 +364,13 @@ morgue dumps per game.
 2. **NetHack** — DONE (see the Phase 2 handoff above; LIVELOG panned out, so
    live Amulet-at-pickup timing and achievement flavor came back from a
    file, and the scrape is deleted).
-3. **Brogue**: victory-logging patch + isolation-script-style fail-closed
-   grep, run-history parser (per-player files: the tailer walks
-   `players/*/`), badges, boards.
-4. **dcss-stats HTTP publishing** after maintainer contact.
+3. **Brogue** — DONE (see the Phase 3 handoff above; the victory-logging bug
+   was real and is patched fail-closed, the tailer walks `players/*/`, and the
+   badge pair grants without back-granting because Brogue's endings are
+   alternatives).
+4. **dcss-stats HTTP publishing** after maintainer contact. Ingress shape
+   decided (path prefix, see the answered question below); still needs the
+   maintainer conversation before building.
 
 ## Testing guidance (repo policy applies, tests adjacent to code)
 

@@ -1095,6 +1095,54 @@ async fn linked_account_gets_the_rail_entry_and_the_pane() {
 }
 
 #[tokio::test]
+async fn switching_screens_drops_the_open_cyberspace_room() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-leaver").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-leave-flow-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+
+    app.chat.select_cyberspace_room(0);
+    assert_eq!(
+        app.chat.cyberspace.open_room_slug(),
+        Some("circ-lab"),
+        "selecting the rail entry should open the room"
+    );
+
+    // A digit, Tab, or Ctrl+G switches screens without going through the
+    // rail; the room's stream and presence heartbeat must not survive it.
+    app.set_screen(Screen::Arcade);
+    assert_eq!(
+        app.chat.cyberspace.open_room_slug(),
+        None,
+        "leaving Home must drop the room session"
+    );
+    assert_eq!(
+        app.chat.cyberspace_room_selected, None,
+        "the rail must not keep pointing at a room nobody is in"
+    );
+    assert!(
+        app.chat.cyberspace_selected,
+        "coming back to Home should land on the cyberspace pane, same as Esc"
+    );
+}
+
+#[tokio::test]
 async fn client_side_chat_commands_render_without_persisting_messages() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "command-flow-viewer").await;
@@ -1446,15 +1494,16 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     );
 
     // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
-    // the first row (Background color). The save banner marks the write landing.
+    // the first row (Sync terminal background). The save banner marks the
+    // write landing.
     app.handle_input(b"\x0f");
     // Wait for the draft to hydrate from the profile snapshot before moving:
     // that hydration resets the modal to its first tab (`open_from_profile`).
     wait_for_render_contains(&mut app, "rails-key-it").await;
     app.handle_input(b"\t\t\t");
-    wait_for_render_contains(&mut app, "Background color").await;
-    // Enter toggles the selected row (Background color, the first one), which
-    // runs the same `save()` every other settings edit runs.
+    wait_for_render_contains(&mut app, "Sync terminal background").await;
+    // Enter toggles the selected row (Sync terminal background, the first
+    // one), which runs the same `save()` every other settings edit runs.
     app.handle_input(b"\r");
     wait_until(
         || {

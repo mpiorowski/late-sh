@@ -130,8 +130,17 @@ fn extract_json_object(text: &str) -> &str {
 
 impl AiService {
     pub fn new(enabled: bool, api_key: Option<String>) -> Self {
+        // Every caller funnels through this one client, and several hold a
+        // scarce resource across the call (the translation API gate, spawned
+        // summary tasks). reqwest has no default timeout, so a hung Gemini
+        // call would pin those forever; 120s is far past any legitimate
+        // generation.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("reqwest client construction cannot fail with these options");
         Self {
-            client: Client::new(),
+            client,
             api_key,
             enabled,
         }

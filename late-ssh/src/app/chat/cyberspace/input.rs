@@ -9,20 +9,79 @@ use crate::app::{
 };
 
 use super::state::{
-    BODY_MAX_CHARS, ComposeField, LinkField, Modal, TITLE_MAX_CHARS, TOPICS_MAX_CHARS, View,
+    BODY_MAX_CHARS, CIRC_MESSAGE_MAX_CHARS, ComposeField, LinkField, Modal, TITLE_MAX_CHARS,
+    TOPICS_MAX_CHARS, View,
 };
 
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    match key {
-        b'A' => {
+    let in_room = app.chat.cyberspace.open_room_slug().is_some();
+    match (key, in_room) {
+        (b'A', true) => {
+            app.chat.cyberspace.room_scroll(-1);
+            true
+        }
+        (b'B', true) => {
+            app.chat.cyberspace.room_scroll(1);
+            true
+        }
+        (b'A', false) => {
             app.chat.cyberspace.move_selection(-1);
             true
         }
-        b'B' => {
+        (b'B', false) => {
             app.chat.cyberspace.move_selection(1);
             true
         }
         _ => false,
+    }
+}
+
+/// Keys inside an open chat room. The room is its own surface (its own rail
+/// slot), so it does not share the pane's view keys.
+pub fn handle_room_byte(app: &mut App, byte: u8) -> bool {
+    let state = &mut app.chat.cyberspace;
+    match byte {
+        b'j' | b'J' => {
+            state.room_scroll(1);
+            true
+        }
+        b'k' | b'K' => {
+            state.room_scroll(-1);
+            true
+        }
+        b'g' | b'G' => {
+            state.room_to_bottom();
+            true
+        }
+        b'i' | b'I' | b'\r' | b'\n' => {
+            state.start_room_composer();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Keystrokes while the room composer is open. It owns every one of them, the
+/// same way an open modal does, so a message can contain a space or an `h`
+/// without the rail stealing it. Reached from `app::input`'s modal chain,
+/// which runs before any chat routing.
+pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
+    let Some(composer) = app.chat.cyberspace.room_composer_mut() else {
+        return;
+    };
+    // Single line: one keypress sends, matching the one-row composer slot it
+    // draws in and their one-message-per-send API.
+    match handle_single_line_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
+        EditOutcome::Submit => {
+            if let Some(banner) = app.chat.cyberspace.submit_room_composer() {
+                app.banner = Some(banner);
+            }
+        }
+        EditOutcome::Cancel => {
+            app.chat.cyberspace.cancel_room_composer();
+        }
+        EditOutcome::Handled => app.chat.cyberspace.note_composer_activity(),
+        EditOutcome::Ignored => {}
     }
 }
 
@@ -44,6 +103,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         b'k' | b'K' => {
             state.move_selection(-1);
+            true
+        }
+        b'g' | b'G' => {
+            state.go_to_top();
             true
         }
         b'\r' | b'\n' => {
@@ -104,8 +167,15 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
         handle_modal_escape(app);
         return;
     }
+    // The room picker is a list, not a form: it moves and toggles rather than
+    // editing text, so it is resolved before the text-field modals.
+    if matches!(app.chat.cyberspace.modal, Some(Modal::Rooms(_))) {
+        handle_rooms_modal_input(app, event);
+        return;
+    }
     let action = match &mut app.chat.cyberspace.modal {
-        None => ModalAction::None,
+        // Handled above; the arm keeps the match exhaustive over the roster.
+        None | Some(Modal::Rooms(_)) => ModalAction::None,
         // While a submit is in flight the draft is locked; Esc above still works.
         Some(modal) if modal_busy(modal) => ModalAction::None,
         Some(Modal::Link(link)) => match event {
@@ -188,6 +258,26 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
     }
 }
 
+/// The room picker: move the highlight, toggle a room onto the rail, close.
+/// Nothing here opens a room, because the rail entry is how a room is entered.
+fn handle_rooms_modal_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
+            app.chat.cyberspace.move_rooms_modal_selection(1);
+        }
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
+            app.chat.cyberspace.move_rooms_modal_selection(-1);
+        }
+        ParsedInput::Byte(b'\r' | b'\n' | b' ') => {
+            if let Some(banner) = app.chat.cyberspace.toggle_selected_room() {
+                app.banner = Some(banner);
+            }
+        }
+        // Everything else is swallowed: an open modal owns the keyboard.
+        _ => {}
+    }
+}
+
 pub(crate) fn handle_modal_escape(app: &mut App) {
     app.chat.cyberspace.close_modal();
 }
@@ -197,6 +287,9 @@ fn modal_busy(modal: &Modal) -> bool {
         Modal::Link(link) => link.busy,
         Modal::Compose(compose) => compose.busy,
         Modal::Reply(reply) => reply.busy,
+        // The picker is never busy in this sense: it holds no draft to
+        // protect, and toggling stays usable while its roster loads.
+        Modal::Rooms(_) => false,
     }
 }
 

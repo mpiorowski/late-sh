@@ -6,12 +6,16 @@ fn parse_cursors_reads_path_shaped_ids() {
         "players/mat/BrogueRunHistory.txt:123,players/zed_2/BrogueRunHistory.txt:456",
     );
     assert_eq!(cursors.get("players/mat/BrogueRunHistory.txt"), Some(&123));
-    assert_eq!(cursors.get("players/zed_2/BrogueRunHistory.txt"), Some(&456));
+    assert_eq!(
+        cursors.get("players/zed_2/BrogueRunHistory.txt"),
+        Some(&456)
+    );
 }
 
 #[test]
 fn parse_cursors_skips_malformed_entries() {
-    let cursors = parse_cursors("players/a/BrogueRunHistory.txt:abc,players/b/BrogueRunHistory.txt:7,junk");
+    let cursors =
+        parse_cursors("players/a/BrogueRunHistory.txt:abc,players/b/BrogueRunHistory.txt:7,junk");
     assert_eq!(cursors.get("players/a/BrogueRunHistory.txt"), None);
     assert_eq!(cursors.get("players/b/BrogueRunHistory.txt"), Some(&7));
     assert_eq!(cursors.len(), 1);
@@ -57,7 +61,8 @@ fn frame_lines_frames_complete_lines_with_next_cursor() {
 fn frame_lines_keeps_embedded_tabs_in_the_line() {
     // Brogue's own run-history fields are tab-separated; the frame must carry
     // them untouched (the client splits with `splitn(3, '\t')`).
-    let (frames, consumed) = frame_lines("players/mat/BrogueRunHistory.txt", 0, b"123\t456\tDied\n");
+    let (frames, consumed) =
+        frame_lines("players/mat/BrogueRunHistory.txt", 0, b"123\t456\tDied\n");
     assert_eq!(consumed, 13);
     assert_eq!(
         String::from_utf8(frames).unwrap(),

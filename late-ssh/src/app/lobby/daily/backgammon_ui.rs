@@ -229,22 +229,21 @@ impl GridCtx {
             .code()
     }
 
-    /// Background for a column in one half: landing hints, the lifted
-    /// checker, then the cursor on top — the same precedence the other
-    /// boards use.
+    /// Background for a column in one half: the cursor on top, then the
+    /// lifted checker, then landing hints — the same precedence the other
+    /// boards use, and exclusive branches because the lifted checker's
+    /// swap is a `REVERSED` modifier a later `.bg()` cannot clear.
     fn column_bg(&self, half: usize, col: usize) -> Style {
         let code = self.code_at(half, col);
-        let mut style = Style::default();
-        if self.dests.contains(&code) {
-            style = style.bg(theme::AMBER_DIM());
-        }
-        if self.selected == Some(code) {
-            style = style.bg(theme::BG_SELECTION());
-        }
         if self.cursor == Some(half * SLOT_COLS + col) {
-            style = style.bg(theme::AMBER_DIM());
+            Style::default().bg(theme::AMBER_DIM())
+        } else if self.selected == Some(code) {
+            theme::selection_style()
+        } else if self.dests.contains(&code) {
+            Style::default().bg(theme::AMBER_DIM())
+        } else {
+            Style::default()
         }
-        style
     }
 }
 

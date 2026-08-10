@@ -160,6 +160,7 @@ pub struct SessionConfig {
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
     pub chat_service: ChatService,
+    pub translation_service: crate::app::ai::translate::TranslationService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -867,6 +868,13 @@ impl App {
         }
     }
 
+    /// Leave the open cyberspace chat room and land back on its pane. This is
+    /// what stops the room's stream and heartbeat, so every exit path (Esc,
+    /// `b`, selecting anything else) goes through a `leave_room`.
+    pub(crate) fn leave_cyberspace_room(&mut self) {
+        self.chat.select_cyberspace();
+    }
+
     pub(crate) fn sync_visible_chat_room(&mut self) {
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
@@ -1253,6 +1261,7 @@ impl App {
             chat: chat::state::ChatState::new(
                 chat::state::ChatServices {
                     chat: config.chat_service,
+                    translation: config.translation_service,
                     notifications: config.notification_service,
                     articles: config.article_service.clone(),
                     feeds: config.feed_service.clone(),
@@ -1824,6 +1833,13 @@ impl App {
             }
             self.sync_visible_chat_room();
             return;
+        }
+
+        // Leaving Home is leaving the open cyberspace chat room: its stream
+        // and presence heartbeat exist only while the user is on the surface,
+        // and Esc is not the only way off it (digits, Tab, door chords).
+        if self.screen == Screen::Dashboard {
+            self.chat.close_cyberspace_room();
         }
 
         if self.screen == Screen::Artboard {

@@ -155,10 +155,26 @@ If you write a palette this way, know what you trade away:
 - `Color::Reset` has no readable RGB value, so colors derived from the canvas
   (the Sudoku same-number wash) anchor on black instead of the real
   background. The mention and reply washes sit under body text, so instead of
-  the black anchor they fall back to the flat `bg_highlight`.
+  the black anchor they drop out entirely: no fixed wash can promise contrast
+  against a foreground the terminal owns, and the mention/author accents on
+  the text carry the emphasis instead.
+- Selections stop using `bg_selection`. Text on a Reset-canvas palette follows
+  the terminal's own foreground, and no fixed fill is guaranteed readable
+  under an unknown color, so `theme::selection_style()` (and the
+  `theme::row_style(selected)` list helper built on it) switches to reverse
+  video: the terminal swaps its own fg/bg pair, the one pair the user already
+  made legible. New selection call sites must go through those helpers, never
+  raw `bg(BG_SELECTION())`. The swap is total: patching `selection_style()`
+  in clears any fg or bg the call site set earlier, so a reversed row gives
+  up its intra-row accents on these palettes. A color that must survive
+  because it means something (a game piece, a card suit) is applied after
+  the patch, where it becomes the fill of the swapped cell. And because the
+  swap is a modifier a later `.bg()` cannot remove, treatments that compete
+  on the same cell (cursor vs. selection on a game board) must resolve to
+  exactly one branch, never patch-then-overwrite.
 - The text brightness setting only moves colors it can read, so `Color::Reset`
   entries ignore it.
-- With `bg_canvas: Color::Reset`, the "sync terminal background" setting stops
+- With `bg_canvas: Color::Reset`, the "Sync terminal background" setting stops
   driving OSC 11 and resets it instead. That is the point of such a palette:
   leave the background alone.
 

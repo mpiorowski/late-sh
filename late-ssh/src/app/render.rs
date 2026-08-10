@@ -236,7 +236,9 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
-    cyberspace_modal: Option<&'a chat::cyberspace::state::Modal>,
+    /// The pane state, not just its modal: the room picker checks its rows
+    /// against the pinned rail list, which lives on the pane.
+    cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -554,6 +556,8 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
             peer_pomodoros: &self.peer_pomodoros,
+            translations: &self.chat.translations,
+            translation_hidden: &self.chat.translation_hidden,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             inline_images: &self.chat.inline_image_cache,
@@ -628,6 +632,7 @@ impl App {
         let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
             && !self.chat.cyberspace_selected
+            && self.chat.cyberspace_room_selected.is_none()
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
             && !self.chat.showcase_selected
@@ -650,6 +655,9 @@ impl App {
             feeds_view,
             cyberspace_selected: self.chat.cyberspace_selected,
             cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace_unread_saturated: self.chat.cyberspace.unread_saturated(),
+            cyberspace_rooms: self.chat.cyberspace.pinned_rooms(),
+            cyberspace_room_selected: self.chat.cyberspace_room_selected,
             cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
@@ -702,6 +710,8 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
             peer_pomodoros: &self.peer_pomodoros,
+            translations: &self.chat.translations,
+            translation_hidden: &self.chat.translation_hidden,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -783,6 +793,8 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
                     peer_pomodoros: &self.peer_pomodoros,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -843,6 +855,8 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
                     peer_pomodoros: &self.peer_pomodoros,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1035,7 +1049,11 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
-                        cyberspace_modal: self.chat.cyberspace.modal.as_ref(),
+                        cyberspace_modal: self
+                            .chat
+                            .cyberspace
+                            .modal_active()
+                            .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,

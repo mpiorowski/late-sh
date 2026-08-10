@@ -87,7 +87,12 @@ fn raw_json(keys: &[&str], values: &[&str]) -> serde_json::Value {
     serde_json::Value::Object(
         keys.iter()
             .zip(values)
-            .map(|(k, v)| ((*k).to_string(), serde_json::Value::String((*v).to_string())))
+            .map(|(k, v)| {
+                (
+                    (*k).to_string(),
+                    serde_json::Value::String((*v).to_string()),
+                )
+            })
             .collect(),
     )
 }
@@ -112,8 +117,17 @@ pub fn parse_run_history_line(line: &str) -> Option<BrogueLine> {
     if values.len() < KEYS.len() {
         return None;
     }
-    let [seed, time, result, killed_by, score, _gold, _lumenstones, deepest_level, turns] =
-        values[..KEYS.len()]
+    let [
+        seed,
+        time,
+        result,
+        killed_by,
+        score,
+        _gold,
+        _lumenstones,
+        deepest_level,
+        turns,
+    ] = values[..KEYS.len()]
     else {
         unreachable!("slice of KEYS.len() matches the 9-element pattern");
     };

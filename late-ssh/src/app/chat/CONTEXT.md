@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-07 (the Cyberspace section moved to its own `cyberspace/CONTEXT.md`; this file keeps only the `/cs` command dispatch, the rail-gating rule, and the keybindings row)
+- Last updated: 2026-08-09 (author-shared translations: the "Translate my messages to English" opt-in now marks its cache rows `author_shared` and every English-target session displays them automatically, no auto mode or `t` needed; the room-entry cache sweep runs for every session, the settings row "Translate to" is renamed "Target language" since it now also picks which shared translations you receive; see §14 Translation)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -36,7 +36,8 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages
-|-- cyberspace/                  # Synthetic Cyberspace entry: personal client for cyberspace.online
+|                                # (translation itself lives in ../ai/translate.rs; chat owns only the key, the display state, and the row)
+|-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
 |-- discover/                    # Synthetic Discover entry: public rooms not yet joined
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- news/                        # Synthetic News entry: articles + #lounge announcement
@@ -151,6 +152,11 @@ Messages:
 - Delta queries return ascending after `(created, id)` and are inserted into newest-first local state.
 - `reply_to_message_id` is nullable and uses `ON DELETE SET NULL`.
 - `reply_to_user_id` is nullable and uses `ON DELETE SET NULL`. It records the user a bot/automated reply is responding to, used to filter such replies for viewers who ignore that user. Set only by bot sends.
+
+Translations:
+- `message_translations` is the shared translation cache, primary key `(message_id, target_lang)`, `ON DELETE CASCADE` from the message. Migration 136; migration 137 adds `same_language` (a cached "already in this language" verdict whose `body` keeps the judged text, rendered as nothing); migration 138 adds `author_shared` (the author's opt-in wrote this row, so every session reading the target displays it; the upsert ORs the flag so a reader's private rewrite never un-shares a row).
+- Rows are written only by `TranslationService` after a successful model call, and deleted by `ChatMessage` edits (inside the edit transaction) and the FK cascade. Nothing else may write them: a stale row is a translation of text that no longer exists.
+- `target_lang` is the `TranslateLang` key (`en`, `zh-hans`, `ko`, `ja`, `es`, `fr`, `pt`, `de`, `it`, `pl`, `ru`, `uk`, `tr`, `vi`, `id`, `th`, `hi`); adding a language is a new enum variant, and its cache rows are independent of every other language's.
 
 Slow modes:
 - `chat_slow_modes` is a per-user throttle, not a ban. `room_id` set means room-scoped; `room_id NULL` means server-scoped. Unique indexes enforce one row per `(room_id, target_user_id)` for room scope and one server row per target. Rows store `interval_secs`, nullable `expires_at` (`NULL` = permanent), actor, and reason.
@@ -273,7 +279,7 @@ User commands:
 - `/active` opens an overlay from in-memory `active_users`, including repeated-session counts.
 - `/friend @user` privately marks a user as a friend; `/unfriend @user` removes the mark; `/friends` lists marked users.
 - `/binds` opens the Chat help topic.
-- `/cs` (alias `/cyberspace`) opens the Cyberspace rail entry; `/cs post` opens its compose modal, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
+- `/cs` (alias `/cyberspace`) opens the Cyberspace `feeds` entry; `/cs post` opens its compose modal, `/cs chat` (alias `/cs rooms`) the chat-room picker that adds rooms as rail entries, `/cs link` the account-link modal, `/cs unlink` forgets the link. Parsed in `submit_composer` (`parse_cyberspace_command`), handled inline on `ChatState` (no `take_requested_*` plumbing; `pending_chat_screen_switch` pulls the user to Home).
 - `/aquarium` (alias `/aq`) toggles the Shop-unlocked aquarium tray shown only in the Home Lounge view (carved from the top of the lounge chat column); `/aquarium feed` feeds it. Parsed in `submit_composer`, drained via `take_requested_aquarium_command` in `handle_post_submit_requests`.
 - `/pet` toggles the pet strip (same `show_pet_strip` setting as the settings tweak); `/pet feed` and `/pet water` care for the Pet Companion (same strip actions as clicking the bowls/pet; the pet and the food bowl are both feed targets). The strip renders only in the Home Lounge view. Parsed in `submit_composer`, drained via `take_requested_pet_command`.
 - `/dm @user` opens/creates a DM.
@@ -376,6 +382,7 @@ Keys:
 - `d` deletes (double-press `dd` to confirm; first press arms and banners `Press d again to delete`, any selection change disarms) and moves selection to an adjacent message.
 - `p` opens the selected author's read-only profile modal.
 - `c` copies the selected message body.
+- `t` toggles the message's translation (see Translation below).
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
@@ -447,8 +454,9 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 ### Cyberspace
 
-- late.sh as a personal client for cyberspace.online. The slice (`chat/cyberspace/`), its API-terms contract, token model, views/modals, deferrals, and tests live in `cyberspace/CONTEXT.md`: read that before touching anything in the directory.
-- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), the synthetic rail entry in Core below rss (`cyberspace_linked` gates the row in **both** `visual_order_for_rooms` and the rail builders: gating one and not the other leaves a slot the user can arrow onto but never see), and the pane's row in the keybindings table.
+- late.sh as a personal client for cyberspace.online. The slice (`chat/cyberspace/`), its API-terms contract, token model, views/modals, their chat (cIRC), and tests live in `cyberspace/CONTEXT.md`: read that before touching anything in the directory.
+- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), and the rail contract. A linked account gets its **own** `RoomSection::Cyberspace` (shortcut `y`, folds like any other section) holding the pane plus one row per pinned cIRC chat room; `cyberspace_linked` gates the section in **both** `visual_order_for_rooms` and the two rail builders, since gating one and not the other leaves a slot the user can arrow onto but never see.
+- `RoomSlot::CyberspaceRoom(index)` is the first **dynamic** slot: it indexes `ChatState::cyberspace.pinned_rooms()`, and `cyberspace_room_selected` is the matching selection. Because a chat room streams only while it is open, **every** selection change must close it: that is why `clear_synthetic_selection` (the one place the synthetic-entry bools are reset) calls `cyberspace.leave_room()`. A future entry that clears selection by hand instead of through that helper would leave a room streaming behind the user's back.
 - The one rule that crosses domains: **their API terms are load-bearing** (no bots, no scraping/caching for redistribution, no feeding their content to AI). Fetched content renders only for the user who fetched it, and `news/svc.rs::is_ai_blocklisted_url` hard-stops cyberspace.online URLs at the summarizer.
 
 ### Notifications / Mentions
@@ -541,6 +549,7 @@ Cache:
 | `d` | Delete selected own/admin message (press `dd` to confirm) or News article |
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
+| `t` | Translate selected message; press again to collapse, again to reopen. A message already in your target language banners instead of spending a call. |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
 | `f` then `1..9` | Quick-react to selected message |
@@ -594,7 +603,9 @@ modals and the icon picker). Username profile-opens are debounced via
 | News | `j/k` navigate, `i` paste URL, Enter copy/submit URL, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
-| Cyberspace | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `n` notifications, `r` refresh/reply, `b` back |
+| Cyberspace feeds | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `n` notifications, `r` refresh/reply, `b` back |
+| Cyberspace room picker (`/cs chat`, command only) | `j/k` move, Enter add the room to the rail section or take it off, Esc close |
+| Cyberspace room (a rail entry) | `j/k` scroll, `g` newest, `i`/Enter write (in the normal chat composer slot, titled with the room), Enter send, Esc cancel the draft then leave the room, `b` leave |
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
@@ -628,6 +639,22 @@ A patron deep enough into the tavern's drinks types like it. `ChatService::slurr
 - **Readability rests on one rule:** a word's first and last character never move. Only interior letters are reordered (never added or dropped), which is the typoglycemia effect and is why level 4 stays legible at all. Two dials climb per level: what share of words get scrambled (6/32/60/85%) and how far each goes (one swap, one swap, one-or-two swaps, full interior shuffle). Tipsy and buzzed deliberately share a depth: the same fumble, just far more often. The change in *kind* lands at sloshed. Measured over ordinary prose that is roughly 3/21/33/58% of *all* words visibly changed, since short words are ineligible; `each_drink_reads_harder_than_the_last` pins those bands.
 - **Protected tokens are never touched:** `@mentions` (they drive notifications and the mention wash), `#slugs`, URLs, backtick code spans, `---NEWS---`-family markers, the leading `> ` reply quote line (someone else's words), and anything non-ASCII (so CJK and emoji pass through whole). The level-4 `*hic*` only widens an existing gap and respects the same exclusions.
 - `slur(body, level, seed)` is pure with a caller-supplied seed; `svc.rs::slur_seed` supplies a fresh one per message. Tests live in `slur_test.rs`.
+
+### Translation
+
+Chat messages translate on demand (`t`) or, opt-in, automatically. The model call lives in `app/ai/translate.rs` (`TranslationService`, a Gemini `generate_json` schema call); `ChatState` owns only per-session display state.
+
+- **Cost scales with messages written, not readers.** Every result is cached in `message_translations` keyed `(message_id, target_lang)`, so the first viewer's call covers everyone after them, forever, including a session reconnecting tomorrow. Two guards keep that true: single-flight dedupe in the service (twelve sessions rendering the same new message make one call) and a bulk cache-only lookup when entering a room.
+- **Same-language is a cached verdict, not an absence.** The model reply carries a `same_language` flag (an echoed body counts too, the guard for URL-only messages); the verdict lands in `message_translations.same_language` so nobody pays for the call again, renders as nothing (no `↳` line), and `t` on it banners "Already written in X". This is what lets English translate: `En` claims no script (`TranslateLang::script`), so French/Spanish/German bodies reach the model for English readers like any shared-script target, and the model, not the script check, decides what was already readable. The old behavior (English claiming Latin, silently refusing to translate any Latin-script language for the English majority) was the top user complaint about the feature.
+- **The script precheck survives as the cheap first filter.** `needs_translation` (`late-core/src/models/message_translation.rs`) still clears unambiguous cases locally (a Han body for a Han target, unscripted bodies, over-cap walls) so they never reach the API. It is a *script* detector, not a language detector; targets without their own script (English and the Latin roster; Russian/Ukrainian on Cyrillic) send every scripted body to the model and let the cache absorb the cost.
+- **Replies translate the reply, not the quote.** The composer bakes `> @author: preview` into the stored body, and `translation_source_text` strips that first line everywhere translation looks (the precheck, the model prompt, the cached text), so the quoted author never gets re-worded and the `↳` line carries only the reply. The staleness guard still compares the full stored body, since that is what an edit rewrites.
+- **Authors can pre-share in English, and shared means shown.** `Ctrl+O` → Settings → Translation → "Translate my messages to English" (`users.settings.translate_mine_to_en`, off by default): the send and edit paths (`ChatService::pretranslate_for_author`) fire `TranslationService::request_shared` for the author's own message. The cache row lands with `author_shared = true`, the broadcast event carries the flag, and every session whose target language matches displays the `↳` line with no auto mode and no `t`, live via the event and later via the room-entry sweep. The author's own session never shows it (they wrote the original), and a reader's private `t` rows stay private: display is the author's choice, never a side effect of someone else reading. One call per message written by the opted-in author, spent from the same daily cap.
+- **Auto mode is live-only, by policy.** A foreign-script message arriving in the room *on screen* auto-expands; history does not, which is what bounds auto mode's cost and matches what the feature is for (following a live conversation, not machine-translating the archive). History is always one `t` away. Cached history *is* shown pre-expanded on room entry, since reading the cache is free.
+- **The render rule is one line:** foreign script + cache hit → show expanded; cache miss + live → fire a call; cache miss + history → collapsed, `t` on offer. The room-entry cache sweep runs for **every** session (it is cache-only, so it costs one batched read and zero API calls); the drain decides display: auto mode shows all hits, everyone else shows author-shared rows only. A `t`-collapse is a per-session override (`translation_hidden`) that wins over auto mode, the cache, and author-shared rows, so a message you dismissed does not spring back open next frame.
+- **Invalidation is mandatory, not hygiene.** A cached translation describes the exact body it translated: `ChatService::edit_message` deletes the message's rows inside the edit transaction, and `ChatState::forget_translation` drops the session's copy on edit and delete. Skipping either leaves a translation asserting something the author no longer said. Changing the target language clears every stored translation for the same reason, and late results for the old target are dropped on arrival. The cache write itself is conditional (`upsert_if_current` checks the live `chat_messages.body` against the body that was translated), which closes the race where an edit lands while the model call is in flight: the edit's row delete finds nothing to delete, and the stale result is then discarded instead of cached.
+- **Guardrails are for bugs and abuse, not for legitimate traffic**, which is orders of magnitude below them: a global daily call cap (`TRANSLATE_DAILY_CAP`, degrading to "translation unavailable" until UTC rollover), a 4-way concurrency gate so a burst queues instead of tripping API rate limits, and a body-length cap. Failures never retry on their own; `t` is the retry. `record_chat_translation` reports every outcome (`cache_hit` / `translated` / `same_language` / `failed` / `cap_exhausted` / `stale`), so the cache hit ratio and the cap are both visible.
+- **DMs and private rooms are included.** The *viewer* opted in and it is their received text, unlike Drunk Text above, which is excluded from private rooms because it rewrites what the *author* said.
+- Target language, auto mode, and the author-side English share are per account (`users.settings`: `translate_to`, `auto_translate`, `translate_mine_to_en`), edited under `Ctrl+O` → Settings → Translation; the first two sync into `ChatState` each tick, the third is read by `ChatService` at send/edit time. The settings row reads "Target language" because `translate_to` now decides two things: what `t` and auto mode translate into, and which authors' shared translations this session receives (a shared English row shows only to English-target readers).
 
 ### Tail And Delta Recovery
 
@@ -693,6 +720,9 @@ Existing DB-backed coverage:
 - `showcase/svc_test.rs`: create event/snapshot, non-owner update failure, admin delete, unread cursor behavior.
 - `work/svc_test.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
 - `state_test.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
+- `state_internal_test.rs`: `t` toggle over a cached translation (pending → ready → collapse → reopen, plus the same-script no-op banner), target-language switching dropping stale translations, auto mode firing without a pending placeholder, and author-shared display (shared row by someone else shows with no auto mode or `t`; private rows and the viewer's own shared row stay hidden). Note the harness gotcha these pinned: snapshots carry rooms with **empty** message vectors, so a test needing a concrete message must pull the room tail (`load_room_tail`), not wait for a snapshot.
+- `app/ai/translate_test.rs`: cache-hit service path with AI disabled, the failure path clearing single-flight so `t` can retry, and author-shared rows broadcasting their flag (request and sweep alike).
+- `late-core/src/models/message_translation_test.rs`: script detection against each target, language key round-trip, cache upsert/read/cascade-delete, and `author_shared` surviving a later private rewrite.
 
 Existing unit coverage:
 - `state.rs`: command parsing, autocomplete ranking, visual order, reply preview/target helpers, DM sort keys, textarea theme behavior.

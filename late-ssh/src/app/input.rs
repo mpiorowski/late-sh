@@ -899,6 +899,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // The open room's composer takes every keystroke while it is up, so arrows
+    // move the cursor rather than scrolling the conversation behind it.
+    if app.chat.cyberspace.room_composer_mut().is_some() {
+        chat::cyberspace::input::handle_room_composer_input(app, event);
+        return;
+    }
+
     if app.show_bonsai_v2_modal {
         crate::app::bonsai_v2::modal_input::handle_input(app, event);
         return;
@@ -2045,6 +2052,16 @@ fn dispatch_escape(app: &mut App) {
         chat::cyberspace::input::handle_modal_escape(app);
         return;
     }
+    // Inside a cyberspace chat room, Esc backs out one step at a time: the
+    // composer first (so a draft is never lost to a stray Esc), then the room
+    // itself, which is what closes its stream.
+    if app.chat.cyberspace.cancel_room_composer() {
+        return;
+    }
+    if app.chat.cyberspace.open_room_slug().is_some() {
+        app.leave_cyberspace_room();
+        return;
+    }
     if app.chat.cyberspace_selected && app.chat.cyberspace.escape_to_feed() {
         return;
     }
@@ -2458,8 +2475,12 @@ fn chat_room_list_view<'a>(
         feeds_selected: app.chat.feeds_selected,
         feeds_unread_count: app.chat.feeds.unread_count(),
         cyberspace_linked: app.chat.cyberspace.is_linked(),
+        cyberspace_rooms: app.chat.cyberspace.pinned_rooms(),
         cyberspace_selected: app.chat.cyberspace_selected,
+        cyberspace_room_selected: app.chat.cyberspace_room_selected,
+        cyberspace_room_unread: app.chat.cyberspace.room_unread_flags(),
         cyberspace_unread_count: app.chat.cyberspace.unread_count(),
+        cyberspace_unread_saturated: app.chat.cyberspace.unread_saturated(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),
         notifications_selected: app.chat.notifications_selected,
@@ -3338,14 +3359,14 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_lobby_modal = true;
 }
 
+/// The `z`-prefix suffix key, resolved through `RoomSection::shortcut` so the
+/// keys live in one place. Spelling them out again here left a section the
+/// rail drew but nothing could fold.
 fn room_section_suffix(byte: u8) -> Option<RoomSection> {
-    match byte {
-        b'f' | b'F' => Some(RoomSection::Favorites),
-        b'o' | b'O' => Some(RoomSection::Core),
-        b'c' | b'C' => Some(RoomSection::Channels),
-        b'd' | b'D' => Some(RoomSection::Dms),
-        _ => None,
-    }
+    let pressed = byte.to_ascii_lowercase();
+    RoomSection::ALL
+        .into_iter()
+        .find(|section| section.shortcut() == pressed)
 }
 
 pub(crate) fn trigger_global_quit(app: &mut App) {

@@ -92,10 +92,7 @@ pub(crate) fn parse_cursors(value: &str) -> HashMap<String, u64> {
 /// the cursor env value embed the name, so a foreign byte (`\t`, `:`, `,`,
 /// `/`) would corrupt both encodings.
 fn valid_playname_dir(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// Frame every complete line in `bytes` (read starting at `offset` in the

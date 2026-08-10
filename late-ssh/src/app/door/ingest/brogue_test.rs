@@ -118,10 +118,7 @@ fn rejects_file_ids_outside_the_contract() {
         None
     );
     assert_eq!(playname_from_file("players//BrogueRunHistory.txt"), None);
-    assert_eq!(
-        playname_from_file("players/a/b/BrogueRunHistory.txt"),
-        None
-    );
+    assert_eq!(playname_from_file("players/a/b/BrogueRunHistory.txt"), None);
     assert_eq!(playname_from_file("BrogueRunHistory.txt"), None);
     assert_eq!(playname_from_file("logfile"), None);
 }

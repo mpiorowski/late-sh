@@ -70,7 +70,7 @@ russh.workspace = true
 
 # Web / HTTP
 axum = { workspace = true, features = ["ws"] }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 image.workspace = true
 tower-http = { workspace = true, features = ["cors", "trace"] }
 qrcodegen.workspace = true

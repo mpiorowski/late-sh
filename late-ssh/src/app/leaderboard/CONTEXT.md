@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/leaderboard` — the top-level Leaderboards page (screen `6`) and `LeaderboardService` — plus the roster-generated data model in `late-core/src/models/leaderboard.rs` and the monthly `profile_awards` snapshot machinery it drives.
-- Last updated: 2026-08-07 (file created: the Leaderboard Data ownership moved here from `hub/CONTEXT.md`, and `LeaderboardService` moved from `app/hub/svc.rs` to `app/leaderboard/svc.rs` so the slice owns its service)
+- Last updated: 2026-08-08 (Brogue joins the `DoorGame` roster, completing the three door board triples; adding a door costs no extra queries, since each door board family is one union query per window regardless of roster size)
 - Purpose: local working context for everything leaderboard: the refresh service and its cost rules, the board rosters and queries, the page, monthly profile awards, and the local seed script.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -15,7 +15,7 @@ must not own those runtimes or write paths. The Shop/quest/aquarium surfaces
 stay with `app/hub` (`hub/CONTEXT.md`); chip primitives stay in
 `late-core/src/models/chips.rs`; the ingestion pipe that fills the door
 tables belongs to the doors (`app/door/ingest/` plus
-`app/door/{dcss,nethack}/CONTEXT.md`).
+`app/door/{dcss,nethack,brogue}/CONTEXT.md`).
 
 ## Source Map
 
@@ -58,7 +58,7 @@ rosters).
 
 - `DailyPuzzle` (Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube): iterating `ALL` generates the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, and per-user daily completion statuses. The one thing the roster cannot enforce: a new game's win-insert statement must compose `bump_daily_win_total_sql`, or its all-time board stays empty. Monthly boards count win rows in the month window; all-time reads the `daily_win_totals` rollup (migration 131; the bump rides the win insert's own statement, gated to fresh inserts, so same-day replays never double-count and the refresh stays O(players)).
 - `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic): monthly boards union `game_score_events` with legacy best-score rows touched this month; all-time boards read only the legacy tables of record.
-- `DoorGame` (Dcss, Nethack; Brogue joins in its `PLAN-ROGUELIKE-BOARDS.md` phase): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` is already the run maximum, so its milestone rows simply contribute nothing to the union.
+- `DoorGame` (Dcss, Nethack, Brogue): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). `WINS` is win + mastery, so a Brogue escape and a Brogue mastery both count once each on its wins board. The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` and Brogue's `deepestLevel` are already run maximums, so their milestone rows contribute nothing to the union (Brogue writes no milestone rows at all: it logs only at end of game).
 - `Top Chips` (monthly net chip delta from `chip_ledger`, exclusions derived from `ChipMove::excluded_earning_reasons()`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5; Le Word fixed Easy, Rubik's fixed Medium), the same enum whose `chips()` carries the daily-win payout tiers, so points and payouts cannot drift apart. Unknown difficulty keys score 0, never a default.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short); `lateania_frontier` unnests each blob's visited-room array for the deepest Frontier zone (rooms 2000..=2999, 50 per zone, constants restated in `leaderboard.rs` with a pointer at `lateania/world.rs`). A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
 - The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass).
@@ -78,7 +78,7 @@ board's standings beyond that tail; a board deeper than the pane clips.
 
 - Migration 077 adds `profile_awards`, one permanent row per user/category/month placement; 081 enforces top-3.
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as catch-up: it creates missing previous-UTC-month rows and leaves existing rows frozen. Awarded categories: `top_chips`, `arcade_wins`, `tetris` (renders as Lateris), `twenty_forty_eight`, `snake`, ranks 1-3.
-- One-time rankless milestone awards share the table (granted immediately, shown regardless of award month): Lateania bosses (`LMG`, `LKN`, `LYS`, `LKA`), NetHack (`NHA` Amulet, `NHY` ascension), DCSS (`DCO` Orb pickup, `DCW` escape) — both door pairs granted by the log pipe's award sink — and Green Dragon (`GDS`). Chat author labels collapse a lesser badge when its superseding one is present (`user.rs::chat_profile_award_badges`); profile views show all, plus the always-appended `Badge Codes` legend.
+- One-time rankless milestone awards share the table (granted immediately, shown regardless of award month): Lateania bosses (`LMG`, `LKN`, `LYS`, `LKA`), NetHack (`NHA` Amulet, `NHY` ascension), DCSS (`DCO` Orb pickup, `DCW` escape), Brogue (`BRE` escape, `BRM` mastery) — all three door pairs granted by the log pipe's award sink — and Green Dragon (`GDS`). Chat author labels collapse a lesser badge when its superseding one is present (`user.rs::chat_profile_award_badges`); profile views show all, plus the always-appended `Badge Codes` legend. Note the collapse rule is a display convention and does not imply a grant rule: `BRM` collapses `BRE` in chat labels, but a mastery does not back-grant an escape the way `NHY` and `DCW` back-grant their pickups.
 - Chat author labels show top-3 last-completed-UTC-month award badges as one bracketed group; Top Chips badges render as `CHIP1`-`CHIP3`.
 
 ## Local seed data
@@ -86,10 +86,12 @@ board's standings beyond that tail; a board deeper than the pane clips.
 An empty local database renders every panel as "no scores yet".
 `make seed-leaderboard` (`scripts/seed_leaderboard_test_data.{sh,sql}`) fills
 the Compose database with 48 synthetic players spread across every board,
-including `mud_characters` blobs for the Lateania boards and DCSS
-`door_runs`/`door_milestones` rows (winners, quits, spread depths, Orb
-milestones carrying the dive depth; `seed:`-prefixed source files so the
-idempotency key can never collide with real ingested lines). Local
+including `mud_characters` blobs for the Lateania boards and per-door
+`door_runs`/`door_milestones` rows for all three doors (winners, quits,
+spread depths, DCSS Orb milestones carrying the dive depth, Brogue escapes
+and masteries; each door's block is offset from the others so no two boards
+mirror each other, and `seed:`-prefixed source files keep the idempotency key
+from ever colliding with real ingested lines). Local
 development only: it owns the `seed:leaderboard:` fingerprints, prefixes
 usernames with `lb_`, and rewrites their stats on every rerun. With no
 argument it also gives the most recently active real user a representative
@@ -107,4 +109,3 @@ pass a username to target that enrichment explicitly.
 
 - No notify-driven refresh; up to one `REFRESH_INTERVAL` of staleness by design (see Refresh model).
 - No in-board scrolling beyond the around-you tail.
-- Brogue has no boards yet; its ingestion phase is next in `devdocs/PLAN-ROGUELIKE-BOARDS.md`.
