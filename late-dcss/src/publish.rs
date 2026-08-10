@@ -43,7 +43,7 @@ use chrono::{DateTime, Utc};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 /// Everything crawl writes lives under this subdirectory of the child HOME
-/// (`config.data_dir`) — the same root `stats.rs` tails.
+/// (`config.data_dir`), the same root `stats.rs` tails.
 const CRAWL_SUBDIR: &str = ".crawl";
 
 /// Morgue dumps: one file per finished game, written by crawl at game end.

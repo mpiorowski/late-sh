@@ -2,8 +2,8 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/leaderboard` — the top-level Leaderboards page (screen `6`) and `LeaderboardService` — plus the roster-generated data model in `late-core/src/models/leaderboard.rs` and the monthly `profile_awards` snapshot machinery it drives.
-- Last updated: 2026-08-08 (Brogue joins the `DoorGame` roster, completing the three door board triples; adding a door costs no extra queries, since each door board family is one union query per window regardless of roster size)
-- Purpose: local working context for everything leaderboard: the refresh service and its cost rules, the board rosters and queries, the page, monthly profile awards, and the local seed script.
+- Last updated: 2026-08-10 (this file absorbs the cross-door log-pipe contract and its settled decisions from `devdocs/PLAN-ROGUELIKE-BOARDS.md`, which is now finished and kept only as the build record: the pipe that fills the door boards is documented here, per-game formats and host internals stay in the door contexts)
+- Purpose: local working context for everything leaderboard: the refresh service and its cost rules, the board rosters and queries, the door log pipe that fills the door boards, the page, monthly profile awards, and the local seed script.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
@@ -13,9 +13,15 @@ fact tables other domains own (daily-win tables, score tables, `chip_ledger`,
 `mud_characters`, the door log-pipe tables `door_runs`/`door_milestones`) but
 must not own those runtimes or write paths. The Shop/quest/aquarium surfaces
 stay with `app/hub` (`hub/CONTEXT.md`); chip primitives stay in
-`late-core/src/models/chips.rs`; the ingestion pipe that fills the door
-tables belongs to the doors (`app/door/ingest/` plus
-`app/door/{dcss,nethack,brogue}/CONTEXT.md`).
+`late-core/src/models/chips.rs`.
+
+One documentation exception: the **door log pipe** writes those two fact
+tables and lives in `app/door/ingest/`, but its contract is what the door
+boards and badges are made of, so the cross-door half of it is documented
+here (see "The door log pipe" below) rather than repeated in three door
+files. Per-game log formats, build flags, and host internals stay in
+`app/door/{dcss,nethack,brogue}/CONTEXT.md`; code changes to the pipe belong
+to the doors.
 
 ## Source Map
 
@@ -24,6 +30,7 @@ tables belongs to the doors (`app/door/ingest/` plus
 - `ui.rs`: the board rail (Games group leading, then Boards, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, and the daily `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
+- Read-only from here, documented below: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`, models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`, migration `136_create_door_ingestion.sql`).
 
 ## Refresh model
 
@@ -65,6 +72,86 @@ rosters).
 
 Monthly windows use UTC calendar months. No refresh query scans full history.
 
+## The door log pipe (what fills `door_runs`/`door_milestones`)
+
+The three external roguelike doors feed their boards, badges, chips, and feed
+lines from **host-written log files, never from the terminal**. Shipped in four
+phases over 2026-08-07..10 (DCSS, NetHack + scrape removal, Brogue, then the
+DCSS file publishing); `devdocs/PLAN-ROGUELIKE-BOARDS.md` is the build record
+that the migrations and a few source comments still point at.
+
+- **Transport: a stats SSH session on the door host.** Each host reserves one
+  SSH username, `late_stats` (inside the already-reserved `late_*` handle
+  namespace, so no player can claim it). Instead of a game child it opens a log
+  stream: the client pushes its per-file byte offsets in one env request
+  (`LATE_DOOR_STATS_CURSORS`, `logfile:123,milestones:456`), the host streams
+  one `<file-id>\t<next-offset>\t<line>` frame per complete line with tail -f
+  semantics, and stays **stateless**: no cursor storage, no parsing, no DB. All
+  parsing lives in late-ssh, so a parser fix never needs a door redeploy, and
+  door pods never hold DB credentials. Chosen over a new HTTP ingest surface
+  because it reuses the russh servers and shared secrets already there.
+- **Client side.** `app/door/ingest/`: `svc.rs` orchestration (one
+  connect-with-retry task per enabled door, spawned from `main.rs` behind that
+  door's `LATE_*_ENABLED`), `stream.rs` the stats SSH client, `dcss.rs` /
+  `nethack.rs` / `brogue.rs` pure parsers, `award.rs` the shared
+  `DoorAwards`/`DoorBadge` sink. Cursors persist in `door_log_cursors`.
+- **Idempotency.** Unique `(game, source_file, source_offset)` on both fact
+  tables, with the fact insert and the cursor advance committing in one
+  transaction. Files are append-only and hosts single-replica, so offsets are
+  stable; a fresh cursor starts at 0 and ingests whatever history is already on
+  the PVC, which is why every door board launched non-empty. A file that shrinks
+  (playground rebuilt) restarts from 0 and the idempotent inserts absorb the
+  replay.
+- **Identity.** The playname on every line is the account's **arcade handle**
+  (NetHack `-u`, DCSS `-name`, Brogue's player directory name), mapped through
+  `arcade_handles` (unique on `lower(handle)`). Handle rows outlive accounts
+  with `user_id` NULL and those are skipped, as are the reserved `late`/`late_*`
+  shapes (NetHack's legacy `late_<hex>` lines predate handles).
+- **Grants are lifetime-idempotent.** Badges and chips fire from `award.rs` on
+  every win or pickup, guarded by a lifetime payout claim plus a `NOT EXISTS`
+  award insert, so a re-win, a re-ingest, and a crash between fact insert and
+  grant all settle to exactly one payout. That is what makes backfill safe.
+- **Feed events are gated twice.** Deaths and wins post to #lounge only when the
+  fact row is freshly inserted AND the event is inside a 10-minute recency
+  window, so a backfill of years of history never floods the feed. "Started a
+  game" stays connect-based in the client; it never was a scrape.
+- **Never build boards or badges on a screen scrape.** NetHack's vt100 scrape
+  was acceptable for cosmetic flair and was deleted in Phase 2; anything that
+  pays chips or ranks a player reads the spoof-proof host files. Non-scoring
+  games are excluded at the source, per door: wizard/explore xlogfile lines are
+  flagged and skipped (and explore mode is locked off at the sysconf, since
+  livelog lines carry no flag), crawl never logs wizard games, Brogue writes no
+  run-history line for Easy or Wizard.
+- **Deploy order matters.** The host half ships in that door's image-only
+  release (`-dcss` / `-nethack` / `-brogue`), the client half with service-ssh:
+  deploy the host first or together, or ingestion just retries against a host
+  with no stats session. Manifest changes (a new initContainer file, a port, an
+  ingress) ride `deploy_infra.yml` instead.
+- **The DCSS files are also published outward.** The same `logfile`/`milestones`
+  the pipe tails are served read-only over HTTP at `late.sh/crawl/...` for the
+  public DCSS tooling (dcss-stats, Sequell), so their fetcher and this pipe read
+  identical bytes and validate each other. Details in the DCSS CONTEXT §1;
+  nothing on this page depends on it.
+
+### Settled decisions (do not re-litigate)
+
+- **Badge pairs, 10k/20k chips, once per lifetime per game**, mirroring the
+  original NetHack pair. DCSS's Orb *pickup* was chosen over first rune
+  deliberately: it is the exact twin of the Amulet badge. DCSS and NetHack pairs
+  are **stages** (the win back-grants the pickup); Brogue's Escaped/Mastered are
+  **alternative endings**, so a mastery grants only itself. The chat-label
+  collapse is a display convention in both cases and implies nothing about
+  granting.
+- **Boards per door are uniform**: Wins (all-time), Deepest dive and Top score
+  (monthly + all-time), joining the Games rail group. Adding a fourth door costs
+  zero extra queries.
+- **Backfilled historical wins grant** badges and chips (approved 2026-08-07);
+  the idempotence above is what makes that safe.
+- **Brogue variants do not count.** Rapid and Bullet Brogue write their own
+  files beside the standard one and the host never opens them.
+- **Badge codes** `DCO`/`DCW` (approved 2026-08-07) and `BRE`/`BRM` (approved
+  2026-08-08).
+
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Games group
@@ -103,6 +190,7 @@ pass a username to target that enrichment explicitly.
 - Board/rail/window layout: `state_test.rs`, `ui_test.rs` (pure).
 - The refresh gate (`should_refresh`, pure channel state): `svc_test.rs` — the one sanctioned inert-`Db` test (it makes no DB calls; see the root Test Strategy exception).
 - Query behavior: `late-core/src/models/leaderboard_test.rs` (DB-backed, fixtures through production constructors).
+- The pipe behind the door boards: `app/door/ingest/{dcss,nethack,brogue}_test.rs` (pure parsers against real captured lines, including unknown fields, dead and reserved handles, and truncated last lines), `stream_test.rs` (the stats client against a stub SSH host), `svc_test.rs` (DB-backed: replay idempotency, skipped names, once-per-lifetime grants, cursor advancement).
 - Seed-on-connect behavior: `app/state_test.rs::leaderboard_seeds_from_the_already_published_snapshot`.
 
 ## Known gaps

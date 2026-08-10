@@ -16,11 +16,20 @@ context files. Verified: `cargo check -p late-dcss --all-targets` clean,
 `terraform fmt`/`validate` clean, `ARGS="-p late-dcss" make test-llm` green at
 32/32. `make check` is human-owned and NOT run.
 
-Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md` (the
-whole leaderboard domain, incl. the door board model), and the door contexts
-(`late-ssh/src/app/door/{nethack,dcss,brogue}/CONTEXT.md` — all three now
-document their shipped log pipes; brogue's §1 covers the per-player-directory
-identity shape that makes it the odd one out).
+**This file is the build record, not the documentation.** Everything still true
+about the shipped system was folded into the contexts on 2026-08-10 and should
+be read (and maintained) there:
+
+- `late-ssh/src/app/leaderboard/CONTEXT.md`: the cross-door log-pipe contract
+  (transport, cursors, idempotency, identity, grants, feed gating, deploy
+  order), the settled decisions, the board triples, and the badge machinery.
+- `late-ssh/src/app/door/{dcss,nethack,brogue}/CONTEXT.md`: per-game log
+  formats, build flags, host internals, and each door's quirks. The DCSS one
+  also owns the `late.sh/crawl` publishing surface.
+
+What stays here: the phase-by-phase account of how it was built, including the
+corrections each phase made to this plan's own assumptions. The migrations and a
+few source comments point at this path, so it does not move.
 
 ## Phase 3 handoff (Brogue, 2026-08-08)
 
