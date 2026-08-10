@@ -2,19 +2,20 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use tower::ServiceExt as _;
 
-use super::{ListingEntry, PathReject, RangeSpec, parse_range, render_listing, router, sanitize_rel};
+use super::{
+    ListingEntry, PathReject, RangeSpec, parse_range, render_listing, router, sanitize_rel,
+};
 
 #[test]
 fn sanitize_rel_keeps_plain_components() {
     assert_eq!(
         sanitize_rel("mat/morgue-mat-20260810-120000.txt"),
-        Ok(std::path::PathBuf::from("mat/morgue-mat-20260810-120000.txt"))
+        Ok(std::path::PathBuf::from(
+            "mat/morgue-mat-20260810-120000.txt"
+        ))
     );
     // A trailing or doubled slash is just an empty component.
-    assert_eq!(
-        sanitize_rel("mat//"),
-        Ok(std::path::PathBuf::from("mat"))
-    );
+    assert_eq!(sanitize_rel("mat//"), Ok(std::path::PathBuf::from("mat")));
     assert_eq!(sanitize_rel(""), Ok(std::path::PathBuf::new()));
 }
 
@@ -100,9 +101,11 @@ fn render_listing_links_entries_and_marks_directories() {
     assert!(listing.contains("<h1>Index of /morgue/</h1>"));
     assert!(listing.contains("<a href=\"../\">../</a>"));
     assert!(listing.contains("<a href=\"mat/\">mat/</a>"));
-    assert!(listing.contains(
-        "<a href=\"morgue-mat-20260810-120000.txt\">morgue-mat-20260810-120000.txt</a>"
-    ));
+    assert!(
+        listing.contains(
+            "<a href=\"morgue-mat-20260810-120000.txt\">morgue-mat-20260810-120000.txt</a>"
+        )
+    );
     assert!(listing.contains("4096"));
 }
 
@@ -123,7 +126,11 @@ fn playground() -> tempfile::TempDir {
     home
 }
 
-async fn get(home: &tempfile::TempDir, uri: &str, range: Option<&str>) -> (StatusCode, HeaderMap, String) {
+async fn get(
+    home: &tempfile::TempDir,
+    uri: &str,
+    range: Option<&str>,
+) -> (StatusCode, HeaderMap, String) {
     let mut request = Request::builder().uri(uri);
     if let Some(range) = range {
         request = request.header(header::RANGE, range);
@@ -176,7 +183,13 @@ async fn walks_the_morgue_tree() {
     assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
     assert!(body.contains("<a href=\"mat/\">mat/</a>"));
 
-    let (status, _, body) = get(&home, "/crawl/morgue/mat", None).await;
+    // A directory without the trailing slash redirects: the listing's links are
+    // relative and would otherwise resolve one level too high.
+    let (status, headers, _) = get(&home, "/crawl/morgue/mat", None).await;
+    assert_eq!(status, StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(headers[header::LOCATION], "/crawl/morgue/mat/");
+
+    let (status, _, body) = get(&home, "/crawl/morgue/mat/", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("morgue-mat-20260810-120000.txt"));
 

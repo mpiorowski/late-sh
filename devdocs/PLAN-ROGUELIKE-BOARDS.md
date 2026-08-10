@@ -1,23 +1,20 @@
 # PLAN: Roguelike Door Boards, Badges, and the Log Pipe
 
-Status: Phases 1-3 IMPLEMENTED (DCSS 2026-08-07, NetHack + scrape removal
-2026-08-08, Brogue 2026-08-08). **All three external roguelike doors now run on
-the log pipe; only Phase 4 (dcss-stats publishing) remains, and it is blocked
-on maintainer contact, not on code.** (The Lateania Games boards shipped
-separately.)
+Status: ALL FOUR PHASES IMPLEMENTED (DCSS 2026-08-07, NetHack + scrape removal
+2026-08-08, Brogue 2026-08-08, crawl-file publishing 2026-08-10). **This plan is
+done in code.** What remains is not engineering: nobody has written to the
+dcss-stats maintainer yet, so the published files sit there unfetched, and the
+URL layout is our guess until that conversation happens (see Phase 4 below for
+the exact questions and how cheap a change would be). The Lateania Games boards
+shipped separately.
 
-**Working-tree state as of 2026-08-08, read before touching anything:** all of
-Phases 1-3 sit uncommitted on branch `mateu/roguelikes_leaderboards`, and that
-branch has an **in-progress merge from `main`** (`git merge main`). The only
-conflict was root `CONTEXT.md`; it is resolved and staged, so the tree is ready
-for the human to commit. Two resolution notes: the `Last updated` line was
-overwritten with the Phase 3 entry per that file's own no-chain rule (main's
-chat-translation note was dropped; its real documentation lives in
-`late-ssh/src/app/chat/CONTEXT.md` §14), and the Brogue migration was renumbered
-`137 -> 140` because main landed its own 137/138/139. Merged tree verified:
-`cargo check` clean, `cargo fmt` applied, `make test-llm` green at 195/195 over
-the brogue, ingest, leaderboard, activity, chips, profile-award, and user
-suites. `make check` is human-owned and NOT run.
+**State as of 2026-08-10:** all four phases live on branch
+`mateu/roguelikes_leaderboards`. Phase 4 touches `late-dcss/src/publish.rs`
+(+ its test) with the Cargo/config/main wiring, `infra/service-dcss.tf`, the
+`deploy_dcss.yml` bootstrap target list, the `runtime-dcss` EXPOSE line, and the
+context files. Verified: `cargo check -p late-dcss --all-targets` clean,
+`terraform fmt`/`validate` clean, `ARGS="-p late-dcss" make test-llm` green at
+32/32. `make check` is human-owned and NOT run.
 
 Read first: root `CONTEXT.md`, `late-ssh/src/app/leaderboard/CONTEXT.md` (the
 whole leaderboard domain, incl. the door board model), and the door contexts
@@ -362,31 +359,62 @@ Once xlogfile ingestion grants badges and posts death events:
   LIVELOG exists, its achievement moments (quest artifact, Gehennom entry,
   amulet pickup) are better flavor than the level-band lines anyway.
 
-## dcss-stats.com publishing (Phase 4) — THE ONLY REMAINING WORK
+## Phase 4 handoff (crawl-file publishing, 2026-08-10)
 
 Goal: late.sh joins the public-server ecosystem, whose tooling (dcss-stats,
 Sequell) ingests servers by fetching logfile/milestones over HTTP and links
 morgue dumps per game.
 
-**Blocked on Mat's conversation with the dcss-stats maintainer, not on code.**
-Do not start building URL shapes before that answer lands.
+Built ahead of the maintainer conversation by owner decision (2026-08-10): the
+layout follows the public-server convention, and tweaking it later is a route
+change plus an ingress path, nothing more. Green under `ARGS="-p late-dcss"
+make test-llm` (32/32); `make check` not run (human-owned).
 
-- Serve `$HOME/.crawl/logfile`, `milestones`, and `morgue/` read-only over
-  HTTP from the `late-dcss` pod: a small axum listener in the crate (second
-  port), path-sanitized, directory listing for morgues.
-- Ingress: **path prefix, decided 2026-08-08** (see the answered question at
-  the bottom). The listener serves under `/crawl/...` natively, with no
-  rewrite annotation; a `Prefix` path rule on the `var.DOMAIN` host out-ranks
-  late-web's `/` catch-all by ingress-nginx's longest-match, so the existing
-  DNS record and TLS cert are reused and late-web needs no change. The new rule
-  belongs in `infra/service-dcss.tf` beside the door's other resources.
-- Coordinate with the dcss-stats maintainer before building URL shapes: what
-  layout their fetcher expects, whether a path-prefixed base URL suits it,
-  whether 0.34.1 is fine, whether the server needs registering in Sequell's
-  server list first.
-- Player names are arcade handles, public by design; no privacy gate needed.
-- Nice property: their fetcher and our ingestion read the same files, so each
-  validates the other.
+- **The listener**: `late-dcss/src/publish.rs`, a second axum listener on
+  `LATE_DCSS_PUBLISH_PORT` (2329), spawned from `main.rs` in the same
+  `select!` as the SSH server so a bind failure kills the pod rather than
+  serving games with the public files silently dark. Routes: `/crawl/` (an
+  index documenting the layout), `/crawl/logfile`, `/crawl/milestones`,
+  `/crawl/morgue/...`.
+- **Range support is the load-bearing detail.** These fetchers pull the logs
+  incrementally by byte offset, so `serve_file` honors a single-range `Range`
+  header (`bytes=N-` is the incremental case), answers 416 when the caller is
+  already caught up, and streams through `ReaderStream` so a multi-MB logfile
+  is never buffered. Anything unimplemented (multi-range, malformed, a
+  non-`bytes` unit) degrades to serving the whole file, which is always a legal
+  answer.
+- **Path handling is the whole security surface** (read-only, public by design,
+  playnames already public). Morgue paths are rebuilt from sanitized components
+  so `..` is unrepresentable and dotfiles are refused, then the resolved path is
+  canonicalized and re-checked against the morgue root, which is what stops a
+  symlink from reaching the saves/rc files that live beside the published ones.
+  Tested: traversal, an escaping symlink, and `<name>.rc` all 404.
+- **Directory listings** copy nginx's autoindex shape (one `<a>` per line in a
+  `<pre>`, date and size columns), because the scrapers in this ecosystem are
+  written against the public servers' nginx output. Same reasoning behind the
+  301 (not axum's 308) when a directory URL arrives without its trailing slash,
+  which those relative links need.
+- **Ingress**: path prefix, as decided 2026-08-08. `late_dcss_crawl` in
+  `infra/service-dcss.tf` puts a `Prefix` rule for `/crawl` on the `var.DOMAIN`
+  host; ingress-nginx merges rules per host and matches longest-prefix-first,
+  so it out-ranks late-web's `/` catch-all while reusing the existing DNS record
+  and certificate. It deliberately carries **no tls block and no cert-manager
+  annotations**: the apex certificate belongs to `service-web-ingress`, and a
+  second issuer request for the same host would fight it.
+- **Bring-up**: the ports and the ingress are manifest changes, so they ship
+  through `deploy_infra.yml`, NOT the image-only `deploy_dcss.yml` (same shape
+  as Phase 2's initContainer change). The `deploy_dcss.yml` bootstrap target
+  list gained `kubernetes_ingress_v1.late_dcss_crawl` so a first/disaster
+  deploy still creates it. Nothing about the game or the log pipe changes.
+- Nice property, now real: their fetcher and our ingestion read the same bytes,
+  so each validates the other.
+
+**Still owed, and it is a conversation, not code:** write to the dcss-stats
+maintainer and probably register in Sequell's server list. Ask whether a
+path-prefixed base URL (`late.sh/crawl/`) suits their fetcher or it assumes a
+host root, what morgue layout it walks (ours is whatever crawl writes under
+`morgue/`, flat rather than the per-player subdirs some servers use), and
+whether 0.34.1 is a version they ingest.
 
 ## Phases (each shippable alone)
 
@@ -402,9 +430,10 @@ Do not start building URL shapes before that answer lands.
    was real and is patched fail-closed, the tailer walks `players/*/`, and the
    badge pair grants without back-granting because Brogue's endings are
    alternatives).
-4. **dcss-stats HTTP publishing** after maintainer contact. Ingress shape
-   decided (path prefix, see the answered question below); still needs the
-   maintainer conversation before building.
+4. **dcss-stats HTTP publishing** — DONE (see the Phase 4 handoff above; built
+   on the conventional layout ahead of maintainer contact, path-prefixed at
+   `late.sh/crawl/...`, with `Range` support for incremental fetching). The
+   maintainer conversation is still owed and may move the URL shapes.
 
 ## Testing guidance (repo policy applies, tests adjacent to code)
 
@@ -428,11 +457,9 @@ Do not start building URL shapes before that answer lands.
 - ~~Should backfilled historical wins grant badges/chips?~~ Yes, approved
   2026-08-07.
 - ~~Ingress shape for the DCSS files?~~ Path prefix (`late.sh/crawl/*`),
-  decided 2026-08-08: the axum listener serves under `/crawl/...` natively (no
-  rewrite annotation), a `Prefix` path rule on the `var.DOMAIN` host out-ranks
-  late-web's `/` catch-all by longest-match, reusing the existing DNS record
-  and cert. Confirm with the dcss-stats maintainer that a path-prefixed base
-  URL suits their fetcher before building (Phase 4).
+  decided 2026-08-08, shipped 2026-08-10 exactly as described.
+- ~~Wait for the dcss-stats maintainer before building Phase 4?~~ No, build it
+  on the conventional layout and tweak after; approved 2026-08-10.
 - ~~Do Rapid/Bullet Brogue variant games count on the Brogue boards?~~ No,
   filter to standard Brogue only. Approved 2026-08-08. (They share the player
   dir; verify how the run history line identifies the variant while reading

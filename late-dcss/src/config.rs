@@ -53,7 +53,7 @@ impl Config {
             secret,
             listen_addr: optional("LATE_DCSS_LISTEN_ADDR").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: optional_parse("LATE_DCSS_PORT", 2325)?,
-            publish_port: optional_parse("LATE_DCSS_PUBLISH_PORT", 2326)?,
+            publish_port: optional_parse("LATE_DCSS_PUBLISH_PORT", 2329)?,
             idle_timeout: optional_parse("LATE_DCSS_IDLE_TIMEOUT", 3600)?,
         })
     }

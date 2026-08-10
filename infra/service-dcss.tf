@@ -93,7 +93,7 @@ resource "kubernetes_deployment_v1" "late_dcss" {
           # Read-only HTTP publishing of the shared crawl logs for the public
           # DCSS tooling (see the ingress at the bottom of this file).
           port {
-            container_port = 2326
+            container_port = 2329
             name           = "crawl"
           }
 
@@ -164,7 +164,7 @@ resource "kubernetes_deployment_v1" "late_dcss" {
           # from one place rather than from the host's default.
           env {
             name  = "LATE_DCSS_PUBLISH_PORT"
-            value = "2326"
+            value = "2329"
           }
 
           volume_mount {
@@ -210,7 +210,7 @@ resource "kubernetes_service_v1" "late_dcss_sv" {
     # The crawl-file publisher, fronted by the ingress below.
     port {
       name        = "crawl"
-      port        = 2326
+      port        = 2329
       target_port = "crawl"
     }
   }

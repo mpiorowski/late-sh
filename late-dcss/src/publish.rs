@@ -36,7 +36,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -133,16 +133,17 @@ async fn milestones(State(publish): State<Publish>, headers: HeaderMap) -> Respo
     serve_log(&publish, PublishedLog::Milestones, &headers).await
 }
 
-async fn morgue_root(State(publish): State<Publish>, headers: HeaderMap) -> Response {
-    serve_morgue(&publish, "", &headers).await
+async fn morgue_root(State(publish): State<Publish>, uri: Uri, headers: HeaderMap) -> Response {
+    serve_morgue(&publish, "", uri.path(), &headers).await
 }
 
 async fn morgue_path(
     State(publish): State<Publish>,
     UrlPath(rel): UrlPath<String>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> Response {
-    serve_morgue(&publish, &rel, &headers).await
+    serve_morgue(&publish, &rel, uri.path(), &headers).await
 }
 
 async fn serve_log(publish: &Publish, log: PublishedLog, headers: &HeaderMap) -> Response {
@@ -155,7 +156,12 @@ async fn serve_log(publish: &Publish, log: PublishedLog, headers: &HeaderMap) ->
     serve_file(&path, &meta, TEXT_PLAIN, headers).await
 }
 
-async fn serve_morgue(publish: &Publish, rel: &str, headers: &HeaderMap) -> Response {
+async fn serve_morgue(
+    publish: &Publish,
+    rel: &str,
+    request_path: &str,
+    headers: &HeaderMap,
+) -> Response {
     let root = publish.crawl_dir.join(MORGUE_SUBDIR);
     let requested = match sanitize_rel(rel) {
         Ok(sanitized) => root.join(sanitized),
@@ -183,6 +189,12 @@ async fn serve_morgue(publish: &Publish, rel: &str, headers: &HeaderMap) -> Resp
         return not_found();
     };
     if meta.is_dir() {
+        // A listing's links are relative, so they only resolve correctly from a
+        // path that ends in a slash. Redirect rather than serve a page whose
+        // every link points one level too high.
+        if !request_path.ends_with('/') {
+            return redirect_to_dir(request_path);
+        }
         serve_listing(&real, rel).await
     } else {
         serve_file(&real, &meta, content_type_for(&real), headers).await
@@ -449,6 +461,16 @@ fn header_value(value: &str) -> HeaderValue {
     HeaderValue::from_str(value).expect("header value is ascii by construction")
 }
 
+/// nginx answers a directory URL missing its trailing slash with a 301, and the
+/// scrapers in this ecosystem are written against the public servers' nginx.
+/// Hand-built rather than axum's `Redirect::permanent`, which is a 308: same
+/// meaning to a modern client, but 301 is the one every old script understands.
+fn redirect_to_dir(request_path: &str) -> Response {
+    let mut out = HeaderMap::new();
+    out.insert(header::LOCATION, header_value(&format!("{request_path}/")));
+    (StatusCode::MOVED_PERMANENTLY, out).into_response()
+}
+
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found\n").into_response()
 }
@@ -459,7 +481,10 @@ fn internal_error() -> Response {
 
 fn range_not_satisfiable(len: u64) -> Response {
     let mut out = HeaderMap::new();
-    out.insert(header::CONTENT_RANGE, header_value(&format!("bytes */{len}")));
+    out.insert(
+        header::CONTENT_RANGE,
+        header_value(&format!("bytes */{len}")),
+    );
     (StatusCode::RANGE_NOT_SATISFIABLE, out).into_response()
 }
 

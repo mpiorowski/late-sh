@@ -493,7 +493,9 @@ RUN mkdir -p /usr/games && ln -sf /opt/dcss/bin/crawl /usr/games/crawl
 COPY --from=builder-dcss /app/late-dcss-bin /app/late-dcss
 USER late
 
-EXPOSE 2325
+# 2325: the game over SSH. 2329: the read-only crawl-file publisher for the
+# public DCSS tooling (late-dcss/src/publish.rs).
+EXPOSE 2325 2329
 
 CMD ["/app/late-dcss"]
 
