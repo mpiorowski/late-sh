@@ -8876,6 +8876,10 @@ pub struct RegionPlacement {
     pub z: i32,
     pub zone_w: i32,
     pub zone_h: i32,
+    /// How many zones this region chains together, so a room can say where it
+    /// sits in the run ("zone 7 of 20") rather than only naming itself. A
+    /// single-grid region is its own whole chain, so this is 1 there.
+    pub zone_count: u32,
 }
 
 pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
@@ -8891,6 +8895,7 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
                 z,
                 zone_w: w as i32,
                 zone_h: h as i32,
+                zone_count: 1,
             }
         })
     };
@@ -8905,7 +8910,7 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
     }
 
     // Multi-zone regions: `id = base + zone*stride + cell`, stride = w*h.
-    let multi = |region, base: RoomId, w: usize, h: usize, z: i32| {
+    let multi = |region, base: RoomId, w: usize, h: usize, z: i32, zones: usize| {
         let stride = (w * h) as u32;
         let off = id - base;
         let zone = off / stride;
@@ -8918,6 +8923,7 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
             z,
             zone_w: w as i32,
             zone_h: h as i32,
+            zone_count: zones as u32,
         }
     };
     if is_frontier_room(id) {
@@ -8927,16 +8933,31 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
             FRONTIER_W as usize,
             FRONTIER_H as usize,
             -1,
+            FRONTIER_ZONES,
         ));
     }
     if is_reaches_room(id) {
-        return Some(multi("reaches", REACHES_BASE, REACHES_W, REACHES_H, 0));
+        return Some(multi(
+            "reaches",
+            REACHES_BASE,
+            REACHES_W,
+            REACHES_H,
+            0,
+            REACHES_ZONES,
+        ));
     }
     if is_kaelmyr_room(id) {
-        return Some(multi("kaelmyr", KAELMYR_BASE, KAELMYR_W, KAELMYR_H, 0));
+        return Some(multi(
+            "kaelmyr",
+            KAELMYR_BASE,
+            KAELMYR_W,
+            KAELMYR_H,
+            0,
+            KAELMYR_ZONES,
+        ));
     }
     if is_lakes_room(id) {
-        return Some(multi("lakes", LAKES_BASE, LAKES_W, LAKES_H, 0));
+        return Some(multi("lakes", LAKES_BASE, LAKES_W, LAKES_H, 0, LAKES_ZONES));
     }
     if is_broceliande_room(id) {
         return Some(multi(
@@ -8945,6 +8966,7 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
             BROCELIANDE_W,
             BROCELIANDE_H,
             0,
+            BROCELIANDE_ZONES,
         ));
     }
     None

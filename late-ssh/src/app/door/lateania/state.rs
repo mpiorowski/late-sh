@@ -16,10 +16,24 @@ use uuid::Uuid;
 use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
-use super::worldmap::{Coord, MapCamera};
+use super::world::RoomId;
+use super::worldmap::{Coord, MapCamera, Route};
 
 /// Lines moved per `[` / `]` press when scrolling a text panel.
 const SCROLL_STEP: usize = 3;
+
+/// Where the player has marked they're going, resolved against where they are
+/// standing now. Rendered as one line under the room's exits: the exits say
+/// what is available, this says which of them to take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Heading {
+    /// Standing in the marked room.
+    Arrived(&'static str),
+    /// The marked room, and the next exit to take toward it.
+    Toward(&'static str, Route),
+    /// Marked, but no walk over ground the player knows reaches it from here.
+    Unreachable(&'static str),
+}
 
 /// Which side panel the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +157,16 @@ pub struct State {
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
     map_camera: MapCamera,
+    /// A room the player has marked to travel back to (`x` on the map's
+    /// crosshair). Local to the session and never persisted: it is a note to
+    /// oneself, not world truth.
+    map_dest: Option<RoomId>,
+    /// The last route computed, keyed by the (standing in, heading for) pair it
+    /// was computed for. A route only changes when one of those two changes, so
+    /// caching on that pair keeps the walk off the render path: the panel is
+    /// redrawn on every keystroke and every snapshot, but the search runs once
+    /// per room actually entered.
+    route_cache: RefCell<Option<((RoomId, RoomId), Option<Route>)>>,
 }
 
 impl State {
@@ -175,6 +199,8 @@ impl State {
             chat_buffer: None,
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
+            map_dest: None,
+            route_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -316,6 +342,59 @@ impl State {
         };
         self.map_camera
             .change_level(player, super::worldmap::bounds(), delta);
+    }
+
+    /// The room under the map's crosshair, resolved the same way the canvas
+    /// resolves it, or None when the cursor sits on blank or fog.
+    fn cursor_room(&self) -> Option<RoomId> {
+        let player_room = self.snapshot.players.get(&self.user_id)?.room?;
+        let at = self.map_camera.center(self.player_coord()?);
+        let visited = &self.snapshot.players.get(&self.user_id)?.visited;
+        super::worldmap::room_at(super::worldmap::world_coords(), at, visited, player_room)
+    }
+
+    /// Mark (or unmark) the room under the map crosshair as where the player is
+    /// trying to get to. Marking the room already marked clears it, so one key
+    /// both sets and cancels.
+    pub fn toggle_map_dest(&mut self) {
+        let picked = self.cursor_room();
+        self.map_dest = match (picked, self.map_dest) {
+            (Some(room), Some(current)) if room == current => None,
+            (picked, _) => picked,
+        };
+        self.route_cache.replace(None);
+    }
+
+    /// The room the player marked, for drawing it on the map.
+    pub fn dest_room(&self) -> Option<RoomId> {
+        self.map_dest
+    }
+
+    /// Where the player marked they're going, and how to get there from the
+    /// room they're standing in right now. None when nothing is marked.
+    pub fn heading(&self) -> Option<Heading> {
+        let dest = self.map_dest?;
+        let name = super::worldmap::room_name(dest)?;
+        let player = self.snapshot.players.get(&self.user_id)?;
+        let here = player.room?;
+        if here == dest {
+            return Some(Heading::Arrived(name));
+        }
+        let mut cache = self.route_cache.borrow_mut();
+        let route = match *cache {
+            Some((key, route)) if key == (here, dest) => route,
+            _ => {
+                let route = super::worldmap::route(here, dest, &player.visited);
+                *cache = Some(((here, dest), route));
+                route
+            }
+        };
+        Some(match route {
+            Some(route) => Heading::Toward(name, route),
+            // Marked, reachable once, but no walk over known ground gets there
+            // from here now. Say so rather than showing a confident direction.
+            None => Heading::Unreachable(name),
+        })
     }
 
     /// Current list scroll offset (first visible line).

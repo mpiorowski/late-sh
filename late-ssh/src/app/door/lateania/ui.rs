@@ -19,7 +19,7 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{ClickAction, Panel, State},
+    state::{ClickAction, Heading, Panel, State},
     svc::{LeaderboardEntry, LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
@@ -317,6 +317,16 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
             prompt,
         );
     }
+}
+
+/// The ways up and down. Deliberately loud (the brightest thing on the map
+/// after `@`): these are the exits the flat grid cannot draw as corridors, and
+/// in a world where every zone chains to the next one by a stair they are what
+/// a lost player is looking for.
+fn stair_style() -> Style {
+    Style::default()
+        .fg(theme::SUCCESS())
+        .add_modifier(Modifier::BOLD)
 }
 
 /// The smallest area the graphical world map is worth drawing in. Header,
@@ -703,6 +713,9 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 // non-Euclidean jump, not the edge of the map) - brighter, so
                 // it doesn't read as "nothing more to find here".
                 Tile::HintKnown(ch) => (ch.to_string(), Style::default().fg(theme::AMBER_DIM())),
+                // A way up or down out of the room beside it. No flat
+                // direction can carry this, and it is usually the way onward.
+                Tile::Stair(ch) => (ch.to_string(), stair_style()),
                 Tile::Empty => match biome_at(sr, sc) {
                     Some(biome) => terrain_cell(sr, sc, biome, false),
                     None => (" ".to_string(), Style::default()),
@@ -761,6 +774,8 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
             Span::styled(" you ", dim),
             Span::styled("\u{2500}\u{2502}", path_style),
             Span::styled(" path ", dim),
+            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled(" stair ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
             Span::styled("\u{263a}", player_near_style),
@@ -813,7 +828,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     ])
     .split(area);
 
-    // Header: region name + danger tier, and the current level (z).
+    // Header: region name, where this zone sits in the region's chain, the
+    // zone's own name, the danger tier, and the current level (z).
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
     let level = match center.z {
         0 => "surface".to_string(),
@@ -826,6 +842,26 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD),
     )];
+    // A continent is ~20 zones chained one below the next, and each is its own
+    // reserved block in the coordinate field, so crossing between them replaces
+    // everything on screen. The picture alone therefore can never say that you
+    // are 7 zones into a run of 20; naming that is what turns "lost somewhere
+    // in a forest" back into a position. Only the procedurally-chained regions
+    // can answer it, and elsewhere the header simply stays as it was.
+    if let Some(place) = super::world::region_layout(player_room)
+        && place.zone_count > 1
+    {
+        header.push(Span::styled(
+            format!("  ·  zone {} of {}", place.zone + 1, place.zone_count),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
+    if !view.zone.is_empty() && view.zone != region_name {
+        header.push(Span::styled(
+            format!("  ·  {}", view.zone),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
     if !tier.is_empty() {
         header.push(Span::styled(
             format!("  ·  {tier}"),
@@ -876,6 +912,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         .fg(Color::Rgb(210, 120, 90))
         .add_modifier(Modifier::BOLD);
     let link_style = Style::default().fg(theme::BORDER_DIM());
+    // The room the player marked, resolved once per frame rather than per cell.
+    let dest_room = state.dest_room();
 
     let mut cells: Vec<Vec<(String, Style)>> = canvas
         .iter()
@@ -896,7 +934,21 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                             .fg(theme::AMBER_DIM())
                             .add_modifier(Modifier::BOLD),
                     ),
+                    // The ways up and down out of the room beside it. A flat
+                    // level has no direction to draw these in, and in a world
+                    // chained zone-to-zone by stairs they are usually the way
+                    // onward, so they get their own corner cell.
+                    Tile::Stair(ch) => (ch.to_string(), stair_style()),
                     Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
+                    // Where you said you were going, outranking every other
+                    // marker: once a destination is marked, a boss star on
+                    // that room is not what you opened the map to find.
+                    Tile::Room(id) if Some(*id) == dest_room => (
+                        "\u{2691}".to_string(),
+                        Style::default()
+                            .fg(theme::SUCCESS())
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                         Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
@@ -1058,13 +1110,36 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             Style::default().fg(theme::TEXT_FAINT()),
         )));
     }
+    // The map replaces the room panel while it is open, so the heading it just
+    // set would otherwise be invisible until the map is closed again. Confirm
+    // the mark here instead, on the inspector's own second row.
+    if let Some(heading) = state.heading() {
+        let (text, color) = match heading {
+            Heading::Toward(name, route) => (
+                format!(
+                    "\u{2691} heading for {name} · {} room{} · take {}",
+                    route.rooms,
+                    if route.rooms == 1 { "" } else { "s" },
+                    route.next.label()
+                ),
+                theme::SUCCESS(),
+            ),
+            Heading::Arrived(name) => (format!("\u{2691} {name} · you're here"), theme::SUCCESS()),
+            Heading::Unreachable(name) => (
+                format!("\u{2691} {name} · no way there over ground you know"),
+                theme::ERROR(),
+            ),
+        };
+        inspect.truncate(1);
+        inspect.push(Line::from(Span::styled(text, Style::default().fg(color))));
+    }
     frame.render_widget(Paragraph::new(inspect), rows[2]);
 
     // Footer line 1: controls.
     let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "wasd pan · <> level · Enter re-centre · m close",
+            "wasd pan · <> level · x mark destination · Enter re-centre · m close",
             dim,
         )])),
         rows[3],
@@ -1090,6 +1165,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" known, elsewhere  ", dim),
+            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled(" way down/up  ", dim),
             Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
             Span::styled(" look here", dim),
         ])),
@@ -1562,7 +1639,8 @@ fn draw_room_side(
         rows[0]
     };
 
-    let (lines, foe_hits, player_hits) = room_panel(view, usernames, panel_area.width as usize);
+    let (lines, foe_hits, player_hits) =
+        room_panel(view, usernames, panel_area.width as usize, state.heading());
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -1827,6 +1905,7 @@ fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
+    heading: Option<Heading>,
 ) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
     let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
@@ -1937,6 +2016,29 @@ fn room_panel(
             .join(", ")
     };
     lines.extend(side_kv_wrap("exits", &exits, theme::AMBER_DIM(), width));
+    // Directly under the exits, because it answers the question the exits
+    // raise: they say what is available, this says which one to take. A zone
+    // boundary is a jump in the coordinate field rather than a direction, so
+    // no picture of the world can carry this - only a named exit can.
+    if let Some(heading) = heading {
+        let (text, color) = match heading {
+            Heading::Toward(name, route) => (
+                format!(
+                    "{name} · {} room{} · take {}",
+                    route.rooms,
+                    if route.rooms == 1 { "" } else { "s" },
+                    route.next.label()
+                ),
+                theme::SUCCESS(),
+            ),
+            Heading::Arrived(name) => (format!("{name} · you're here"), theme::SUCCESS()),
+            Heading::Unreachable(name) => (
+                format!("{name} · no way there over ground you know"),
+                theme::ERROR(),
+            ),
+        };
+        lines.extend(side_kv_wrap("heading", &text, color, width));
+    }
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {

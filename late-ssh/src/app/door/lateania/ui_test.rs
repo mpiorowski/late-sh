@@ -381,7 +381,7 @@ fn room_panel_makes_each_foe_a_clickable_row() {
 
     let names: HashMap<uuid::Uuid, String> = HashMap::new();
     let usernames = UsernameLookup::new(&names, None);
-    let (lines, hits, _player_hits) = super::room_panel(&view, &usernames, 30);
+    let (lines, hits, _player_hits) = super::room_panel(&view, &usernames, 30, None);
 
     assert_eq!(hits.len(), 2, "one clickable row per foe");
     for (idx, id) in &hits {
@@ -467,4 +467,57 @@ fn leaderboard_panel_handles_nobody_online_yet() {
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
     assert!(joined.contains("no one else is online yet"));
     assert!(joined.contains("no rivals slain yet"));
+}
+
+// The exits line says what is available; the heading line says which of them
+// to take. That second question is the one the map itself cannot answer, since
+// a zone boundary is a jump in the coordinate field rather than a direction.
+#[test]
+fn the_heading_line_names_the_exit_to_take_next() {
+    use super::super::state::Heading;
+    use super::super::svc::empty_player_view;
+    use super::super::world::Dir;
+    use super::super::worldmap::Route;
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.exits = vec![
+        (Dir::North, "north".to_string()),
+        (Dir::Down, "down".to_string()),
+    ];
+
+    let panel = |heading| {
+        let (lines, _, _) = super::room_panel(&view, &usernames, 40, heading);
+        lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+    };
+
+    let toward = panel(Some(Heading::Toward(
+        "the Vigil House",
+        Route {
+            next: Dir::Down,
+            rooms: 4,
+        },
+    )));
+    assert!(
+        toward.contains("the Vigil House") && toward.contains("4 rooms"),
+        "the heading names the place and how far it still is: {toward}"
+    );
+    assert!(
+        toward.contains("take down"),
+        "and names the very next exit, not just the destination: {toward}"
+    );
+
+    assert!(
+        panel(Some(Heading::Arrived("the Vigil House"))).contains("you're here"),
+        "arriving says so instead of pointing somewhere"
+    );
+    assert!(
+        panel(Some(Heading::Unreachable("the Vigil House"))).contains("no way there"),
+        "an unreachable mark admits it rather than showing a confident direction"
+    );
+    assert!(!panel(None).contains("heading"), "no mark, no line");
 }

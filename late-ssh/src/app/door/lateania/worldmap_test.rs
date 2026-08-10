@@ -806,3 +806,153 @@ fn poi_index_has_every_marker_kind_and_elite_stays_rare() {
         }
     }
 }
+
+// Every zone chains to the next one by a stair, so "which way is onward" is
+// always a vertical exit - the one thing a flat level cannot draw as a
+// corridor. The map has to say so on the room itself, or it hides the only
+// route out of the zone the player is standing in.
+#[test]
+fn a_room_with_a_way_down_shows_a_stair_on_the_map() {
+    let coords = super::world_coords();
+    // Embergate's square carries both: `Down` is the Frontier descent and `Up`
+    // the city districts, each claimed at runtime by its own `extend_*`. So it
+    // exercises the real built world and the both-ways glyph at once.
+    let square = super::world().start_room;
+    let exits = &super::world().rooms[&square].exits;
+    assert!(
+        exits.contains_key(&super::Dir::Down) && exits.contains_key(&super::Dir::Up),
+        "the square keeps its Frontier stair down and its city stair up"
+    );
+    let visited = std::collections::HashSet::from([square]);
+    let canvas = super::map_canvas(coords, coords[&square], 21, 11, &visited, square);
+    let stairs: Vec<char> = canvas
+        .iter()
+        .flatten()
+        .filter_map(|t| match t {
+            super::Tile::Stair(ch) => Some(*ch),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stairs,
+        vec!['\u{25be}'],
+        "a room with both ways reads as one ▾: down is the way onward, and the \
+         exits line carries the up"
+    );
+}
+
+// The stair layer sits in each room's own corner cell. That only works if a
+// corner belongs to exactly one room and to nothing else the canvas draws;
+// otherwise a stair would silently erase a corridor, or two rooms would fight
+// over one marker.
+#[test]
+fn stair_corners_never_collide_with_rooms_corridors_or_each_other() {
+    let coords = super::world_coords();
+    // A dense hand-authored neighbourhood with stairs, houses and roads in it.
+    let here = super::world().start_room;
+    let visited: std::collections::HashSet<_> = super::world().rooms.keys().copied().collect();
+    let canvas = super::map_canvas(coords, coords[&here], 41, 21, &visited, here);
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            // Rooms land on even offsets from the centre cell, corridors on the
+            // odd cell between two of them, stairs on the odd/odd corner.
+            let (even_col, even_row) = ((c % 2 == 41 / 2 % 2), (r % 2 == 21 / 2 % 2));
+            match tile {
+                super::Tile::Room(_) => assert!(
+                    even_col && even_row,
+                    "a room must sit on the room layer at ({c},{r})"
+                ),
+                super::Tile::Stair(_) => assert!(
+                    !even_col && !even_row,
+                    "a stair must sit on the free corner layer at ({c},{r})"
+                ),
+                super::Tile::LinkH | super::Tile::LinkV => assert!(
+                    even_col != even_row,
+                    "a corridor must sit between two rooms at ({c},{r})"
+                ),
+                _ => {}
+            }
+        }
+    }
+}
+
+// Routing answers the question the picture cannot: not "where is it" but
+// "which exit do I take from here". It walks only ground the player has
+// already covered, so it can never point at an unexplored shortcut.
+#[test]
+fn a_route_names_the_first_exit_to_take_and_the_distance() {
+    let w = super::world();
+    let start = w.start_room;
+    // Two real rooms out from the square, chosen by walking the graph rather
+    // than assuming any particular exit leads on.
+    let (first_dir, second, third) = w.rooms[&start]
+        .exits
+        .iter()
+        .filter_map(|(d, next)| {
+            let onward = w.rooms.get(next)?.exits.values().find(|t| **t != start)?;
+            Some((*d, *next, *onward))
+        })
+        .min_by_key(|(_, second, third)| (*second, *third))
+        .expect("the square leads two rooms out");
+    let visited = std::collections::HashSet::from([start, second, third]);
+
+    let one = super::route(start, second, &visited).expect("a route to the neighbour");
+    assert_eq!(one.next, first_dir, "the first step is the exit to take");
+    assert_eq!(one.rooms, 1, "a neighbour is one room away");
+
+    let two = super::route(start, third, &visited).expect("a route two rooms out");
+    assert_eq!(two.rooms, 2);
+    assert_eq!(
+        two.next, first_dir,
+        "a longer route still names the very next exit, not the last one"
+    );
+
+    // Standing on the destination is not a route, and neither is a place the
+    // player has never been - no route may reveal unexplored ground.
+    assert_eq!(super::route(start, start, &visited), None);
+    let unvisited = std::collections::HashSet::from([start]);
+    assert_eq!(
+        super::route(start, second, &unvisited),
+        None,
+        "a room the player has never seen is not a destination"
+    );
+}
+
+// A stub for a link the flat grid cannot draw adjacently must sit on the side
+// the player would actually walk out of. The house interiors are the sharpest
+// case in the world: each one is its own component in the coordinate field, so
+// the close can land thousands of cells to the *west* of a house whose door
+// out faces *east*. Siding the stub by coordinate delta drew a path west, and
+// walking west then failed - the map inventing a path that is not there is the
+// single worst thing it can do.
+#[test]
+fn a_scattered_links_stub_follows_the_exit_not_the_coordinate_delta() {
+    use crate::app::door::lateania::housing::{HOUSING_BASE, plot_base};
+    let w = super::world();
+    let coords = super::world_coords();
+    let entrance = plot_base(2); // Timber Longhouse: its way out faces east.
+    assert_eq!(
+        w.rooms[&entrance].exits.get(&super::Dir::East),
+        Some(&HOUSING_BASE),
+        "the longhouse door out faces east onto the close"
+    );
+    assert!(
+        coords[&HOUSING_BASE].x < coords[&entrance].x,
+        "and the close sits west of it in the field, which is what used to \
+         decide the stub's side"
+    );
+
+    let visited: std::collections::HashSet<_> = w.rooms.keys().copied().collect();
+    let (cols, rows) = (11, 7);
+    let canvas = super::map_canvas(coords, coords[&entrance], cols, rows, &visited, entrance);
+    let (cx, cy) = ((cols / 2) as usize, (rows / 2) as usize);
+    assert!(
+        matches!(canvas[cy][cx + 1], super::Tile::HintKnown(_)),
+        "the way out reads on the east side, where walking east is what you do"
+    );
+    assert_eq!(
+        canvas[cy][cx - 1],
+        super::Tile::Empty,
+        "and nothing suggests a path west, because there is no way west"
+    );
+}

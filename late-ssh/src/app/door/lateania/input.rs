@@ -25,8 +25,10 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
-//   - Map: m overview atlas (pan around); M toggles RPG mode (the live
-//     walk-around field beside the room) on/off - off is a plain text MUD.
+//   - Map: m overview atlas (pan around); x marks the crosshair room as
+//     where you're headed, and the room panel then names the next exit to
+//     take until you get there; M toggles RPG mode (the live walk-around
+//     field beside the room) on/off - off is a plain text MUD.
 //   - ! opens the Leaderboard: top adventurers currently online by level,
 //     pvp kills, and gold (read-only). Not `?`, which late.sh reserves
 //     globally for a cross-door help overlay.
@@ -247,6 +249,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             b'\r' | b'\n' => {
                 state.recenter_map();
+                return InputAction::Handled;
+            }
+            b'x' | b'X' => {
+                // Mark the crosshair room as where you're headed. The room
+                // panel then carries the next exit to take until you arrive,
+                // which is the one thing the picture can't say: a zone
+                // boundary is a jump in the coordinate field, not a direction.
+                state.toggle_map_dest();
                 return InputAction::Handled;
             }
             _ => {}

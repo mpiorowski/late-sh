@@ -510,6 +510,93 @@ pub fn poi(room: RoomId) -> Option<&'static Poi> {
     POIS.get(&room)
 }
 
+/// A room's name, for naming a place the player marked without shipping the
+/// string through a snapshot (the world is static and process-global).
+pub fn room_name(room: RoomId) -> Option<&'static str> {
+    world().rooms.get(&room).map(|r| r.name)
+}
+
+/// The room under one map cell, resolved exactly as the canvas resolves it
+/// (see `resolve_collision`). For answering "what am I pointing at" without
+/// building a whole canvas, so input can act on the crosshair.
+pub fn room_at(
+    coords: &HashMap<RoomId, Coord>,
+    at: Coord,
+    visited: &HashSet<RoomId>,
+    player_room: RoomId,
+) -> Option<RoomId> {
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    visible(coords, at, 0, 0)
+        .into_iter()
+        .filter(|(id, _)| *id == player_room || visited.contains(id))
+        .map(|(id, _)| id)
+        .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
+}
+
+/// The first step of the shortest walk from `from` to `dest`, and how many
+/// rooms that walk is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Route {
+    /// Which exit to take from the room you are standing in right now.
+    pub next: Dir,
+    /// Rooms between here and there, so the line can say how far it still is.
+    pub rooms: usize,
+}
+
+/// Shortest walk from `from` to `dest`, over rooms the player has already
+/// visited.
+///
+/// Restricting to `visited` is what makes this honest rather than a spoiler
+/// machine: it can only ever retrace ground the player has actually walked, so
+/// it never reveals an unexplored shortcut, and it needs no gate check either
+/// (a room can only be in `visited` if the player legitimately walked into it,
+/// which means they passed whatever gate stands in front of it). It is also
+/// why a route always exists when the destination is a known room: having been
+/// there at all means such a path was once walked.
+///
+/// The whole point is the *first step*. The map can show a place and still
+/// leave "so which way do I actually go" unanswered, because a zone boundary
+/// is a jump in the coordinate field rather than a direction. A direction is
+/// the one answer that never needs the picture to be legible.
+pub fn route(from: RoomId, dest: RoomId, visited: &HashSet<RoomId>) -> Option<Route> {
+    if from == dest || !visited.contains(&dest) {
+        return None;
+    }
+    let rooms = &world().rooms;
+    // Each frontier entry carries the direction its walk left `from` by, so
+    // arriving at `dest` names the first step without rebuilding the path.
+    let mut queue: VecDeque<(RoomId, Dir, usize)> = VecDeque::new();
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    for (dir, &next) in rooms.get(&from)?.exits.iter() {
+        if !visited.contains(&next) || !seen.insert(next) {
+            continue;
+        }
+        if next == dest {
+            return Some(Route {
+                next: *dir,
+                rooms: 1,
+            });
+        }
+        queue.push_back((next, *dir, 1));
+    }
+    while let Some((room, first, depth)) = queue.pop_front() {
+        let Some(r) = rooms.get(&room) else { continue };
+        for &next in r.exits.values() {
+            if !visited.contains(&next) || !seen.insert(next) {
+                continue;
+            }
+            if next == dest {
+                return Some(Route {
+                    next: first,
+                    rooms: depth + 1,
+                });
+            }
+            queue.push_back((next, first, depth + 1));
+        }
+    }
+    None
+}
+
 /// One cell of the rendered map. Rooms sit on even offsets from the centre and
 /// the corridors between them on the odd offsets in between, so the map shows
 /// which rooms are actually linked (walkable), not just spatially near.
@@ -536,14 +623,42 @@ pub enum Tile {
     /// non-Euclidean jump reads distinctly from the true edge of your
     /// exploration.
     HintKnown(char),
+    /// A room has a way up, down, or both. Drawn in the room's own up-right
+    /// corner cell (odd column, odd row), a layer nothing else ever touches:
+    /// rooms sit on even/even and corridors on the odd cell between two of
+    /// them, so each room owns exactly one free corner and no two rooms can
+    /// claim the same one.
+    ///
+    /// This is not decoration. A flat level cannot draw a vertical link, so
+    /// the map used to omit them entirely - and in a world where every zone
+    /// chains to the next one by a stair and every continent hangs off
+    /// another by a stair, that meant opening the map to find the way onward
+    /// showed you everything *except* the way onward. The stair says only
+    /// "there is a way through here", never what waits on the far side.
+    Stair(char),
+}
+
+/// Glyph for a room's vertical exits. A room with both ways reads as `▾`
+/// rather than a two-headed arrow: only one cell per room is free (see
+/// `Tile::Stair`), an arrow reads as a control on this map where every other
+/// glyph is terrain, and down is the way onward everywhere in this world. The
+/// room panel's exits line carries the full truth for the rooms with both.
+fn stair_glyph(down: bool, up: bool) -> Option<char> {
+    match (down, up) {
+        (true, _) => Some('\u{25be}'),     // ▾
+        (false, true) => Some('\u{25b4}'), // ▴
+        (false, false) => None,
+    }
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
 /// (even cells) with the corridors between linked rooms (odd cells). Fog of
 /// war: a room shows only if visited (or it's the player); a corridor shows
 /// only when BOTH its rooms are visited, so paths into the unknown stay hidden.
-/// Up/down exits are not drawn on a flat level. The player's room wins any
-/// cell collision so `@` never vanishes under a stacked hand-authored room.
+/// A vertical link has no flat direction to run in, so it is flagged on the
+/// room itself as a `Tile::Stair` in that room's corner cell instead. The
+/// player's room wins any cell collision so `@` never vanishes under a stacked
+/// hand-authored room.
 pub fn map_canvas(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -604,6 +719,15 @@ pub fn map_canvas(
         let Some(room) = world().rooms.get(&id) else {
             continue;
         };
+        // Flag the ways up and down before walking the flat exits: the match
+        // below has nowhere to draw them, which is exactly why they need their
+        // own corner cell.
+        if let Some(glyph) = stair_glyph(
+            room.exits.contains_key(&Dir::Down),
+            room.exits.contains_key(&Dir::Up),
+        ) {
+            put(&mut canvas, sc + 1, sr - 1, Tile::Stair(glyph));
+        }
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
                 // An exit into the fog: a faint half-stub of path trailing off
@@ -647,20 +771,27 @@ pub fn map_canvas(
                     // known, unlike a plain fog `Hint`, so it becomes a
                     // `HintKnown` instead - same stub glyph, styled brighter,
                     // so a discovered non-Euclidean jump reads differently from
-                    // the unexplored edge of the map. A half-stub toward the
-                    // neighbour on the dominant axis, into an empty cell only,
-                    // so no reachable room reads as a stranded island.
-                    let horizontal = (dc.x - x).abs() >= (dc.y - y).abs();
-                    let (hx, hy) = if horizontal {
-                        (sc + (dc.x - x).signum(), sr)
-                    } else {
-                        (sc, sr + (dc.y - y).signum())
+                    // the unexplored edge of the map.
+                    //
+                    // The stub goes on the side the exit is actually walked
+                    // out of, NOT toward where the destination happens to sit
+                    // in the field. Across reserved blocks that coordinate
+                    // delta means nothing - it only records which block was
+                    // laid down first - so siding by it drew paths that were
+                    // not there. A house door facing east onto a close that
+                    // was placed 5,622 cells west drew a west stub, and
+                    // walking west then failed. Inventing a path is the worst
+                    // thing this map can do, so the exit's own direction is
+                    // the only honest answer.
+                    let Some((dx, dy)) = dir.delta_2d() else {
+                        continue; // up/down: flagged as a Stair, not a stub
                     };
+                    let (hx, hy) = (sc + dx, sr + dy);
                     if (0..cols).contains(&hx)
                         && (0..rows).contains(&hy)
                         && canvas[hy as usize][hx as usize] == Tile::Empty
                     {
-                        let stub = if horizontal { '\u{2500}' } else { '\u{2502}' };
+                        let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
                         canvas[hy as usize][hx as usize] = Tile::HintKnown(stub);
                     }
                 }
