@@ -3316,6 +3316,45 @@ fn an_offensive_ability_strikes_a_pvp_target() {
 }
 
 #[test]
+fn locking_onto_a_mob_breaks_off_the_duel_so_abilities_hit_the_mob() {
+    let mut s = world();
+    // A Wildbound field room holding a revealed, living foe: contested ground
+    // and the Waste's own roster share the same rooms, so a duel and a mob
+    // fight are both one keypress away at any moment.
+    let (mob_id, pvp_room) = s
+        .mobs
+        .values()
+        .find(|m| m.alive && m.revealed && s.world.room(m.current_room).is_some_and(|r| r.pvp))
+        .map(|m| (m.spawn.id, m.current_room))
+        .expect("the Wildbound Waste fields mobs on contested ground");
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+
+    s.engage_player(uid(1), uid(2));
+    s.engage_mob(uid(1), mob_id);
+
+    let rival_hp = s.players[&uid(2)].hp;
+    let mob_hp = s.mobs[&mob_id].hp;
+    s.use_ability(uid(1), 1); // Cleave: Strike
+
+    assert!(
+        s.mobs[&mob_id].hp < mob_hp,
+        "an ability should land on the foe just targeted"
+    );
+    assert_eq!(
+        s.players[&uid(2)].hp,
+        rival_hp,
+        "and never on the rival the duel was broken off with"
+    );
+}
+
+#[test]
 fn a_damage_over_time_ability_seeds_a_pvp_dot_that_ticks_via_strike_player() {
     let mut s = world();
     s.join(uid(1));
@@ -3543,5 +3582,104 @@ fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
     assert!(
         s.players.contains_key(&uid(1)),
         "no amount of ticking without action should ever drop a present player"
+    );
+}
+
+// ---- slot binding (which saved character a session is actually playing) ----
+//
+// These drive the real service against a real database, because the defect
+// they pin lives in the join/leave/persist plumbing, not in `WorldState`.
+
+/// Drive `join_task` and wait for the character to actually materialize.
+async fn join_and_wait(svc: &LateaniaService, user_id: Uuid, session_id: Uuid, slot: i16) {
+    svc.select_slot(user_id, slot);
+    svc.join_task(user_id, session_id);
+    crate::test_helpers::wait_until(
+        || async { svc.is_user_present(user_id) },
+        "the character joins the world",
+    )
+    .await;
+}
+
+/// Pick a class and wait for it to land in the snapshot, so the character is
+/// exportable (unclassed characters are never persisted).
+async fn class_up_and_wait(svc: &LateaniaService, user_id: Uuid, class: Class) {
+    svc.choose_class_task(user_id, class);
+    crate::test_helpers::wait_until(
+        || async {
+            svc.snapshot_rx
+                .borrow()
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.class_name == class.name())
+        },
+        "the class choice reaches the snapshot",
+    )
+    .await;
+}
+
+/// The class key stored in one character slot, or None if the slot is empty.
+async fn saved_class(db: &late_core::db::Db, user_id: Uuid, slot: i16) -> Option<String> {
+    let client = db.get().await.expect("db client");
+    let blob = MudCharacter::load(&client, user_id, slot)
+        .await
+        .expect("mud_characters loads")?;
+    SavedCharacter::from_json(&blob)
+        .expect("a stored blob parses")
+        .class
+}
+
+#[tokio::test]
+async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_character() {
+    let db = crate::test_helpers::new_test_db().await;
+    // A real account row: `mud_characters.user_id` is a foreign key, so a
+    // synthetic uuid would make every save fail silently.
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-binding-fp".to_string(),
+            username: "slotbinder".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-binding");
+    let svc = app.lateania_service.clone();
+
+    // Slot 1 gets a Mage, then logs out: that save is what must survive.
+    join_and_wait(&svc, user, uid(11), 1).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+    svc.leave_task(user, uid(11));
+    crate::test_helpers::wait_until(
+        || async { saved_class(&db.db, user, 1).await == Some(Class::Mage.as_key().to_string()) },
+        "the Mage's logout save reaches slot 1",
+    )
+    .await;
+
+    // Slot 0 gets a Warrior, and this is the character actually in the world.
+    join_and_wait(&svc, user, uid(10), 0).await;
+    class_up_and_wait(&svc, user, Class::Warrior).await;
+
+    // A second connection on the same account opens the landing and picks
+    // slot 1. It attaches to the live character (one world identity per
+    // account) - it must not redirect that character's saves at slot 1.
+    join_and_wait(&svc, user, uid(12), 1).await;
+
+    svc.flush_all()
+        .await
+        .expect("flush persists live characters");
+
+    assert_eq!(
+        saved_class(&db.db, user, 1).await.as_deref(),
+        Some(Class::Mage.as_key()),
+        "the idle slot's Mage must survive another session merely selecting it"
+    );
+    assert_eq!(
+        saved_class(&db.db, user, 0).await.as_deref(),
+        Some(Class::Warrior.as_key()),
+        "the live character keeps saving to the slot it was loaded from"
     );
 }

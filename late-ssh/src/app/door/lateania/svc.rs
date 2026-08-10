@@ -312,10 +312,19 @@ pub struct LateaniaService {
     prepared_saves: Arc<StdMutex<HashMap<CharKey, (u64, SavedCharacter)>>>,
     character_resets: Arc<StdMutex<HashSet<CharKey>>>,
     character_reset_versions: Arc<StdMutex<HashMap<CharKey, u64>>>,
-    /// Which character slot a session is playing, set by `select_slot` before
-    /// `join_task` fires. Absent means slot 0, so accounts that never see the
-    /// slot picker (or predate it) keep loading their one existing character.
+    /// Which character slot the landing last *asked* to play, set by
+    /// `select_slot` before `join_task` fires. Absent means slot 0, so accounts
+    /// that never see the slot picker (or predate it) keep loading their one
+    /// existing character. This is intent only: it is read exactly once, by the
+    /// `join_task` that creates the world player, and never by a save.
     active_slot: Arc<StdMutex<HashMap<Uuid, i16>>>,
+    /// Which slot the character *currently in the world* was loaded from, bound
+    /// the moment `join` creates that player and released when it leaves. Every
+    /// save resolves its slot from here (see `prepare_persist`), never from
+    /// `active_slot`: the picker is account-wide and a second session selecting
+    /// a different slot would otherwise redirect the live character's saves on
+    /// top of the character saved there.
+    live_slot: Arc<StdMutex<HashMap<Uuid, i16>>>,
     /// Cached slot summaries for the character-select landing, refreshed by
     /// `character_slots_task` and read synchronously by the render path.
     slot_summaries: Arc<StdMutex<HashMap<Uuid, Vec<SlotSummary>>>>,
@@ -1082,6 +1091,7 @@ impl LateaniaService {
             character_resets: Arc::new(StdMutex::new(HashSet::new())),
             character_reset_versions: Arc::new(StdMutex::new(HashMap::new())),
             active_slot: Arc::new(StdMutex::new(HashMap::new())),
+            live_slot: Arc::new(StdMutex::new(HashMap::new())),
             slot_summaries: Arc::new(StdMutex::new(HashMap::new())),
         };
         // Build the overhead map's coordinate field and POI index now. Both are
@@ -1122,20 +1132,47 @@ impl LateaniaService {
 
     // ---- Character slots ---------------------------------------------------
     //
-    // An account can keep up to `CHARACTER_SLOTS` saved characters, but only
-    // ever plays one at a time. `select_slot` (called from the landing,
-    // before `join_task`) picks which slot that session's `join`/`leave`/
-    // autosave cycle reads and writes; everything downstream of join still
-    // keys off the account's own `user_id`, unchanged.
+    // An account can keep up to `CHARACTER_SLOTS` saved characters, but the
+    // world only ever holds one player per account, so only one of those
+    // characters is live at a time. Two different questions therefore need two
+    // different answers, and conflating them loses saves:
+    //
+    //   `active_slot` - which slot the landing last asked for. Account-wide,
+    //     changes on every Enter from any connection, read only by the
+    //     `join_task` that actually creates the world player.
+    //   `live_slot`   - which slot the character in the world came from. Bound
+    //     at that same join and released at leave; the only thing a save is
+    //     ever allowed to consult.
+    //
+    // Everything downstream of join still keys off the account's own `user_id`,
+    // unchanged.
 
-    /// The slot a session should load/save for this account. Defaults to 0 so
-    /// accounts that never touch the slot picker keep their one character.
+    /// The slot the landing last asked to play for this account. Defaults to 0
+    /// so accounts that never touch the slot picker keep their one character.
     fn active_slot(&self, user_id: Uuid) -> i16 {
         self.active_slot
             .lock_recover()
             .get(&user_id)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// Which slot the account's live character was loaded from, if one is in
+    /// the world at all.
+    fn live_slot(&self, user_id: Uuid) -> Option<i16> {
+        self.live_slot.lock_recover().get(&user_id).copied()
+    }
+
+    /// Bind the account's live character to the slot it was just loaded from.
+    /// Called only where `join` creates the world player.
+    fn bind_live_slot(&self, user_id: Uuid, slot: i16) {
+        self.live_slot.lock_recover().insert(user_id, slot);
+    }
+
+    /// Release the binding once the character has left the world. Called only
+    /// where the world player is removed.
+    fn unbind_live_slot(&self, user_id: Uuid) {
+        self.live_slot.lock_recover().remove(&user_id);
     }
 
     /// Pick which character slot the next `join_task` for this account loads.
@@ -1271,16 +1308,39 @@ impl LateaniaService {
             } else {
                 svc.prepared_saved(user_id, slot)
             };
-            if !state.players.contains_key(&user_id) {
-                state.join(user_id);
-                state.set_veteran(user_id, veteran);
-                if let Some(saved) = saved {
-                    state.hydrate(user_id, &saved);
+            match state.players.contains_key(&user_id) {
+                false => {
+                    state.join(user_id);
+                    // Bind before hydrating: from here until this character
+                    // leaves, every save for the account goes to `slot` and
+                    // nowhere else, whatever the landing is later asked for.
+                    svc.bind_live_slot(user_id, slot);
+                    state.set_veteran(user_id, veteran);
+                    if let Some(saved) = saved {
+                        state.hydrate(user_id, &saved);
+                    }
+                    // A player materialized in the world (fresh join, not an
+                    // already-present session). The lounge feed's repeat window
+                    // absorbs quick leave/rejoin ping-pong.
+                    svc.activity.game_started_task(user_id, ActivityGame::Mud);
                 }
-                // A player materialized in the world (fresh join, not an
-                // already-present session). The lounge feed's repeat window
-                // absorbs quick leave/rejoin ping-pong.
-                svc.activity.game_started_task(user_id, ActivityGame::Mud);
+                // Already in the world: a second connection for the same
+                // account attaches to the character that is already playing.
+                // One world identity per account means the slot it asked for
+                // simply loses, and it must be told so, or it looks like the
+                // pick silently failed.
+                true => {
+                    if svc.live_slot(user_id).is_some_and(|live| live != slot) {
+                        state.log_to(
+                            user_id,
+                            LogKind::System,
+                            "You're already adventuring on another connection. \
+                             Both are playing that character; close the other \
+                             session first to switch."
+                                .to_string(),
+                        );
+                    }
+                }
             }
             svc.publish(&state);
         });
@@ -1301,11 +1361,14 @@ impl LateaniaService {
                 if svc.has_active_session(user_id) {
                     return;
                 }
-                let slot = svc.active_slot(user_id);
+                // Stage the save while the character is still live (that is
+                // what resolves its slot), then remove it and release the
+                // binding, so nothing that runs later can save it again.
                 let saved = state
                     .export_saved(user_id)
-                    .and_then(|saved| svc.prepare_persist(user_id, slot, saved));
+                    .and_then(|saved| svc.prepare_persist(user_id, saved));
                 state.leave(user_id);
+                svc.unbind_live_slot(user_id);
                 svc.publish(&state);
                 saved
             };
@@ -1386,12 +1449,14 @@ impl LateaniaService {
             .unwrap_or(0)
     }
 
-    fn prepare_persist(
-        &self,
-        user_id: Uuid,
-        slot: i16,
-        saved: SavedCharacter,
-    ) -> Option<PendingSave> {
+    /// Stage one character blob for writing, targeting the slot its character
+    /// was loaded from. The slot is resolved here rather than passed in, so no
+    /// caller can name the wrong one: a save exists only for a character that
+    /// is in the world, and that character has exactly one slot for its whole
+    /// stay. Returns None when nothing is live to save (a leave that already
+    /// released the binding, or a reset in flight).
+    fn prepare_persist(&self, user_id: Uuid, saved: SavedCharacter) -> Option<PendingSave> {
+        let slot = self.live_slot(user_id)?;
         let key = (user_id, slot);
         let resets = self.character_resets.lock_recover();
         if resets.contains(&key) {
@@ -1488,10 +1553,7 @@ impl LateaniaService {
                     state
                         .export_all_saved()
                         .into_iter()
-                        .filter_map(|(user_id, saved)| {
-                            let slot = svc.active_slot(user_id);
-                            svc.prepare_persist(user_id, slot, saved)
-                        })
+                        .filter_map(|(user_id, saved)| svc.prepare_persist(user_id, saved))
                         .collect()
                 };
                 for save in saves {
@@ -1589,10 +1651,7 @@ impl LateaniaService {
             let saves = state
                 .export_all_saved()
                 .into_iter()
-                .filter_map(|(user_id, saved)| {
-                    let slot = self.active_slot(user_id);
-                    self.prepare_persist(user_id, slot, saved)
-                })
+                .filter_map(|(user_id, saved)| self.prepare_persist(user_id, saved))
                 .collect();
             let world_save = if state.world_dirty {
                 state.world_dirty = false;
@@ -1808,11 +1867,15 @@ impl LateaniaService {
         let svc = self.clone();
         tokio::spawn(async move {
             svc.begin_character_reset(user_id, slot);
-            let is_live_slot = svc.active_slot(user_id) == slot;
-            if is_live_slot {
+            // "Live" means the character actually in the world came from this
+            // slot, not that the landing happens to be pointing at it: a
+            // cursor sitting on slot 3 must never evict the slot-0 character
+            // someone is mid-fight with.
+            if svc.live_slot(user_id) == Some(slot) {
                 svc.clear_sessions(user_id);
                 let mut state = svc.state.lock().await;
                 state.delete_character(user_id);
+                svc.unbind_live_slot(user_id);
                 svc.publish(&state);
             }
 
@@ -1949,14 +2012,22 @@ impl LateaniaService {
 
     fn publish(&self, state: &WorldState) {
         let mut snapshot = state.snapshot();
-        // A session only ever plays its account's currently active slot, so
-        // the reset signal it needs is scoped to that one slot even though
-        // the version counter underneath is tracked per (account, slot).
+        // The "reset elsewhere" signal exists to stop a live session from
+        // silently becoming a different character, so it is scoped to the slot
+        // that session is actually playing - not the one the landing points at
+        // (deleting an idle slot from another tab must not kick anyone). With
+        // no live character there is nothing to kick, so fall back to the
+        // picker's choice for a session still on its way in.
         snapshot.reset_versions = self
             .character_reset_versions
             .lock_recover()
             .iter()
-            .filter(|((user_id, slot), _)| *slot == self.active_slot(*user_id))
+            .filter(|((user_id, slot), _)| {
+                *slot
+                    == self
+                        .live_slot(*user_id)
+                        .unwrap_or_else(|| self.active_slot(*user_id))
+            })
             .map(|((user_id, _), version)| (*user_id, *version))
             .collect();
         let _ = self.snapshot_tx.send(snapshot);
@@ -4998,6 +5069,23 @@ impl WorldState {
                 "You slide from the saddle - this is foot work.".to_string(),
             );
         }
+        // Taking a mob target breaks off any duel. `target` and `pvp_target`
+        // are mutually exclusive by contract - `damage_target` and the `Stun`
+        // arm both resolve pvp first, so a player holding two targets at once
+        // would have their abilities damage the rival while the stun landed on
+        // the mob. `engage_player` clears `target`; this is the other half.
+        let dropped_duel = self
+            .players
+            .get_mut(&user_id)
+            .and_then(|p| p.pvp_target.take())
+            .is_some();
+        if dropped_duel {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                "You break off the duel.".to_string(),
+            );
+        }
         if let Some(player) = self.players.get_mut(&user_id) {
             player.target = Some(mob_id);
             // Opportunist: the Rogue's first strike of a fight always crits.
@@ -5300,9 +5388,10 @@ impl WorldState {
     }
 
     fn damage_target(&mut self, user_id: Uuid, raw: i32, dtype: DamageType, source: &str) {
-        // A pvp duel takes priority: `engage_player`/auto-retaliation clears
-        // the mob `target` whenever `pvp_target` is set, so the two never
-        // coexist, but checking pvp first keeps that invariant explicit here.
+        // A pvp duel takes priority. The two targets never coexist: taking a
+        // duel clears the mob target (`engage_player`) and taking a mob target
+        // breaks off the duel (`set_target`). Checking pvp first keeps that
+        // invariant explicit here.
         if let Some(victim_id) = self.players.get(&user_id).and_then(|p| p.pvp_target) {
             self.log_to(
                 user_id,
