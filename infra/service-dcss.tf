@@ -90,6 +90,13 @@ resource "kubernetes_deployment_v1" "late_dcss" {
             name           = "dcss"
           }
 
+          # Read-only HTTP publishing of the shared crawl logs for the public
+          # DCSS tooling (see the ingress at the bottom of this file).
+          port {
+            container_port = 2326
+            name           = "crawl"
+          }
+
           resources {
             limits = {
               cpu    = local.door_cpu_limit
@@ -152,6 +159,14 @@ resource "kubernetes_deployment_v1" "late_dcss" {
             value = local.dcss_var_path
           }
 
+          # Port for the read-only crawl-file publisher. Stated explicitly so
+          # this manifest's container port, service port, and ingress all read
+          # from one place rather than from the host's default.
+          env {
+            name  = "LATE_DCSS_PUBLISH_PORT"
+            value = "2326"
+          }
+
           volume_mount {
             name       = "dcss-save"
             mount_path = local.dcss_var_path
@@ -184,12 +199,63 @@ resource "kubernetes_service_v1" "late_dcss_sv" {
       app = "late-dcss"
     }
 
-    # Cluster-internal only: reached by service-ssh at late-dcss-sv:2325. Not
-    # exposed via ingress or the ssh-tcp LoadBalancer.
+    # The game itself is cluster-internal: reached by service-ssh at
+    # late-dcss-sv:2325, never through ingress or the ssh-tcp LoadBalancer.
     port {
       name        = "dcss"
       port        = 2325
       target_port = "dcss"
+    }
+
+    # The crawl-file publisher, fronted by the ingress below.
+    port {
+      name        = "crawl"
+      port        = 2326
+      target_port = "crawl"
+    }
+  }
+}
+
+# =============================================================================
+# late.sh/crawl → the read-only crawl server files (logfile, milestones, morgue)
+# =============================================================================
+# Public DCSS tooling (dcss-stats.com, Sequell) ingests a server by fetching its
+# logfile/milestones over HTTP and linking morgue dumps per game. The late-dcss
+# host serves those natively under /crawl/... (late-dcss/src/publish.rs), so no
+# rewrite annotation is needed here.
+#
+# Path prefix rather than a subdomain, deliberately: ingress-nginx merges every
+# rule for a host into one server block and matches longest-prefix-first, so
+# /crawl out-ranks late-web's "/" catch-all in ingress.tf while the existing DNS
+# record and TLS certificate keep working untouched. That is also why this
+# resource carries no tls block and no cert-manager annotations: the certificate
+# for var.DOMAIN belongs to service-web-ingress, and a second issuer request for
+# the same host would fight it.
+resource "kubernetes_ingress_v1" "late_dcss_crawl" {
+  metadata {
+    name = "late-dcss-crawl-ingress"
+    annotations = {
+      "kubernetes.io/ingress.class" = "nginx"
+    }
+  }
+
+  spec {
+    rule {
+      host = var.DOMAIN
+      http {
+        path {
+          path      = "/crawl"
+          path_type = "Prefix"
+          backend {
+            service {
+              name = kubernetes_service_v1.late_dcss_sv.metadata[0].name
+              port {
+                name = "crawl"
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
