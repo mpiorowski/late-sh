@@ -1346,7 +1346,11 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                         ));
                     }
                     // Only the native saved-character doors offer a reset; the
-                    // proxied ones own their own saves upstream.
+                    // proxied ones own their own saves upstream. Lateania is
+                    // multi-slot now and no longer arms this confirm from the
+                    // hub at all (see the guard above) - its own landing is
+                    // the only place that can reach this arm, and it never
+                    // will, but the match still has to be exhaustive.
                     HubGame::Lateania
                     | HubGame::Rebels
                     | HubGame::Nethack
@@ -1354,13 +1358,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Brogue
                     | HubGame::Usurper
                     | HubGame::Dopewars
-                    | HubGame::Codekeep => {
-                        app.leave_lateania();
-                        app.lateania_service.delete_character_task(app.user_id);
-                        app.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Lateania character reset. Enter the world to start over.",
-                        ));
-                    }
+                    | HubGame::Codekeep => {}
                 }
                 true
             }
@@ -1394,11 +1392,12 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             app.games_hub_state.select_prev();
             true
         }
+        // Lateania has multiple character slots now, so its own landing (with
+        // a slot cursor to say *which* character) is the only safe place to
+        // confirm a delete; this hub shortcut still covers the single-save
+        // games.
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if matches!(
-                selected,
-                HubGame::Lateania | HubGame::GreenDragon | HubGame::Darkroom
-            ) =>
+            if matches!(selected, HubGame::GreenDragon | HubGame::Darkroom) =>
         {
             app.door_delete_confirm = true;
             true
@@ -1439,8 +1438,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
     app.door_delete_confirm = false;
     match game {
         HubGame::Lateania => {
+            // Lands on the character-select landing rather than jumping
+            // straight into the world, since which of the account's saved
+            // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
-            app.enter_lateania();
         }
         HubGame::Rebels => {
             if !app.rebels_enabled {
@@ -2207,6 +2208,21 @@ fn dispatch_escape(app: &mut App) {
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
+        // ...but while a world is live, Esc is the door's key, not this
+        // dispatcher's. The door cancels a chat line being composed, and
+        // otherwise requires a confirming second press before it will give up
+        // a player's place in a persistent world. This runs before screen
+        // dispatch, so leaving here unconditionally skipped both rules - the
+        // same interception that was removed from `lateania::screen` still
+        // lived one layer up here. Forward it and let the door decide; only a
+        // leave it actually performed should reach the hub.
+        if app.lateania_state.is_some() {
+            crate::app::door::lateania::screen::GAME.handle_key(app, 0x1B);
+            if app.lateania_state.is_none() {
+                app.set_screen(Screen::Games);
+            }
+            return;
+        }
         app.door_delete_confirm = false;
         app.leave_lateania();
         app.set_screen(Screen::Games);

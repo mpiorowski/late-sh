@@ -165,6 +165,9 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
+    /// This account's character slots, for the character-select landing.
+    lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    lateania_slot_cursor: usize,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -988,6 +991,8 @@ impl App {
                         codekeep_enabled: self.codekeep_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
+                        lateania_slots: self.lateania_service.character_slots(self.user_id),
+                        lateania_slot_cursor: self.lateania_slot_cursor,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1349,6 +1354,8 @@ impl App {
                         dopewars_enabled: ctx.dopewars_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
+                        lateania_slots: ctx.lateania_slots.clone(),
+                        lateania_slot_cursor: ctx.lateania_slot_cursor,
                         nethack_live: ctx
                             .nethack_state
                             .as_deref()
@@ -1376,6 +1383,8 @@ impl App {
                         state: ctx.lateania_state,
                         usernames: ctx.usernames,
                         online: ctx.lateania_online,
+                        slots: &ctx.lateania_slots,
+                        slot_cursor: ctx.lateania_slot_cursor,
                     },
                     terminal_images,
                 );

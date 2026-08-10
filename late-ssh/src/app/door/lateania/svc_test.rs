@@ -464,6 +464,40 @@ fn world_clock_cycles_through_day_phases_and_weather() {
         Weather::from_ticks(0),
         Weather::from_ticks(WEATHER_TICKS * 2)
     );
+    // Every phase gets its own glyph, and "dark" lines up with dusk/night
+    // exactly (the UI colours the clock as a danger cue from this flag).
+    let phases = [
+        TimeOfDay::Dawn,
+        TimeOfDay::Day,
+        TimeOfDay::Dusk,
+        TimeOfDay::Night,
+    ];
+    let glyphs: std::collections::HashSet<&str> = phases.iter().map(|p| p.glyph()).collect();
+    assert_eq!(glyphs.len(), 4, "every phase has a distinct glyph");
+    assert!(!TimeOfDay::Dawn.is_dark());
+    assert!(!TimeOfDay::Day.is_dark());
+    assert!(TimeOfDay::Dusk.is_dark());
+    assert!(TimeOfDay::Night.is_dark());
+}
+
+#[test]
+fn stray_feeding_day_boundary_is_spelled_out_in_real_time() {
+    // The bug: "come back tomorrow" left players guessing when "tomorrow"
+    // actually starts, and easy to confuse with the much faster in-game
+    // Dawn/Day/Dusk/Night clock (a ~16-minute cycle, not a real day).
+    let countdown = time_until_next_utc_day();
+    assert!(
+        countdown.ends_with('m'),
+        "always at least a minutes component: {countdown}"
+    );
+    // Never a full day or more, and never negative/absurd - it counts down
+    // to the *next* midnight, always less than 24h away.
+    if let Some(h) = countdown.split('h').next()
+        && countdown.contains('h')
+    {
+        let hours: i64 = h.trim().parse().expect("leading hours are numeric");
+        assert!((0..24).contains(&hours), "got {countdown}");
+    }
 }
 
 #[test]
@@ -979,10 +1013,11 @@ fn warp_to_waypoint_refuses_without_one_set_or_without_enough_gold() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    let start = s.players[&uid(1)].room;
     s.warp_to_waypoint(uid(1));
     assert_eq!(
         s.players[&uid(1)].room,
-        s.world.start_room,
+        start,
         "no waypoint set: nothing happens"
     );
 
@@ -1071,6 +1106,7 @@ fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     let home = s.world.start_room;
+    s.players.get_mut(&uid(1)).unwrap().room = home;
 
     s.move_player(uid(1), Dir::Down);
     assert_eq!(
@@ -1140,6 +1176,7 @@ fn frontier_warning_clears_when_moving_elsewhere() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
     grant_frontier_unlock_titles(&mut s, uid(1));
 
     s.move_player(uid(1), Dir::Down);
@@ -1154,6 +1191,7 @@ fn town_square_exit_labels_mark_frontier_as_dangerous() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
 
     let snap = s.snapshot();
     let view = snap.players.get(&uid(1)).expect("player view");
@@ -1231,23 +1269,33 @@ fn hunting_small_game_grants_xp_then_cools_down() {
 
 #[test]
 fn a_boon_creature_mends_on_arrival() {
+    // The bug: Mend used to be a small partial heal, so fully healing meant
+    // walking in and out of the room over and over. It should just heal you
+    // all the way in one visit.
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    let max = s.players[&uid(1)].max_hp();
     if let Some(p) = s.players.get_mut(&uid(1)) {
         p.hp = 1;
+        // Room 1, the town square, is home to the hearth-cat (Mend boon).
+        p.room = 1;
     }
-    // The player starts in the town square, home of the hearth-cat (Mend boon).
     s.apply_critter_perks(uid(1));
-    assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        max,
+        "the hearth-cat should mend you all the way, not partway"
+    );
 }
 
 #[test]
 fn unclassed_player_cannot_move_or_fight() {
     let mut s = world();
     s.join(uid(1));
+    let start = s.players[&uid(1)].room;
     s.move_player(uid(1), Dir::South);
-    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+    assert_eq!(s.players[&uid(1)].room, start);
     s.engage(uid(1));
     assert!(s.players[&uid(1)].target.is_none());
 }
@@ -1257,6 +1305,7 @@ fn buying_costs_gold_and_adds_item() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Walk to the smith (room 3, east of square).
     s.move_player(uid(1), Dir::East);
     assert_eq!(s.players[&uid(1)].room, 3);
@@ -1274,7 +1323,7 @@ fn waystone_travel_teleports_between_portals() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     // Room 1 (Embergate square) has the town waystone.
-    assert_eq!(s.players[&uid(1)].room, 1);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.travel(uid(1), village_room(0));
     assert_eq!(
         s.players[&uid(1)].room,
@@ -1305,7 +1354,7 @@ fn continent_waystones_honor_their_walking_gate_titles() {
     s.choose_class(uid(1), Class::Warrior);
     // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
     // stays sealed until the Yssgar crown is earned.
-    assert_eq!(s.players[&uid(1)].room, 1);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.travel(uid(1), super::super::world::KAELMYR_BASE);
     assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
     s.players
@@ -1384,6 +1433,7 @@ fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
     assert_eq!(s.players[&uid(1)].room, 3);
     {
@@ -1411,7 +1461,8 @@ fn buying_a_companion_costs_gold_and_sets_a_pet() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // A fresh adventurer stands in Embergate's square, which has a stable.
+    // Embergate's square (room 1) has a stable.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.players.get_mut(&uid(1)).unwrap().gold = 1000;
     s.buy_pet(uid(1), "war_hound");
     let p = &s.players[&uid(1)];
@@ -1805,6 +1856,7 @@ fn bank_toggles_between_deposit_and_withdraw_all_gold() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
 
     // Find the banker's grille by kind - feature indices shift as scenery
     // (e.g. a stable) is added to the square.
@@ -1920,10 +1972,78 @@ fn worn_gear_cannot_be_sold_out_from_under_you() {
 }
 
 #[test]
+fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
+    // The bug: selling required unequipping first even when a second, loose
+    // copy of the same item sat right there in the pack.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    s.equip(uid(1), 1006);
+    // A second copy, still loose in the pack.
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let gold = s.players[&uid(1)].gold;
+    let price = item(1006).unwrap().sell_price();
+
+    s.sell(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, gold + price, "the loose copy sold");
+    assert!(
+        p.equipped.values().any(|id| *id == 1006),
+        "the worn copy stayed on"
+    );
+    assert!(
+        !p.inventory.contains(&1006),
+        "the loose copy left the pack: {:?}",
+        p.inventory
+    );
+}
+
+// ---- character slots (multiple saved characters per account) -------------
+
+#[test]
+fn empty_slot_summary_reads_as_unoccupied() {
+    let summary = SlotSummary::empty(3);
+    assert_eq!(summary.slot, 3);
+    assert!(!summary.occupied);
+    assert_eq!(summary.class, None);
+    assert_eq!(summary.level, 0);
+}
+
+#[test]
+fn slot_summary_from_a_save_reads_its_class_and_level() {
+    let saved = SavedCharacter::from_json(&serde_json::json!({
+        "class": "warrior",
+        "level": 14,
+    }))
+    .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(2, &saved);
+    assert_eq!(summary.slot, 2);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, Some(Class::Warrior));
+    assert_eq!(summary.level, 14);
+}
+
+#[test]
+fn slot_summary_before_a_class_is_chosen_still_reads_as_occupied() {
+    // A character mid-tutorial (joined, never picked a class) has a real save
+    // to resume or delete, even with no class to show yet.
+    let saved = SavedCharacter::from_json(&serde_json::json!({ "level": 1 }))
+        .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(0, &saved);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, None);
+}
+
+#[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Rogue);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1939,6 +2059,7 @@ fn combat_tick_logs_player_auto_attack() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1959,6 +2080,13 @@ fn field_mode_logs_discoveries_only_and_classic_logs_every_arrival() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Mage);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1;
+        // Room 1 is "known land" for this test's purposes, same as it was
+        // when a fresh join placed a character there directly.
+        std::sync::Arc::make_mut(&mut p.visited).insert(1);
+    }
 
     // First footfall in field mode (rpg on by default): a discovery line plus
     // the room's prose, which has nowhere else to live on the field layout.
@@ -2011,6 +2139,7 @@ fn warrior_does_not_arm_opening_strike() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
     s.engage(uid(1));
@@ -3056,6 +3185,390 @@ fn a_word_that_merely_starts_with_z_or_w_is_not_mistaken_for_a_scope_marker() {
     );
 }
 
+/// Any real Wildbound Waste field room, for pvp tests that don't care which.
+fn any_pvp_room(world: &super::super::world::World) -> RoomId {
+    world
+        .rooms
+        .values()
+        .find(|r| r.pvp)
+        .map(|r| r.id)
+        .expect("the Wildbound Waste has at least one pvp room")
+}
+
+#[test]
+fn engage_player_only_works_on_pvp_ground() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Both start in Embergate's safe square: no duelling allowed here.
+    s.players.get_mut(&uid(2)).unwrap().room = s.players[&uid(1)].room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(
+        s.players[&uid(1)].pvp_target,
+        None,
+        "safe ground refuses a duel"
+    );
+
+    // Move both onto real pvp ground: the duel locks on and the victim
+    // auto-retaliates since they weren't already fighting anything.
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(s.players[&uid(1)].pvp_target, Some(uid(2)));
+    assert_eq!(
+        s.players[&uid(2)].pvp_target,
+        Some(uid(1)),
+        "an unengaged victim rounds on their attacker"
+    );
+}
+
+#[test]
+fn a_pvp_duel_blocks_movement_and_recall_like_any_fight() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert!(s.players[&uid(1)].in_combat());
+
+    let room_before = s.players[&uid(1)].room;
+    s.recall(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        room_before,
+        "recall must not work mid-duel"
+    );
+}
+
+#[test]
+fn winning_a_pvp_duel_credits_gold_xp_a_kill_and_a_title() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    // Stack the fight hopelessly in the attacker's favour: a one-shot kill on
+    // the first combat round, no Warrior death-save or veteran charge to
+    // interrupt it.
+    {
+        let victim = s.players.get_mut(&uid(2)).unwrap();
+        victim.hp = 1;
+        victim.death_save_used = true;
+        victim.resurrections_left = 0;
+        victim.gold = 100;
+    }
+    let attacker_xp_before = s.players[&uid(1)].xp;
+    let attacker_gold_before = s.players[&uid(1)].gold;
+    s.engage_player(uid(1), uid(2));
+    s.tick();
+
+    let victim = &s.players[&uid(2)];
+    assert!(victim.dead, "the outmatched victim should have fallen");
+    let lost_gold = 100 - victim.gold;
+    assert!(lost_gold > 0, "a real death loses carried gold");
+
+    let attacker = &s.players[&uid(1)];
+    assert_eq!(attacker.pvp_kills, 1);
+    assert_eq!(
+        attacker.gold,
+        attacker_gold_before + lost_gold,
+        "the victim's lost gold becomes the spoils"
+    );
+    assert!(attacker.xp > attacker_xp_before, "a pvp kill grants xp");
+    assert!(
+        attacker.titles.iter().any(|t| t == "Blooded"),
+        "a first pvp kill earns the Blooded title, got {:?}",
+        attacker.titles
+    );
+}
+
+#[test]
+fn an_offensive_ability_strikes_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    // Slot 1 is Cleave (Strike) for a level-1 Warrior.
+    let before = s.players[&uid(2)].hp;
+    s.use_ability(uid(1), 1);
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "Cleave should damage the pvp target directly, not just the auto-attack"
+    );
+}
+
+#[test]
+fn locking_onto_a_mob_breaks_off_the_duel_so_abilities_hit_the_mob() {
+    let mut s = world();
+    // A Wildbound field room holding a revealed, living foe: contested ground
+    // and the Waste's own roster share the same rooms, so a duel and a mob
+    // fight are both one keypress away at any moment.
+    let (mob_id, pvp_room) = s
+        .mobs
+        .values()
+        .find(|m| m.alive && m.revealed && s.world.room(m.current_room).is_some_and(|r| r.pvp))
+        .map(|m| (m.spawn.id, m.current_room))
+        .expect("the Wildbound Waste fields mobs on contested ground");
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+
+    s.engage_player(uid(1), uid(2));
+    s.engage_mob(uid(1), mob_id);
+
+    let rival_hp = s.players[&uid(2)].hp;
+    let mob_hp = s.mobs[&mob_id].hp;
+    s.use_ability(uid(1), 1); // Cleave: Strike
+
+    assert!(
+        s.mobs[&mob_id].hp < mob_hp,
+        "an ability should land on the foe just targeted"
+    );
+    assert_eq!(
+        s.players[&uid(2)].hp,
+        rival_hp,
+        "and never on the rival the duel was broken off with"
+    );
+}
+
+#[test]
+fn a_damage_over_time_ability_seeds_a_pvp_dot_that_ticks_via_strike_player() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 4; // unlocks Rend (slot 2)
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    s.use_ability(uid(1), 2); // Rend: DamageOverTime
+    assert!(
+        s.pvp_dots.contains_key(&uid(2)),
+        "Rend should seed a pvp dot on the victim"
+    );
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "the dot should tick real damage into the victim via strike_player"
+    );
+}
+
+#[test]
+fn a_stun_ability_skips_the_stunned_players_next_swing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 12; // unlocks Shield Bash (slot 4)
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.players.get_mut(&uid(2)).unwrap().max_resource = 500;
+    s.engage_player(uid(1), uid(2));
+    // Victim rounds on the attacker too (auto-retaliation), so give them an
+    // ability roster of their own to prove their swing is actually skipped.
+    s.players.get_mut(&uid(2)).unwrap().level = 1;
+
+    s.use_ability(uid(1), 4); // Shield Bash: Stun
+    assert!(
+        s.pvp_stuns.get(&uid(2)).copied().unwrap_or(0) > 0,
+        "Shield Bash should stun the pvp victim"
+    );
+    let attacker_hp_before = s.players[&uid(1)].hp;
+    s.tick();
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        attacker_hp_before,
+        "a stunned adventurer should not land their own swing this round"
+    );
+}
+
+#[test]
+fn a_companions_bite_and_auto_skills_reach_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Buy the companion at Embergate's stable (room 1) before heading to the
+    // pvp ground, same as any real player would.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+    s.buy_pet(uid(1), "war_hound");
+    assert!(s.players[&uid(1)].pet.is_some(), "the companion is set");
+
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.engage_player(uid(1), uid(2));
+
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    let after_owner_and_pet = s.players[&uid(2)].hp;
+    assert!(
+        after_owner_and_pet < before,
+        "the owner's own blow should land"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("tears into your rival")),
+        "the pet's bite against the pvp target should be logged, got {:?}",
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| &l.text)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_brand_new_character_spawns_in_the_tutorial_and_can_recall_to_embergate() {
+    let mut s = world();
+    s.join(uid(1));
+    // Joining alone (before a class is chosen) already places the character
+    // in Wayfarer's Hollow, not `World::start_room` directly.
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    s.choose_class(uid(1), Class::Warrior);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("Wayfarer's Hollow") && l.text.contains('r')),
+        "the welcome message should mention the tutorial and the recall key"
+    );
+    // The existing recall (r) already works from anywhere: it's the "leave
+    // for town with a key anytime" the tutorial promises.
+    s.recall(uid(1));
+    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+}
+
+#[test]
+fn a_returning_character_reloads_where_they_saved_not_the_tutorial() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    let saved = s.export_saved(uid(1)).expect("classed character exports");
+    assert_eq!(
+        saved.room, 1,
+        "the saved room is wherever they actually stood"
+    );
+
+    // A fresh session reloads that exact room, not the tutorial.
+    let mut s2 = world();
+    s2.join(uid(1));
+    s2.hydrate(uid(1), &saved);
+    assert_eq!(s2.players[&uid(1)].room, 1);
+}
+
+#[test]
+fn leaderboard_ranks_by_level_pvp_kills_and_gold_and_skips_unclassed() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3)); // never classed - must not appear on any board
+
+    {
+        let p1 = s.players.get_mut(&uid(1)).unwrap();
+        p1.level = 10;
+        p1.pvp_kills = 3;
+        p1.gold = 50;
+        p1.banked_gold = 0;
+    }
+    {
+        let p2 = s.players.get_mut(&uid(2)).unwrap();
+        p2.level = 20;
+        p2.pvp_kills = 1;
+        p2.gold = 10;
+        p2.banked_gold = 500;
+    }
+
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 2, "unclassed players are excluded");
+    assert_eq!(
+        board.by_level[0].user_id,
+        uid(2),
+        "higher level ranks first"
+    );
+    assert_eq!(
+        board.by_pvp_kills[0].user_id,
+        uid(1),
+        "more pvp kills ranks first"
+    );
+    assert_eq!(
+        board.by_gold[0].user_id,
+        uid(2),
+        "carried + banked gold ranks first"
+    );
+    assert_eq!(board.by_gold[0].value, 510, "gold is carried plus banked");
+    assert!(
+        board
+            .by_level
+            .iter()
+            .chain(&board.by_pvp_kills)
+            .chain(&board.by_gold)
+            .all(|e| e.user_id != uid(3)),
+        "an unclassed character never appears on any board"
+    );
+}
+
+#[test]
+fn leaderboard_caps_at_ten_entries() {
+    let mut s = world();
+    for i in 0..15u128 {
+        s.join(uid(100 + i));
+        s.choose_class(uid(100 + i), Class::Warrior);
+        s.players.get_mut(&uid(100 + i)).unwrap().level = i as i32;
+    }
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 10, "top ten only, not all fifteen");
+    assert_eq!(board.by_level[0].level, 14, "the highest level leads");
+}
+
 #[test]
 fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
     // There used to be a 10-minute inactivity kick. It's gone: only an
@@ -3069,5 +3582,104 @@ fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
     assert!(
         s.players.contains_key(&uid(1)),
         "no amount of ticking without action should ever drop a present player"
+    );
+}
+
+// ---- slot binding (which saved character a session is actually playing) ----
+//
+// These drive the real service against a real database, because the defect
+// they pin lives in the join/leave/persist plumbing, not in `WorldState`.
+
+/// Drive `join_task` and wait for the character to actually materialize.
+async fn join_and_wait(svc: &LateaniaService, user_id: Uuid, session_id: Uuid, slot: i16) {
+    svc.select_slot(user_id, slot);
+    svc.join_task(user_id, session_id);
+    crate::test_helpers::wait_until(
+        || async { svc.is_user_present(user_id) },
+        "the character joins the world",
+    )
+    .await;
+}
+
+/// Pick a class and wait for it to land in the snapshot, so the character is
+/// exportable (unclassed characters are never persisted).
+async fn class_up_and_wait(svc: &LateaniaService, user_id: Uuid, class: Class) {
+    svc.choose_class_task(user_id, class);
+    crate::test_helpers::wait_until(
+        || async {
+            svc.snapshot_rx
+                .borrow()
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.class_name == class.name())
+        },
+        "the class choice reaches the snapshot",
+    )
+    .await;
+}
+
+/// The class key stored in one character slot, or None if the slot is empty.
+async fn saved_class(db: &late_core::db::Db, user_id: Uuid, slot: i16) -> Option<String> {
+    let client = db.get().await.expect("db client");
+    let blob = MudCharacter::load(&client, user_id, slot)
+        .await
+        .expect("mud_characters loads")?;
+    SavedCharacter::from_json(&blob)
+        .expect("a stored blob parses")
+        .class
+}
+
+#[tokio::test]
+async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_character() {
+    let db = crate::test_helpers::new_test_db().await;
+    // A real account row: `mud_characters.user_id` is a foreign key, so a
+    // synthetic uuid would make every save fail silently.
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-binding-fp".to_string(),
+            username: "slotbinder".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-binding");
+    let svc = app.lateania_service.clone();
+
+    // Slot 1 gets a Mage, then logs out: that save is what must survive.
+    join_and_wait(&svc, user, uid(11), 1).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+    svc.leave_task(user, uid(11));
+    crate::test_helpers::wait_until(
+        || async { saved_class(&db.db, user, 1).await == Some(Class::Mage.as_key().to_string()) },
+        "the Mage's logout save reaches slot 1",
+    )
+    .await;
+
+    // Slot 0 gets a Warrior, and this is the character actually in the world.
+    join_and_wait(&svc, user, uid(10), 0).await;
+    class_up_and_wait(&svc, user, Class::Warrior).await;
+
+    // A second connection on the same account opens the landing and picks
+    // slot 1. It attaches to the live character (one world identity per
+    // account) - it must not redirect that character's saves at slot 1.
+    join_and_wait(&svc, user, uid(12), 1).await;
+
+    svc.flush_all()
+        .await
+        .expect("flush persists live characters");
+
+    assert_eq!(
+        saved_class(&db.db, user, 1).await.as_deref(),
+        Some(Class::Mage.as_key()),
+        "the idle slot's Mage must survive another session merely selecting it"
+    );
+    assert_eq!(
+        saved_class(&db.db, user, 0).await.as_deref(),
+        Some(Class::Warrior.as_key()),
+        "the live character keeps saving to the slot it was loaded from"
     );
 }

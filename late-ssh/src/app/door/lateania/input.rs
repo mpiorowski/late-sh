@@ -25,8 +25,13 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
-//   - Map: m overview atlas (pan around); M toggles RPG mode (the live
-//     walk-around field beside the room) on/off - off is a plain text MUD.
+//   - Map: m overview atlas (pan around); x marks the crosshair room as
+//     where you're headed, and the room panel then names the next exit to
+//     take until you get there; M toggles RPG mode (the live walk-around
+//     field beside the room) on/off - off is a plain text MUD.
+//   - ! opens the Leaderboard: top adventurers currently online by level,
+//     pvp kills, and gold (read-only). Not `?`, which late.sh reserves
+//     globally for a cross-door help overlay.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
@@ -82,9 +87,19 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         return InputAction::Handled;
     }
-    // Lateania reserves Esc for returning to its landing page.
+    // Lateania reserves Esc for returning to its landing page, but a single
+    // stray Esc must never instantly drop a player out of a persistent
+    // world: the first press only arms a short confirmation window (shown
+    // in the title bar); a confirming second Esc within that window is what
+    // actually leaves. `screen::handle_active_lateania_key` must route every
+    // byte through this function (including Esc) for both the chat-cancel
+    // check above and this confirm gate to ever run.
     if byte == 0x1B {
-        return InputAction::Leave;
+        if state.confirm_leave() {
+            return InputAction::Leave;
+        }
+        state.arm_leave_confirm();
+        return InputAction::Handled;
     }
 
     let view = state.view();
@@ -236,6 +251,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.recenter_map();
                 return InputAction::Handled;
             }
+            b'x' | b'X' => {
+                // Mark the crosshair room as where you're headed. The room
+                // panel then carries the next exit to take until you arrive,
+                // which is the one thing the picture can't say: a zone
+                // boundary is a jump in the coordinate field, not a direction.
+                state.toggle_map_dest();
+                return InputAction::Handled;
+            }
             _ => {}
         }
     }
@@ -330,6 +353,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         b'j' | b'J' => {
             // Quest journal (read-only).
             state.toggle_panel(Panel::Quests);
+            InputAction::Handled
+        }
+        b'!' => {
+            // Leaderboard: top adventurers currently online (read-only).
+            // Not `?` - late.sh reserves that globally across every door
+            // game for a cross-door help overlay
+            // (`app::input::door_games_allows_global_help`), so a Lateania
+            // binding on `?` is intercepted before this function ever runs.
+            state.toggle_panel(Panel::Leaderboard);
             InputAction::Handled
         }
         b';' => {
