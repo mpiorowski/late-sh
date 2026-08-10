@@ -249,16 +249,49 @@ pub fn viewport(
         .collect()
 }
 
+/// Which of two rooms sharing a map cell should be shown. The player's own
+/// room always wins; failing that, a room in the same region as the one the
+/// player currently stands in wins, so a collision reads as "the place I'm
+/// in", not an arbitrary global pick - the hand-authored core stacks whole
+/// regions on shared cells (the Mistfen under Whisperwood, the Obsidian
+/// Throne under Frostspire, every house interior under Embergate), and
+/// resolving those purely by lowest id used to paint the *other* region's
+/// rooms around a player who was clearly standing in one of them. The lowest
+/// id is the final tie-break, kept only for determinism when neither room
+/// matches (or both do).
+fn resolve_collision(
+    current: RoomId,
+    candidate: RoomId,
+    player_room: RoomId,
+    player_region: Option<&'static str>,
+) -> RoomId {
+    if current == player_room {
+        return current;
+    }
+    if candidate == player_room {
+        return candidate;
+    }
+    if let Some(region) = player_region {
+        let region_of = |id: RoomId| super::world::region_atlas_entry(id).map(|(name, _)| name);
+        let current_matches = region_of(current) == Some(region);
+        let candidate_matches = region_of(candidate) == Some(region);
+        if candidate_matches && !current_matches {
+            return candidate;
+        }
+        if current_matches && !candidate_matches {
+            return current;
+        }
+    }
+    current.min(candidate)
+}
+
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
 /// `visited` is the player's explored-room set.
 ///
-/// Cells are resolved with the player's own room first, then the lowest visited
-/// room id. Resolving before the fog (as a plain filter over `viewport` would)
-/// loses to the collision tie-break: the hand-authored core stacks whole regions
-/// on shared cells (the Mistfen under Whisperwood, the Obsidian Throne under
-/// Frostspire, every house interior under Embergate), and a player standing in
-/// the higher-id room of such a pair would watch their own `@` vanish and the
-/// inspector describe somewhere else.
+/// Cells are resolved by `resolve_collision`. Resolving before the fog (as a
+/// plain filter over `viewport` would) loses to the collision tie-break: see
+/// `resolve_collision` for why a player standing in one of a colliding pair
+/// must not lose their own cell (or have it painted as an unrelated region).
 pub fn viewport_explored(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -269,22 +302,15 @@ pub fn viewport_explored(
 ) -> Vec<Vec<Option<RoomId>>> {
     let rx = cols / 2;
     let ry = rows / 2;
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
             continue;
         }
-        match at.entry((c.x, c.y)) {
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(id);
-            }
-            std::collections::hash_map::Entry::Occupied(mut slot) => {
-                let cur = *slot.get();
-                if cur != player_room && (id == player_room || id < cur) {
-                    slot.insert(id);
-                }
-            }
-        }
+        at.entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
     }
     let left = center.x - rx;
     let top = center.y - ry;
@@ -495,12 +521,21 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
-    /// A path-continuation hint: a faint half-stub of corridor showing that an
-    /// exit runs on (into fog, or toward a visited room the map can't draw
-    /// right beside it - the hand-authored core doesn't lay perfectly flat).
-    /// Always a `─`/`│` stub, never an arrow: on the field a line means
-    /// "walkable path" and nothing else.
+    /// An exit into the unexplored: a faint half-stub of corridor (`─`/`│`)
+    /// showing that this room has a walkable exit into fog you haven't
+    /// visited yet. Always a stub, never an arrow - on the field a line means
+    /// "walkable path" and nothing else, and arrows read as controls. So a
+    /// discovered room's unexplored side never reads as a dead end, with no
+    /// spoiler of what's out there.
     Hint(char),
+    /// A path-continuation hint to a room you've *already* visited that the map
+    /// can't draw right beside it (the hand-authored core doesn't lay perfectly
+    /// flat, so some branches scatter, or the link crosses into a whole other
+    /// reserved block, like the Sunderlakes hanging off Melvanala). Same stub
+    /// glyph as `Hint` (never an arrow), just styled brighter, so a known
+    /// non-Euclidean jump reads distinctly from the true edge of your
+    /// exploration.
+    HintKnown(char),
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
@@ -529,7 +564,9 @@ pub fn map_canvas(
         if !(0..cols).contains(&sc) || !(0..rows).contains(&sr) {
             return;
         }
-        // The player's room outranks a collided room on the same cell.
+        // The player's room outranks a collided room on the same cell. Belt
+        // and braces: the resolve pass below already guarantees this, but a
+        // corridor cell placed after it must not clobber a room cell either.
         if let Tile::Room(existing) = canvas[sr as usize][sc as usize]
             && existing == player_room
         {
@@ -542,12 +579,26 @@ pub fn map_canvas(
     // pull a slightly wider window so corridors reaching in are covered.
     let rxw = cols / 4 + 2;
     let ryw = rows / 4 + 2;
+
+    // Resolve which room wins each world coordinate before drawing anything,
+    // so a collision paints the room that matches where the player actually
+    // is (see `resolve_collision`) instead of whichever happened to be last
+    // out of a hash-ordered iterator.
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {
             continue;
         }
-        let sc = cx + 2 * (c.x - center.x);
-        let sr = cy + 2 * (c.y - center.y);
+        winners
+            .entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
+    }
+
+    for (&(x, y), &id) in &winners {
+        let sc = cx + 2 * (x - center.x);
+        let sr = cy + 2 * (y - center.y);
         put(&mut canvas, sc, sr, Tile::Room(id));
 
         let Some(room) = world().rooms.get(&id) else {
@@ -580,31 +631,37 @@ pub fn map_canvas(
             let Some(&dc) = coords.get(dest) else {
                 continue;
             };
-            if dc.z != c.z {
+            if dc.z != center.z {
                 continue; // stairs: not drawn on a flat level
             }
-            match (dir, dc.x - c.x, dc.y - c.y) {
+            match (dir, dc.x - x, dc.y - y) {
                 (Dir::East, 1, 0) => put(&mut canvas, sc + 1, sr, Tile::LinkH),
                 (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
                 (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
-                _ if dc.z == c.z => {
+                _ if dc.z == center.z => {
                     // Linked on the same level but not in the adjacent cell (the
-                    // hand-authored core scatters some branches). A half-stub
-                    // toward the neighbour on the dominant axis, into an empty
-                    // cell only, so no reachable room reads as a stranded island.
-                    let horizontal = (dc.x - c.x).abs() >= (dc.y - c.y).abs();
+                    // hand-authored core scatters some branches, or the link
+                    // crosses into a whole other reserved block, like the
+                    // Sunderlakes hanging off Melvanala). This room is already
+                    // known, unlike a plain fog `Hint`, so it becomes a
+                    // `HintKnown` instead - same stub glyph, styled brighter,
+                    // so a discovered non-Euclidean jump reads differently from
+                    // the unexplored edge of the map. A half-stub toward the
+                    // neighbour on the dominant axis, into an empty cell only,
+                    // so no reachable room reads as a stranded island.
+                    let horizontal = (dc.x - x).abs() >= (dc.y - y).abs();
                     let (hx, hy) = if horizontal {
-                        (sc + (dc.x - c.x).signum(), sr)
+                        (sc + (dc.x - x).signum(), sr)
                     } else {
-                        (sc, sr + (dc.y - c.y).signum())
+                        (sc, sr + (dc.y - y).signum())
                     };
                     if (0..cols).contains(&hx)
                         && (0..rows).contains(&hy)
                         && canvas[hy as usize][hx as usize] == Tile::Empty
                     {
                         let stub = if horizontal { '\u{2500}' } else { '\u{2502}' };
-                        canvas[hy as usize][hx as usize] = Tile::Hint(stub);
+                        canvas[hy as usize][hx as usize] = Tile::HintKnown(stub);
                     }
                 }
                 _ => {} // stairs (up/down): not drawn on a flat level

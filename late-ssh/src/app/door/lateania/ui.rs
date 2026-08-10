@@ -324,7 +324,10 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
 /// legend needs the width. Below this, `draw_game` takes over: the text atlas
 /// in the side panel down to 50x9, then compact mode.
 fn map_fits(area: Rect) -> bool {
-    area.width >= 50 && area.height >= 12
+    // The footer grew by two lines (the symbol and marker legends split
+    // apart) to make room for a fuller legend; bump the floor to match, so
+    // the map body keeps the same minimum breathing room it always had.
+    area.width >= 50 && area.height >= 14
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
@@ -696,6 +699,10 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 // A path running off into the unknown: a faint arrow pointing the
                 // way, so a discovered spot never looks stranded (no spoiler).
                 Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+                // Same idea, but the far side is already explored (a
+                // non-Euclidean jump, not the edge of the map) - brighter, so
+                // it doesn't read as "nothing more to find here".
+                Tile::HintKnown(ch) => (ch.to_string(), Style::default().fg(theme::AMBER_DIM())),
                 Tile::Empty => match biome_at(sr, sc) {
                     Some(biome) => terrain_cell(sr, sc, biome, false),
                     None => (" ".to_string(), Style::default()),
@@ -752,6 +759,8 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         Paragraph::new(Line::from(vec![
             Span::styled("@", player_style),
             Span::styled(" you ", dim),
+            Span::styled("\u{2500}\u{2502}", path_style),
+            Span::styled(" path ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
             Span::styled("\u{263a}", player_near_style),
@@ -797,7 +806,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Constraint::Length(1), // header
         Constraint::Min(1),    // map body
         Constraint::Length(2), // cell inspector (crosshair target)
-        Constraint::Length(1), // controls + marker legend
+        Constraint::Length(1), // controls
+        Constraint::Length(1), // symbol legend (you, paths, cursor)
+        Constraint::Length(1), // marker legend (boss/tame/foe/gather/off-map)
         Constraint::Length(1), // terrain key (biomes in view)
     ])
     .split(area);
@@ -875,6 +886,16 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     Tile::LinkH => ("\u{2500}".to_string(), link_style), // ─
                     Tile::LinkV => ("\u{2502}".to_string(), link_style), // │
                     Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+                    // A known non-Euclidean jump (already explored, just not
+                    // adjacent on screen): brighter than a plain fog hint, so
+                    // it reads as "goes somewhere you've been", not the edge
+                    // of the map.
+                    Tile::HintKnown(ch) => (
+                        ch.to_string(),
+                        Style::default()
+                            .fg(theme::AMBER_DIM())
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
@@ -1039,28 +1060,61 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     }
     frame.render_widget(Paragraph::new(inspect), rows[2]);
 
-    // Footer line 1: controls + marker legend.
+    // Footer line 1: controls.
     let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("wasd pan · <> level · Enter re-centre · m close   ", dim),
-            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-            Span::styled(" boss ", dim),
-            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame ", dim),
-            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
-            Span::styled(" foe ", dim),
-            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
-            Span::styled(" gather ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" off-map ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" path", dim),
-        ])),
+        Paragraph::new(Line::from(vec![Span::styled(
+            "wasd pan · <> level · Enter re-centre · m close",
+            dim,
+        )])),
         rows[3],
     );
 
-    // Footer line 2: terrain key, showing only the biomes actually in view so it
+    // Footer line 2: what the map's own symbols mean - the glyphs every map
+    // shows regardless of what's actually nearby (rooms, corridors, the two
+    // kinds of "more lies this way" stub, the look-here cursor). Stubs, never
+    // arrows, on purpose: arrows read as controls here, a line just means
+    // "walkable path".
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("@", player_style),
+            Span::styled(" you  ", dim),
+            Span::styled("\u{2500}\u{2502}", link_style),
+            Span::styled(" known path  ", dim),
+            Span::styled("\u{2500}\u{2502}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" unexplored  ", dim),
+            Span::styled(
+                "\u{2500}\u{2502}",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" known, elsewhere  ", dim),
+            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+            Span::styled(" look here", dim),
+        ])),
+        rows[4],
+    );
+
+    // Footer line 3: marker legend (bosses, tames, notable foes, gather
+    // nodes, and the border arrow for an off-screen one of those).
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+            Span::styled(" boss  ", dim),
+            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+            Span::styled(" tame  ", dim),
+            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+            Span::styled(" notable foe  ", dim),
+            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+            Span::styled(" gather  ", dim),
+            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" one of these, off-map", dim),
+        ])),
+        rows[5],
+    );
+
+    // Footer line 4: terrain key, showing only the biomes actually in view so it
     // stays legible instead of listing every biome in the world.
     use super::world::Biome;
     let mut present: Vec<Biome> = Vec::new();
@@ -1098,7 +1152,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         key.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
         key.push(Span::styled(format!(" {label}  "), dim));
     }
-    frame.render_widget(Paragraph::new(Line::from(key)), rows[4]);
+    frame.render_widget(Paragraph::new(Line::from(key)), rows[6]);
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {

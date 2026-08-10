@@ -309,6 +309,95 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
     }
 }
 
+// ---- collision resolution favours where the player actually stands -------
+
+#[test]
+fn resolve_collision_prefers_the_players_own_room() {
+    // Out of id order on purpose: the player's own room must win regardless.
+    assert_eq!(super::resolve_collision(5, 100, 100, None), 100);
+    assert_eq!(super::resolve_collision(100, 5, 100, None), 100);
+}
+
+#[test]
+fn resolve_collision_falls_back_to_lowest_id_without_a_region_match() {
+    assert_eq!(super::resolve_collision(50, 20, 999, None), 20);
+    assert_eq!(super::resolve_collision(20, 50, 999, None), 20);
+}
+
+#[test]
+fn a_collision_favours_the_room_that_matches_where_the_player_stands() {
+    // The hand-authored core stacks whole regions on shared cells. When the
+    // player is in neither colliding room, the map must still favour the one
+    // that shares a region with wherever they *are*, not whichever id is
+    // lower - painting an unrelated region around a player who's clearly
+    // standing in one specific land is the bug this guards.
+    use crate::app::door::lateania::world::region_atlas_entry;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (_, ids) = clashes
+        .iter()
+        .find(|(_, ids)| {
+            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
+        })
+        .expect("some collision spans two different regions");
+    let lower = *ids.first().unwrap();
+    let higher = *ids.last().unwrap();
+    let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
+
+    // No region context (or the player is elsewhere with no matching room):
+    // the lowest id still wins, same as before this feature.
+    assert_eq!(
+        super::resolve_collision(lower, higher, 999_999, None),
+        lower
+    );
+    // The player stands somewhere in the higher room's region: that room
+    // wins the cell instead, even though its id is larger.
+    assert_eq!(
+        super::resolve_collision(lower, higher, 999_999, Some(higher_region)),
+        higher
+    );
+}
+
+#[test]
+fn viewport_explored_paints_a_collision_as_the_players_own_region() {
+    use crate::app::door::lateania::world::region_atlas_entry;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (&cell, ids) = clashes
+        .iter()
+        .find(|(_, ids)| {
+            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
+        })
+        .expect("some collision spans two different regions");
+    let lower = *ids.first().unwrap();
+    let higher = *ids.last().unwrap();
+    let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
+
+    // Some other room in the higher room's region, not part of the collision
+    // itself, so only the region match can explain the result.
+    let stand_in = world
+        .rooms
+        .keys()
+        .copied()
+        .find(|&id| {
+            id != lower
+                && id != higher
+                && region_atlas_entry(id).map(|(name, _)| name) == Some(higher_region)
+        })
+        .expect("the higher room's region has more than one room");
+
+    let visited: std::collections::HashSet<_> = [lower, higher].into_iter().collect();
+    let (cols, rows) = (21, 11);
+    let grid = super::viewport_explored(&coords, cell, cols, rows, &visited, stand_in);
+    assert_eq!(
+        grid[rows as usize / 2][cols as usize / 2],
+        Some(higher),
+        "standing in {higher_region} should paint the colliding cell as the room in that region"
+    );
+}
+
 #[test]
 fn the_player_holds_their_own_cell_against_a_collision() {
     use std::collections::HashSet;
@@ -635,6 +724,57 @@ fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
             }
         }
     }
+}
+
+// A link to a room the player has *already visited* but that the flat grid
+// can't draw right beside it (a scattered branch, or a jump into a whole
+// other reserved block like the Sunderlakes off Melvanala) must read
+// differently from a plain fog `Hint` - it's a known place, not the edge of
+// exploration.
+#[test]
+fn a_link_to_an_already_visited_scattered_room_shows_a_known_hint() {
+    use super::Tile;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+
+    // Every same-level, non-adjacent link in the world, in a stable order so
+    // the test is deterministic despite `world.rooms` being a HashMap.
+    let mut room_ids: Vec<_> = world.rooms.keys().copied().collect();
+    room_ids.sort_unstable();
+    let mut candidates: Vec<(_, _)> = Vec::new();
+    for id in room_ids {
+        let Some(&c) = coords.get(&id) else { continue };
+        let mut dests: Vec<_> = world.rooms[&id].exits.values().copied().collect();
+        dests.sort_unstable();
+        for dst in dests {
+            if let Some(&dc) = coords.get(&dst)
+                && dc.z == c.z
+                && (dc.x - c.x).abs() + (dc.y - c.y).abs() != 1
+            {
+                candidates.push((id, dst));
+            }
+        }
+    }
+    assert!(
+        !candidates.is_empty(),
+        "world has a same-level link that isn't unit-adjacent"
+    );
+
+    // A candidate's arrow can be shadowed by one of the anchor's own other
+    // exits landing on the same adjacent cell first, so scan for one that
+    // actually renders rather than assuming the first candidate always will.
+    let renders = candidates.into_iter().any(|(anchor, dest)| {
+        let visited: std::collections::HashSet<_> = [anchor, dest].into_iter().collect();
+        let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
+        canvas
+            .iter()
+            .flatten()
+            .any(|t| matches!(t, Tile::HintKnown(_)))
+    });
+    assert!(
+        renders,
+        "at least one already-visited scattered link should show a known hint, not plain fog"
+    );
 }
 
 // The POI index carries every marker kind the map draws, and the "notable foe"
