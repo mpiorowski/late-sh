@@ -15,7 +15,8 @@ use super::user::{
     extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
     extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
     extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    extract_translate_to, normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    extract_translate_mine_to_en, extract_translate_to, normalize_right_sidebar_components,
+    normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -63,6 +64,9 @@ pub struct Profile {
     pub translate_to: TranslateLang,
     /// Tweak: auto-translate foreign-script messages in the viewed room.
     pub auto_translate: bool,
+    /// Tweak: pre-translate own outgoing messages to English at send time,
+    /// warming the shared cache for English readers.
+    pub translate_mine_to_en: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, or `None` if unset.
@@ -106,6 +110,7 @@ impl Default for Profile {
             show_pet_strip: true,
             translate_to: TranslateLang::En,
             auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
             birthday: None,
         }
@@ -141,6 +146,7 @@ pub struct ProfileParams {
     pub show_pet_strip: bool,
     pub translate_to: TranslateLang,
     pub auto_translate: bool,
+    pub translate_mine_to_en: bool,
     pub favorite_room_ids: Vec<Uuid>,
     /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
     pub birthday: Option<String>,
@@ -299,10 +305,11 @@ impl Profile {
                          'land_on_home', $26::bool,
                          'show_pet_strip', $27::bool,
                          'translate_to', $28::text,
-                         'auto_translate', $29::bool
+                         'auto_translate', $29::bool,
+                         'translate_mine_to_en', $30::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $30
+                 WHERE id = $31
                  RETURNING *",
                 &[
                     &params.username,
@@ -334,6 +341,7 @@ impl Profile {
                     &params.show_pet_strip,
                     &params.translate_to.as_str(),
                     &params.auto_translate,
+                    &params.translate_mine_to_en,
                     &user_id,
                 ],
             )
@@ -372,6 +380,7 @@ impl Profile {
             show_pet_strip: extract_show_pet_strip(&user.settings),
             translate_to: extract_translate_to(&user.settings),
             auto_translate: extract_auto_translate(&user.settings),
+            translate_mine_to_en: extract_translate_mine_to_en(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
             birthday: extract_birthday(&user.settings),
         }

@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use uuid::Uuid;
 
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
@@ -18,8 +19,8 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{ClickAction, Panel, State},
-    svc::{LogKind, PlayerView, SectionRow},
+    state::{ClickAction, Heading, Panel, State},
+    svc::{LeaderboardEntry, LogKind, PlayerView, SectionRow},
     world::{Dir, MapCell, MiniMap},
 };
 
@@ -196,8 +197,11 @@ fn draw_action_bar(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVi
             ClickAction::Flee => Style::default().fg(theme::TEXT_DIM()),
             ClickAction::Ability(_) if chip.ready => Style::default().fg(theme::AMBER()),
             ClickAction::Ability(_) => Style::default().fg(theme::TEXT_FAINT()),
-            // Foe rows carry AttackMob, never the action bar; kept for exhaustiveness.
-            ClickAction::AttackMob(_) => Style::default().fg(theme::TEXT_DIM()),
+            // Foe/adventurer rows carry these, never the action bar; kept for
+            // exhaustiveness.
+            ClickAction::AttackMob(_) | ClickAction::AttackPlayer(_) => {
+                Style::default().fg(theme::TEXT_DIM())
+            }
         };
         spans.push(Span::styled(chip.label.clone(), style));
         col += w;
@@ -236,15 +240,21 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
             state.player_count()
         )
     };
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(vec![Span::styled(
-            title,
+    let mut title_lines = vec![Line::from(vec![Span::styled(
+        title,
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )])];
+    if state.leave_confirm_pending() {
+        title_lines.push(Line::from(Span::styled(
+            "Press Esc again to leave Lateania - any other key stays.",
             Style::default()
-                .fg(theme::AMBER_GLOW())
+                .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
-        )])]),
-        rows[0],
-    );
+        )));
+    }
+    frame.render_widget(Paragraph::new(title_lines), rows[0]);
     // While composing a chat line, reserve the bottom row for the say prompt.
     // The body above it keeps drawing whatever panel is open, map included, so
     // pressing `'` never swaps the view out from under you.
@@ -309,12 +319,25 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     }
 }
 
+/// The ways up and down. Deliberately loud (the brightest thing on the map
+/// after `@`): these are the exits the flat grid cannot draw as corridors, and
+/// in a world where every zone chains to the next one by a stair they are what
+/// a lost player is looking for.
+fn stair_style() -> Style {
+    Style::default()
+        .fg(theme::SUCCESS())
+        .add_modifier(Modifier::BOLD)
+}
+
 /// The smallest area the graphical world map is worth drawing in. Header,
 /// inspector, and footer cost 4 rows before a single cell of map, and the
 /// legend needs the width. Below this, `draw_game` takes over: the text atlas
 /// in the side panel down to 50x9, then compact mode.
 fn map_fits(area: Rect) -> bool {
-    area.width >= 50 && area.height >= 12
+    // The footer grew by two lines (the symbol and marker legends split
+    // apart) to make room for a fuller legend; bump the floor to match, so
+    // the map body keeps the same minimum breathing room it always had.
+    area.width >= 50 && area.height >= 14
 }
 
 /// Per-biome map glyph and colour for the overhead world map.
@@ -686,6 +709,13 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
                 // A path running off into the unknown: a faint arrow pointing the
                 // way, so a discovered spot never looks stranded (no spoiler).
                 Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+                // Same idea, but the far side is already explored (a
+                // non-Euclidean jump, not the edge of the map) - brighter, so
+                // it doesn't read as "nothing more to find here".
+                Tile::HintKnown(ch) => (ch.to_string(), Style::default().fg(theme::AMBER_DIM())),
+                // A way up or down out of the room beside it. No flat
+                // direction can carry this, and it is usually the way onward.
+                Tile::Stair(ch) => (ch.to_string(), stair_style()),
                 Tile::Empty => match biome_at(sr, sc) {
                     Some(biome) => terrain_cell(sr, sc, biome, false),
                     None => (" ".to_string(), Style::default()),
@@ -742,6 +772,10 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         Paragraph::new(Line::from(vec![
             Span::styled("@", player_style),
             Span::styled(" you ", dim),
+            Span::styled("\u{2500}\u{2502}", path_style),
+            Span::styled(" path ", dim),
+            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled(" stair ", dim),
             Span::styled("\u{2020}", foe_style),
             Span::styled(" foe ", dim),
             Span::styled("\u{263a}", player_near_style),
@@ -787,12 +821,15 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Constraint::Length(1), // header
         Constraint::Min(1),    // map body
         Constraint::Length(2), // cell inspector (crosshair target)
-        Constraint::Length(1), // controls + marker legend
+        Constraint::Length(1), // controls
+        Constraint::Length(1), // symbol legend (you, paths, cursor)
+        Constraint::Length(1), // marker legend (boss/tame/foe/gather/off-map)
         Constraint::Length(1), // terrain key (biomes in view)
     ])
     .split(area);
 
-    // Header: region name + danger tier, and the current level (z).
+    // Header: region name, where this zone sits in the region's chain, the
+    // zone's own name, the danger tier, and the current level (z).
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
     let level = match center.z {
         0 => "surface".to_string(),
@@ -805,6 +842,26 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             .fg(theme::AMBER_GLOW())
             .add_modifier(Modifier::BOLD),
     )];
+    // A continent is ~20 zones chained one below the next, and each is its own
+    // reserved block in the coordinate field, so crossing between them replaces
+    // everything on screen. The picture alone therefore can never say that you
+    // are 7 zones into a run of 20; naming that is what turns "lost somewhere
+    // in a forest" back into a position. Only the procedurally-chained regions
+    // can answer it, and elsewhere the header simply stays as it was.
+    if let Some(place) = super::world::region_layout(player_room)
+        && place.zone_count > 1
+    {
+        header.push(Span::styled(
+            format!("  ·  zone {} of {}", place.zone + 1, place.zone_count),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
+    if !view.zone.is_empty() && view.zone != region_name {
+        header.push(Span::styled(
+            format!("  ·  {}", view.zone),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ));
+    }
     if !tier.is_empty() {
         header.push(Span::styled(
             format!("  ·  {tier}"),
@@ -855,6 +912,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         .fg(Color::Rgb(210, 120, 90))
         .add_modifier(Modifier::BOLD);
     let link_style = Style::default().fg(theme::BORDER_DIM());
+    // The room the player marked, resolved once per frame rather than per cell.
+    let dest_room = state.dest_room();
 
     let mut cells: Vec<Vec<(String, Style)>> = canvas
         .iter()
@@ -865,7 +924,31 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                     Tile::LinkH => ("\u{2500}".to_string(), link_style), // ─
                     Tile::LinkV => ("\u{2502}".to_string(), link_style), // │
                     Tile::Hint(ch) => (ch.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+                    // A known non-Euclidean jump (already explored, just not
+                    // adjacent on screen): brighter than a plain fog hint, so
+                    // it reads as "goes somewhere you've been", not the edge
+                    // of the map.
+                    Tile::HintKnown(ch) => (
+                        ch.to_string(),
+                        Style::default()
+                            .fg(theme::AMBER_DIM())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    // The ways up and down out of the room beside it. A flat
+                    // level has no direction to draw these in, and in a world
+                    // chained zone-to-zone by stairs they are usually the way
+                    // onward, so they get their own corner cell.
+                    Tile::Stair(ch) => (ch.to_string(), stair_style()),
                     Tile::Room(id) if *id == player_room => ("@".to_string(), player_style),
+                    // Where you said you were going, outranking every other
+                    // marker: once a destination is marked, a boss star on
+                    // that room is not what you opened the map to find.
+                    Tile::Room(id) if Some(*id) == dest_room => (
+                        "\u{2691}".to_string(),
+                        Style::default()
+                            .fg(theme::SUCCESS())
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                         Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
@@ -1027,30 +1110,88 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             Style::default().fg(theme::TEXT_FAINT()),
         )));
     }
+    // The map replaces the room panel while it is open, so the heading it just
+    // set would otherwise be invisible until the map is closed again. Confirm
+    // the mark here instead, on the inspector's own second row.
+    if let Some(heading) = state.heading() {
+        let (text, color) = match heading {
+            Heading::Toward(name, route) => (
+                format!(
+                    "\u{2691} heading for {name} · {} room{} · take {}",
+                    route.rooms,
+                    if route.rooms == 1 { "" } else { "s" },
+                    route.next.label()
+                ),
+                theme::SUCCESS(),
+            ),
+            Heading::Arrived(name) => (format!("\u{2691} {name} · you're here"), theme::SUCCESS()),
+            Heading::Unreachable(name) => (
+                format!("\u{2691} {name} · no way there over ground you know"),
+                theme::ERROR(),
+            ),
+        };
+        inspect.truncate(1);
+        inspect.push(Line::from(Span::styled(text, Style::default().fg(color))));
+    }
     frame.render_widget(Paragraph::new(inspect), rows[2]);
 
-    // Footer line 1: controls + marker legend.
+    // Footer line 1: controls.
     let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("wasd pan · <> level · Enter re-centre · m close   ", dim),
-            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-            Span::styled(" boss ", dim),
-            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame ", dim),
-            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
-            Span::styled(" foe ", dim),
-            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
-            Span::styled(" gather ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" off-map ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::TEXT_FAINT())),
-            Span::styled(" path", dim),
-        ])),
+        Paragraph::new(Line::from(vec![Span::styled(
+            "wasd pan · <> level · x mark destination · Enter re-centre · m close",
+            dim,
+        )])),
         rows[3],
     );
 
-    // Footer line 2: terrain key, showing only the biomes actually in view so it
+    // Footer line 2: what the map's own symbols mean - the glyphs every map
+    // shows regardless of what's actually nearby (rooms, corridors, the two
+    // kinds of "more lies this way" stub, the look-here cursor). Stubs, never
+    // arrows, on purpose: arrows read as controls here, a line just means
+    // "walkable path".
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("@", player_style),
+            Span::styled(" you  ", dim),
+            Span::styled("\u{2500}\u{2502}", link_style),
+            Span::styled(" known path  ", dim),
+            Span::styled("\u{2500}\u{2502}", Style::default().fg(theme::TEXT_FAINT())),
+            Span::styled(" unexplored  ", dim),
+            Span::styled(
+                "\u{2500}\u{2502}",
+                Style::default()
+                    .fg(theme::AMBER_DIM())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" known, elsewhere  ", dim),
+            Span::styled("\u{25be}\u{25b4}", stair_style()),
+            Span::styled(" way down/up  ", dim),
+            Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)),
+            Span::styled(" look here", dim),
+        ])),
+        rows[4],
+    );
+
+    // Footer line 3: marker legend (bosses, tames, notable foes, gather
+    // nodes, and the border arrow for an off-screen one of those).
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+            Span::styled(" boss  ", dim),
+            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+            Span::styled(" tame  ", dim),
+            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+            Span::styled(" notable foe  ", dim),
+            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+            Span::styled(" gather  ", dim),
+            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" one of these, off-map", dim),
+        ])),
+        rows[5],
+    );
+
+    // Footer line 4: terrain key, showing only the biomes actually in view so it
     // stays legible instead of listing every biome in the world.
     use super::world::Biome;
     let mut present: Vec<Biome> = Vec::new();
@@ -1088,7 +1229,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         key.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
         key.push(Span::styled(format!(" {label}  "), dim));
     }
-    frame.render_widget(Paragraph::new(Line::from(key)), rows[4]);
+    frame.render_widget(Paragraph::new(Line::from(key)), rows[6]);
 }
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
@@ -1346,6 +1487,7 @@ fn draw_side(
         Panel::Appearance => (appearance_panel(view, state.cursor()), None),
         Panel::Crafting => crafting_panel(&state.craft_rows(), view, state.cursor()),
         Panel::Map => (atlas_panel(view), None),
+        Panel::Leaderboard => (leaderboard_panel(view, usernames), None),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -1497,7 +1639,8 @@ fn draw_room_side(
         rows[0]
     };
 
-    let (lines, foe_hits) = room_panel(view, usernames, panel_area.width as usize);
+    let (lines, foe_hits, player_hits) =
+        room_panel(view, usernames, panel_area.width as usize, state.heading());
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -1511,6 +1654,20 @@ fn draw_room_side(
                     height: 1,
                 },
                 ClickAction::AttackMob(mob_id),
+            );
+        }
+    }
+    // Same for hostile adventurers in a pvp room's "Adventurers here" list.
+    for (idx, target_id) in player_hits {
+        if (idx as u16) < panel_area.height {
+            state.record_combat_hit(
+                Rect {
+                    x: panel_area.x,
+                    y: panel_area.y + idx as u16,
+                    width: panel_area.width,
+                    height: 1,
+                },
+                ClickAction::AttackPlayer(target_id),
             );
         }
     }
@@ -1596,6 +1753,90 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+/// One leaderboard row: rank, level + class abbreviation, name, then the
+/// board's own value column (already formatted by the caller, since its
+/// meaning - a bare level, a kill count, a gold total - differs per board).
+fn leaderboard_row(
+    rank: usize,
+    e: &LeaderboardEntry,
+    usernames: &UsernameLookup<'_>,
+    value: &str,
+) -> Line<'static> {
+    let name = usernames
+        .get(&e.user_id)
+        .cloned()
+        .unwrap_or_else(|| "adventurer".to_string());
+    let abbrev = class_abbrev(&e.class_key);
+    Line::from(Span::styled(
+        format!(
+            "  {rank:>2}. Lv{:<3} {abbrev:<3} {name:<16} {value}",
+            e.level
+        ),
+        Style::default().fg(if rank == 1 {
+            theme::BADGE_GOLD()
+        } else {
+            theme::TEXT_BRIGHT()
+        }),
+    ))
+}
+
+fn leaderboard_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
+    let mut lines = vec![section("Leaderboard")];
+    lines.push(Line::from(Span::styled(
+        "  the ten sharpest adventurers online right now",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::raw(""));
+
+    lines.push(section("By Level"));
+    if view.leaderboard.by_level.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no one else is online yet",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, e) in view.leaderboard.by_level.iter().enumerate() {
+        lines.push(leaderboard_row(i + 1, e, usernames, ""));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("By PvP Kills (the Wildbound Waste)"));
+    if view.leaderboard.by_pvp_kills.iter().all(|e| e.value == 0) {
+        lines.push(Line::from(Span::styled(
+            "  no rivals slain yet - the Waste awaits",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        for (i, e) in view.leaderboard.by_pvp_kills.iter().enumerate() {
+            if e.value == 0 {
+                break;
+            }
+            lines.push(leaderboard_row(
+                i + 1,
+                e,
+                usernames,
+                &format!("{} kill{}", e.value, if e.value == 1 { "" } else { "s" }),
+            ));
+        }
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(section("By Gold"));
+    for (i, e) in view.leaderboard.by_gold.iter().enumerate() {
+        lines.push(leaderboard_row(
+            i + 1,
+            e,
+            usernames,
+            &format!("{}g", e.value),
+        ));
+    }
+    lines.push(Line::raw(""));
+
+    lines.push(hint("!", "close"));
+    lines.push(hint("[ ]", "scroll"));
+    lines
+}
+
 fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(vec![
@@ -1659,20 +1900,33 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
 /// The room side panel. Returns the lines plus, for each foe, the line index of
 /// its roster row and its spawn id, so the caller can record a clickable rect
 /// over each foe (click a foe to lock onto it).
+#[allow(clippy::type_complexity)]
 fn room_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, u32)>) {
+    heading: Option<Heading>,
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
+    let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
     lines.extend(side_text_wrap(&view.zone, LAT_TEXT, width));
-    // The living-world clock: time of day and weather.
+    // The living-world clock: time of day and weather. A phase glyph plus a
+    // danger colour during dusk/night (when mobs hit 25% harder) makes the
+    // clock legible at a glance instead of reading as pure flavour text.
+    let clock_color = if view.time_of_day_dark {
+        theme::ERROR()
+    } else {
+        theme::AMBER_DIM()
+    };
     lines.push(Line::from(Span::styled(
-        format!("  {} · {}", view.time_of_day, view.weather),
-        Style::default().fg(theme::AMBER_DIM()),
+        format!(
+            "  {} {} · {}",
+            view.time_of_day_glyph, view.time_of_day, view.weather
+        ),
+        Style::default().fg(clock_color),
     )));
     // An active escort: who you're leading, their health, and where to.
     if let Some((name, hp, max_hp, dest)) = &view.escort {
@@ -1762,6 +2016,29 @@ fn room_panel(
             .join(", ")
     };
     lines.extend(side_kv_wrap("exits", &exits, theme::AMBER_DIM(), width));
+    // Directly under the exits, because it answers the question the exits
+    // raise: they say what is available, this says which one to take. A zone
+    // boundary is a jump in the coordinate field rather than a direction, so
+    // no picture of the world can carry this - only a named exit can.
+    if let Some(heading) = heading {
+        let (text, color) = match heading {
+            Heading::Toward(name, route) => (
+                format!(
+                    "{name} · {} room{} · take {}",
+                    route.rooms,
+                    if route.rooms == 1 { "" } else { "s" },
+                    route.next.label()
+                ),
+                theme::SUCCESS(),
+            ),
+            Heading::Arrived(name) => (format!("{name} · you're here"), theme::SUCCESS()),
+            Heading::Unreachable(name) => (
+                format!("{name} · no way there over ground you know"),
+                theme::ERROR(),
+            ),
+        };
+        lines.extend(side_kv_wrap("heading", &text, color, width));
+    }
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
@@ -1816,36 +2093,59 @@ fn room_panel(
         }
     }
     if !view.occupants.is_empty() {
-        lines.push(section("Adventurers here"));
+        lines.push(section(if view.pvp {
+            "Adventurers here (pvp ground)"
+        } else {
+            "Adventurers here"
+        }));
         for occ in &view.occupants {
             let name = usernames
                 .get(&occ.user_id)
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
+            let labelled = format!("Lv{:<2} {name}", occ.level);
             let following = view.following == Some(occ.user_id);
-            let (tag, color) = if !occ.alive {
+            let (status, color) = if !occ.alive {
                 ("fallen", theme::ERROR())
             } else if following {
                 ("follow", theme::MENTION())
+            } else if occ.targeted {
+                ("duel", theme::ERROR())
             } else if occ.in_combat {
                 ("fight", theme::AMBER())
+            } else if occ.attackable {
+                ("hostile", theme::ERROR())
             } else {
                 ("", theme::SUCCESS())
+            };
+            // Status (fallen/duel/fight/hostile) takes priority when there's
+            // room for only one; otherwise the class abbreviation rides
+            // alongside it so a foe's kit is visible before you ever engage.
+            let abbrev = class_abbrev(&occ.class_key);
+            let tag = match (status.is_empty(), abbrev.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => abbrev.to_string(),
+                (false, true) => status.to_string(),
+                (false, false) => format!("{status}\u{00b7}{abbrev}"),
             };
             let tag_w = if tag.is_empty() {
                 0
             } else {
-                1 + UnicodeWidthStr::width(tag)
+                1 + UnicodeWidthStr::width(tag.as_str())
             };
-            let name_w = width.saturating_sub(9 + tag_w).clamp(6, 16);
+            let name_w = width.saturating_sub(13 + tag_w).clamp(6, 16);
+            let marker = if occ.targeted { "\u{00bb} " } else { "  " };
+            if occ.attackable {
+                player_hits.push((lines.len(), occ.user_id));
+            }
             lines.push(roster_row(
-                "  ",
-                &name,
+                marker,
+                &labelled,
                 occ.hp,
                 occ.max_hp,
                 Style::default().fg(color),
                 name_w,
-                tag,
+                &tag,
             ));
         }
     }
@@ -1923,7 +2223,7 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
-    (lines, foe_hits)
+    (lines, foe_hits, player_hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,
@@ -2417,6 +2717,32 @@ fn class_name_of(class_key: &str) -> String {
     Class::from_key(class_key)
         .map(|c| c.name().to_string())
         .unwrap_or_default()
+}
+
+/// A three-letter class abbreviation, for roster rows too narrow for the full
+/// name (hand-picked, not a naive truncation - "Warrior"/"Warlock" would
+/// otherwise collide on "WAR").
+fn class_abbrev(class_key: &str) -> &'static str {
+    match Class::from_key(class_key) {
+        Some(Class::Warrior) => "WAR",
+        Some(Class::Mage) => "MAG",
+        Some(Class::Cleric) => "CLR",
+        Some(Class::Rogue) => "ROG",
+        Some(Class::Ranger) => "RNG",
+        Some(Class::Druid) => "DRU",
+        Some(Class::Necromancer) => "NEC",
+        Some(Class::Bard) => "BRD",
+        Some(Class::Monk) => "MNK",
+        Some(Class::Paladin) => "PAL",
+        Some(Class::Warlock) => "WLK",
+        Some(Class::Berserker) => "BRS",
+        Some(Class::Beastlord) => "BST",
+        Some(Class::Skald) => "SKD",
+        Some(Class::Runemaster) => "RUN",
+        Some(Class::Valewalker) => "VLW",
+        Some(Class::Spiritmaster) => "SPM",
+        None => "",
+    }
 }
 
 /// The accent colour that tints a class's portrait and headline.
@@ -3555,8 +3881,9 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
         lines.push(hint("i", "the ways (portal)"));
     }
     lines.push(hint("m", "world atlas"));
+    lines.push(hint("!", "leaderboard"));
     lines.push(hint("G", "mount / dismount"));
-    lines.push(hint("Esc", "leave"));
+    lines.push(hint("Esc", "leave (press twice)"));
     lines
 }
 
@@ -3964,13 +4291,14 @@ fn follow_panel(
             .get(&occ.user_id)
             .cloned()
             .unwrap_or_else(|| "adventurer".to_string());
+        let labelled = format!("Lv{:<2} {name}", occ.level);
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
         }
         let following = view.following == Some(occ.user_id);
         let marker = if selected { "> " } else { "  " };
-        let tag = if !occ.alive {
+        let status = if !occ.alive {
             "fallen"
         } else if following {
             "follow"
@@ -3978,6 +4306,13 @@ fn follow_panel(
             "fight"
         } else {
             ""
+        };
+        let abbrev = class_abbrev(&occ.class_key);
+        let tag = match (status.is_empty(), abbrev.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => abbrev.to_string(),
+            (false, true) => status.to_string(),
+            (false, false) => format!("{status}\u{00b7}{abbrev}"),
         };
         let color = if selected {
             theme::TEXT_BRIGHT()
@@ -3995,12 +4330,12 @@ fn follow_panel(
         };
         lines.push(roster_row(
             marker,
-            &name,
+            &labelled,
             occ.hp,
             occ.max_hp,
             Style::default().fg(color).add_modifier(weight),
-            12,
-            tag,
+            16,
+            &tag,
         ));
     }
     // Profile the highlighted adventurer: show their composed portrait, then bio.

@@ -223,7 +223,9 @@ pub(super) fn wrap_chat_entry_to_lines(
 /// The `↳` block under a translated message: dim italic so it reads as an
 /// annotation, never as text the author typed. Pending shows a one-line
 /// placeholder that the result replaces on the next drain; Failed renders
-/// nothing (the requester already got a banner, and `t` retries).
+/// nothing (the requester already got a banner, and `t` retries);
+/// SameLanguage renders nothing (the message is already readable, and a dim
+/// duplicate under it would only say so badly).
 fn translation_lines(
     translation: &TranslationDisplay,
     width: usize,
@@ -237,7 +239,7 @@ fn translation_lines(
             pad.clone(),
             Span::styled(" ↳ translating…", style),
         ])],
-        TranslationDisplay::Failed => Vec::new(),
+        TranslationDisplay::Failed | TranslationDisplay::SameLanguage => Vec::new(),
         TranslationDisplay::Ready(text) => {
             // pad + " ↳ " prefix on the first row, matching indent after.
             let budget = width.saturating_sub(5).max(8);

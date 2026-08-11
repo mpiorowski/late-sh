@@ -249,16 +249,49 @@ pub fn viewport(
         .collect()
 }
 
+/// Which of two rooms sharing a map cell should be shown. The player's own
+/// room always wins; failing that, a room in the same region as the one the
+/// player currently stands in wins, so a collision reads as "the place I'm
+/// in", not an arbitrary global pick - the hand-authored core stacks whole
+/// regions on shared cells (the Mistfen under Whisperwood, the Obsidian
+/// Throne under Frostspire, every house interior under Embergate), and
+/// resolving those purely by lowest id used to paint the *other* region's
+/// rooms around a player who was clearly standing in one of them. The lowest
+/// id is the final tie-break, kept only for determinism when neither room
+/// matches (or both do).
+fn resolve_collision(
+    current: RoomId,
+    candidate: RoomId,
+    player_room: RoomId,
+    player_region: Option<&'static str>,
+) -> RoomId {
+    if current == player_room {
+        return current;
+    }
+    if candidate == player_room {
+        return candidate;
+    }
+    if let Some(region) = player_region {
+        let region_of = |id: RoomId| super::world::region_atlas_entry(id).map(|(name, _)| name);
+        let current_matches = region_of(current) == Some(region);
+        let candidate_matches = region_of(candidate) == Some(region);
+        if candidate_matches && !current_matches {
+            return candidate;
+        }
+        if current_matches && !candidate_matches {
+            return current;
+        }
+    }
+    current.min(candidate)
+}
+
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
 /// `visited` is the player's explored-room set.
 ///
-/// Cells are resolved with the player's own room first, then the lowest visited
-/// room id. Resolving before the fog (as a plain filter over `viewport` would)
-/// loses to the collision tie-break: the hand-authored core stacks whole regions
-/// on shared cells (the Mistfen under Whisperwood, the Obsidian Throne under
-/// Frostspire, every house interior under Embergate), and a player standing in
-/// the higher-id room of such a pair would watch their own `@` vanish and the
-/// inspector describe somewhere else.
+/// Cells are resolved by `resolve_collision`. Resolving before the fog (as a
+/// plain filter over `viewport` would) loses to the collision tie-break: see
+/// `resolve_collision` for why a player standing in one of a colliding pair
+/// must not lose their own cell (or have it painted as an unrelated region).
 pub fn viewport_explored(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -269,22 +302,15 @@ pub fn viewport_explored(
 ) -> Vec<Vec<Option<RoomId>>> {
     let rx = cols / 2;
     let ry = rows / 2;
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
             continue;
         }
-        match at.entry((c.x, c.y)) {
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(id);
-            }
-            std::collections::hash_map::Entry::Occupied(mut slot) => {
-                let cur = *slot.get();
-                if cur != player_room && (id == player_room || id < cur) {
-                    slot.insert(id);
-                }
-            }
-        }
+        at.entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
     }
     let left = center.x - rx;
     let top = center.y - ry;
@@ -484,6 +510,93 @@ pub fn poi(room: RoomId) -> Option<&'static Poi> {
     POIS.get(&room)
 }
 
+/// A room's name, for naming a place the player marked without shipping the
+/// string through a snapshot (the world is static and process-global).
+pub fn room_name(room: RoomId) -> Option<&'static str> {
+    world().rooms.get(&room).map(|r| r.name)
+}
+
+/// The room under one map cell, resolved exactly as the canvas resolves it
+/// (see `resolve_collision`). For answering "what am I pointing at" without
+/// building a whole canvas, so input can act on the crosshair.
+pub fn room_at(
+    coords: &HashMap<RoomId, Coord>,
+    at: Coord,
+    visited: &HashSet<RoomId>,
+    player_room: RoomId,
+) -> Option<RoomId> {
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    visible(coords, at, 0, 0)
+        .into_iter()
+        .filter(|(id, _)| *id == player_room || visited.contains(id))
+        .map(|(id, _)| id)
+        .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
+}
+
+/// The first step of the shortest walk from `from` to `dest`, and how many
+/// rooms that walk is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Route {
+    /// Which exit to take from the room you are standing in right now.
+    pub next: Dir,
+    /// Rooms between here and there, so the line can say how far it still is.
+    pub rooms: usize,
+}
+
+/// Shortest walk from `from` to `dest`, over rooms the player has already
+/// visited.
+///
+/// Restricting to `visited` is what makes this honest rather than a spoiler
+/// machine: it can only ever retrace ground the player has actually walked, so
+/// it never reveals an unexplored shortcut, and it needs no gate check either
+/// (a room can only be in `visited` if the player legitimately walked into it,
+/// which means they passed whatever gate stands in front of it). It is also
+/// why a route always exists when the destination is a known room: having been
+/// there at all means such a path was once walked.
+///
+/// The whole point is the *first step*. The map can show a place and still
+/// leave "so which way do I actually go" unanswered, because a zone boundary
+/// is a jump in the coordinate field rather than a direction. A direction is
+/// the one answer that never needs the picture to be legible.
+pub fn route(from: RoomId, dest: RoomId, visited: &HashSet<RoomId>) -> Option<Route> {
+    if from == dest || !visited.contains(&dest) {
+        return None;
+    }
+    let rooms = &world().rooms;
+    // Each frontier entry carries the direction its walk left `from` by, so
+    // arriving at `dest` names the first step without rebuilding the path.
+    let mut queue: VecDeque<(RoomId, Dir, usize)> = VecDeque::new();
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    for (dir, &next) in rooms.get(&from)?.exits.iter() {
+        if !visited.contains(&next) || !seen.insert(next) {
+            continue;
+        }
+        if next == dest {
+            return Some(Route {
+                next: *dir,
+                rooms: 1,
+            });
+        }
+        queue.push_back((next, *dir, 1));
+    }
+    while let Some((room, first, depth)) = queue.pop_front() {
+        let Some(r) = rooms.get(&room) else { continue };
+        for &next in r.exits.values() {
+            if !visited.contains(&next) || !seen.insert(next) {
+                continue;
+            }
+            if next == dest {
+                return Some(Route {
+                    next: first,
+                    rooms: depth + 1,
+                });
+            }
+            queue.push_back((next, first, depth + 1));
+        }
+    }
+    None
+}
+
 /// One cell of the rendered map. Rooms sit on even offsets from the centre and
 /// the corridors between them on the odd offsets in between, so the map shows
 /// which rooms are actually linked (walkable), not just spatially near.
@@ -495,20 +608,57 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
-    /// A path-continuation hint: a faint half-stub of corridor showing that an
-    /// exit runs on (into fog, or toward a visited room the map can't draw
-    /// right beside it - the hand-authored core doesn't lay perfectly flat).
-    /// Always a `─`/`│` stub, never an arrow: on the field a line means
-    /// "walkable path" and nothing else.
+    /// An exit into the unexplored: a faint half-stub of corridor (`─`/`│`)
+    /// showing that this room has a walkable exit into fog you haven't
+    /// visited yet. Always a stub, never an arrow - on the field a line means
+    /// "walkable path" and nothing else, and arrows read as controls. So a
+    /// discovered room's unexplored side never reads as a dead end, with no
+    /// spoiler of what's out there.
     Hint(char),
+    /// A path-continuation hint to a room you've *already* visited that the map
+    /// can't draw right beside it (the hand-authored core doesn't lay perfectly
+    /// flat, so some branches scatter, or the link crosses into a whole other
+    /// reserved block, like the Sunderlakes hanging off Melvanala). Same stub
+    /// glyph as `Hint` (never an arrow), just styled brighter, so a known
+    /// non-Euclidean jump reads distinctly from the true edge of your
+    /// exploration.
+    HintKnown(char),
+    /// A room has a way up, down, or both. Drawn in the room's own up-right
+    /// corner cell (odd column, odd row), a layer nothing else ever touches:
+    /// rooms sit on even/even and corridors on the odd cell between two of
+    /// them, so each room owns exactly one free corner and no two rooms can
+    /// claim the same one.
+    ///
+    /// This is not decoration. A flat level cannot draw a vertical link, so
+    /// the map used to omit them entirely - and in a world where every zone
+    /// chains to the next one by a stair and every continent hangs off
+    /// another by a stair, that meant opening the map to find the way onward
+    /// showed you everything *except* the way onward. The stair says only
+    /// "there is a way through here", never what waits on the far side.
+    Stair(char),
+}
+
+/// Glyph for a room's vertical exits. A room with both ways reads as `▾`
+/// rather than a two-headed arrow: only one cell per room is free (see
+/// `Tile::Stair`), an arrow reads as a control on this map where every other
+/// glyph is terrain, and down is the way onward everywhere in this world. The
+/// room panel's exits line carries the full truth for the rooms with both.
+fn stair_glyph(down: bool, up: bool) -> Option<char> {
+    match (down, up) {
+        (true, _) => Some('\u{25be}'),     // ▾
+        (false, true) => Some('\u{25b4}'), // ▴
+        (false, false) => None,
+    }
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
 /// (even cells) with the corridors between linked rooms (odd cells). Fog of
 /// war: a room shows only if visited (or it's the player); a corridor shows
 /// only when BOTH its rooms are visited, so paths into the unknown stay hidden.
-/// Up/down exits are not drawn on a flat level. The player's room wins any
-/// cell collision so `@` never vanishes under a stacked hand-authored room.
+/// A vertical link has no flat direction to run in, so it is flagged on the
+/// room itself as a `Tile::Stair` in that room's corner cell instead. The
+/// player's room wins any cell collision so `@` never vanishes under a stacked
+/// hand-authored room.
 pub fn map_canvas(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -529,7 +679,9 @@ pub fn map_canvas(
         if !(0..cols).contains(&sc) || !(0..rows).contains(&sr) {
             return;
         }
-        // The player's room outranks a collided room on the same cell.
+        // The player's room outranks a collided room on the same cell. Belt
+        // and braces: the resolve pass below already guarantees this, but a
+        // corridor cell placed after it must not clobber a room cell either.
         if let Tile::Room(existing) = canvas[sr as usize][sc as usize]
             && existing == player_room
         {
@@ -542,17 +694,40 @@ pub fn map_canvas(
     // pull a slightly wider window so corridors reaching in are covered.
     let rxw = cols / 4 + 2;
     let ryw = rows / 4 + 2;
+
+    // Resolve which room wins each world coordinate before drawing anything,
+    // so a collision paints the room that matches where the player actually
+    // is (see `resolve_collision`) instead of whichever happened to be last
+    // out of a hash-ordered iterator.
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {
             continue;
         }
-        let sc = cx + 2 * (c.x - center.x);
-        let sr = cy + 2 * (c.y - center.y);
+        winners
+            .entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
+    }
+
+    for (&(x, y), &id) in &winners {
+        let sc = cx + 2 * (x - center.x);
+        let sr = cy + 2 * (y - center.y);
         put(&mut canvas, sc, sr, Tile::Room(id));
 
         let Some(room) = world().rooms.get(&id) else {
             continue;
         };
+        // Flag the ways up and down before walking the flat exits: the match
+        // below has nowhere to draw them, which is exactly why they need their
+        // own corner cell.
+        if let Some(glyph) = stair_glyph(
+            room.exits.contains_key(&Dir::Down),
+            room.exits.contains_key(&Dir::Up),
+        ) {
+            put(&mut canvas, sc + 1, sr - 1, Tile::Stair(glyph));
+        }
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
                 // An exit into the fog: a faint half-stub of path trailing off
@@ -580,31 +755,44 @@ pub fn map_canvas(
             let Some(&dc) = coords.get(dest) else {
                 continue;
             };
-            if dc.z != c.z {
+            if dc.z != center.z {
                 continue; // stairs: not drawn on a flat level
             }
-            match (dir, dc.x - c.x, dc.y - c.y) {
+            match (dir, dc.x - x, dc.y - y) {
                 (Dir::East, 1, 0) => put(&mut canvas, sc + 1, sr, Tile::LinkH),
                 (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
                 (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
-                _ if dc.z == c.z => {
+                _ if dc.z == center.z => {
                     // Linked on the same level but not in the adjacent cell (the
-                    // hand-authored core scatters some branches). A half-stub
-                    // toward the neighbour on the dominant axis, into an empty
-                    // cell only, so no reachable room reads as a stranded island.
-                    let horizontal = (dc.x - c.x).abs() >= (dc.y - c.y).abs();
-                    let (hx, hy) = if horizontal {
-                        (sc + (dc.x - c.x).signum(), sr)
-                    } else {
-                        (sc, sr + (dc.y - c.y).signum())
+                    // hand-authored core scatters some branches, or the link
+                    // crosses into a whole other reserved block, like the
+                    // Sunderlakes hanging off Melvanala). This room is already
+                    // known, unlike a plain fog `Hint`, so it becomes a
+                    // `HintKnown` instead - same stub glyph, styled brighter,
+                    // so a discovered non-Euclidean jump reads differently from
+                    // the unexplored edge of the map.
+                    //
+                    // The stub goes on the side the exit is actually walked
+                    // out of, NOT toward where the destination happens to sit
+                    // in the field. Across reserved blocks that coordinate
+                    // delta means nothing - it only records which block was
+                    // laid down first - so siding by it drew paths that were
+                    // not there. A house door facing east onto a close that
+                    // was placed 5,622 cells west drew a west stub, and
+                    // walking west then failed. Inventing a path is the worst
+                    // thing this map can do, so the exit's own direction is
+                    // the only honest answer.
+                    let Some((dx, dy)) = dir.delta_2d() else {
+                        continue; // up/down: flagged as a Stair, not a stub
                     };
+                    let (hx, hy) = (sc + dx, sr + dy);
                     if (0..cols).contains(&hx)
                         && (0..rows).contains(&hy)
                         && canvas[hy as usize][hx as usize] == Tile::Empty
                     {
-                        let stub = if horizontal { '\u{2500}' } else { '\u{2502}' };
-                        canvas[hy as usize][hx as usize] = Tile::Hint(stub);
+                        let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
+                        canvas[hy as usize][hx as usize] = Tile::HintKnown(stub);
                     }
                 }
                 _ => {} // stairs (up/down): not drawn on a flat level

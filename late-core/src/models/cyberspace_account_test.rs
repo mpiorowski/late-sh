@@ -107,3 +107,94 @@ async fn links_are_scoped_to_their_owner() {
         .expect("other still linked");
     assert_eq!(other_row.refresh_token, "token-b");
 }
+
+#[tokio::test]
+async fn pinned_circ_rooms_round_trip_and_survive_a_relink() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "cs-circ").await;
+
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+
+    // A fresh link pins nothing: the rail shows the pane and no rooms.
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert!(found.circ_rooms.is_empty());
+
+    // The list is written whole, and order is the user's rail order.
+    let rooms = vec!["general".to_string(), "tech".to_string()];
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &rooms)
+        .await
+        .expect("pin rooms");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.circ_rooms, rooms);
+
+    // Signing in again is the same person's rail, so the pins stay.
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-2")
+        .await
+        .expect("re-link");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.circ_rooms, rooms);
+}
+
+#[tokio::test]
+async fn circ_room_read_cursors_round_trip_and_prune_with_the_pins() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "cs-circ-reads").await;
+
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+    let rooms = vec!["general".to_string(), "tech".to_string()];
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &rooms)
+        .await
+        .expect("pin rooms");
+
+    // A fresh link has read nothing, which must read as no dots, not all dots.
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert!(found.room_read_cursors().is_empty());
+
+    CyberspaceAccount::mark_circ_room_read(&client, user.id, "general", 1_700_000_000_000)
+        .await
+        .expect("mark general read");
+    CyberspaceAccount::mark_circ_room_read(&client, user.id, "tech", 1_700_000_100_000)
+        .await
+        .expect("mark tech read");
+    // A later visit moves the cursor in place.
+    CyberspaceAccount::mark_circ_room_read(&client, user.id, "general", 1_700_000_200_000)
+        .await
+        .expect("re-mark general");
+    let cursors = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked")
+        .room_read_cursors();
+    assert_eq!(cursors.get("general"), Some(&1_700_000_200_000));
+    assert_eq!(cursors.get("tech"), Some(&1_700_000_100_000));
+
+    // Unpinning a room takes its cursor with it; the survivor keeps its own.
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &["tech".to_string()])
+        .await
+        .expect("unpin general");
+    let cursors = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked")
+        .room_read_cursors();
+    assert_eq!(cursors.get("general"), None);
+    assert_eq!(cursors.get("tech"), Some(&1_700_000_100_000));
+}

@@ -696,6 +696,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             room_last_message_at: &HashMap::new(),
             feeds_available: true,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -718,14 +719,19 @@ fn visual_order_matches_cozy_rail_grouping() {
 }
 
 #[test]
-fn room_section_label_round_trips() {
-    for section in [
-        RoomSection::Favorites,
-        RoomSection::Core,
-        RoomSection::Channels,
-        RoomSection::Dms,
-    ] {
+fn every_section_round_trips_its_label_and_owns_a_unique_fold_key() {
+    let mut shortcuts = HashSet::new();
+    for section in RoomSection::ALL {
+        // Clicking a header maps its text back to the section.
         assert_eq!(RoomSection::from_label(section.label()), Some(section));
+        // `z` + this key folds it. A section whose key another one already
+        // claimed is unreachable, and one missing from the `z` handler's own
+        // key map is a section the rail draws but nothing can fold.
+        assert!(
+            shortcuts.insert(section.shortcut()),
+            "two sections claim '{}'",
+            section.shortcut() as char
+        );
     }
     assert_eq!(RoomSection::from_label("not-a-section"), None);
 }
@@ -761,6 +767,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             room_last_message_at: &HashMap::new(),
             feeds_available: false,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
@@ -839,6 +846,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         room_last_message_at: &room_last_message_at,
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -878,6 +886,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -898,6 +907,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[dm_bob.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -941,6 +951,7 @@ fn visual_order_promotes_unread_dms_above_channels() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[dm_carol.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -987,6 +998,7 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
             room_last_message_at: &HashMap::new(),
             feeds_available: false,
             cyberspace_linked: false,
+            cyberspace_rooms: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -1037,6 +1049,7 @@ fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::from([RoomSection::Dms]),
         ignored_user_ids: &HashSet::new(),
@@ -1123,6 +1136,7 @@ fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
         room_last_message_at: &HashMap::new(),
         feeds_available: false,
         cyberspace_linked: false,
+        cyberspace_rooms: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::from([bob]),
@@ -2128,6 +2142,18 @@ fn extend_changed_reports_only_real_changes() {
 /// A ChatState wired to a real DB with inert side services, for exercising
 /// the row-cache counter contract directly.
 fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) -> ChatState {
+    chat_state_with_cyberspace(test_db, user_id).0
+}
+
+/// Same wiring, returning the cyberspace service handle so a test can play
+/// the part of another session of the same linked account.
+fn chat_state_with_cyberspace(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: Uuid,
+) -> (
+    ChatState,
+    crate::app::chat::cyberspace::svc::CyberspaceService,
+) {
     let db = test_db.db.clone();
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
@@ -2135,7 +2161,12 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
-    ChatState::new(
+    // Dead base URL: state logic under test never talks to the network.
+    let cyberspace = crate::app::chat::cyberspace::svc::CyberspaceService::new(
+        db.clone(),
+        "http://127.0.0.1:1".to_string(),
+    );
+    let state = ChatState::new(
         ChatServices {
             chat,
             translation,
@@ -2143,18 +2174,16 @@ fn counter_test_state(test_db: &late_core::test_utils::TestDb, user_id: Uuid) ->
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
             showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
-            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
-            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
-                db,
-                "http://127.0.0.1:1".to_string(),
-            ),
+            work: crate::app::chat::work::svc::WorkService::new(db),
+            cyberspace: cyberspace.clone(),
         },
         user_id,
         crate::authz::Permissions::new(false, false),
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
-    )
+    );
+    (state, cyberspace)
 }
 
 async fn wait_for_snapshot(state: &mut ChatState) {
@@ -2163,6 +2192,85 @@ async fn wait_for_snapshot(state: &mut ChatState) {
         "chat snapshot refresh",
     )
     .await;
+}
+
+/// Pump full ChatState ticks until `ready` holds, the way the app tick loop
+/// does every frame. Sub-pane events (cyberspace among them) drain inside
+/// `tick`, not `drain_events`, so `drain_events_until` cannot serve here.
+async fn tick_until(state: &mut ChatState, label: &str, ready: impl Fn(&ChatState) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        state.tick();
+        if ready(state) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for condition: {label}");
+}
+
+#[tokio::test]
+async fn remote_pin_changes_re_derive_the_rail_room_selection() {
+    use late_core::models::cyberspace_account::CyberspaceAccount;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "circ_reconcile").await;
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &["alpha".to_string(), "beta".to_string()])
+        .await
+        .expect("pin rooms");
+
+    let (mut state, cyberspace) = chat_state_with_cyberspace(&test_db, user.id);
+    tick_until(&mut state, "pinned rooms load", |state| {
+        state.cyberspace.pinned_rooms().len() == 2
+    })
+    .await;
+
+    state.select_cyberspace_room(1);
+    assert_eq!(state.cyberspace.open_room_slug(), Some("beta"));
+    assert_eq!(state.cyberspace_room_selected, Some(1));
+
+    // Another session of the same account pins a room in front: beta moves
+    // to index 2, and the rail cursor must follow the room, not the slot.
+    cyberspace.set_circ_pinned_task(
+        user.id,
+        vec!["zeta".to_string(), "alpha".to_string(), "beta".to_string()],
+    );
+    tick_until(&mut state, "pinned list grows", |state| {
+        state.cyberspace.pinned_rooms().len() == 3
+    })
+    .await;
+    assert_eq!(
+        state.cyberspace_room_selected,
+        Some(2),
+        "the selection follows the open room's slug through a reorder"
+    );
+    assert_eq!(
+        state.cyberspace.open_room_slug(),
+        Some("beta"),
+        "the open room itself rides out the reorder"
+    );
+
+    // Another session unpins the open room: the rail can no longer name it,
+    // so the session leaves the room and lands back on the pane.
+    cyberspace.set_circ_pinned_task(user.id, vec!["alpha".to_string()]);
+    tick_until(&mut state, "pinned list shrinks", |state| {
+        state.cyberspace.pinned_rooms().len() == 1
+    })
+    .await;
+    assert_eq!(state.cyberspace_room_selected, None);
+    assert_eq!(
+        state.cyberspace.open_room_slug(),
+        None,
+        "an unpinned room cannot keep its stream and heartbeat"
+    );
+    assert!(
+        state.cyberspace_selected,
+        "the user lands on the cyberspace pane, not in limbo"
+    );
 }
 
 /// Pump the chat event stream until `ready` holds, the way the app tick loop
@@ -2597,7 +2705,9 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
     use late_core::models::chat_room_member::ChatRoomMember;
-    use late_core::models::message_translation::{MessageTranslation, TranslateLang};
+    use late_core::models::message_translation::{
+        CachedTranslation, MessageTranslation, TranslateLang,
+    };
 
     let test_db = crate::test_helpers::new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -2632,16 +2742,29 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
     .await
     .expect("english message");
     // Seeded the way another viewer's earlier call would: the cache is what
-    // makes a translation free for everyone who comes after the first.
+    // makes a translation free for everyone who comes after the first. The
+    // English message got a same-language verdict from that call, also
+    // cached, so nobody pays to learn it again.
     MessageTranslation::upsert_if_current(
         &client,
         foreign.id,
         TranslateLang::En,
         "你好，我刚发现这个地方",
-        "hello, i just found this place",
+        &CachedTranslation::Translated("hello, i just found this place".to_string()),
+        false,
     )
     .await
     .expect("seed cache");
+    MessageTranslation::upsert_if_current(
+        &client,
+        english.id,
+        TranslateLang::En,
+        "what a cozy little place",
+        &CachedTranslation::SameLanguage,
+        false,
+    )
+    .await
+    .expect("seed same-language cache");
 
     let mut state = counter_test_state(&test_db, viewer.id);
     load_room_tail(&mut state, lounge.id, foreign.id).await;
@@ -2693,18 +2816,276 @@ async fn pressing_t_shows_a_translation_then_collapses_and_reopens_it() {
         ))
     );
 
-    // `t` on a message already in the viewer's language spends no API call:
-    // it says so and leaves no translation state behind.
+    // `t` on a message already in the viewer's language: the request goes
+    // out (the script check can't clear English for an English target), the
+    // cached same-language verdict comes back, nothing renders, and a
+    // second `t` explains instead of collapsing a line that isn't there.
     state.selected_message_id = Some(english.id);
+    assert!(
+        state
+            .toggle_translation_selected_in_room(lounge.id)
+            .is_none(),
+        "the request itself banners nothing"
+    );
+    drain_translations_until(&mut state, "same-language verdict arrives", |state| {
+        matches!(
+            state.translations.get(&english.id),
+            Some(TranslationDisplay::SameLanguage)
+        )
+    })
+    .await;
     let banner = state
         .toggle_translation_selected_in_room(lounge.id)
-        .expect("same-script message banners");
+        .expect("same-language message banners");
     assert!(
-        banner.message.contains("Already readable"),
+        banner.message.contains("Already written in English"),
         "unexpected banner text: {}",
         banner.message
     );
-    assert!(!state.translations.contains_key(&english.id));
+}
+
+#[tokio::test]
+async fn auto_mode_requests_fire_without_a_pending_placeholder() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::message_translation::TranslateLang;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "auto_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "auto_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    let seed = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "seed".to_string(),
+        },
+    )
+    .await
+    .expect("seed message");
+
+    // Inline harness keeping the service handles: the live auto path only
+    // runs for events arriving on the state's own service channel.
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let mut translation_events = translation.subscribe();
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = ChatState::new(
+        ChatServices {
+            chat: chat.clone(),
+            translation,
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
+        },
+        viewer.id,
+        crate::authz::Permissions::new(false, false),
+        None,
+        notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
+    );
+    load_room_tail(&mut state, lounge.id, seed.id).await;
+    state.set_visible_room_id(Some(lounge.id));
+    state.set_translate_settings(TranslateLang::En, true);
+
+    chat.send_message_task(
+        author.id,
+        lounge.id,
+        None,
+        "bonjour tout le monde".to_string(),
+        Uuid::now_v7(),
+        false,
+    );
+    drain_events_until(&mut state, "live message arrives", |state| {
+        state.rooms.iter().any(|(room, messages)| {
+            room.id == lounge.id && messages.iter().any(|m| m.body.contains("bonjour"))
+        })
+    })
+    .await;
+    let message_id = state
+        .rooms
+        .iter()
+        .find(|(room, _)| room.id == lounge.id)
+        .and_then(|(_, messages)| messages.iter().find(|m| m.body.contains("bonjour")))
+        .map(|m| m.id)
+        .expect("live message loaded");
+
+    // The request went out (AI is off, so it resolves Failed)...
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), translation_events.recv())
+        .await
+        .expect("translation event timeout")
+        .expect("translation channel open");
+    assert_eq!(event.message_id, message_id);
+    // ...but nothing went on screen for it: the "translating…" placeholder
+    // is manual-only (`t`), so auto mode never flashes a line under a
+    // message that then vanishes on a same-language verdict.
+    assert!(
+        !state.translations.contains_key(&message_id),
+        "auto-fired request must not render a pending placeholder"
+    );
+}
+
+#[tokio::test]
+async fn author_shared_translations_show_without_auto_mode_or_t() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::message_translation::{
+        CachedTranslation, MessageTranslation, TranslateLang,
+    };
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "shared_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "shared_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+
+    // Three cached rows, one per display rule: the author's shared message
+    // (shows to everyone), another author message a reader once translated
+    // privately (stays private), and the viewer's own shared message (the
+    // author never sees their own text echoed back translated).
+    let shared = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "bonjour tout le monde".to_string(),
+        },
+    )
+    .await
+    .expect("shared message");
+    let private = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "salut la compagnie".to_string(),
+        },
+    )
+    .await
+    .expect("private message");
+    let own = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: viewer.id,
+            body: "je vous salue bien".to_string(),
+        },
+    )
+    .await
+    .expect("own message");
+    MessageTranslation::upsert_if_current(
+        &client,
+        shared.id,
+        TranslateLang::En,
+        "bonjour tout le monde",
+        &CachedTranslation::Translated("hello everyone".to_string()),
+        true,
+    )
+    .await
+    .expect("seed shared row");
+    MessageTranslation::upsert_if_current(
+        &client,
+        private.id,
+        TranslateLang::En,
+        "salut la compagnie",
+        &CachedTranslation::Translated("hi folks".to_string()),
+        false,
+    )
+    .await
+    .expect("seed private row");
+    MessageTranslation::upsert_if_current(
+        &client,
+        own.id,
+        TranslateLang::En,
+        "je vous salue bien",
+        &CachedTranslation::Translated("i salute you".to_string()),
+        true,
+    )
+    .await
+    .expect("seed own shared row");
+
+    // Inline harness keeping a witness receiver: the test waits until every
+    // broadcast event exists before draining, so the whole-map assertion
+    // below judges all three rules at once instead of racing the sweep.
+    let db = test_db.db.clone();
+    let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
+    let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let mut translation_events = translation.subscribe();
+    let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
+    let (notifier, _outbox) = crate::app::notify::channel();
+    let mut state = ChatState::new(
+        ChatServices {
+            chat,
+            translation: translation.clone(),
+            notifications,
+            articles,
+            feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+            showcases: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
+            work: crate::app::chat::work::svc::WorkService::new(db.clone()),
+            cyberspace: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+                db,
+                "http://127.0.0.1:1".to_string(),
+            ),
+        },
+        viewer.id,
+        crate::authz::Permissions::new(false, false),
+        None,
+        notifier,
+        crate::app::ai::ladder::MentionLadders::new(),
+    );
+    load_room_tail(&mut state, lounge.id, own.id).await;
+
+    // No auto mode, no `t`. Making the room visible runs the sweep over the
+    // two messages by others; the viewer's own message is swept out, so its
+    // event is forced through the service directly to pin the drain's
+    // own-message guard too.
+    assert!(!state.auto_translate);
+    state.set_visible_room_id(Some(lounge.id));
+    translation.load_cached(lounge.id, vec![own.id], TranslateLang::En);
+    for _ in 0..3 {
+        tokio::time::timeout(std::time::Duration::from_secs(5), translation_events.recv())
+            .await
+            .expect("translation event timeout")
+            .expect("translation channel open");
+    }
+
+    state.drain_translation_events();
+    assert_eq!(
+        state.translations,
+        std::collections::HashMap::from([(
+            shared.id,
+            TranslationDisplay::Ready("hello everyone".to_string())
+        )]),
+        "only the author-shared message by someone else displays"
+    );
 }
 
 #[tokio::test]
@@ -2757,7 +3138,9 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
     use late_core::models::chat_room_member::ChatRoomMember;
-    use late_core::models::message_translation::{MessageTranslation, TranslateLang};
+    use late_core::models::message_translation::{
+        CachedTranslation, MessageTranslation, TranslateLang,
+    };
 
     let test_db = crate::test_helpers::new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -2785,7 +3168,8 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
         message.id,
         TranslateLang::En,
         "你好，我刚发现这个地方",
-        "hello there",
+        &CachedTranslation::Translated("hello there".to_string()),
+        false,
     )
     .await
     .expect("seed cache");
@@ -2812,4 +3196,69 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
     // the new target's view.
     state.drain_translation_events();
     assert!(state.translations.is_empty());
+}
+
+#[test]
+fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
+    let me = Uuid::from_u128(1);
+    let lounge = Uuid::from_u128(10);
+    let usernames: HashMap<Uuid, String> = HashMap::new();
+    let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
+    let pinned = vec!["general".to_string(), "tech".to_string()];
+
+    let order_for = |linked: bool, collapsed: &HashSet<RoomSection>| {
+        visual_order_for_rooms(RoomVisualOrderInput {
+            rooms: &rooms,
+            user_id: me,
+            usernames: &usernames,
+            unread_counts: &HashMap::new(),
+            room_last_message_at: &HashMap::new(),
+            feeds_available: false,
+            cyberspace_linked: linked,
+            cyberspace_rooms: &pinned,
+            favorite_room_ids: &[],
+            collapsed_sections: collapsed,
+            ignored_user_ids: &HashSet::new(),
+            sticky_unread_dm: None,
+        })
+    };
+
+    // Linked: the pane leads its own section and every pinned room follows it,
+    // in the user's order. Slots carry the index into that list.
+    assert_eq!(
+        order_for(true, &HashSet::new()),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+            RoomSlot::Cyberspace,
+            RoomSlot::CyberspaceRoom(0),
+            RoomSlot::CyberspaceRoom(1),
+        ]
+    );
+
+    // Unlinked: no section at all, however many rooms a stale list holds.
+    // A row the rail cannot draw is a slot the user can land on but never see.
+    assert_eq!(
+        order_for(false, &HashSet::new()),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+        ]
+    );
+
+    // Collapsed: the header stays, its rooms leave navigation with it.
+    let collapsed = HashSet::from([RoomSection::Cyberspace]);
+    assert_eq!(
+        order_for(true, &collapsed),
+        vec![
+            RoomSlot::Room(lounge),
+            RoomSlot::Notifications,
+            RoomSlot::News,
+            RoomSlot::Discover,
+        ]
+    );
 }

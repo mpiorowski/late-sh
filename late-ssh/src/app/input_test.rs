@@ -863,3 +863,39 @@ fn chat_click_kind_double_click_followup_only_for_body_and_profile() {
     assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
     assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
 }
+
+// A lone Esc in an active Lateania world belongs to the door, not to this
+// dispatcher. `dispatch_escape` runs before screen dispatch, so leaving here
+// unconditionally skipped both of the door's Esc rules: cancelling a chat line
+// you are composing, and requiring a confirming second press. Losing your place
+// in a persistent world to one stray keypress is the worst kind of accident.
+#[tokio::test]
+async fn one_escape_never_drops_you_out_of_an_active_lateania_world() {
+    let db = crate::test_helpers::new_test_db().await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), uuid::Uuid::now_v7(), "esc-confirm");
+    app.set_screen(Screen::Lateania);
+    app.enter_lateania();
+    assert!(app.lateania_state.is_some(), "the world is live");
+
+    dispatch_escape(&mut app);
+    assert!(
+        app.lateania_state.is_some(),
+        "one Esc must only arm the confirmation, never leave"
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Lateania,
+        "and it must not navigate away either"
+    );
+
+    dispatch_escape(&mut app);
+    assert!(
+        app.lateania_state.is_none(),
+        "a confirming second Esc does leave"
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Games,
+        "and lands back on the hub that launched it"
+    );
+}

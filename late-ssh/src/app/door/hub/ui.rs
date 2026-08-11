@@ -30,6 +30,9 @@ pub struct HubView<'a> {
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
+    /// This account's character slots, for the landing card's select list.
+    pub lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    pub lateania_slot_cursor: usize,
     /// Roguelike doors with a live detached game this session: the sidebar
     /// marks them and their landing offers resume instead of launch.
     pub nethack_live: bool,
@@ -155,6 +158,8 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.delete_confirm,
             view.lateania_online,
+            &view.lateania_slots,
+            view.lateania_slot_cursor,
         ),
         HubGame::Rebels => {
             crate::app::door::rebels::render::draw_landing(frame, body[1], view.rebels_enabled);

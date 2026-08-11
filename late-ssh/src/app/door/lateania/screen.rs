@@ -16,6 +16,8 @@ use crate::app::{
 };
 use crate::usernames::UsernameLookup;
 
+use super::svc::{CHARACTER_SLOTS, SlotSummary};
+
 pub const GAME: LateaniaDoorGame = LateaniaDoorGame;
 
 pub struct LateaniaDoorGame;
@@ -72,6 +74,10 @@ pub struct LateaniaScreenView<'a> {
     pub usernames: &'a UsernameLookup<'a>,
     /// Players currently in the Lateania world, shown on the landing.
     pub online: usize,
+    /// This account's character slots, for the landing's select list.
+    pub slots: &'a [SlotSummary],
+    /// Highlighted slot on the landing.
+    pub slot_cursor: usize,
 }
 
 fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
@@ -85,7 +91,14 @@ fn draw_screen(frame: &mut Frame, area: Rect, view: &LateaniaScreenView<'_>) {
         return;
     }
 
-    draw_landing(frame, area, view.delete_confirm, view.online);
+    draw_landing(
+        frame,
+        area,
+        view.delete_confirm,
+        view.online,
+        view.slots,
+        view.slot_cursor,
+    );
 }
 
 fn handle_key(app: &mut App, byte: u8) -> bool {
@@ -98,9 +111,18 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
     }
 
     match byte {
-        b'j' | b'J' | b'k' | b'K' => true,
+        b'j' | b'J' => {
+            move_slot_cursor(app, 1);
+            true
+        }
+        b'k' | b'K' => {
+            move_slot_cursor(app, -1);
+            true
+        }
         b'\r' | b'\n' => {
             app.door_delete_confirm = false;
+            app.lateania_service
+                .select_slot(app.user_id, app.lateania_slot_cursor as i16);
             app.enter_lateania();
             true
         }
@@ -110,6 +132,13 @@ fn handle_key(app: &mut App, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+/// Move the landing's slot cursor, clamped to the character slots that exist.
+fn move_slot_cursor(app: &mut App, delta: i32) {
+    let max = CHARACTER_SLOTS as i32 - 1;
+    let next = app.lateania_slot_cursor as i32 + delta;
+    app.lateania_slot_cursor = next.clamp(0, max) as usize;
 }
 
 fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
@@ -134,7 +163,17 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
         return true;
     }
 
-    matches!(key, b'A' | b'B')
+    match key {
+        b'A' => {
+            move_slot_cursor(app, -1);
+            true
+        }
+        b'B' => {
+            move_slot_cursor(app, 1);
+            true
+        }
+        _ => false,
+    }
 }
 
 fn leave_active_game(app: &mut App) -> bool {
@@ -155,11 +194,14 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
     match byte {
         b'y' | b'Y' | b'\r' | b'\n' => {
             app.door_delete_confirm = false;
+            let slot = app.lateania_slot_cursor as i16;
             app.leave_lateania();
-            app.lateania_service.delete_character_task(app.user_id);
-            app.banner = Some(Banner::success(
-                "Lateania character reset. Enter the world to start over.",
-            ));
+            app.lateania_service
+                .delete_character_task(app.user_id, slot);
+            app.banner = Some(Banner::success(&format!(
+                "Slot {} reset. Enter to start a new character there.",
+                slot + 1
+            )));
             true
         }
         b'n' | b'N' | b'd' | b'D' | b'q' | b'Q' | 0x1B => {
@@ -171,11 +213,12 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
 }
 
 fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
-    if byte == 0x1B {
-        app.leave_lateania();
-        return true;
-    }
-
+    // Esc must route through `input::handle_key` like every other byte, not
+    // be special-cased here: that function is what cancels an in-progress
+    // chat compose on Esc instead of leaving, and what gates a genuine leave
+    // behind a confirming second press. Short-circuiting Esc here used to
+    // skip both, so Esc while chatting closed the game and a single
+    // accidental Esc always logged the player straight out.
     let Some(state) = app.lateania_state.as_mut() else {
         return true;
     };
@@ -187,11 +230,66 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
 
 /// Lateania landing, used both by the standalone screen fallback and the Games
 /// hub when Lateania is the selected card.
-pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool, online: usize) {
-    draw_launch_copy(frame, area, delete_confirm, online);
+pub fn draw_landing(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    online: usize,
+    slots: &[SlotSummary],
+    slot_cursor: usize,
+) {
+    draw_launch_copy(frame, area, delete_confirm, online, slots, slot_cursor);
 }
 
-fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online: usize) {
+/// One row of the character-select list: the highlighted slot gets a `>`
+/// marker and bright text; an empty slot reads as an invitation to start one.
+fn slot_row(slot: &SlotSummary, highlighted: bool) -> Line<'static> {
+    let marker_color = if highlighted {
+        theme::SUCCESS()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    let marker_style = if highlighted {
+        Style::default()
+            .fg(marker_color)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(marker_color)
+    };
+    let desc = if slot.occupied {
+        match slot.class {
+            Some(class) => format!("{}, Lv {}", class.name(), slot.level),
+            None => format!("Lv {} - no class chosen yet", slot.level),
+        }
+    } else {
+        "empty - start a new character".to_string()
+    };
+    let desc_color = if slot.occupied {
+        theme::TEXT_BRIGHT()
+    } else {
+        theme::TEXT_FAINT()
+    };
+    Line::from(vec![
+        Span::styled(
+            format!(
+                "{} {}. ",
+                if highlighted { ">" } else { " " },
+                slot.slot + 1
+            ),
+            marker_style,
+        ),
+        Span::styled(desc, Style::default().fg(desc_color)),
+    ])
+}
+
+fn draw_launch_copy(
+    frame: &mut Frame,
+    area: Rect,
+    delete_confirm: bool,
+    online: usize,
+    slots: &[SlotSummary],
+    slot_cursor: usize,
+) {
     let inner = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -249,17 +347,22 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));
-    lines.push(landing::heading("Enter The World"));
+    lines.push(landing::heading("Choose Your Character"));
+    for slot in slots {
+        lines.push(slot_row(slot, slot.slot as usize == slot_cursor));
+    }
+    lines.push(Line::raw(""));
+    lines.push(landing::hint("j/k or up/down", "highlight a slot", 19));
     lines.push(landing::action(
         ">",
         "Enter",
-        "step through the gate",
+        "play the highlighted slot",
         theme::SUCCESS(),
     ));
     lines.push(landing::action(
         " ",
         "d",
-        "reset your saved character",
+        "reset the highlighted slot",
         theme::ERROR(),
     ));
     lines.push(landing::action(" ", "?", "open the guide", theme::AMBER()));
@@ -276,7 +379,7 @@ fn draw_launch_copy(frame: &mut Frame, area: Rect, delete_confirm: bool, online:
     if delete_confirm {
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![Span::styled(
-            "Delete your Lateania character?",
+            format!("Delete the character in slot {}?", slot_cursor + 1),
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),

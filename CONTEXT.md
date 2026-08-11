@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-08 (production IRC ingress now sends trusted PROXY v1 metadata before in-process TLS, so IP-ban checks, active sessions, and server-ban snapshots use the real client IP; a shared proxy transport address is retained only as a transient failed-auth rate-limit key when client metadata is unavailable)
+- Last updated: 2026-08-08 (chat translation goes two-way: English targets now translate Latin-script languages, with the model's cached `same_language` verdict (migration 137) replacing the script shortcut; replies translate only the reply text, never the baked-in `> @author:` quote line; and a new per-account "Translate my messages to English" setting (`Ctrl+O` → Settings → Translation) pre-warms the shared cache from the send/edit paths. The model call is `TranslationService` in `app/ai/translate.rs`; the full contract is in `late-ssh/src/app/chat/CONTEXT.md` §14 Translation)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -596,11 +596,6 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 
 **Embedded IRC server (late-ssh, local-dev plaintext port 6667; TLS default 6697):**
 - The root `Makefile` enables the embedded server for local dev via `LATE_IRC_ENABLED=1` and `LATE_IRC_PORT=6667` in generated `.env`; when env vars are absent, the Rust config default remains disabled. `late-ssh/src/ircd/serve.rs` starts only when enabled. When both `LATE_IRC_TLS_CERT` and `LATE_IRC_TLS_KEY` are set, the listener accepts rustls TLS and defaults to port 6697 if `LATE_IRC_PORT` is unset.
-- Production IPv4 ingress-nginx and IPv6 HAProxy send PROXY v1 before the
-  in-process TLS handshake. IRC accepts headers only from configured trusted
-  CIDRs. Missing/`UNKNOWN` client addresses remain absent: the transport pod or
-  node address is used only as an auth-rate-limit fallback, never for IP-ban
-  matching or active-session/server-ban persistence.
 - Users mint, reset, and revoke IRC tokens from `Ctrl+O` Settings > Account. Tokens are shown once, stored hashed only in `irc_tokens`, and are supplied as the IRC `PASS`. The IRC nick is locked to the late.sh username after authentication.
 - `#lounge` is force-joined and cannot be permanently parted from IRC. Public rooms project as channels; DMs bridge through IRC query/private-message semantics. Channel messages route through `ChatService`, so IRC clients share the same DB writes, broadcasts, permissions, ignores, and notifications as the TUI.
 - IRC moderation uses the existing moderation service path: channel ops map `KICK`, `MODE +b/-b`, and ban list requests to room moderation; admins can use `KILL` for server kicks. TUI/server kicks, bans, token resets, and token revokes call `IrcRegistry::disconnect_user` so live IRC clients close immediately with an IRC `ERROR`.
@@ -752,7 +747,7 @@ Known gaps/risks:
 - **Single-replica assumption:** Several structures are purely in-memory and not shared across processes (see multi-replica notes below)
 - **SSH pod drain window:** `infra/service-ssh.tf` sets `termination_grace_period_seconds = 21600` (6h) so rolling updates can stop new connections while allowing existing SSH sessions to drain for a long window before Kubernetes sends SIGKILL.
 - **SSH ingress reload risk:** `ssh late.sh` currently reaches `late-ssh` through RKE2 ingress-nginx TCP passthrough (`infra/ssh-tcp.tf`, port `22 -> service-ssh-sv:2222::PROXY`). Long-lived SSH sessions can be dropped after any ingress-nginx config reload because old workers are terminated after `worker_shutdown_timeout` (240s; cert-manager certificate renewals are a recurring reload trigger). Future infra improvement: stop routing SSH through ingress-nginx; use a dedicated TCP LoadBalancer/NodePort/host proxy for SSH so HTTP/TLS reloads cannot kill SSH sessions. Short-term mitigation: increase ingress-nginx `worker-shutdown-timeout`, but that only delays the disconnect.
-- **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the current ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, `22`, and the configured IRC port when enabled; HTTP(S) forwards to localhost ingress hostPorts, while SSH and IRC forward to `service-ssh-sv` with PROXY protocol. `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
+- **IPv6 ingress status:** RKE2/CNI `hostPort` exposes the current ingress-nginx path for IPv4 only; do not switch the main ingress controller to `hostNetwork` without a rollout plan. Public IPv6 is handled by the separate `kube-system/ipv6-proxy` HAProxy DaemonSet in `infra/ipv6-proxy.tf`, binding `2a01:4f9:c013:2ae1::1` on `80`, `443`, and `22`; HTTP(S) forwards to localhost ingress hostPorts, while SSH forwards to `service-ssh-sv:2222` with PROXY protocol. `Network is unreachable` during `ssh -6 late.sh` means the client lacks IPv6 egress.
 - **Stateful VT parsing in `late-ssh/src/app/input.rs`:** SSH input runs through a persistent `vte::Parser`, so CSI/SS3 sequences and bracketed paste survive split russh reads instead of assuming the whole escape sequence lands in one chunk. The app still keeps two pragmatic layers on top: `is_likely_paste` heuristically treats large printable unmarked chunks as paste for terminals without bracketed paste, and `sanitize_paste_markers`/`strip_paste_markers` still scrub stored residue defensively when copying URLs from older polluted state. Standalone `Esc` is resolved on a short tick delay so split escape sequences are not mistaken for cancel keys.
 
 Roadmap ideas:
@@ -849,10 +844,6 @@ Currently the SSH app assumes a single process. These in-memory structures would
 - Plain username display should use `State.username_directory` or the render snapshot derived from it. Do not add ad hoc per-feature username caches for seat labels, activity labels, or recent-join labels unless the feature needs richer author metadata such as badges, countries, or bonsai glyphs.
 - @bot, @graybeard, @bartender, and @dealer bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). All are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`, `bartender-fp-000`, `dealer-fp-000`). Ghost-bot entries in `active_users` have `fingerprint: None`; the Clubhouse roster uses that to keep bots out of the seat pool (and to capture the bartender/graybeard user ids for staff speech bubbles and the tutorial's scripted greeting).
 - Connection limits (global semaphore + per-IP counter) plus SSH attempt rate limit (sliding window) MUST be enforced before any auth (effective client IP is resolved from PROXY protocol when enabled)
-- IRC IP bans and active-session IP snapshots MUST use a direct peer or a client
-  address supplied by a configured trusted PROXY peer; a proxy transport
-  address must never substitute for an unavailable client IP. Auth-failure
-  limiting may use the transport address as a transient, non-persisted fallback.
 - Chat message deletes are hard deletes; any moderation/delete path must remove rows directly rather than relying on tombstones
 
 ### 8.2 Data integrity invariants
@@ -1086,14 +1077,6 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 One dated entry per production crash or serious incident. **Add a new entry (newest first) whenever a crash is investigated**, even if the root cause stays unproven; the negative evidence ("we checked X, it was clean") is exactly what the next investigation needs. Keep verdicts honest: "consistent and plausible, not proven" beats a confident wrong root cause. Triage commands live in §10.2.2; the symptom checklist in §10.4; performance (non-crash) findings in SCALE.md.
 
 Entry template: symptom → evidence → verdict → fixes shipped → what to check if it repeats.
-
-#### 2026-08-08: shared IRC ingress address captured by a server ban (IRC outage, no crash)
-
-- **Symptom:** users reconnecting after a service restart received IRC `465 You are banned from this server`; regenerating IRC access tokens did not help.
-- **Evidence:** affected users had unrelated public addresses, while the active server-ban list contained `10.42.0.123`, a Kubernetes-internal ingress address. A raw TLS registration exposed the `465` that clients summarized as generic authentication failure. IPv4 ingress-nginx and the IPv6 HAProxy path did not send PROXY metadata for IRC, and `ircd::serve` passed the TCP transport peer into IP-ban auth and active-session state. A username ban of an IRC-connected account therefore captured the shared ingress address; established connections survived until restart, then all reconnects matched it before token lookup.
-- **Verdict:** proven. IRC confused its proxy transport peer with the client IP.
-- **Fix prepared:** the poisoned live ban was replaced without an IP. Production ingress now sends PROXY v1 on both IP families; IRC parses it from trusted CIDRs before rustls, carries the verified client IP as optional state, and never substitutes the transport address for ban matching or persistence. A no-header transition is accepted with no client IP so Terraform resource ordering cannot recreate the outage during rollout.
-- **If it repeats:** run `/mod view bans server` and look for pod/node addresses, confirm the ingress TCP mapping ends in `::PROXY`, confirm IPv6 HAProxy uses `send-proxy`, and inspect startup config/logs for `LATE_IRC_PROXY_PROTOCOL`, trusted CIDRs, missing headers, or proxy-parse failures.
 
 #### 2026-08-06: news AI summaries dead after the 3.6-flash switch (feature outage, no crash)
 
