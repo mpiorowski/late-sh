@@ -18,11 +18,24 @@ use crate::app::{
 /// leave.
 pub const VOICE_STRIP_HEIGHT: u16 = 1;
 
+/// ON AIR context for a stream room's voice strip: while the room's stream
+/// is live, everyone in voice is audible to anonymous watch-page listeners,
+/// and the strip must say so loudly. `streamer_mic` is the streamer's
+/// `(user_id, username)` while their go-live page reports the browser mic
+/// open: `VoiceService`'s roster only knows CLI participants, and a speaker
+/// the roster hides is the one betrayal this display must never allow.
+pub struct OnAirView {
+    pub live: bool,
+    pub streamer_mic: Option<(Uuid, String)>,
+}
+
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
     pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
+    /// Present only for rooms with a registered stream.
+    pub on_air: Option<OnAirView>,
 }
 
 impl VoiceRoomView<'_> {
@@ -68,13 +81,38 @@ fn voice_roster_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
             Style::default().fg(theme::TEXT_DIM()),
         )];
     }
-    if view.participants().is_empty() {
-        return vec![Span::styled(
+    let mut spans = Vec::new();
+    // The ON AIR marker leads the row: joining voice here is broadcasting.
+    if view.on_air.as_ref().is_some_and(|on_air| on_air.live) {
+        spans.push(Span::styled(
+            "⦿ ON AIR ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    // A browser-mic streamer is audible but absent from `VoiceService`'s
+    // CLI-only roster; the page's own mic report puts them on the row.
+    let streamer_mic = view.on_air.as_ref().and_then(|on_air| {
+        on_air.streamer_mic.as_ref().filter(|(user_id, _)| {
+            view.participants()
+                .iter()
+                .all(|participant| participant.user_id != *user_id)
+        })
+    });
+    if view.participants().is_empty() && streamer_mic.is_none() {
+        spans.push(Span::styled(
             "No one is in voice yet.",
             Style::default().fg(theme::TEXT_DIM()),
-        )];
+        ));
+        return spans;
     }
-    let mut spans = Vec::new();
+    if let Some((_, username)) = streamer_mic {
+        spans.push(Span::styled(
+            format!("{username} · on air"),
+            Style::default().fg(theme::AMBER()),
+        ));
+    }
     for participant in view.participants() {
         if !spans.is_empty() {
             spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));

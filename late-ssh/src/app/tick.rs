@@ -221,6 +221,7 @@ impl App {
         }
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
+        changed |= self.tick_stream();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;

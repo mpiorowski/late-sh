@@ -69,6 +69,13 @@ pub enum ActivityKind {
     CyberspacePosted {
         title: Option<String>,
     },
+    /// A streamer's go-live page reported media flowing: their "watch me"
+    /// stream room is on. Fired on the pending -> live transition only,
+    /// never at `/golive` command time, so no line ever points at a black
+    /// screen. There is no matching "stream ended" event (noise).
+    WentLive {
+        title: Option<String>,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -80,7 +87,8 @@ impl ActivityKind {
         match self {
             Self::UserJoined
             | Self::UsernameEffectApplied { .. }
-            | Self::CyberspacePosted { .. } => ActivityCategory::Session,
+            | Self::CyberspacePosted { .. }
+            | Self::WentLive { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
@@ -420,6 +428,21 @@ impl ActivityEvent {
             Some(user_id),
             username,
             ActivityKind::CyberspacePosted { title },
+            action,
+        )
+    }
+
+    /// A stream went on air: "mat is live: refactoring the render loop".
+    /// The line is the invitation; the room row is where the party moves.
+    pub fn went_live(user_id: Uuid, username: impl Into<String>, title: Option<String>) -> Self {
+        let action = match title.as_deref().map(str::trim) {
+            Some(title) if !title.is_empty() => format!("is live: {title}"),
+            _ => "is live".to_string(),
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::WentLive { title },
             action,
         )
     }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-07-25 (the inline voice strip is one row now: roster left, keys flushed right, and on Home chat it is the first row of the shared room header above the topic)
+- Last updated: 2026-08-11 (stream-room exception: `VoiceService` now also mints source-restricted publish tickets for the streamer's go-live page and hidden subscribe-only tickets for anonymous watch pages; see §7 and `../stream/CONTEXT.md`)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -21,7 +21,7 @@ Owned by this domain:
 
 Out of scope:
 - Icecast house radio, YouTube queue/fallback, Music Booth, visualizer, and audio source switching. Those live in `late-ssh/src/app/audio/CONTEXT.md`.
-- Browser publishing/listening, video, screen share, and recording.
+- Browser publishing/listening, video, screen share, and recording — except the precisely scoped stream-room tickets this service mints for `app/stream` (see §7). The stream flows themselves live in `../stream/CONTEXT.md`.
 - A shared CLI mixer for music + voice. Current voice I/O uses LiveKit `PlatformAudio` separately from the CLI music decoder.
 
 Product direction:
@@ -220,12 +220,31 @@ Important audio-engine boundary:
 
 ---
 
-## 7. Browser Listen-Only
+## 7. Browser Listen-Only and the Stream-Room Exception
 
-Browser listen-only support was removed for v1. Voice tokens are now minted only
-for authenticated SSH sessions with a paired native CLI, after the server checks
-that the voice channel is enabled and the user is a member of the target
-chat/game room.
+Browser listen-only support was removed for v1 as a *paired-client* surface.
+Voice tokens for actual voice participation are minted only for authenticated
+SSH sessions with a paired native CLI, after the server checks that the voice
+channel is enabled and the user is a member of the target chat/game room.
+
+Stream rooms (`/golive`, `app/stream`) reintroduce two browser tickets,
+deliberately and narrowly:
+
+- `stream_publish_ticket` — the streamer's own broadcast console page, room
+  owner only, reached through a per-stream capability URL minted from the
+  TUI. Publishing is restricted at the SFU grant level to
+  `screen_share`/`screen_share_audio`/`microphone` (the streamer-mic
+  exception, so macOS streamers are not condemned to silent streams).
+  Identity is `stream-{user_id}` so a CLI streamer in voice is not kicked by
+  their own console connecting.
+- `stream_watch_ticket` — anonymous watch pages: `canPublish=false` enforced
+  at the grant level (a tampered page still cannot open a mic) and
+  `hidden=true` so viewers never appear in LiveKit rosters; the watcher
+  count comes from page heartbeats instead. Anonymous ears are the product;
+  anonymous mouths stay forbidden.
+
+Viewers never publish. General browser voice remains a separate, unmade
+decision.
 
 ---
 
@@ -271,7 +290,7 @@ Background tasks:
 - Add richer LiveKit health/metrics dashboards.
 - Reintroduce browser listening only with authenticated room-access checks.
 - Consider one CLI audio engine/mixer for music + voice once voice polish needs ducking/device unification.
-- Keep browser publishing, video, screen share, and recording out of the MVP until product scope changes.
+- Keep browser publishing, video, screen share, and recording out of the MVP until product scope changes — with the one shipped exception of the stream-room tickets in §7 (streamer console + anonymous watch pages, scoped to `app/stream`). Do not widen that exception into general browser voice without a real design pass.
 
 ---
 

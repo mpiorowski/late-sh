@@ -103,6 +103,11 @@ enum PairControlMessage {
     VoiceSetDeafened {
         deafened: bool,
     },
+    /// Open a URL in the user's default browser (stream watch/go-live
+    /// pages). Advertised via the `open_url` capability.
+    OpenUrl {
+        url: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -124,10 +129,10 @@ impl From<PairAudioSource> for MediaSource {
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice"];
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "open_url"];
 
 #[cfg(target_os = "macos")]
-const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube"];
+const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "open_url"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];
@@ -911,6 +916,45 @@ async fn handle_pair_control(
             send_voice_state(ws, voice).await?;
             Ok(false)
         }
+        PairControlMessage::OpenUrl { url } => {
+            open_url_in_browser(&url);
+            Ok(false)
+        }
+    }
+}
+
+/// Open a server-sent URL in the default browser. Only `https://`/`http://`
+/// pass: the server is trusted, but a URL is the one string here that ends
+/// up as a command argument, so the scheme gate stays.
+fn open_url_in_browser(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        warn!(url = %url, "refusing to open non-http url");
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    let result = std::process::Command::new("xdg-open")
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let result: std::io::Result<std::process::Child> =
+        Err(std::io::Error::other("no browser opener on this platform"));
+    match result {
+        Ok(_) => info!(url = %url, "opened url in browser"),
+        Err(err) => warn!(url = %url, error = ?err, "failed to open url in browser"),
     }
 }
 
@@ -1022,7 +1066,8 @@ fn apply_audio_pair_control(
         | PairControlMessage::VoiceJoin { .. }
         | PairControlMessage::VoiceLeave
         | PairControlMessage::VoiceSetMuted { .. }
-        | PairControlMessage::VoiceSetDeafened { .. } => {}
+        | PairControlMessage::VoiceSetDeafened { .. }
+        | PairControlMessage::OpenUrl { .. } => {}
     }
 }
 

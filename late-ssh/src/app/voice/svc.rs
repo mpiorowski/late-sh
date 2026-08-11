@@ -150,6 +150,17 @@ pub struct VoiceJoinTicket {
     pub deafened: bool,
 }
 
+/// LiveKit connection details for a stream-room media page (the streamer's
+/// go-live console or an anonymous watch page). Pure media plumbing: no
+/// muted/deafened seed like [`VoiceJoinTicket`], because these pages are not
+/// voice participants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamMediaTicket {
+    pub room: String,
+    pub url: String,
+    pub token: String,
+}
+
 /// Outcome of a moderator `kick`. `changed` is whether anything actually changed
 /// (newly blocked or removed). `livekit_room` is the LiveKit room the user was
 /// in, if any, so the caller can force-disconnect them via `remove_participant`.
@@ -558,8 +569,10 @@ impl VoiceService {
                 room_admin: true,
                 room_create: false,
                 can_publish: false,
+                can_publish_sources: None,
                 can_subscribe: false,
                 can_publish_data: false,
+                hidden: false,
             },
         )?;
         let endpoint = format!("{http_base}/twirp/livekit.RoomService/RemoveParticipant");
@@ -582,6 +595,85 @@ impl VoiceService {
         Ok(())
     }
 
+    /// Publisher ticket for the streamer's go-live console page. Publishing
+    /// is restricted at the SFU grant level to screen share plus microphone
+    /// (the streamer-mic exception; the page keeps the mic off by default),
+    /// so the page can never publish a camera. Subscribe is allowed: a
+    /// non-CLI streamer hears co-hosts through this page. The identity is
+    /// `stream-{user_id}`, distinct from the user's CLI voice identity so a
+    /// CLI streamer in voice is not kicked out of LiveKit by their own
+    /// console connecting.
+    pub fn stream_publish_ticket(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+        username: &str,
+    ) -> anyhow::Result<StreamMediaTicket> {
+        if !self.config.enabled {
+            anyhow::bail!("voice is not configured");
+        }
+        if self.is_blocked(user_id) {
+            anyhow::bail!("you have been removed from voice by a moderator");
+        }
+        let room = self.livekit_room_name(room_id);
+        let url = self
+            .config
+            .livekit_url
+            .clone()
+            .context("voice enabled without LiveKit URL")?;
+        let token = self.mint_livekit_token_with_grants(
+            &format!("stream-{user_id}"),
+            username,
+            &room,
+            LiveKitTokenGrants {
+                room_admin: false,
+                room_create: false,
+                can_publish: true,
+                can_publish_sources: Some(&["screen_share", "screen_share_audio", "microphone"]),
+                can_subscribe: true,
+                can_publish_data: false,
+                hidden: false,
+            },
+        )?;
+        Ok(StreamMediaTicket { room, url, token })
+    }
+
+    /// Subscribe-only ticket for an anonymous watch page. `canPublish=false`
+    /// is enforced at the SFU grant level: a tampered watch page still
+    /// cannot open a mic. `hidden` keeps the anonymous viewer out of LiveKit
+    /// participant rosters; the watcher count is served by heartbeats, not
+    /// by room presence.
+    pub fn stream_watch_ticket(
+        &self,
+        room_id: Uuid,
+        identity: &str,
+    ) -> anyhow::Result<StreamMediaTicket> {
+        if !self.config.enabled {
+            anyhow::bail!("voice is not configured");
+        }
+        let room = self.livekit_room_name(room_id);
+        let url = self
+            .config
+            .livekit_url
+            .clone()
+            .context("voice enabled without LiveKit URL")?;
+        let token = self.mint_livekit_token_with_grants(
+            identity,
+            "viewer",
+            &room,
+            LiveKitTokenGrants {
+                room_admin: false,
+                room_create: false,
+                can_publish: false,
+                can_publish_sources: None,
+                can_subscribe: true,
+                can_publish_data: false,
+                hidden: true,
+            },
+        )?;
+        Ok(StreamMediaTicket { room, url, token })
+    }
+
     fn mint_livekit_token(
         &self,
         user_id: Uuid,
@@ -596,8 +688,10 @@ impl VoiceService {
                 room_admin: false,
                 room_create: false,
                 can_publish: true,
+                can_publish_sources: None,
                 can_subscribe: true,
                 can_publish_data: true,
+                hidden: false,
             },
         )
     }
@@ -632,8 +726,10 @@ impl VoiceService {
                 room_admin: grants.room_admin,
                 room_create: grants.room_create,
                 can_publish: grants.can_publish,
+                can_publish_sources: grants.can_publish_sources,
                 can_subscribe: grants.can_subscribe,
                 can_publish_data: grants.can_publish_data,
+                hidden: grants.hidden,
             },
         };
 
@@ -713,8 +809,14 @@ struct LiveKitTokenGrants {
     room_admin: bool,
     room_create: bool,
     can_publish: bool,
+    /// LiveKit publish-source restriction (`canPublishSources`). `None`
+    /// means the grant does not restrict sources.
+    can_publish_sources: Option<&'static [&'static str]>,
     can_subscribe: bool,
     can_publish_data: bool,
+    /// Hidden participants can subscribe but never appear in rosters. Used
+    /// for anonymous watch-page viewers.
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -750,10 +852,14 @@ struct LiveKitVideoGrant<'a> {
     room_create: bool,
     #[serde(rename = "canPublish")]
     can_publish: bool,
+    #[serde(rename = "canPublishSources", skip_serializing_if = "Option::is_none")]
+    can_publish_sources: Option<&'static [&'static str]>,
     #[serde(rename = "canSubscribe")]
     can_subscribe: bool,
     #[serde(rename = "canPublishData")]
     can_publish_data: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
 }
 
 #[cfg(test)]

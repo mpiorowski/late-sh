@@ -1,0 +1,139 @@
+{% extends "pages/app.html" %}
+
+{% block title %}live · late.sh{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto pt-4">
+
+    <div class="mb-4">
+        <div class="flex items-baseline justify-between gap-4">
+            <h1 class="text-2xl text-green-500 tracking-tight">late.sh <span class="text-gray-400">· live</span></h1>
+            <div class="text-xs text-gray-400 shrink-0" id="watching"></div>
+        </div>
+        <p class="text-gray-300 mt-2">
+            <span class="text-green-400" id="streamer"></span>
+            <span id="title" class="text-gray-200"></span>
+        </p>
+    </div>
+
+    <div class="border border-gray-700 rounded overflow-hidden bg-black">
+        <video id="stream-video" class="w-full block" style="aspect-ratio: 16 / 9; object-fit: contain;" autoplay
+            playsinline muted></video>
+    </div>
+
+    <div class="flex items-center justify-between gap-4 mt-3">
+        <div class="text-xs text-gray-400" id="status">connecting&hellip;</div>
+        <button type="button" id="mute-btn"
+            class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+            unmute room audio
+        </button>
+    </div>
+
+    <p class="text-xs text-gray-500 mt-6 leading-relaxed">
+        the conversation around this stream lives in the terminal clubhouse:
+        <span class="text-green-400">ssh late.sh</span>. this page is eyes and ears only.
+    </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
+<script>
+    (function () {
+        const streamId = "{{ stream_id }}";
+        const watcherId = (self.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : String(Math.random()).slice(2) + Date.now();
+        const video = document.getElementById('stream-video');
+        const statusEl = document.getElementById('status');
+        const titleEl = document.getElementById('title');
+        const streamerEl = document.getElementById('streamer');
+        const watchingEl = document.getElementById('watching');
+        const muteBtn = document.getElementById('mute-btn');
+        // Born silent: browser autoplay policy demands the muted-until-gesture
+        // shape anyway, and a CLI viewer already hearing voice through the
+        // terminal must not get the room twice.
+        let muted = true;
+        let ended = false;
+        let room = null;
+        const audioEls = [];
+
+        function setStatus(text) { statusEl.textContent = text; }
+
+        function endStream(message) {
+            ended = true;
+            setStatus(message);
+            if (room) { room.disconnect(); }
+        }
+
+        async function poll() {
+            if (ended) return;
+            let res;
+            try { res = await fetch('/live/' + streamId + '/state'); } catch (e) { return; }
+            if (res.status === 404) { endStream('this stream has ended.'); return; }
+            if (!res.ok) return;
+            const state = await res.json();
+            streamerEl.textContent = '@' + state.streamer + (state.title ? ' · ' : '');
+            titleEl.textContent = state.title || '';
+            watchingEl.textContent = state.watching + ' watching';
+            if (!state.live) { setStatus('not live yet - hang tight.'); }
+        }
+
+        function heartbeat() {
+            if (ended) return;
+            fetch('/live/' + streamId + '/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watcher_id: watcherId }),
+            }).catch(function () { });
+        }
+
+        function attachTrack(track) {
+            if (track.kind === 'video') {
+                track.attach(video);
+                setStatus('');
+            } else if (track.kind === 'audio') {
+                const el = track.attach();
+                el.muted = muted;
+                audioEls.push(el);
+                document.body.appendChild(el);
+            }
+        }
+
+        async function connect() {
+            let res;
+            try { res = await fetch('/live/' + streamId + '/grant'); } catch (e) {
+                setStatus('could not reach the server - reload to retry.');
+                return;
+            }
+            if (!res.ok) { endStream('this stream has ended.'); return; }
+            const grant = await res.json();
+            room = new LivekitClient.Room();
+            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track) { attachTrack(track); });
+            room.on(LivekitClient.RoomEvent.Disconnected, function () {
+                if (!ended) { setStatus('disconnected - reload to retry.'); }
+            });
+            await room.connect(grant.livekit_url, grant.token);
+            room.remoteParticipants.forEach(function (participant) {
+                participant.trackPublications.forEach(function (publication) {
+                    if (publication.track) { attachTrack(publication.track); }
+                });
+            });
+        }
+
+        muteBtn.addEventListener('click', async function () {
+            muted = !muted;
+            if (!muted && room) {
+                try { await room.startAudio(); } catch (e) { }
+            }
+            audioEls.forEach(function (el) { el.muted = muted; });
+            video.muted = muted;
+            muteBtn.textContent = muted ? 'unmute room audio' : 'mute room audio';
+        });
+
+        poll();
+        heartbeat();
+        connect().catch(function () { setStatus('could not connect - reload to retry.'); });
+        setInterval(poll, 10000);
+        setInterval(heartbeat, 15000);
+    })();
+</script>
+{% endblock %}

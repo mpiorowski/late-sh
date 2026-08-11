@@ -99,6 +99,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
         ActivityKind::CyberspacePosted { .. } => true,
+        // Going live is the archetypal invitation: the whole point of the
+        // line is pulling people into the stream room.
+        ActivityKind::WentLive { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the

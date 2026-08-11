@@ -1,10 +1,15 @@
 # STREAM.md — "watch me" streaming rooms
 
-Status: **seed doc, agreed design (2026-08-11 session).** Nothing here is
-built; every step still gets its own design review before implementation.
-This file exists so a fresh session starts from the decided design instead
-of re-deriving it. Read it whole before touching anything: the audio model
-only makes sense as one piece.
+Status: **built (2026-08-11), v1 shipped in the working tree.** This file
+remains the design rationale; the living contract is
+`late-ssh/src/app/stream/CONTEXT.md` (with the voice-scope exception
+recorded in `late-ssh/src/app/voice/CONTEXT.md` §7 and the web pages in
+`late-web/CONTEXT.md`). Where this doc and those diverge, trust the code
+and the CONTEXT files. Notable v1 deltas from the text below: the rail got
+a dedicated `stream` section (under Core, above Cyberspace/Channels) whose
+rows appear at `/golive` time rather than first-media time — the #lounge
+announcement still waits for media — and `/watch`/`/golive` URLs open via
+the paired CLI's new `open_url` capability with a QR modal fallback.
 
 ## Why (and why now)
 

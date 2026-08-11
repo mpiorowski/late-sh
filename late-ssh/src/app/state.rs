@@ -53,6 +53,14 @@ struct VoiceJoinTaskResult {
     ticket: Result<crate::app::voice::svc::VoiceJoinTicket, String>,
 }
 
+/// Full-screen URL + QR modal for stream pages, drawn over everything and
+/// dismissed by any key.
+pub(crate) struct StreamQrModal {
+    pub url: String,
+    pub title: String,
+    pub subtitle: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VoiceToggleIntent {
     JoinOrSwitch,
@@ -159,6 +167,9 @@ pub struct SessionConfig {
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
+    /// Process-global "watch me" stream registry/orchestration. `None` on
+    /// headless/test paths, which disables `/golive` and `/watch`.
+    pub stream_service: Option<crate::app::stream::svc::StreamService>,
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub notification_service: NotificationService,
@@ -482,6 +493,22 @@ pub struct App {
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     voice_join_tx: mpsc::UnboundedSender<VoiceJoinTaskResult>,
     voice_join_rx: mpsc::UnboundedReceiver<VoiceJoinTaskResult>,
+    /// Process-global stream service; `None` disables `/golive`/`/watch`.
+    pub(crate) stream_service: Option<crate::app::stream::svc::StreamService>,
+    /// Go-live results for this session, drained in tick.
+    stream_events_rx: Option<broadcast::Receiver<crate::app::stream::svc::StreamEvent>>,
+    /// Live-stream snapshot watch; polled ~1/s in tick into `chat`'s copy so
+    /// render paths read local memory only.
+    stream_snapshot_rx:
+        Option<tokio::sync::watch::Receiver<crate::app::stream::registry::StreamSnapshot>>,
+    /// Set when the user pressed Ctrl+V in an on-air stream room and still
+    /// has to confirm they will be audible to anonymous watchers. Holds the
+    /// voice channel the confirm is for; a second Ctrl+V within the window
+    /// proceeds, anything else re-arms.
+    pub(crate) pending_on_air_voice_confirm: Option<Uuid>,
+    /// Full-screen URL + QR modal for the stream pages (`/golive` publisher
+    /// URL, `/watch` for raw SSH sessions). Any key closes it.
+    pub(crate) stream_qr_modal: Option<StreamQrModal>,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -1253,6 +1280,17 @@ impl App {
             voice_service,
             voice_join_tx,
             voice_join_rx,
+            stream_events_rx: config
+                .stream_service
+                .as_ref()
+                .map(|service| service.subscribe_events()),
+            stream_snapshot_rx: config
+                .stream_service
+                .as_ref()
+                .map(|service| service.subscribe()),
+            stream_service: config.stream_service,
+            pending_on_air_voice_confirm: None,
+            stream_qr_modal: None,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -2607,9 +2645,188 @@ impl App {
             self.voice.current_room(self.user_id),
             self.active_voice_channel(),
         ) {
-            VoiceToggleIntent::JoinOrSwitch => self.voice_join(),
-            VoiceToggleIntent::Leave => self.voice_leave(),
+            VoiceToggleIntent::JoinOrSwitch => {
+                // Joining voice in a room whose stream is on air makes you
+                // audible to anonymous link-holders; one explicit confirm
+                // before the first join (per channel, re-armed on switch).
+                if let Some(channel_id) = self.active_voice_channel()
+                    && self.active_stream_on_air(channel_id)
+                    && self.pending_on_air_voice_confirm != Some(channel_id)
+                {
+                    self.pending_on_air_voice_confirm = Some(channel_id);
+                    return Banner::error(
+                        "ON AIR: voice here is broadcast to stream watchers. Ctrl+V again to join.",
+                    );
+                }
+                self.pending_on_air_voice_confirm = None;
+                self.voice_join()
+            }
+            VoiceToggleIntent::Leave => {
+                self.pending_on_air_voice_confirm = None;
+                self.voice_leave()
+            }
         }
+    }
+
+    /// Whether the stream owning `channel_id`'s room is on air right now.
+    fn active_stream_on_air(&self, channel_id: Uuid) -> bool {
+        self.chat
+            .live_streams
+            .iter()
+            .any(|stream| stream.voice_channel_id == channel_id && stream.live)
+    }
+
+    /// Stream plumbing drained once per tick: composer commands, go-live
+    /// task results, and the registry snapshot. This is the orchestration
+    /// point for the whole `/golive` / `/watch` session flow, so every
+    /// failure mode surfaces as a banner here.
+    pub(crate) fn tick_stream(&mut self) -> bool {
+        let mut changed = false;
+
+        if let Some(command) = self.chat.take_requested_golive() {
+            changed = true;
+            match (&self.stream_service, command) {
+                (None, _) => {
+                    self.banner = Some(Banner::error("Streaming is not available on this server."));
+                }
+                (Some(service), crate::app::chat::state::GoLiveCommand::Start { title }) => {
+                    service.go_live_task(self.user_id, self.username.clone(), title);
+                    self.banner = Some(Banner::success("Setting up your stream..."));
+                }
+                (Some(service), crate::app::chat::state::GoLiveCommand::Stop) => {
+                    self.banner = Some(if service.stop(self.user_id) {
+                        Banner::success("Stream ended.")
+                    } else {
+                        Banner::error("You are not streaming.")
+                    });
+                }
+            }
+        }
+
+        if let Some(username) = self.chat.take_requested_watch() {
+            changed = true;
+            match &self.stream_service {
+                None => {
+                    self.banner = Some(Banner::error("Streaming is not available on this server."));
+                }
+                Some(service) => match service.watch_url_for_username(&username) {
+                    Some(url) => {
+                        let streamer = username.clone();
+                        self.open_stream_url(
+                            url,
+                            "Watch Stream".to_string(),
+                            format!("@{streamer} is live. Open on any device or scan:"),
+                            true,
+                        );
+                    }
+                    None => {
+                        self.banner = Some(Banner::error(&format!(
+                            "@{username} is not live right now."
+                        )));
+                    }
+                },
+            }
+        }
+
+        let mut events = Vec::new();
+        if let Some(rx) = &mut self.stream_events_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        self.stream_events_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
+        // The snapshot applies before the events: a `GoLiveReady` selects
+        // the fresh stream room, and `select_room_slot` only special-cases
+        // rooms it can see in `live_streams`.
+        if let Some(rx) = &mut self.stream_snapshot_rx
+            && rx.has_changed().unwrap_or(false)
+        {
+            let mut snapshot = rx.borrow_and_update().clone();
+            if let Some(service) = &self.stream_service {
+                for stream in &mut snapshot.streams {
+                    stream.watch_url = service.watch_url(&stream.stream_id);
+                }
+            }
+            if self.chat.set_live_streams(snapshot.streams) {
+                // LIVE tags live inside cached chat rows; rail rows and the
+                // stream header re-render on the same epoch bump.
+                self.chat_ctx_epoch += 1;
+                changed = true;
+            }
+        }
+
+        for event in events {
+            use crate::app::stream::svc::StreamEvent;
+            match event {
+                StreamEvent::GoLiveReady {
+                    user_id,
+                    publish_url,
+                    room_id,
+                    ..
+                } if user_id == self.user_id => {
+                    changed = true;
+                    // Land the streamer in their own stream room so the
+                    // header (title, watch URL, count) is in front of them.
+                    // Membership landed server-side in `go_live`; the list
+                    // refresh pulls the room into this session's copy.
+                    self.chat.request_list();
+                    self.chat
+                        .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+                    self.open_stream_url(
+                        publish_url,
+                        "Go Live".to_string(),
+                        "Open in your browser and pick a window to share.".to_string(),
+                        false,
+                    );
+                }
+                StreamEvent::GoLiveFailed { user_id, message } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::error(&message));
+                }
+                StreamEvent::GoLiveReady { .. } | StreamEvent::GoLiveFailed { .. } => {}
+            }
+        }
+
+        changed
+    }
+
+    /// Hand a stream URL to the user: a capable paired CLI opens the
+    /// browser; everyone always gets (or, with `modal_only_without_cli`,
+    /// falls back to) the URL + QR modal.
+    fn open_stream_url(
+        &mut self,
+        url: String,
+        title: String,
+        subtitle: String,
+        skip_modal_when_cli_opens: bool,
+    ) {
+        let sent = self
+            .paired_client_registry
+            .as_ref()
+            .is_some_and(|registry| {
+                registry.send_control_to_open_url_cli(
+                    &self.session_token,
+                    PairControlMessage::OpenUrl { url: url.clone() },
+                )
+            });
+        if sent {
+            self.banner = Some(Banner::success("Opening in your browser..."));
+            if skip_modal_when_cli_opens {
+                return;
+            }
+        }
+        self.stream_qr_modal = Some(StreamQrModal {
+            url,
+            title,
+            subtitle,
+        });
     }
 
     fn voice_leave_current_channel(&mut self) -> bool {

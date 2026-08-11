@@ -249,6 +249,7 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
+    stream_qr_modal: Option<&'a crate::app::state::StreamQrModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -517,6 +518,7 @@ impl App {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             rows_cache: &mut self.dashboard_chat_rows_cache,
@@ -532,6 +534,7 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             message_reactions,
             unread_marker: shell_active_room
                 .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
@@ -672,12 +675,14 @@ impl App {
             chat_ctx_epoch: self.chat.context_epoch(),
             app_ctx_epoch: self.chat_ctx_epoch,
             chat_rooms: self.chat.rooms.as_slice(),
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             ignored_user_ids: self.chat.ignored_user_ids(),
             sticky_unread_dm: self.chat.sticky_unread_dm,
             message_reactions,
@@ -760,6 +765,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -822,6 +828,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -1070,6 +1077,7 @@ impl App {
                         } else {
                             None
                         },
+                        stream_qr_modal: self.stream_qr_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1785,6 +1793,18 @@ impl App {
         {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
+
+        // Stream URL + QR modal (publisher URL from `/golive`, watch URL
+        // from `/watch`): topmost, since it was just explicitly requested.
+        if let Some(modal) = ctx.stream_qr_modal {
+            crate::app::common::qr::draw_qr_overlay(
+                frame,
+                inner,
+                &modal.url,
+                &modal.title,
+                &modal.subtitle,
+            );
+        }
     }
 }
 
@@ -1799,6 +1819,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
+        || ctx.stream_qr_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()

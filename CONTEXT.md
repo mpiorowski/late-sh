@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-08 (chat translation goes two-way: English targets now translate Latin-script languages, with the model's cached `same_language` verdict (migration 137) replacing the script shortcut; replies translate only the reply text, never the baked-in `> @author:` quote line; and a new per-account "Translate my messages to English" setting (`Ctrl+O` → Settings → Translation) pre-warms the shared cache from the send/edit paths. The model call is `TranslationService` in `app/ai/translate.rs`; the full contract is in `late-ssh/src/app/chat/CONTEXT.md` §14 Translation)
+- Last updated: 2026-08-11 ("watch me" streaming rooms shipped: `/golive` publishes a screen share into the streamer's permanent `#<user>-live` room's LiveKit voice channel, browser watch pages subscribe through unlisted capability URLs, the Home rail grows a `stream` section, and #lounge gets one `is live` line when media actually flows. New domain context at `late-ssh/src/app/stream/CONTEXT.md`; web pages in `late-web/src/pages/live`; the voice-scope exception is documented in `late-ssh/src/app/voice/CONTEXT.md` §7)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -64,6 +64,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/lobby/daily/CONTEXT.md` | Daily correspondence games: the open-challenge lobby, daily chess/battleship/connect-four/briscola matches, the game roster (`DailyGame`), the `Ctrl+G` Lobby modal, the sidebar Lobby panel, the full-screen daily boards, move deadlines/forfeits, `/challenge`, or the `daily_matches` table. | Daily domain context: the `DailyGame` roster enum (per-game name/prize/reward key + add-a-game checklist), `DailyService` snapshot/events/sweeper, single-table challenge+match persistence with revision guard, battleship + connect four + briscola rules (briscola is the roster's first hidden-hand game: both hands live in the state and only the renderer keeps them hidden), the three UI surfaces, per-match private chat + voice on the board, the backtick cycle, your-turn desktop notify, v1 scope boundaries, and future hooks (wagers, announcements). |
 | `late-ssh/src/app/clubhouse/CONTEXT.md` | The Late Lounge tavern (screen `0`): the shared multiplayer lobby, seating/walkers, speech bubbles, emotes, door ambience, the first-visit tutorial, or the generated floor plan. | Clubhouse module map, the process-global `SharedLobby` contract (single-replica!), bubble/composer chat surface, tutorial persistence, and map-generator gotchas. |
 | `late-ssh/src/app/scratchpad/CONTEXT.md` | `/pair @user`, the shared two-person live text scratchpad, `Screen::Scratchpad`, syntax highlighting/line numbers, or the in-memory pairing registry. | Registry contract (single-replica, dies when both sides leave), the mutual `/pair` handshake and its 10 minute intent TTL, editor input model, the `syntect`-backed highlighting/gutter render, and known gaps. |
+| `late-ssh/src/app/stream/CONTEXT.md` | `/golive` / `/watch`, "watch me" streaming rooms, the in-process stream registry, `/api/stream/*` routes, the rail's `stream` section, the LIVE tag / ON AIR strip, or the late-web `/live` and `/golive` pages. | Stream domain context: the one-LiveKit-room media model, registry phase machine and capability URLs, publish/watch grant shapes, the went-live announcement contract, consent invariants (born-silent pages, ON AIR confirm, no invisible speaker), and v1 scope boundaries. |
 
 Routing rules for future LLM agents:
 - Update a local context file when behavior changes inside that domain.
@@ -562,6 +563,7 @@ late-sh/
 - `GET /api/status` → `StatusResponse { online, message, version }`
 - `GET /api/ws/pair?token={token}` - WebSocket upgrade for paired CLI and webview-helper control plus helper player reports
 - `GET /api/listen` - public, unauthenticated, memory-only snapshot of both Icecast mounts, the Nightride stations, and the YouTube queue; backs late-web's `/listen` page
+- `GET /api/stream/publish/{token}`, `POST /api/stream/publish/{token}/state`, `GET /api/stream/watch/{id}`, `GET /api/stream/watch/{id}/grant`, `POST /api/stream/watch/{id}/heartbeat` - "watch me" stream capability routes (registry-memory only, capability id in the URL is the whole auth), proxied by late-web's `/golive/{token}` and `/live/{id}` pages; see `late-ssh/src/app/stream/CONTEXT.md`
 
 **WS payloads (client → server):**
 - `{ "event": "heartbeat" }`
@@ -583,6 +585,8 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 - `GET /profiles`, `/profiles/{slug}` - Public work profile index/detail pages
 - `GET /stream` - `audio/mpeg` chill stream proxy to Icecast with bundled silence fallback
 - `GET /stream/{mount}` - `audio/mpeg` stream proxy for supported Icecast mounts (`chill`, `classical`)
+- `GET /live/{id}` - public "watch me" stream page (unlisted per-stream capability URL; muted-by-default video + room audio), with `/live/{id}/state`, `/live/{id}/grant`, and `/live/{id}/heartbeat` same-origin proxies to the late-ssh stream API
+- `GET /golive/{token}` - streamer broadcast console (screen picker, off-by-default browser mic), with `/golive/{token}/grant` and `/golive/{token}/state` proxies
 - `GET /test` - Error simulation endpoint
 - All other routes → redirect to `/`
 - Detailed web route, template, runtime config, browser protocol, and stream-proxy notes live in `late-web/CONTEXT.md`.
@@ -824,6 +828,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 | Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 30s refresh | Already DB-backed; each replica runs its own refresh loop — duplicate work but no write conflict |
 | Chat translation | `TranslationService` (`app/ai/translate.rs`) | DB-backed cache + in-memory single-flight set, daily call cap, and concurrency gate, all per replica | Cache is already shared through Postgres, so correctness holds across replicas; only the dedupe and the cap are per-process, meaning N replicas can each spend up to the cap and can duplicate one call for the same message. Both are acceptable at current scale; a shared counter would be the fix. |
 | `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `/pair` intents + `user_id → pairing` | Stays local by design: `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
+| `StreamRegistry` | `app/stream/registry.rs` | In-memory live-stream registry: one stream per user, capability ids, watcher heartbeats | Stays local by design: a stream dies with the process (the room and its history are DB rows and survive); the streamer just runs `/golive` again |
 
 **Approach:** Sticky sessions (LB routes by source IP) so each SSH connection lives on one replica. Shared data via DB/Redis. Not needed yet — single replica handles thousands of concurrent SSH sessions.
 

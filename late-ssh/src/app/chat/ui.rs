@@ -50,6 +50,8 @@ const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
+/// Presence tag beside an author whose stream is on air right now.
+const LIVE_BADGE: &str = "▶LIVE";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -78,6 +80,9 @@ pub struct DashboardChatView<'a> {
     /// `/rules`) is read here; messages arrive separately below.
     pub room: Option<&'a ChatRoom>,
     pub messages: &'a [ChatMessage],
+    /// Registered "watch me" streams; drives the stream header row and the
+    /// ON AIR voice-strip state when this room has one.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
@@ -86,6 +91,8 @@ pub struct DashboardChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
@@ -1082,6 +1089,11 @@ pub fn draw_dashboard_chat_card(
     }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
+    let room_stream = view.room.and_then(|room| {
+        view.live_streams
+            .iter()
+            .find(|stream| stream.room_id == room.id)
+    });
     let voice = view
         .voice_channel_id
         .map(|room_id| crate::app::voice::ui::VoiceRoomView {
@@ -1089,11 +1101,17 @@ pub fn draw_dashboard_chat_card(
             room_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+            on_air: room_stream.map(stream_on_air_view),
         });
     messages_area = draw_room_header(
         frame,
         messages_area,
         RoomHeader {
+            stream: view.room.and_then(|room| {
+                view.live_streams
+                    .iter()
+                    .find(|stream| stream.room_id == room.id)
+            }),
             voice,
             topic: view.room.and_then(room_topic),
             has_rules: view.room.is_some_and(room_has_rules),
@@ -1119,6 +1137,7 @@ pub fn draw_dashboard_chat_card(
                 versions: view.rows_versions,
                 current_user_id: view.current_user_id,
                 afk_user_ids: view.afk_user_ids,
+                live_user_ids: view.live_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
@@ -1205,6 +1224,8 @@ struct ChatRowsContext<'a> {
     versions: ChatRowsVersions,
     current_user_id: Uuid,
     afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    live_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
@@ -1536,10 +1557,14 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        // Presence badges trail every earned badge: AFK first, then a
+        // Presence badges trail every earned badge: the LIVE stream tag
+        // first (an invitation, the loudest of the three), then AFK, then a
         // running `/pomodoro` countdown (minutes only; the label never
         // leaves its owner's session).
         let mut presence_badges: Vec<&str> = Vec::new();
+        if ctx.live_user_ids.contains(&msg.user_id) {
+            presence_badges.push(LIVE_BADGE);
+        }
         if ctx.afk_user_ids.contains(&msg.user_id) {
             presence_badges.push(AFK_BADGE);
         }
@@ -2550,6 +2575,8 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
     /// The DM held in the promoted unread group while it is being read (see
     /// `ChatState::note_sticky_unread_dm`).
@@ -2583,6 +2610,10 @@ pub struct ChatRenderInput<'a> {
         &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
+    /// Registered "watch me" streams (see `ChatState::live_streams`): the
+    /// rail's `stream` section, the LIVE author tag, and the stream header
+    /// block all read from this.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
@@ -2627,6 +2658,8 @@ type RoomEntry = (ChatRoom, Vec<ChatMessage>);
 
 pub(crate) struct ChatRoomListView<'a> {
     pub chat_rooms: &'a [RoomEntry],
+    /// Registered "watch me" streams driving the rail's `stream` section.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -2676,6 +2709,8 @@ pub struct EmbeddedRoomChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_marker: Option<DateTime<Utc>>,
@@ -2756,6 +2791,9 @@ pub fn draw_embedded_room_chat(
             snapshot: view.voice_snapshot,
             room_id: voice_channel_id,
             current_user_id: view.current_user_id,
+            // Embedded game chats (house tables, daily boards) are never
+            // stream rooms.
+            on_air: None,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
         };
         let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
@@ -2783,6 +2821,7 @@ pub fn draw_embedded_room_chat(
             versions: view.rows_versions,
             current_user_id: view.current_user_id,
             afk_user_ids: view.afk_user_ids,
+            live_user_ids: view.live_user_ids,
             show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
@@ -2982,6 +3021,7 @@ pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> R
 fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
     ChatRoomListView {
         chat_rooms: view.chat_rooms,
+        live_streams: view.live_streams,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -3673,6 +3713,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         collapsed_sections: view.collapsed_sections,
         ignored_user_ids: view.ignored_user_ids,
         sticky_unread_dm: view.sticky_unread_dm,
+        live_streams: view.live_streams,
     });
     // Bumped rooms are advertised as read-only text at the top of the rail;
     // they are not part of `order`, so they take no jump key and never
@@ -3901,6 +3942,19 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_slot(RoomSlot::Discover, &mut push_row);
     }
 
+    // Stream: registered "watch me" streams, directly under Core, mirroring
+    // `visual_order_for_rooms`. The section only exists while somebody is
+    // streaming.
+    if !view.live_streams.is_empty() {
+        push_row(blank(), None, false);
+        push_row(section_header(RoomSection::Stream), None, false);
+        if !collapsed_set.contains(&RoomSection::Stream) {
+            for stream in view.live_streams {
+                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            }
+        }
+    }
+
     // Cyberspace: the feeds pane plus this user's pinned chat rooms, under a
     // header of their own. Linked accounts only, mirroring
     // `visual_order_for_rooms`. A row here that the navigation order does not
@@ -4022,6 +4076,17 @@ fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> 
 fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
+            // A stream row carries the show, not the room: streamer, title,
+            // and the watcher count. It also renders before this user is a
+            // member (the room may be missing from `chat_rooms` entirely).
+            if let Some(stream) = view
+                .live_streams
+                .iter()
+                .find(|stream| stream.room_id == room_id)
+            {
+                let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
+                return (stream_rail_label(stream), unread);
+            }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
                 return ("room".to_string(), 0);
@@ -4055,6 +4120,34 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
     }
+}
+
+/// The voice strip's ON AIR view for a room with a registered stream.
+fn stream_on_air_view(
+    stream: &crate::app::stream::registry::LiveStreamView,
+) -> crate::app::voice::ui::OnAirView {
+    crate::app::voice::ui::OnAirView {
+        live: stream.live,
+        streamer_mic: stream
+            .mic_on_air
+            .then(|| (stream.user_id, stream.username.clone())),
+    }
+}
+
+/// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.
+/// A pending stream (registered, no media yet) shows `starting…` instead of
+/// the count; the watch count only means something once frames flow.
+fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
+    let mut label = format!("▶ {}-live", stream.username);
+    if !stream.title.trim().is_empty() {
+        label.push_str(&format!(" · {}", stream.title.trim()));
+    }
+    if !stream.live {
+        label.push_str(" · starting…");
+    } else if stream.watching > 0 {
+        label.push_str(&format!(" · {} watching", stream.watching));
+    }
+    label
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -4194,24 +4287,71 @@ fn dm_display_label(
 /// the left with the keys or commands that act on it flushed to the right edge,
 /// so the eye finds status in one column and actions in another.
 struct RoomHeader<'a> {
+    /// The room's registered stream, drawn as the first header row: title,
+    /// watcher count, and the watch-URL nudge (a terminal-only person in
+    /// the room is otherwise missing the show).
+    stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     topic: Option<&'a str>,
     has_rules: bool,
 }
 
 impl RoomHeader<'_> {
-    /// Rows this header wants: the voice row, a divider between voice and topic
-    /// (only when there is something on both sides of it), the topic row, and a
-    /// closing rule that separates the whole block from the messages.
+    /// Rows this header wants: one per present row (stream, voice, topic),
+    /// a divider between each adjacent pair, and a closing rule that
+    /// separates the whole block from the messages.
     fn height(&self) -> u16 {
-        let voice = u16::from(self.voice.is_some());
-        let topic = u16::from(self.topic.is_some());
-        if voice + topic == 0 {
+        let rows = u16::from(self.stream.is_some())
+            + u16::from(self.voice.is_some())
+            + u16::from(self.topic.is_some());
+        if rows == 0 {
             return 0;
         }
-        let divider = u16::from(self.voice.is_some() && self.topic.is_some());
-        voice + divider + topic + 1
+        rows + (rows - 1) + 1
     }
+}
+
+/// The stream row of the header: `● LIVE title · 3 watching` on the left,
+/// the watch URL flushed right.
+fn stream_header_line(
+    stream: &crate::app::stream::registry::LiveStreamView,
+    width: usize,
+) -> Line<'static> {
+    let mut left = Vec::new();
+    if stream.live {
+        left.push(Span::styled(
+            "● LIVE ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        left.push(Span::styled(
+            "○ starting… ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    if !stream.title.trim().is_empty() {
+        left.push(Span::styled(
+            truncate_cells(stream.title.trim(), width.saturating_sub(30)),
+            Style::default().fg(theme::TEXT()),
+        ));
+    }
+    if stream.live {
+        left.push(Span::styled(
+            format!(" · {} watching", stream.watching),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    let hint = if stream.watch_url.is_empty() {
+        Vec::new()
+    } else {
+        vec![Span::styled(
+            format!("watch: {}", stream.watch_url),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )]
+    };
+    row_with_hint(left, hint, width)
 }
 
 /// Draw the header and return the area left for messages. A room with neither
@@ -4232,6 +4372,12 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     };
 
     let mut lines: Vec<Line> = Vec::new();
+    if let Some(stream) = header.stream {
+        lines.push(stream_header_line(stream, width));
+    }
+    if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
+        lines.push(rule());
+    }
     if let Some(voice) = &header.voice {
         lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
     }
@@ -4354,7 +4500,15 @@ fn draw_selected_content(
     } else {
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
-            .filter(|(room, _)| is_chat_list_room(room))
+            // Stream rooms are `kind='game'` (not chat-list rooms) but are
+            // openable from the rail's stream section, so they render here.
+            .filter(|(room, _)| {
+                is_chat_list_room(room)
+                    || view
+                        .live_streams
+                        .iter()
+                        .any(|stream| stream.room_id == room.id)
+            })
             .or_else(|| {
                 view.chat_rooms
                     .iter()
@@ -4364,18 +4518,27 @@ fn draw_selected_content(
         // Voice state and the room's topic share one header block above the
         // messages; a text-only room without a topic renders unchanged.
         let messages_area = if let Some((room, _)) = selected_room {
+            let room_stream = view
+                .live_streams
+                .iter()
+                .find(|stream| stream.room_id == room.id);
             let voice = view.voice_channels_by_room_id.get(&room.id).map(|channel| {
                 crate::app::voice::ui::VoiceRoomView {
                     snapshot: view.voice_snapshot,
                     room_id: channel.id,
                     current_user_id,
                     paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                    on_air: room_stream.map(stream_on_air_view),
                 }
             });
             draw_room_header(
                 frame,
                 messages_area,
                 RoomHeader {
+                    stream: view
+                        .live_streams
+                        .iter()
+                        .find(|stream| stream.room_id == room.id),
                     voice,
                     topic: room_topic(room),
                     has_rules: room_has_rules(room),
@@ -4417,6 +4580,7 @@ fn draw_selected_content(
                     },
                     current_user_id,
                     afk_user_ids: view.afk_user_ids,
+                    live_user_ids: view.live_user_ids,
                     show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,

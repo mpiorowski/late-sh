@@ -156,6 +156,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::CyberspacePosted { title } => {
             format!("cyberspace-posted:{}", title.as_deref().unwrap_or_default())
         }
+        // Keyed on the kind alone: a publisher-page reconnect or a retitle
+        // inside the window must not re-announce the same show, while a
+        // genuinely new stream later in the day announces again.
+        ActivityKind::WentLive { .. } => "went-live".to_string(),
         ActivityKind::GameScored { game, .. } => format!("scored:{}", game.key()),
         ActivityKind::BonsaiWatered => "bonsai-watered".to_string(),
         ActivityKind::BonsaiLost { .. } => "bonsai-lost".to_string(),

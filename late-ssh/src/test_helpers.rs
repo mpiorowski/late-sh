@@ -237,6 +237,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = crate::app::UltimateService::new(db.clone());
     let voice_service = VoiceService::new(config.voice.clone());
+    let stream_service = crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -258,6 +264,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
+        stream_service,
         chat_service,
         notification_service,
         ai_service,
@@ -413,6 +420,7 @@ fn make_app_with_chat_service_and_permissions(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: None,
         chat_service: chat_service.clone(),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),
@@ -616,6 +624,7 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: None,
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),

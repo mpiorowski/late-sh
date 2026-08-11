@@ -801,6 +801,25 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Stream URL + QR modal: any key or click closes it. It sits above
+    // everything except the announcements: the URL it shows was just
+    // requested, so nothing else should swallow the dismissal.
+    if app.stream_qr_modal.is_some() {
+        if matches!(
+            event,
+            ParsedInput::Byte(_)
+                | ParsedInput::Char(_)
+                | ParsedInput::Arrow(_)
+                | ParsedInput::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down,
+                    ..
+                })
+        ) {
+            app.stream_qr_modal = None;
+        }
+        return;
+    }
+
     // The forced first-visit tour outranks even the reserved chords: a
     // newcomer mid-route cannot open settings or the lobby, only follow the
     // named key or quit. The quit-confirm modal stays above it so `y`/`n`
@@ -2475,6 +2494,7 @@ fn chat_room_list_view<'a>(
 ) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
+        live_streams: &app.chat.live_streams,
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,

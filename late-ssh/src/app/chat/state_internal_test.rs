@@ -699,6 +699,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         }),
         vec![
             RoomSlot::Room(lounge),
@@ -770,6 +771,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         })
     };
 
@@ -849,6 +851,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
     let dm_order: Vec<_> = order
         .into_iter()
@@ -889,6 +892,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
@@ -910,6 +914,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
         sticky_unread_dm: None,
+        live_streams: &[],
     });
     assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
 }
@@ -954,6 +959,7 @@ fn visual_order_promotes_unread_dms_above_channels() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert_eq!(
@@ -1001,6 +1007,7 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: sticky,
+            live_streams: &[],
         })
     };
 
@@ -1052,6 +1059,7 @@ fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
         collapsed_sections: &HashSet::from([RoomSection::Dms]),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     // Collapsing DMs folds away the read ones only; an unread DM lives in its
@@ -1139,6 +1147,7 @@ fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::from([bob]),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
@@ -3216,6 +3225,7 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         })
     };
 

@@ -208,6 +208,32 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Permanent per-streamer chat room for "watch me" streams: `kind='game'`
+    /// (hidden from the Home rail and IRC, joinable by anyone through the
+    /// public game-room join path), `game_kind='stream'`, slug
+    /// `{username}-live`. Same seeded shape as the house-table rooms; chat
+    /// history persists between streams. `owner` is recorded as `created_by`
+    /// on first creation and is the only user allowed to publish into the
+    /// room's stream.
+    pub async fn get_or_create_stream_room(
+        client: &Client,
+        username: &str,
+        owner: Uuid,
+    ) -> Result<Self> {
+        let slug = normalize_game_slug(&format!("{username}-live"))?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, created_by)
+                 VALUES ('game', 'public', false, $1, 'stream', $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug, &owner],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     /// Private two-player chat room for a claimed daily match, plus both
     /// memberships, in one statement. `kind = 'game'` (hidden from the Home
     /// rail, no Mentions, no IRC) but `visibility = 'private'`: only the two

@@ -108,6 +108,162 @@ async fn listen_endpoint_is_public_and_hides_internal_snapshot_fields() {
     api_task.abort();
 }
 
+#[tokio::test]
+async fn stream_endpoints_serve_the_watch_and_publish_flow() {
+    let test_db = new_test_db().await;
+    let mut config = test_config(test_db.db.config().clone());
+    config.voice = crate::app::voice::svc::VoiceConfig::enabled(
+        "wss://rtc.test".to_string(),
+        "test-key".to_string(),
+        "test-secret".to_string(),
+        "late-voice".to_string(),
+    )
+    .expect("voice config");
+    let state = test_app_state(test_db.db.clone(), config);
+
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "stream-test-fp".to_string(),
+            username: "streamer".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("create user");
+    drop(client);
+    let mut events = state.stream_service.subscribe_events();
+    state.stream_service.go_live_task(
+        user.id,
+        "streamer".to_string(),
+        Some("demo show".to_string()),
+    );
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("go live event in time")
+        .expect("go live event");
+    let (publish_url, watch_url) = match event {
+        crate::app::stream::svc::StreamEvent::GoLiveReady {
+            publish_url,
+            watch_url,
+            ..
+        } => (publish_url, watch_url),
+        other => panic!("expected GoLiveReady, got {other:?}"),
+    };
+    let publish_token = publish_url.rsplit('/').next().expect("token").to_string();
+    let stream_id = watch_url.rsplit('/').next().expect("stream id").to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let api_task = tokio::spawn(async move {
+        let _ = run_api_server_with_listener(listener, state, None).await;
+    });
+
+    // Pending stream: the watch URL resolves but is not live yet.
+    let (status, body) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}"), 10)
+        .await
+        .expect("watch state");
+    assert_eq!(status, 200);
+    assert!(body.contains("\"live\":false"), "pending stream: {body}");
+    assert!(body.contains("demo show"));
+
+    // The publisher page fetches its grant and reports media flowing.
+    let (status, body) =
+        http_get_with_retry(addr, &format!("/api/stream/publish/{publish_token}"), 3)
+            .await
+            .expect("publish grant");
+    assert_eq!(status, 200);
+    assert!(body.contains("\"streamer\":\"streamer\""), "grant: {body}");
+    assert!(body.contains("\"token\":"));
+    let (status, _) = http_post_json(
+        addr,
+        &format!("/api/stream/publish/{publish_token}/state"),
+        "{\"publishing\":true,\"mic_live\":false}",
+    )
+    .await
+    .expect("publish state report");
+    assert_eq!(status, 204);
+
+    // Watchers now see it live, get a subscribe grant, and count via
+    // heartbeats.
+    let (status, body) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}"), 3)
+        .await
+        .expect("watch state");
+    assert_eq!(status, 200);
+    assert!(body.contains("\"live\":true"), "live stream: {body}");
+    let (status, body) =
+        http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
+            .await
+            .expect("watch grant");
+    assert_eq!(status, 200);
+    assert!(body.contains("\"livekit_url\":\"wss://rtc.test\""));
+    let (status, _) = http_post_json(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/heartbeat"),
+        "{\"watcher_id\":\"viewer-1\"}",
+    )
+    .await
+    .expect("watch heartbeat");
+    assert_eq!(status, 204);
+    let (status, body) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}"), 3)
+        .await
+        .expect("watch state");
+    assert_eq!(status, 200);
+    assert!(body.contains("\"watching\":1"), "watcher count: {body}");
+
+    // Dead capability ids answer 404, never a grant.
+    let (status, _) = http_get_with_retry(addr, "/api/stream/watch/unknown-id", 3)
+        .await
+        .expect("unknown watch state");
+    assert_eq!(status, 404);
+    let (status, _) = http_get_with_retry(addr, "/api/stream/publish/unknown-token", 3)
+        .await
+        .expect("unknown publish grant");
+    assert_eq!(status, 404);
+
+    api_task.abort();
+}
+
+async fn http_post_json(
+    addr: SocketAddr,
+    path: &str,
+    body: &str,
+) -> std::io::Result<(u16, String)> {
+    let mut stream = TcpStream::connect(addr).await?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        host = addr,
+        len = body.len(),
+    );
+    stream.write_all(request.as_bytes()).await?;
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    let response = String::from_utf8_lossy(&raw).into_owned();
+    let status = response
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+    Ok((status, body))
+}
+
 async fn http_get_with_retry(
     addr: SocketAddr,
     path: &str,

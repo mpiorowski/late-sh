@@ -243,10 +243,25 @@ async fn connect_voice_media(
                     ..
                 } => {
                     let track_id = publication.sid().to_string();
-                    if let RemoteTrack::Audio(track) = track
-                        && !event_remote_playback_enabled.load(Ordering::Relaxed)
-                    {
-                        track.disable();
+                    match track {
+                        RemoteTrack::Audio(track) => {
+                            if !event_remote_playback_enabled.load(Ordering::Relaxed) {
+                                track.disable();
+                            }
+                        }
+                        // Stream rooms carry the streamer's screen share in
+                        // the same LiveKit room. This runtime is audio-only:
+                        // drop the subscription so a video track never burns
+                        // bandwidth or decoder time here.
+                        RemoteTrack::Video(_) => {
+                            publication.set_subscribed(false);
+                            info!(
+                                track_id = %track_id,
+                                participant = %participant.identity(),
+                                "ignoring remote video track (audio-only voice runtime)"
+                            );
+                            continue;
+                        }
                     }
                     info!(
                         track_id = %track_id,
