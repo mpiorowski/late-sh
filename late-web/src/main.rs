@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-web")
         .context("failed to initialize telemetry")?;
 
-    let config = Config::from_env().context("failed to load configuration")?;
+    let config = Config::load().context("failed to load configuration")?;
     config.log_startup();
 
     let http_client = reqwest::Client::builder()
@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
         .no_proxy()
         .build()
         .context("failed to build HTTP client")?;
-    let db = Db::from_env().context("failed to initialize database pool")?;
+    let db = Db::new(&config.db).context("failed to initialize database pool")?;
 
     let port = config.port;
 

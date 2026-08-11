@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to initialize telemetry")?;
 
     // Load configuration from environment
-    let config = Config::from_env().context("failed to load configuration")?;
+    let config = Config::load().context("failed to load configuration")?;
     config.log_startup();
 
     // Init database connection pool

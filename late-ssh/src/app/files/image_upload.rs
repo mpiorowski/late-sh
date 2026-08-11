@@ -1,5 +1,4 @@
 use std::{
-    env,
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
@@ -11,9 +10,10 @@ use reqwest::{Url, redirect::Policy};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::config::{FilesConfig, MAX_IMAGE_BYTES};
+
 type HmacSha256 = Hmac<Sha256>;
 
-const DEFAULT_MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 // Kept short so deleting an object from R2 takes effect once caches expire,
 // without a CDN purge. The takedown promise in /terms depends on this.
 const CACHE_CONTROL: &str = "public, max-age=3600";
@@ -23,39 +23,6 @@ struct ValidatedDownloadUrl {
     url: Url,
     host: String,
     addrs: Vec<SocketAddr>,
-}
-
-#[derive(Debug, Clone)]
-struct FileStorageConfig {
-    endpoint: String,
-    bucket: String,
-    public_base_url: String,
-    access_key_id: String,
-    secret_access_key: String,
-    region: String,
-}
-
-impl FileStorageConfig {
-    fn from_env() -> Result<Self> {
-        Ok(Self {
-            endpoint: env_required_any("LATE_FILES_S3_ENDPOINT", "S3_ENDPOINT")?,
-            bucket: env_required("LATE_FILES_S3_BUCKET")?,
-            public_base_url: env_required("LATE_FILES_PUBLIC_BASE_URL")?,
-            access_key_id: env_required_any("LATE_FILES_S3_ACCESS_KEY_ID", "S3_ACCESS_KEY_ID")?,
-            secret_access_key: env_required_any(
-                "LATE_FILES_S3_SECRET_ACCESS_KEY",
-                "S3_SECRET_ACCESS_KEY",
-            )?,
-            region: env::var("LATE_FILES_S3_REGION")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "auto".to_string()),
-        })
-    }
-}
-
-pub fn is_file_upload_configured() -> bool {
-    FileStorageConfig::from_env().is_ok()
 }
 
 pub fn detect_image_mime(data: &[u8]) -> Option<&'static str> {
@@ -78,13 +45,12 @@ pub fn ext_for_mime(mime: &str) -> &'static str {
     }
 }
 
-pub async fn download_and_reupload_url(url: String) -> Result<String> {
-    let max_bytes = max_upload_bytes();
-    let bytes = download_url_bytes(&url, Duration::from_secs(30), max_bytes).await?;
+pub async fn download_and_reupload_url(files: &FilesConfig, url: String) -> Result<String> {
+    let bytes = download_url_bytes(&url, Duration::from_secs(30), MAX_IMAGE_BYTES).await?;
 
     let mime = detect_image_mime(&bytes)
         .ok_or_else(|| anyhow::anyhow!("url does not point to a supported image"))?;
-    upload_image_bytes(bytes, mime).await
+    upload_image_bytes(files, bytes, mime).await
 }
 
 pub(crate) async fn download_url_bytes(
@@ -159,9 +125,8 @@ async fn send_validated_get(
     Ok(client.get(validated.url.clone()).send().await?)
 }
 
-pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {
-    let max_bytes = max_upload_bytes();
-    ensure_upload_size(data.len(), max_bytes)?;
+pub async fn upload_image_bytes(files: &FilesConfig, data: Vec<u8>, mime: &str) -> Result<String> {
+    ensure_upload_size(data.len(), MAX_IMAGE_BYTES)?;
 
     let detected_mime =
         detect_image_mime(&data).ok_or_else(|| anyhow::anyhow!("unsupported image type"))?;
@@ -173,8 +138,7 @@ pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {
         );
     }
 
-    let config = FileStorageConfig::from_env()
-        .context("file upload storage is not configured; missing LATE_FILES_* env")?;
+    let config = files;
     let now = Utc::now();
     let key = format!(
         "chat/{:04}/{:02}/{}.{}",
@@ -184,12 +148,12 @@ pub async fn upload_image_bytes(data: Vec<u8>, mime: &str) -> Result<String> {
         ext_for_mime(detected_mime)
     );
 
-    put_object(&config, &key, data, detected_mime, now).await?;
-    Ok(public_url(&config, &key))
+    put_object(config, &key, data, detected_mime, now).await?;
+    Ok(public_url(config, &key))
 }
 
 async fn put_object(
-    config: &FileStorageConfig,
+    config: &FilesConfig,
     key: &str,
     data: Vec<u8>,
     mime: &str,
@@ -201,7 +165,7 @@ async fn put_object(
         config.bucket,
         key
     );
-    let parsed_url = Url::parse(&upload_url).context("invalid LATE_FILES_S3_ENDPOINT")?;
+    let parsed_url = Url::parse(&upload_url).context("invalid files endpoint")?;
     let host = canonical_host(&parsed_url)?;
     let date_stamp = now.format("%Y%m%d").to_string();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -248,26 +212,6 @@ async fn put_object(
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     bail!("r2 upload failed: http {} {}", status, body.trim());
-}
-
-fn env_required(key: &str) -> Result<String> {
-    env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("{key} is not set"))
-}
-
-fn env_required_any(primary: &str, fallback: &str) -> Result<String> {
-    env_required(primary).or_else(|_| env_required(fallback))
-}
-
-pub(crate) fn max_upload_bytes() -> usize {
-    env::var("LATE_FILES_MAX_UPLOAD_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_MAX_UPLOAD_BYTES)
 }
 
 fn ensure_upload_size(len: usize, max: usize) -> Result<()> {
@@ -363,7 +307,7 @@ async fn read_response_limited(mut resp: reqwest::Response, max_bytes: usize) ->
     Ok(out)
 }
 
-fn public_url(config: &FileStorageConfig, key: &str) -> String {
+fn public_url(config: &FilesConfig, key: &str) -> String {
     format!("{}/{}", config.public_base_url.trim_end_matches('/'), key)
 }
 

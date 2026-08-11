@@ -565,7 +565,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - **Guide vs `/audio`.** The Pair guide tab (`?`) explains music setup and controls. `/audio` and `/audio fallback` are staff submit commands. Don't conflate.
 - **No public submit route.** Reading the queue is public via `/api/listen`; submitting still requires the SSH booth modal or the staff `/audio` command.
 - **Region locks / embedding disabled** may still be partly regional. `/audio` and booth both use the YouTube Data API now, so public/non-embeddable/upcoming/duration failures are caught at submit time. A client may still report `error`, but the server treats that as diagnostics only.
-- **`LATE_YOUTUBE_API_KEY` is optional at config load** (`config.rs:200`, `optional()`), but YouTube submissions and fallback updates require it at runtime. Without it, booth submit is disabled and staff `/audio` fails validation.
+- **`LATE_YOUTUBE_API_KEY` is optional in the dev profile and required in prod** (`config.rs` profiles), but YouTube submissions and fallback updates require it at runtime. Without it, booth submit is disabled and staff `/audio` fails validation.
 - **Queue state-drift / singleton-violation stuck state.** Took down prod once already (2026-05-19). The class of bug is non-atomic two-write transitions (DB row status + in-memory `state.current_item_id`); any divergence is unrecoverable without a pod restart. The reconciliation contract in §19 is the active fix — any new code that flips `media_queue_items.status` or mutates `current_item_id` must route through it.
 
 ---

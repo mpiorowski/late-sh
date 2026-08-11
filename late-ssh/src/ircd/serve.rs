@@ -9,7 +9,6 @@ use std::{
     io::BufReader,
     net::{IpAddr, SocketAddr},
     sync::Arc,
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -24,7 +23,7 @@ use tokio_rustls::TlsAcceptor;
 use super::conn;
 use crate::{config::IrcConfig, proxy_protocol, state::State};
 
-const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
+use crate::config::PROXY_HEADER_TIMEOUT;
 
 pub async fn run(state: State, shutdown: Option<CancellationToken>) -> Result<()> {
     let config = state.config.irc.clone();
