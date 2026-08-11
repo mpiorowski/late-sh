@@ -107,7 +107,7 @@ Cross-domain touchpoints:
 4. Ending: `/golive stop`, or close the tab / stop sharing → grace
    (~30s, survives a refresh) → the registry sweeps the stream, watch and
    publisher URLs die, the rail row disappears. A registered stream whose
-   page never reports media is swept after 15 minutes.
+   page never reports media is swept after 5 minutes.
 
 ## 4. Consent invariants (non-negotiable, from STREAM.md)
 

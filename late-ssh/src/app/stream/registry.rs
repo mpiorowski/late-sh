@@ -16,8 +16,10 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 /// A registered stream whose publisher page never reported media is swept
-/// after this long (the streamer closed the modal and walked away).
-pub const PENDING_TTL: Duration = Duration::from_secs(15 * 60);
+/// after this long (the streamer closed the modal and walked away). Short
+/// on purpose: a pending stream occupies a rail row, and `/golive` again is
+/// cheap (idempotent, same room).
+pub const PENDING_TTL: Duration = Duration::from_secs(5 * 60);
 /// Publisher heartbeat TTL: a go-live page that stops reporting for this
 /// long is treated as disconnected and the stream enters grace.
 pub const PUBLISHER_TTL: Duration = Duration::from_secs(30);
