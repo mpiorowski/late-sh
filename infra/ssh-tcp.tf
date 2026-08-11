@@ -22,10 +22,17 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
             "22" = "default/service-ssh-sv:2222::PROXY"
           },
           local.irc_enabled_bool ? {
-            tostring(local.irc_port) = "default/service-ssh-sv:${local.irc_port}::PROXY"
+            tostring(local.irc_port) = "default/service-ssh-sv:${local.irc_port}${local.irc_proxy_emit_bool ? "::PROXY" : ""}"
           } : {}
         )
       })
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !local.irc_enabled_bool || !local.irc_proxy_emit_bool || local.irc_proxy_accept_bool
+      error_message = "IRC_PROXY_EMIT requires IRC_PROXY_ACCEPT while IRC is enabled. Deploy parser acceptance before enabling proxy emission."
     }
   }
 }

@@ -1078,6 +1078,14 @@ One dated entry per production crash or serious incident. **Add a new entry (new
 
 Entry template: symptom → evidence → verdict → fixes shipped → what to check if it repeats.
 
+#### 2026-08-08: shared IRC ingress address captured by a server ban (IRC outage, no crash)
+
+- **Symptom:** users reconnecting after a service restart received IRC `465 You are banned from this server`; regenerating IRC access tokens did not help.
+- **Evidence:** affected users had unrelated public addresses, while the active server-ban list contained `10.42.0.123`, a Kubernetes-internal ingress address. A raw TLS registration exposed the `465` that clients summarized as generic authentication failure. IPv4 ingress-nginx and the IPv6 HAProxy path did not send PROXY metadata for IRC, and `ircd::serve` passed the TCP transport peer into IP-ban auth and active-session state. A username ban of an IRC-connected account therefore captured the shared ingress address; established connections survived until restart, then all reconnects matched it before token lookup.
+- **Verdict:** proven. IRC confused its proxy transport peer with the client IP.
+- **Fix prepared:** the poisoned live ban was replaced without an IP. IRC now parses trusted PROXY v1 metadata before rustls, carries the verified client IP as optional state, and never substitutes the transport address for ban matching or persistence. Terraform keeps parser acceptance separate from ingress emission: deploy the parser-capable image with acceptance enabled and emission disabled, then enable emission in a subsequent infrastructure apply. Optional no-header parsing protects only the new-parser/old-ingress direction; it does not protect an old parser after ingress starts emitting PROXY. Rollback disables emission before rolling back below the parser-capable image.
+- **If it repeats:** run `/mod view bans server` and look for pod/node addresses, confirm the ingress TCP mapping ends in `::PROXY`, confirm IPv6 HAProxy uses `send-proxy`, and inspect startup config/logs for `LATE_IRC_PROXY_PROTOCOL`, trusted CIDRs, missing headers, or proxy-parse failures.
+
 #### 2026-08-06: news AI summaries dead after the 3.6-flash switch (feature outage, no crash)
 
 - **Symptom:** every AI-summarized news link (articles and YouTube alike) fell back to generic summaries after the `model_update` commit (5829f9c6) moved `AI_MODEL` to `gemini-3.6-flash`. Logs: `gemini returned no usable text call=generate_json_with_search`, raw body holding only `usageMetadata` (thinking tokens spent, zero output). @bot and @bartender kept working.

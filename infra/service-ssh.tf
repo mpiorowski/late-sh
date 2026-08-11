@@ -478,7 +478,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
           env {
             name  = "LATE_IRC_PROXY_PROTOCOL"
-            value = "1"
+            value = local.irc_proxy_accept
           }
           env {
             name  = "LATE_IRC_PROXY_TRUSTED_CIDRS"

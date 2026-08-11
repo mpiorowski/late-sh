@@ -183,6 +183,8 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 | Variable | Description |
 |----------|-------------|
 | `IRC_ENABLED` | Enable embedded IRC listener, defaults to `0` |
+| `IRC_PROXY_ACCEPT` | Enable optional PROXY header parsing in `late-ssh`, defaults to `1` |
+| `IRC_PROXY_EMIT` | Make ingress-nginx and IPv6 HAProxy emit PROXY headers, defaults to `0` |
 | `IRC_HOST` | Public IRC hostname, defaults to `irc.<DOMAIN>` |
 | `IRC_PORT` | IRC TLS port, defaults to `6697` |
 | `IRC_MAX_CONNS_GLOBAL` | Max total concurrent IRC connections, defaults to `200` |
@@ -190,9 +192,21 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 | `IRC_MAX_AUTH_FAILURES_PER_IP` | Max failed auth attempts per IP, defaults to `20` |
 | `IRC_AUTH_FAILURE_WINDOW_SECS` | Auth failure rate-limit window, defaults to `300` |
 
-Terraform enables `LATE_IRC_PROXY_PROTOCOL` for this ingress topology and gives
-IRC the same trusted proxy CIDRs as SSH. Local/direct IRC keeps it disabled by
-default.
+Terraform gives IRC the same trusted proxy CIDRs as SSH. PROXY acceptance and
+emission are separate so a compatible parser can be rolled out before either
+edge starts sending headers:
+
+1. Leave `IRC_PROXY_ACCEPT=1` and `IRC_PROXY_EMIT=0`, then deploy the
+   parser-capable `service-ssh` image and verify it is healthy.
+2. Set the GitHub environment variable `IRC_PROXY_EMIT=1`, then run a subsequent
+   infrastructure deployment to enable emission in ingress-nginx and IPv6
+   HAProxy.
+
+Rollback uses the reverse order: set `IRC_PROXY_EMIT=0` and apply infrastructure
+before deploying an image that does not understand IRC PROXY headers. Optional
+parsing protects the new-parser/old-ingress direction only; it cannot protect an
+old parser after an ingress proxy starts emitting headers. Terraform rejects an
+enabled-IRC configuration that emits headers while parser acceptance is off.
 
 ### IPv6 edge proxy
 

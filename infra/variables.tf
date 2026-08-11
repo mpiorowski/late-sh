@@ -374,6 +374,28 @@ variable "IRC_ENABLED" {
   }
 }
 
+variable "IRC_PROXY_ACCEPT" {
+  description = "Enable optional PROXY protocol parsing for IRC in late-ssh."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_PROXY_ACCEPT)))
+    error_message = "IRC_PROXY_ACCEPT must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
+variable "IRC_PROXY_EMIT" {
+  description = "Make the IRC ingress proxies emit PROXY protocol headers. Enable only after the parser-capable image is deployed."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_PROXY_EMIT)))
+    error_message = "IRC_PROXY_EMIT must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
+  }
+}
+
 variable "IRC_HOST" {
   description = "Public IRC hostname used for the TLS certificate."
   type        = string

@@ -42,6 +42,10 @@ locals {
 
   irc_enabled                  = trimspace(var.IRC_ENABLED) != "" ? trimspace(var.IRC_ENABLED) : "0"
   irc_enabled_bool             = contains(["1", "true", "yes", "on"], lower(local.irc_enabled))
+  irc_proxy_accept             = trimspace(var.IRC_PROXY_ACCEPT) != "" ? trimspace(var.IRC_PROXY_ACCEPT) : "1"
+  irc_proxy_accept_bool        = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_accept))
+  irc_proxy_emit               = trimspace(var.IRC_PROXY_EMIT) != "" ? trimspace(var.IRC_PROXY_EMIT) : "0"
+  irc_proxy_emit_bool          = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_emit))
   irc_host                     = trimspace(var.IRC_HOST) != "" ? trimspace(var.IRC_HOST) : "irc.${var.DOMAIN}"
   irc_port                     = tonumber(trimspace(var.IRC_PORT) != "" ? trimspace(var.IRC_PORT) : "6697")
   irc_max_conns_global         = trimspace(var.IRC_MAX_CONNS_GLOBAL) != "" ? trimspace(var.IRC_MAX_CONNS_GLOBAL) : "200"
