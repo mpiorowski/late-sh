@@ -149,6 +149,22 @@ impl App {
         }
         // Fire a debounced message search for the Ctrl+/ modal's `?` mode.
         crate::app::room_search_modal::state::tick_message_search(self);
+        // A finished news share is offered on to their cyberspace feed, but
+        // only on a tick where this app owns the keyboard: over a door or
+        // another modal the offer would paint on top of a surface that keeps
+        // the keys, so it waits instead. Unlinking while it waits drops it.
+        if self.chat.pending_shared_link.is_some() {
+            if !self.chat.cyberspace.is_linked() {
+                self.chat.take_pending_shared_link();
+            } else if crate::app::input::app_owns_input(self)
+                && let Some(shared) = self.chat.take_pending_shared_link()
+            {
+                self.chat
+                    .cyberspace
+                    .open_compose_modal_for_link(&shared.title, &shared.url);
+                changed = true;
+            }
+        }
         if let Some(room_id) = self.chat.take_requested_poll_room() {
             let allow_poll_modal = self.screen == Screen::Dashboard;
             crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);

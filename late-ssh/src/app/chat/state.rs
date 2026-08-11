@@ -626,6 +626,13 @@ pub struct ChatState {
     /// pinned list. `None` whenever any other rail entry is.
     pub(crate) cyberspace_room_selected: Option<usize>,
     pub cyberspace: cyberspace::state::State,
+    /// A finished news share waiting to be offered on to their cyberspace
+    /// feed. Held rather than acted on here: `ChatState` cannot see the
+    /// screen, the door, or the modal stack that decide whether opening a
+    /// modal right now would land on a surface the user can type into, so
+    /// `App::tick` is what takes it. A second share before the first is
+    /// taken replaces it; the offer is about the link just shared.
+    pub(crate) pending_shared_link: Option<news::state::SharedLink>,
 
     /// Notifications / mentions (shown as a virtual room in the room list)
     pub(crate) notifications_selected: bool,
@@ -850,6 +857,7 @@ impl ChatState {
             cyberspace_selected: false,
             cyberspace_room_selected: None,
             cyberspace: cyberspace::state::State::new(cyberspace_service, user_id),
+            pending_shared_link: None,
             notifications_selected: false,
             notifications: notifications::state::State::new(notification_service, user_id),
             discover_selected: false,
@@ -1435,6 +1443,13 @@ impl ChatState {
 
     pub fn take_requested_poll_room(&mut self) -> Option<Uuid> {
         self.requested_poll_room.take()
+    }
+
+    /// The news share waiting to be offered on to their cyberspace feed.
+    /// Only call this on a tick that is going to open the modal: taking it
+    /// drops the offer, and a held one is retried on the next tick.
+    pub(crate) fn take_pending_shared_link(&mut self) -> Option<news::state::SharedLink> {
+        self.pending_shared_link.take()
     }
 
     pub fn create_poll(
@@ -3748,14 +3763,10 @@ impl ChatState {
         let news_tick = self.news.tick();
         // Sharing a link to news is the moment to offer it onward: the title
         // that landed on the article and the URL, with the human pressing
-        // publish. Never over a modal already up, and never for an account
-        // with nowhere to post it.
-        if let Some(shared) = news_tick.shared.as_ref()
-            && self.cyberspace.is_linked()
-            && !self.cyberspace.modal_active()
-        {
-            self.cyberspace
-                .open_compose_modal_for_link(&shared.title, &shared.url);
+        // publish. Recorded here and opened by `App::tick`, which is the
+        // layer that can tell whether anything else owns the keyboard.
+        if let Some(shared) = news_tick.shared.as_ref() {
+            self.pending_shared_link = Some(shared.clone());
         }
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();

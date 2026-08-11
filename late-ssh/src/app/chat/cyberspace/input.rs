@@ -230,6 +230,14 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
                     }
                 };
                 match outcome {
+                    // The offer opened over whatever the user was typing
+                    // into, so the first Enter after it appeared was aimed
+                    // somewhere else: it wakes the modal and does nothing
+                    // else. Every Enter after that walks the chain normally.
+                    EditOutcome::Submit if compose.unaimed => {
+                        compose.unaimed = false;
+                        ModalAction::None
+                    }
                     // Enter in the metadata fields walks down to the body;
                     // only the body's Enter publishes.
                     EditOutcome::Submit if compose.focus != ComposeField::Body => {

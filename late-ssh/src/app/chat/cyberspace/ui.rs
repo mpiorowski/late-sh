@@ -906,7 +906,13 @@ fn draw_link_modal(frame: &mut Frame, area: Rect, link: &LinkModal) {
 fn draw_compose_modal(frame: &mut Frame, area: Rect, compose: &ComposeModal) {
     let popup = centered_rect(area, 76, 20);
     frame.render_widget(Clear, popup);
-    let block = modal_block(" New cyberspace entry ");
+    // An offer names itself, so a box appearing over the screen on its own
+    // reads as a question rather than as a draft the user must have started.
+    let block = modal_block(if compose.unaimed {
+        " Share this link to cyberspace? "
+    } else {
+        " New cyberspace entry "
+    });
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
     let areas = Layout::vertical([

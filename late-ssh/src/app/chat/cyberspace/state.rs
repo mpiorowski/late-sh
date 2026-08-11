@@ -92,6 +92,11 @@ pub(crate) struct ComposeModal {
     pub focus: ComposeField,
     pub error: Option<String>,
     pub busy: bool,
+    /// Set while this modal is an offer the user never asked for (a finished
+    /// news share). It appeared under whatever they were typing into, so the
+    /// first Enter is spent acknowledging it rather than walking the field
+    /// chain toward publish.
+    pub unaimed: bool,
 }
 
 /// The room picker: their whole roster, with the rooms already on the rail
@@ -464,9 +469,12 @@ impl State {
     /// feed: the extracted title in the title field, the URL as the body,
     /// and nothing else. No summary, no ASCII art, nothing this app wrote.
     /// The modal is only ever an offer: it opens prefilled and a human
-    /// presses publish, so no post reaches their API unread.
+    /// presses publish, so no post reaches their API unread. It also opens
+    /// `unaimed`, because the keystroke that arrives next was aimed at
+    /// whatever this appeared over.
     pub(crate) fn open_compose_modal_for_link(&mut self, title: &str, url: &str) {
         let mut modal = blank_compose_modal();
+        modal.unaimed = true;
         // The title field is one line: a headline that arrived wrapped would
         // otherwise open as two rows in a box that only ever submits one.
         modal
@@ -1140,6 +1148,7 @@ fn blank_compose_modal() -> ComposeModal {
         focus: ComposeField::Title,
         error: None,
         busy: false,
+        unaimed: false,
     }
 }
 

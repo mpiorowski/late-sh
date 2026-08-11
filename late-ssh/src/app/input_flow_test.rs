@@ -1094,6 +1094,94 @@ async fn linked_account_gets_the_rail_entry_and_the_pane() {
     );
 }
 
+/// The news-share offer opens a modal nobody asked for, so it waits for a
+/// tick where this app owns the keyboard. Settings stands in for the whole
+/// overlay stack (and for a running door): while one is up, keystrokes never
+/// reach the cyberspace modal, so an offer painted there would be a box the
+/// user can see and cannot type into.
+#[tokio::test]
+async fn a_shared_link_offer_waits_while_something_else_owns_the_keyboard() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-offer-gate").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-offer-gate-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"\x0f");
+    wait_for_render_contains(&mut app, " Settings ").await;
+
+    // A URL takes minutes to process, so the share lands wherever the user
+    // has moved on to.
+    app.chat.pending_shared_link = Some(SharedLink {
+        title: "A headline".to_string(),
+        url: "https://example.com/a-post".to_string(),
+    });
+    assert_render_not_contains_for(
+        &mut app,
+        " Share this link to cyberspace? ",
+        Duration::from_millis(300),
+    )
+    .await;
+
+    // Closing settings hands the keyboard back, and the held offer lands.
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, " Share this link to cyberspace? ").await;
+    wait_for_render_contains(&mut app, "https://example.com/a-post").await;
+}
+
+/// The offer appears over whatever the user is typing into and takes their
+/// keystrokes from that moment on, so the first Enter after it opened was
+/// aimed at the surface underneath. It wakes the modal and publishes nothing.
+#[tokio::test]
+async fn the_first_enter_after_an_offer_opens_publishes_nothing() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-offer-enter").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-offer-enter-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.chat.pending_shared_link = Some(SharedLink {
+        title: "A headline".to_string(),
+        url: "https://example.com/a-post".to_string(),
+    });
+    wait_for_render_contains(&mut app, " Share this link to cyberspace? ").await;
+
+    app.handle_input(b"\r");
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains(" New cyberspace entry "),
+        "the first Enter should wake the offer, not act on it: {plain:?}"
+    );
+    assert!(
+        !plain.contains("Publishing..."),
+        "an Enter aimed elsewhere must not publish: {plain:?}"
+    );
+    assert!(
+        app.chat.cyberspace.modal_active(),
+        "the offer stays up for the user to publish or dismiss"
+    );
+}
+
 #[tokio::test]
 async fn switching_screens_drops_the_open_cyberspace_room() {
     use crate::app::common::primitives::Screen;

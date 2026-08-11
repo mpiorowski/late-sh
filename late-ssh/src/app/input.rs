@@ -782,6 +782,91 @@ fn handle_parsed_input(app: &mut App, event: ParsedInput) {
     handle_parsed_input_inner(app, event);
 }
 
+/// `true` when a keystroke arriving now would reach the screen the user is
+/// looking at: no door child is eating the bytes, and no overlay above the
+/// screen is claiming them. The one caller is the news-share offer in
+/// `App::tick`, which opens a modal nobody asked for and so must not do it
+/// on top of a surface that would keep the keys (or, with a raw-passthrough
+/// door, never hand them over at all).
+///
+/// This mirrors two lists it cannot share: the door passthroughs in
+/// `App::handle_input` and the overlay chain in `handle_parsed_input_inner`
+/// below, which dispatch to a different handler per flag. Missing a flag
+/// here shows up as a modal painted over something that still owns the
+/// keyboard; adding a flag that does not belong only makes the offer wait.
+pub(crate) fn app_owns_input(app: &App) -> bool {
+    !door_owns_input(app) && !overlay_owns_input(app)
+}
+
+/// The raw-passthrough doors from `App::handle_input`: while one of these is
+/// live (or inside its post-exit input grace) every byte goes to the child,
+/// so nothing the app draws can be typed into. Rebels, Usurper, dopewars,
+/// and CodeKeep have no detach key at all: whatever the app paints over them
+/// stays there until the game is quit.
+fn door_owns_input(app: &App) -> bool {
+    let screen = app.screen;
+    (screen == Screen::Rebels && app.rebels_state.as_ref().is_some_and(|s| s.is_running()))
+        || (screen == Screen::Nethack
+            && app
+                .nethack_state
+                .as_ref()
+                .is_some_and(|s| s.is_running() || s.in_exit_grace()))
+        || (screen == Screen::Dcss
+            && app
+                .dcss_state
+                .as_ref()
+                .is_some_and(|s| s.is_running() || s.in_exit_grace()))
+        || (screen == Screen::Brogue
+            && app
+                .brogue_state
+                .as_ref()
+                .is_some_and(|s| s.is_running() || s.in_exit_grace()))
+        || (screen == Screen::Usurper
+            && app
+                .usurper_state
+                .as_ref()
+                .is_some_and(|s| s.is_running() || s.in_exit_grace()))
+        || (screen == Screen::Dopewars
+            && app
+                .dopewars_state
+                .as_ref()
+                .is_some_and(|s| s.is_running() || s.in_exit_grace()))
+        || (screen == Screen::Codekeep
+            && app
+                .codekeep_state
+                .as_ref()
+                .is_some_and(|s| s.is_running()))
+}
+
+/// Every overlay that claims keystrokes ahead of the screen, in the order
+/// `handle_parsed_input_inner` checks them. The cyberspace modal is in the
+/// list because an offer must never replace a modal the user opened.
+fn overlay_owns_input(app: &App) -> bool {
+    app.show_splash
+        || app.login_announcements_visible()
+        || app.show_quit_confirm
+        || app.clubhouse.tutorial_forced_step().is_some()
+        || app.room_info_modal_state.is_open()
+        || app.room_search_modal_state.is_open()
+        || app.booth_modal_state.is_open()
+        || app.chat.has_news_modal()
+        || app.chat.has_image_modal()
+        || app.show_help
+        || app.show_mod_modal
+        || app.show_hub_modal
+        || app.show_ultimate_modal
+        || app.show_settings
+        || app.show_profile_modal
+        || app.show_sheet_modal
+        || app.show_poll_modal
+        || app.chat.cyberspace.modal_active()
+        || app.chat.cyberspace.room_composer().is_some()
+        || app.show_bonsai_v2_modal
+        || app.show_bonsai_modal
+        || app.show_lobby_modal
+        || app.icon_picker_open
+}
+
 fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     if let ParsedInput::TerminalVersion(version) = &event {
         app.apply_xtversion_reply(version);
