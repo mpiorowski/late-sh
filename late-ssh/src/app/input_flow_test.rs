@@ -1,5 +1,6 @@
 //! App input integration tests against a real ephemeral DB.
 
+use crate::app::chat::news::state::SharedLink;
 use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
@@ -1166,19 +1167,33 @@ async fn the_first_enter_after_an_offer_opens_publishes_nothing() {
     });
     wait_for_render_contains(&mut app, " Share this link to cyberspace? ").await;
 
+    // Three Enters is what the field chain costs from a fresh compose modal
+    // (title, topics, body), so a user still sending chat messages would
+    // otherwise publish the prefilled post without ever aiming at it.
     app.handle_input(b"\r");
     let plain = render_plain(&mut app);
     assert!(
         plain.contains(" New cyberspace entry "),
         "the first Enter should wake the offer, not act on it: {plain:?}"
     );
+    app.handle_input(b"\r");
+    app.handle_input(b"\r");
+    let plain = render_plain(&mut app);
     assert!(
         !plain.contains("Publishing..."),
-        "an Enter aimed elsewhere must not publish: {plain:?}"
+        "Enters aimed elsewhere must not publish: {plain:?}"
     );
     assert!(
         app.chat.cyberspace.modal_active(),
         "the offer stays up for the user to publish or dismiss"
+    );
+
+    // The guard costs exactly one Enter: the modal still publishes.
+    app.handle_input(b"\r");
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("Publishing..."),
+        "a deliberate Enter on the body still publishes: {plain:?}"
     );
 }
 

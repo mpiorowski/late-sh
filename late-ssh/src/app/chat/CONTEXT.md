@@ -426,7 +426,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - Rendering/parsing of announcement cards lives in `ui_text.rs`.
 - Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
 - URL processing has a 5-minute timeout. Image ASCII fetch has byte, pixel, and time limits.
-- `ArticleEvent::Created` carries the extracted `title` beside the url, and `NewsTick::shared` hands it to `ChatState::tick`, which offers the finished share on to a linked cyberspace account as a prefilled compose modal (title + url only, human presses publish). See `cyberspace/CONTEXT.md` §6.
+- `ArticleEvent::Created` carries the extracted `title` beside the url, and `NewsTick::shared` hands it to `ChatState::tick`, which records it as `pending_shared_link`. `App::tick` takes it and offers the finished share on to a linked cyberspace account as a prefilled compose modal (title + url only, human presses publish), on the first tick where nothing else owns the keyboard. See `cyberspace/CONTEXT.md` §6b.
 - News snapshot is global and lists recent articles; unread count is per user through `article_feed_reads`.
 
 ### Showcase
