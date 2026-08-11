@@ -451,9 +451,6 @@ fn track_active_irc_user(
         active.connection_count += 1;
         active.username = registered.username.clone();
         active.fingerprint = Some(registered.fingerprint.clone());
-        if client_ip.is_some() {
-            active.peer_ip = client_ip;
-        }
         active.audio_source = registered.audio_source;
         active.last_login_at = std::time::Instant::now();
         active.sessions.push(session);
@@ -463,7 +460,6 @@ fn track_active_irc_user(
             ActiveUser {
                 username: registered.username.clone(),
                 fingerprint: Some(registered.fingerprint.clone()),
-                peer_ip: client_ip,
                 audio_source: registered.audio_source,
                 sessions: vec![session],
                 connection_count: 1,

@@ -14,7 +14,6 @@ fn active_users_with(entries: &[(Uuid, &str)]) -> ActiveUsers {
             ActiveUser {
                 username: username.to_string(),
                 fingerprint: None,
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,

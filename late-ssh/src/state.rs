@@ -57,7 +57,6 @@ pub struct ActiveSession {
 pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
-    pub peer_ip: Option<IpAddr>,
     pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,

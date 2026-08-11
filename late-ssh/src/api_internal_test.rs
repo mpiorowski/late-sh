@@ -272,7 +272,6 @@ fn active_user_count_uses_unique_user_entries() {
         ActiveUser {
             username: "alice".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 2,
@@ -284,7 +283,6 @@ fn active_user_count_uses_unique_user_entries() {
         ActiveUser {
             username: "bob".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 1,

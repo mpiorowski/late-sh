@@ -211,14 +211,6 @@ pub async fn run_with_listener(
 
     let server = Server { state };
     let mut session_tasks = JoinSet::new();
-    if server.state.config.ssh_proxy_protocol
-        && server.state.config.ssh_proxy_trusted_cidrs.is_empty()
-    {
-        tracing::warn!(
-            "ssh proxy protocol is enabled but LATE_SSH_PROXY_TRUSTED_CIDRS is empty; \
-             proxy headers will be rejected"
-        );
-    }
 
     loop {
         tokio::select! {
@@ -582,7 +574,6 @@ impl russh::server::Handler for ClientHandler {
                 active.connection_count += 1;
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
-                active.peer_ip = self.peer_ip;
                 active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
@@ -591,7 +582,6 @@ impl russh::server::Handler for ClientHandler {
                     crate::state::ActiveUser {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
-                        peer_ip: self.peer_ip,
                         audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,

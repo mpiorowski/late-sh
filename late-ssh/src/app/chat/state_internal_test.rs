@@ -243,7 +243,6 @@ fn online_username_set_lowercases_active_usernames() {
         ActiveUser {
             username: "Alice".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 1,
@@ -255,7 +254,6 @@ fn online_username_set_lowercases_active_usernames() {
         ActiveUser {
             username: "BOB".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 2,
@@ -1685,7 +1683,6 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "zoe".to_string(),
                 fingerprint: None,
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 2,
@@ -1697,7 +1694,6 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "alice".to_string(),
                 fingerprint: None,
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
