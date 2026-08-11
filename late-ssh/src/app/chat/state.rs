@@ -1038,13 +1038,20 @@ impl ChatState {
             return;
         }
 
-        if let Some(selected_id) = self.selected_room_id
-            && self
+        if let Some(selected_id) = self.selected_room_id {
+            // A selected stream room survives snapshot refreshes even
+            // though it is `kind='game'` (not a chat-list room), and even
+            // before its lazy membership lands in `rooms`.
+            if self.stream_for_room(selected_id).is_some() {
+                return;
+            }
+            if self
                 .rooms
                 .iter()
                 .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-        {
-            return;
+            {
+                return;
+            }
         }
 
         self.selected_room_id = self

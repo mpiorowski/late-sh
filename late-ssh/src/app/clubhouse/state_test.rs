@@ -101,10 +101,22 @@ fn tutorial_tours_every_page_then_comes_home() {
         (TourStep::Page(b'2', Screen::Arcade), Tutorial::VisitArcade),
         (TourStep::Enter, Tutorial::VisitLobby),
         (TourStep::Page(b'3', Screen::Games), Tutorial::VisitGames),
-        (TourStep::Page(b'4', Screen::Artboard), Tutorial::VisitArtboard),
-        (TourStep::Page(b'5', Screen::Profiles), Tutorial::VisitDirectory),
-        (TourStep::Page(b'6', Screen::Leaderboard), Tutorial::VisitLeaderboard),
-        (TourStep::Page(b'0', Screen::Clubhouse), Tutorial::Homecoming),
+        (
+            TourStep::Page(b'4', Screen::Artboard),
+            Tutorial::VisitArtboard,
+        ),
+        (
+            TourStep::Page(b'5', Screen::Profiles),
+            Tutorial::VisitDirectory,
+        ),
+        (
+            TourStep::Page(b'6', Screen::Leaderboard),
+            Tutorial::VisitLeaderboard,
+        ),
+        (
+            TourStep::Page(b'0', Screen::Clubhouse),
+            Tutorial::Homecoming,
+        ),
     ] {
         assert_eq!(state.tutorial_forced_step(), Some(step));
         match step {

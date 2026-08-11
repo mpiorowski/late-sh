@@ -126,27 +126,23 @@ async fn golive_state_handler(
 
 /// Same-origin GET proxy to late-ssh, forwarding the status code: a 404 is
 /// the page's "stream is gone" signal, so it must survive the hop.
+/// `send_traced` folds non-2xx responses into `Err` (`error_for_status`),
+/// so upstream statuses are recovered from the error instead of surfacing
+/// as a late-web 500.
 async fn proxy_get(state: &AppState, id: &str, path: &str) -> Result<Response, AppError> {
     if !valid_capability_id(id) {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let url = format!("{}{path}", state.config.ssh_internal_url);
-    let response = state
-        .http_client
-        .get(&url)
-        .send_traced()
-        .await
-        .context("failed to fetch stream state")?;
-    let status =
-        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    if !status.is_success() {
-        return Ok(status.into_response());
-    }
+    let response = match state.http_client.get(&url).send_traced().await {
+        Ok(response) => response,
+        Err(err) => return Ok(upstream_error_status(err).into_response()),
+    };
     let body: serde_json::Value = response
         .json()
         .await
         .context("failed to parse stream state")?;
-    Ok((status, Json(body)).into_response())
+    Ok((StatusCode::OK, Json(body)).into_response())
 }
 
 async fn proxy_post(
@@ -159,14 +155,21 @@ async fn proxy_post(
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     let url = format!("{}{path}", state.config.ssh_internal_url);
-    let response = state
-        .http_client
-        .post(&url)
-        .json(&body)
-        .send_traced()
-        .await
-        .context("failed to report stream state")?;
+    let response = match state.http_client.post(&url).json(&body).send_traced().await {
+        Ok(response) => response,
+        Err(err) => return Ok(upstream_error_status(err).into_response()),
+    };
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     Ok(status.into_response())
+}
+
+/// The status to hand the page for a failed upstream call: the upstream's
+/// own status when it answered (404 = stream gone), 502 for transport
+/// failures.
+fn upstream_error_status(err: reqwest::Error) -> StatusCode {
+    match err.status() {
+        Some(status) => StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+        None => StatusCode::BAD_GATEWAY,
+    }
 }

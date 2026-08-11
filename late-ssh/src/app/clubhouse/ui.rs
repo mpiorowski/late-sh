@@ -1471,10 +1471,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                 vec![
                     Line::from(vec![
                         Span::styled("[Ctrl+G] ", key),
-                        Span::styled(
-                            "opens the lobby from anywhere: all the multiplayer.",
-                            text,
-                        ),
+                        Span::styled("opens the lobby from anywhere: all the multiplayer.", text),
                     ]),
                     Line::default(),
                     Line::from(vec![

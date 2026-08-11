@@ -2297,6 +2297,54 @@ async fn drain_events_until(
     panic!("timed out waiting for condition: {label}");
 }
 
+/// Regression: `sync_selection` runs on every snapshot apply and used to
+/// reset any selection that was not a chat-list room — which bounced a
+/// freshly opened stream room (`kind='game'`) straight back to the lounge.
+#[tokio::test]
+async fn sync_selection_keeps_a_selected_stream_room() {
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "stream_viewer").await;
+    let streamer = late_core::test_utils::create_test_user(&test_db.db, "stream_owner").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let stream_room = ChatRoom::get_or_create_stream_room(&client, "stream_owner", streamer.id)
+        .await
+        .expect("stream room");
+
+    let mut state = counter_test_state(&test_db, user.id);
+    state.rooms = vec![
+        (lounge.clone(), Vec::new()),
+        (stream_room.clone(), Vec::new()),
+    ];
+    state.live_streams = vec![crate::app::stream::registry::LiveStreamView {
+        user_id: streamer.id,
+        username: "stream_owner".to_string(),
+        title: "show".to_string(),
+        room_id: stream_room.id,
+        voice_channel_id: Uuid::now_v7(),
+        stream_id: "stream-id".to_string(),
+        live: true,
+        mic_on_air: false,
+        watching: 0,
+        watch_url: String::new(),
+    }];
+
+    // Selected stream room survives a selection sync, member or not.
+    state.selected_room_id = Some(stream_room.id);
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(stream_room.id));
+    state.rooms = vec![(lounge.clone(), Vec::new())];
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(stream_room.id));
+
+    // Once the stream is gone the selection falls back to a list room.
+    state.live_streams.clear();
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(lounge.id));
+}
+
 #[tokio::test]
 async fn snapshot_and_message_updates_preserve_row_cache_contract() {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
