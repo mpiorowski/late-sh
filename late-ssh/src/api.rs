@@ -383,22 +383,47 @@ struct StreamWatchHeartbeatBody {
     watcher_id: String,
 }
 
+/// Header carrying the publish-token claim secret between the late-web
+/// proxy (where it lives as an HttpOnly cookie on the console's browser)
+/// and this API.
+pub const PUBLISH_CLAIM_HEADER: &str = "x-late-publish-claim";
+
+fn publish_claim_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(PUBLISH_CLAIM_HEADER)
+        .and_then(|value| value.to_str().ok())
+}
+
 async fn get_stream_publish_grant(
     Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
     AxumState(state): AxumState<State>,
 ) -> impl IntoResponse {
-    match state.stream_service.publisher_grant(&token) {
-        Ok(Some(grant)) => Json(StreamPublishGrantResponse {
-            livekit_url: grant.ticket.url,
-            room: grant.ticket.room,
-            token: grant.ticket.token,
-            title: grant.title,
-            streamer: grant.username,
-            stream_id: grant.stream_id,
-            watch_url: grant.watch_url,
-        })
-        .into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+    use crate::app::stream::svc::PublishGrantAccess;
+    let claim = publish_claim_from_headers(&headers);
+    match state.stream_service.publisher_grant(&token, claim) {
+        Ok(PublishGrantAccess::Granted { grant, new_claim }) => {
+            let mut response = Json(StreamPublishGrantResponse {
+                livekit_url: grant.ticket.url,
+                room: grant.ticket.room,
+                token: grant.ticket.token,
+                title: grant.title,
+                streamer: grant.username,
+                stream_id: grant.stream_id,
+                watch_url: grant.watch_url,
+            })
+            .into_response();
+            // The claiming fetch hands the minted secret back in a header;
+            // the late-web proxy turns it into the console's cookie.
+            if let Some(secret) = new_claim
+                && let Ok(value) = axum::http::HeaderValue::from_str(&secret)
+            {
+                response.headers_mut().insert(PUBLISH_CLAIM_HEADER, value);
+            }
+            response
+        }
+        Ok(PublishGrantAccess::Denied) => StatusCode::FORBIDDEN.into_response(),
+        Ok(PublishGrantAccess::Gone) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
             tracing::error!(error = ?error, "failed to mint stream publish grant");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -408,16 +433,19 @@ async fn get_stream_publish_grant(
 
 async fn post_stream_publish_state(
     Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
     AxumState(state): AxumState<State>,
     Json(body): Json<StreamPublishStateBody>,
 ) -> StatusCode {
-    if state
+    use crate::app::stream::registry::PublisherReport;
+    let claim = publish_claim_from_headers(&headers);
+    match state
         .stream_service
-        .report_publisher(&token, body.publishing, body.mic_live)
+        .report_publisher(&token, body.publishing, body.mic_live, claim)
     {
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::NOT_FOUND
+        PublisherReport::Gone => StatusCode::NOT_FOUND,
+        PublisherReport::Denied => StatusCode::FORBIDDEN,
+        PublisherReport::Live { .. } | PublisherReport::Stopped => StatusCode::NO_CONTENT,
     }
 }
 

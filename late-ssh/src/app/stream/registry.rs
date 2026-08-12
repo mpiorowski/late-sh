@@ -63,6 +63,13 @@ struct StreamEntry {
     last_publisher_report: Instant,
     grace_since: Option<Instant>,
     announced: bool,
+    /// Claim-once lock on the publish token. `None` until the first grant
+    /// fetch; that fetch mints a secret the console keeps as a cookie, and
+    /// every later grant fetch or state report must present it. A leaked
+    /// publish URL is useless once the streamer's own console has claimed
+    /// it; leaked *before* claiming, the intruder claims first and the real
+    /// console fails loudly (403), so the hijack is visible, never silent.
+    publisher_claim: Option<String>,
     /// The go-live page's self-reported browser-mic state. Feeds the "on
     /// air" line in the room's voice display so a browser-mic streamer is
     /// never an invisible speaker. Nothing detects anything: the page
@@ -157,11 +164,29 @@ pub struct EndedStream {
     pub voice_channel_id: Uuid,
 }
 
+/// Outcome of resolving a publish token for the grant endpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublisherAccess {
+    /// Unknown publish token: the stream ended or never existed.
+    Gone,
+    /// The token is claimed by another console and the presented secret
+    /// does not match.
+    Denied,
+    Granted {
+        info: PublisherInfo,
+        /// `Some` exactly once per stream: the first grant fetch mints the
+        /// claim secret the console must present from then on.
+        new_claim: Option<String>,
+    },
+}
+
 /// Outcome of a publisher page state report.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublisherReport {
     /// Unknown publish token: the stream ended or never existed.
     Gone,
+    /// The token is claimed and the presented secret does not match.
+    Denied,
     /// Accepted; media is (still) flowing.
     Live {
         /// True exactly once per registered stream: the `Pending -> Live`
@@ -229,6 +254,7 @@ impl StreamRegistry {
                 last_publisher_report: now,
                 grace_since: None,
                 announced: false,
+                publisher_claim: None,
                 watchers: HashMap::new(),
                 mic_on_air: false,
             });
@@ -277,13 +303,54 @@ impl StreamRegistry {
             })
     }
 
+    /// Claim-once resolution of a publish token for the grant endpoint. The
+    /// first caller claims the token and gets the minted secret back; from
+    /// then on only callers presenting that secret are granted. The claim
+    /// dies with the stream (a fresh `/golive` after a stop mints new
+    /// capability ids and starts unclaimed).
+    pub fn access_publisher(
+        &self,
+        publish_token: &str,
+        presented_claim: Option<&str>,
+    ) -> PublisherAccess {
+        let mut inner = self.inner.lock_recover();
+        let Some(entry) = inner
+            .values_mut()
+            .find(|entry| entry.publish_token == publish_token)
+        else {
+            return PublisherAccess::Gone;
+        };
+        let new_claim = match (&entry.publisher_claim, presented_claim) {
+            (None, _) => {
+                let secret = capability_id();
+                entry.publisher_claim = Some(secret.clone());
+                Some(secret)
+            }
+            (Some(claim), Some(presented)) if claim == presented => None,
+            (Some(_), _) => return PublisherAccess::Denied,
+        };
+        PublisherAccess::Granted {
+            info: PublisherInfo {
+                user_id: entry.user_id,
+                username: entry.username.clone(),
+                title: entry.title.clone(),
+                voice_channel_id: entry.voice_channel_id,
+                stream_id: entry.stream_id.clone(),
+            },
+            new_claim,
+        }
+    }
+
     /// Apply a go-live page state report (media flowing or stopped, plus the
-    /// page's own browser-mic state).
+    /// page's own browser-mic state). Once the token is claimed, reports must
+    /// present the claim secret: a bare URL-holder must not be able to shove
+    /// a live stream into grace with a forged `publishing: false`.
     pub fn report_publisher(
         &self,
         publish_token: &str,
         publishing: bool,
         mic_live: bool,
+        presented_claim: Option<&str>,
     ) -> PublisherReport {
         let outcome = {
             let mut inner = self.inner.lock_recover();
@@ -293,6 +360,11 @@ impl StreamRegistry {
             else {
                 return PublisherReport::Gone;
             };
+            if let Some(claim) = &entry.publisher_claim
+                && presented_claim != Some(claim.as_str())
+            {
+                return PublisherReport::Denied;
+            }
             entry.last_publisher_report = Instant::now();
             entry.mic_on_air = mic_live;
             if publishing {
@@ -443,7 +515,10 @@ impl StreamRegistry {
 
 /// Random 128-bit capability id for publisher/watch URLs. Unguessable is the
 /// whole access model (unlisted, not public, not authed), so this must stay
-/// a full-entropy random id, never derived from user or room ids.
+/// a full-entropy random id, never derived from user or room ids. v4, not
+/// the house-standard v7, on purpose: these are secrets, not row ids, and a
+/// v7 would leak the stream's start time while carrying only ~74 random
+/// bits against v4's 122.
 fn capability_id() -> String {
     Uuid::new_v4().simple().to_string()
 }

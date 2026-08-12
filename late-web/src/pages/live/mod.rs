@@ -13,13 +13,28 @@ use askama::Template;
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use late_core::telemetry::TracedExt;
 
 use crate::{AppState, error::AppError, metrics};
+
+/// Header the late-ssh API uses for the publish-token claim secret. On the
+/// browser side the secret lives as an HttpOnly cookie scoped to this
+/// console's URL path; the proxy translates between the two so page JS
+/// never touches it.
+const PUBLISH_CLAIM_HEADER: &str = "x-late-publish-claim";
+const PUBLISH_CLAIM_COOKIE: &str = "golive_claim";
+
+fn publish_claim_from_cookies(headers: &HeaderMap) -> Option<String> {
+    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
+    cookies.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == PUBLISH_CLAIM_COOKIE).then(|| value.to_string())
+    })
+}
 
 #[cfg(test)]
 mod live_test;
@@ -103,25 +118,81 @@ async fn watch_heartbeat_handler(
     .await
 }
 
+/// Publish grant proxy with the claim-once cookie exchange: the browser's
+/// claim cookie rides upstream as a header, and the claiming (first) fetch
+/// gets the minted secret back as an HttpOnly cookie scoped to this
+/// console's path, so a leaked publish URL cannot fetch a grant from any
+/// other browser (403 from upstream, forwarded as-is).
 async fn golive_grant_handler(
     Path(token): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Response, AppError> {
-    proxy_get(&state, &token, &format!("/api/stream/publish/{token}")).await
+    if !valid_capability_id(&token) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let url = format!(
+        "{}/api/stream/publish/{token}",
+        state.config.ssh_internal_url
+    );
+    let mut request = state.http_client.get(&url);
+    if let Some(claim) = publish_claim_from_cookies(&headers) {
+        request = request.header(PUBLISH_CLAIM_HEADER, claim);
+    }
+    let response = match request.send_traced().await {
+        Ok(response) => response,
+        Err(err) => return Ok(upstream_error_status(err).into_response()),
+    };
+    let new_claim = response
+        .headers()
+        .get(PUBLISH_CLAIM_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .context("failed to parse publish grant")?;
+    let mut page_response = (StatusCode::OK, Json(body)).into_response();
+    if let Some(secret) = new_claim {
+        // HttpOnly: page JS never sees the secret. No `Secure` attribute so
+        // plain-http local dev keeps working; the cookie is path-scoped to
+        // one capability URL, so its exposure matches the URL's own.
+        let cookie = format!(
+            "{PUBLISH_CLAIM_COOKIE}={secret}; Path=/golive/{token}; HttpOnly; SameSite=Strict"
+        );
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            page_response
+                .headers_mut()
+                .insert(header::SET_COOKIE, value);
+        }
+    }
+    Ok(page_response)
 }
 
 async fn golive_state_handler(
     Path(token): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, AppError> {
-    proxy_post(
-        &state,
-        &token,
-        &format!("/api/stream/publish/{token}/state"),
-        body,
-    )
-    .await
+    if !valid_capability_id(&token) {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let url = format!(
+        "{}/api/stream/publish/{token}/state",
+        state.config.ssh_internal_url
+    );
+    let mut request = state.http_client.post(&url).json(&body);
+    if let Some(claim) = publish_claim_from_cookies(&headers) {
+        request = request.header(PUBLISH_CLAIM_HEADER, claim);
+    }
+    let response = match request.send_traced().await {
+        Ok(response) => response,
+        Err(err) => return Ok(upstream_error_status(err).into_response()),
+    };
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    Ok(status.into_response())
 }
 
 /// Same-origin GET proxy to late-ssh, forwarding the status code: a 404 is

@@ -1683,3 +1683,27 @@ async fn forced_tour_gates_input_until_each_named_key() {
     app.handle_input(b"2");
     assert_eq!(app.screen, Screen::Arcade);
 }
+
+#[tokio::test]
+async fn esc_closes_the_stream_qr_modal_like_any_other_key() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "stream-qr-esc").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "stream-qr-esc-it");
+    wait_for_render_contains(&mut app, "Home").await;
+
+    app.stream_qr_modal = Some(crate::app::state::StreamQrModal {
+        url: "https://late.sh/golive/abc".to_string(),
+        title: "Go Live".to_string(),
+        subtitle: "scan to broadcast".to_string(),
+    });
+
+    // A lone Esc dispatches via the pending-escape flush on a later tick,
+    // not through the any-key gate the other keys hit.
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| app.stream_qr_modal.is_none(),
+        "esc closes the stream qr modal",
+    )
+    .await;
+}

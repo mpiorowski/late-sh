@@ -176,18 +176,48 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
         .expect("pending watch grant");
     assert_eq!(status, 404);
 
-    // The publisher page fetches its grant and reports media flowing.
-    let (status, body) =
-        http_get_with_retry(addr, &format!("/api/stream/publish/{publish_token}"), 3)
+    // The publisher page fetches its grant; the first fetch claims the
+    // token and the minted secret rides back in a header (the late-web
+    // proxy turns it into the console's cookie).
+    let (status, head, body) =
+        http_get_with_header(addr, &format!("/api/stream/publish/{publish_token}"), None)
             .await
             .expect("publish grant");
     assert_eq!(status, 200);
     assert!(body.contains("\"streamer\":\"streamer\""), "grant: {body}");
     assert!(body.contains("\"token\":"));
+    let claim = head
+        .lines()
+        .find(|line| {
+            line.to_ascii_lowercase()
+                .starts_with("x-late-publish-claim:")
+        })
+        .and_then(|line| line.split_once(':'))
+        .map(|(_, value)| value.trim().to_string())
+        .expect("claim header on the first grant fetch");
+
+    // A leaked publish URL replayed without the claim is refused, grant
+    // and state report alike: claim-once is the anti-hijack lock.
+    let (status, _, _) =
+        http_get_with_header(addr, &format!("/api/stream/publish/{publish_token}"), None)
+            .await
+            .expect("replayed grant");
+    assert_eq!(status, 403);
     let (status, _) = http_post_json(
         addr,
         &format!("/api/stream/publish/{publish_token}/state"),
+        "{\"publishing\":false,\"mic_live\":false}",
+    )
+    .await
+    .expect("unclaimed state report");
+    assert_eq!(status, 403);
+
+    // The claiming console reports media flowing.
+    let (status, _) = http_post_json_with_header(
+        addr,
+        &format!("/api/stream/publish/{publish_token}/state"),
         "{\"publishing\":true,\"mic_live\":false}",
+        Some(("x-late-publish-claim", &claim)),
     )
     .await
     .expect("publish state report");
@@ -242,6 +272,73 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert_eq!(status, 404);
 
     api_task.abort();
+}
+
+/// GET that also returns the raw response head, for header assertions.
+async fn http_get_with_header(
+    addr: SocketAddr,
+    path: &str,
+    header: Option<(&str, &str)>,
+) -> std::io::Result<(u16, String, String)> {
+    let extra = header
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         {extra}Connection: close\r\n\
+         \r\n",
+        host = addr
+    );
+    http_exchange(addr, request).await
+}
+
+async fn http_post_json_with_header(
+    addr: SocketAddr,
+    path: &str,
+    body: &str,
+    header: Option<(&str, &str)>,
+) -> std::io::Result<(u16, String)> {
+    let extra = header
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         Content-Type: application/json\r\n\
+         {extra}Content-Length: {len}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        host = addr,
+        len = body.len(),
+    );
+    let (status, _, body) = http_exchange(addr, request).await?;
+    Ok((status, body))
+}
+
+async fn http_exchange(
+    addr: SocketAddr,
+    request: String,
+) -> std::io::Result<(u16, String, String)> {
+    let mut stream = TcpStream::connect(addr).await?;
+    stream.write_all(request.as_bytes()).await?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await?;
+    let response = String::from_utf8_lossy(&raw).into_owned();
+    let status = response
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .map(|(head, body)| (head.to_string(), body.to_string()))
+        .unwrap_or((response.clone(), String::new()));
+    Ok((status, head, body))
 }
 
 async fn http_post_json(

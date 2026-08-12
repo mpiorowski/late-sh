@@ -51,8 +51,8 @@ fn first_media_report_goes_live_exactly_once() {
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
 
-    let first = registry.report_publisher(&handles.publish_token, true, false);
-    let second = registry.report_publisher(&handles.publish_token, true, false);
+    let first = registry.report_publisher(&handles.publish_token, true, false, None);
+    let second = registry.report_publisher(&handles.publish_token, true, false, None);
 
     assert_eq!(first, PublisherReport::Live { went_live: true });
     assert_eq!(second, PublisherReport::Live { went_live: false });
@@ -66,7 +66,7 @@ fn first_media_report_goes_live_exactly_once() {
 fn unknown_publish_token_reports_gone() {
     let registry = StreamRegistry::new();
     assert_eq!(
-        registry.report_publisher("nope", true, false),
+        registry.report_publisher("nope", true, false, None),
         PublisherReport::Gone
     );
 }
@@ -76,9 +76,9 @@ fn publisher_stop_keeps_the_stream_in_grace() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
-    let outcome = registry.report_publisher(&handles.publish_token, false, false);
+    let outcome = registry.report_publisher(&handles.publish_token, false, false, None);
 
     assert_eq!(outcome, PublisherReport::Stopped);
     // Grace still counts as live so the room row does not flicker out on a
@@ -86,7 +86,7 @@ fn publisher_stop_keeps_the_stream_in_grace() {
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.live);
     assert_eq!(
-        registry.report_publisher(&handles.publish_token, true, false),
+        registry.report_publisher(&handles.publish_token, true, false, None),
         PublisherReport::Live { went_live: false }
     );
 }
@@ -96,7 +96,7 @@ fn watch_heartbeats_drive_the_watching_count() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
     assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-a"));
     assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-b"));
@@ -113,11 +113,11 @@ fn mic_state_reaches_the_view() {
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
 
-    registry.report_publisher(&handles.publish_token, true, true);
+    registry.report_publisher(&handles.publish_token, true, true, None);
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.mic_on_air);
 
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(!view.mic_on_air);
 }
@@ -127,7 +127,7 @@ fn end_for_user_kills_the_watch_url() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
     // The ended stream carries the voice channel so the caller can
     // force-disconnect the publisher's LiveKit session.
@@ -146,7 +146,7 @@ fn stream_lookup_by_username_is_case_insensitive() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "Mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
     let view = registry
         .stream_for_username("mat")
@@ -160,7 +160,7 @@ fn sweep_keeps_fresh_streams() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
     registry.watch_heartbeat(&handles.stream_id, "viewer-a");
 
     assert!(registry.sweep().is_empty());
@@ -191,7 +191,7 @@ fn sweep_moves_a_stale_publisher_into_grace_then_tears_down() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
     // Publisher silent past its TTL: grace, still shown as live (the room
     // row must not flicker out on a page refresh).
@@ -212,7 +212,7 @@ fn sweep_prunes_stale_watchers() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
     registry.watch_heartbeat(&handles.stream_id, "viewer-a");
 
     let ended = registry.sweep_at(Instant::now() + WATCHER_TTL);
@@ -231,7 +231,7 @@ fn watcher_cap_bounds_the_watching_count() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = registry.begin(user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false);
+    registry.report_publisher(&handles.publish_token, true, false, None);
 
     for i in 0..(WATCHERS_MAX + 25) {
         assert!(registry.watch_heartbeat(&handles.stream_id, &format!("viewer-{i}")));
@@ -241,4 +241,67 @@ fn watcher_cap_bounds_the_watching_count() {
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert_eq!(view.watching, WATCHERS_MAX);
     assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-0"));
+}
+
+#[test]
+fn publisher_claim_locks_the_token_to_the_first_caller() {
+    use super::PublisherAccess;
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = registry.begin(user, "mat", "show", room, channel);
+
+    // First grant fetch claims the token and mints the secret.
+    let secret = match registry.access_publisher(&handles.publish_token, None) {
+        PublisherAccess::Granted {
+            new_claim: Some(secret),
+            info,
+        } => {
+            assert_eq!(info.user_id, user);
+            secret
+        }
+        other => panic!("expected a claiming grant, got {other:?}"),
+    };
+
+    // A bare replay of the leaked URL is refused, grant and report alike.
+    assert_eq!(
+        registry.access_publisher(&handles.publish_token, None),
+        PublisherAccess::Denied
+    );
+    assert_eq!(
+        registry.access_publisher(&handles.publish_token, Some("wrong")),
+        PublisherAccess::Denied
+    );
+    assert_eq!(
+        registry.report_publisher(&handles.publish_token, false, false, None),
+        PublisherReport::Denied
+    );
+
+    // The claiming console keeps working: refetches and reports pass.
+    assert!(matches!(
+        registry.access_publisher(&handles.publish_token, Some(&secret)),
+        PublisherAccess::Granted {
+            new_claim: None,
+            ..
+        }
+    ));
+    assert_eq!(
+        registry.report_publisher(&handles.publish_token, true, false, Some(&secret)),
+        PublisherReport::Live { went_live: true }
+    );
+
+    // A fresh stream after a stop starts unclaimed with new ids.
+    registry.end_for_user(user).expect("ended stream");
+    let fresh = registry.begin(user, "mat", "next show", room, channel);
+    assert_ne!(fresh.publish_token, handles.publish_token);
+    assert!(matches!(
+        registry.access_publisher(&fresh.publish_token, None),
+        PublisherAccess::Granted {
+            new_claim: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(
+        registry.access_publisher(&handles.publish_token, None),
+        PublisherAccess::Gone
+    );
 }

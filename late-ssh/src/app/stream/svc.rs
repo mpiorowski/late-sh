@@ -20,7 +20,8 @@ use uuid::Uuid;
 use crate::app::{
     activity::publisher::ActivityPublisher,
     stream::registry::{
-        EndedStream, LiveStreamView, PublisherReport, StreamRegistry, StreamSnapshot,
+        EndedStream, LiveStreamView, PublisherAccess, PublisherReport, StreamRegistry,
+        StreamSnapshot,
     },
     voice::svc::{StreamMediaTicket, VoiceService},
 };
@@ -50,6 +51,21 @@ pub struct PublishGrant {
     pub username: String,
     pub stream_id: String,
     pub watch_url: String,
+}
+
+/// Outcome of a claim-checked publish grant request.
+#[derive(Clone, Debug)]
+pub enum PublishGrantAccess {
+    /// Dead URL: the stream ended or never existed.
+    Gone,
+    /// The token is claimed by another console; no grant.
+    Denied,
+    Granted {
+        grant: PublishGrant,
+        /// `Some` on the claiming (first) fetch; the API layer hands it to
+        /// the console as a cookie via the late-web proxy.
+        new_claim: Option<String>,
+    },
 }
 
 const STREAM_EVENT_CAP: usize = 64;
@@ -217,45 +233,62 @@ impl StreamService {
     }
 
     /// Resolve a publisher URL token into LiveKit connection details for the
-    /// go-live page. `None` when the stream is gone (dead URL).
-    pub fn publisher_grant(&self, publish_token: &str) -> anyhow::Result<Option<PublishGrant>> {
-        let Some(info) = self.registry.publisher_info(publish_token) else {
-            return Ok(None);
+    /// go-live page. Claim-once: the first fetch locks the token to that
+    /// console (the returned secret rides back as a cookie), so a leaked
+    /// publish URL cannot mint LiveKit tokens once the real console is up.
+    pub fn publisher_grant(
+        &self,
+        publish_token: &str,
+        presented_claim: Option<&str>,
+    ) -> anyhow::Result<PublishGrantAccess> {
+        let (info, new_claim) = match self
+            .registry
+            .access_publisher(publish_token, presented_claim)
+        {
+            PublisherAccess::Gone => return Ok(PublishGrantAccess::Gone),
+            PublisherAccess::Denied => return Ok(PublishGrantAccess::Denied),
+            PublisherAccess::Granted { info, new_claim } => (info, new_claim),
         };
         let ticket = self.voice.stream_publish_ticket(
             info.voice_channel_id,
             info.user_id,
             &info.username,
         )?;
-        Ok(Some(PublishGrant {
-            ticket,
-            title: info.title,
-            username: info.username,
-            stream_id: info.stream_id.clone(),
-            watch_url: self.watch_url(&info.stream_id),
-        }))
+        Ok(PublishGrantAccess::Granted {
+            grant: PublishGrant {
+                ticket,
+                title: info.title,
+                username: info.username,
+                stream_id: info.stream_id.clone(),
+                watch_url: self.watch_url(&info.stream_id),
+            },
+            new_claim,
+        })
     }
 
     /// Go-live page state report. The first "media flowing" report fires the
-    /// one #lounge announcement; a stop starts the grace timer. Returns
-    /// false when the stream is gone.
-    pub fn report_publisher(&self, publish_token: &str, publishing: bool, mic_live: bool) -> bool {
+    /// one #lounge announcement; a stop starts the grace timer. The API
+    /// layer maps `Gone` to 404 and `Denied` (claimed token, wrong or
+    /// missing secret) to 403.
+    pub fn report_publisher(
+        &self,
+        publish_token: &str,
+        publishing: bool,
+        mic_live: bool,
+        presented_claim: Option<&str>,
+    ) -> PublisherReport {
         let info = self.registry.publisher_info(publish_token);
-        match self
-            .registry
-            .report_publisher(publish_token, publishing, mic_live)
+        let outcome =
+            self.registry
+                .report_publisher(publish_token, publishing, mic_live, presented_claim);
+        if let PublisherReport::Live { went_live: true } = outcome
+            && let Some(info) = info
         {
-            PublisherReport::Gone => false,
-            PublisherReport::Live { went_live } => {
-                if went_live && let Some(info) = info {
-                    tracing::info!(user_id = %info.user_id, "stream went live");
-                    let title = Some(info.title).filter(|title| !title.trim().is_empty());
-                    self.activity.went_live_task(info.user_id, title);
-                }
-                true
-            }
-            PublisherReport::Stopped => true,
+            tracing::info!(user_id = %info.user_id, "stream went live");
+            let title = Some(info.title).filter(|title| !title.trim().is_empty());
+            self.activity.went_live_task(info.user_id, title);
         }
+        outcome
     }
 
     /// Watch-page state by stream id. `None` once the stream ends: watch

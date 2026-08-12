@@ -95,7 +95,8 @@
             }).then(function (res) {
                 // A dead publish token means the stream is gone; a report
                 // that vanished into a non-2xx must not keep the share up.
-                if (res.status === 404) { streamOver(); }
+                // 403 means another console holds the claim on this link.
+                if (res.status === 404 || res.status === 403) { streamOver(); }
             }).catch(function () { });
         }
 
@@ -112,6 +113,14 @@
             let res;
             try { res = await fetch('/golive/' + publishToken + '/grant'); } catch (e) {
                 setStatus('could not reach the server - reload to retry.');
+                return;
+            }
+            if (res.status === 403) {
+                // Claim-once: the first browser to open this link owns it.
+                setStatus('this go-live link is already in use by another browser. run /golive stop, then /golive again for a fresh link.');
+                shareBtn.disabled = true;
+                micBtn.disabled = true;
+                speakerBtn.disabled = true;
                 return;
             }
             if (!res.ok) {

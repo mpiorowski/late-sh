@@ -67,7 +67,15 @@ Cross-domain touchpoints:
 - `api.rs` — `/api/stream/publish/{token}`, `/api/stream/publish/{token}/state`,
   `/api/stream/watch/{id}`, `/api/stream/watch/{id}/grant`,
   `/api/stream/watch/{id}/heartbeat`. Capability id in the URL is the whole
-  auth; everything is served from registry memory.
+  auth; everything is served from registry memory. The publish token is
+  additionally **claim-once**: the first grant fetch locks it to that
+  console (secret minted registry-side, carried as the
+  `x-late-publish-claim` header between API and proxy, stored as an
+  HttpOnly path-scoped cookie in the console's browser). A leaked publish
+  URL cannot fetch a grant or forge state reports from any other browser
+  (403); leaked *before* the console opens, the intruder claims first and
+  the real console fails loudly instead of silently losing its stream.
+  Claims die with the stream; fresh `/golive` = fresh unclaimed token.
 - `late-web/src/pages/live/` — `/live/{id}` (watch page) and
   `/golive/{token}` (broadcast console), plus same-origin proxies of the
   API routes above. Pages are thin LiveKit browser clients.
@@ -149,9 +157,9 @@ Cross-domain touchpoints:
 - `registry_test.rs` — the phase machine: one-stream-per-user, pending
   visibility, the exactly-once `went_live` transition, grace on stop,
   heartbeat counting (including the `WATCHERS_MAX` cap), mic state,
-  teardown, username lookup, and all four TTL transitions via the
-  clock-injected `sweep_at` (pending expiry, live → grace, grace teardown,
-  watcher pruning).
+  teardown, username lookup, the claim-once publisher lock, and all four
+  TTL transitions via the clock-injected `sweep_at` (pending expiry,
+  live → grace, grace teardown, watcher pruning).
 - `activity/event_test.rs` — feed titles are mention-safe: `@` is stripped
   before a `/golive` or cyberspace title lands in a #lounge body (the
   lounge feed's "bodies never contain `@`" contract).
@@ -161,7 +169,8 @@ Cross-domain touchpoints:
   whole HTTP flow end to end against a real registry + DB, including the
   404s for dead capability ids.
 - `late-web/src/pages/live/live_test.rs` — capability-id validation (the
-  proxy-path injection gate) and page rendering (born-silent copy pinned).
+  proxy-path injection gate), page rendering (born-silent copy pinned),
+  upstream-status forwarding, and the claim cookie exchange.
 - LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh -E
   'test(stream)'"`; never raw cargo test.
 

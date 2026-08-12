@@ -2032,6 +2032,14 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
+    // A lone Esc never reaches the any-key gate in `handle_parsed_input`
+    // (it dispatches here via the pending-escape flush instead), so the
+    // stream URL modal needs its own arm, first, mirroring its position
+    // above everything else in that gate.
+    if app.stream_qr_modal.is_some() {
+        app.stream_qr_modal = None;
+        return;
+    }
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
         return;
