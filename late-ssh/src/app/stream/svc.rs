@@ -19,7 +19,9 @@ use uuid::Uuid;
 
 use crate::app::{
     activity::publisher::ActivityPublisher,
-    stream::registry::{LiveStreamView, PublisherReport, StreamRegistry, StreamSnapshot},
+    stream::registry::{
+        EndedStream, LiveStreamView, PublisherReport, StreamRegistry, StreamSnapshot,
+    },
     voice::svc::{StreamMediaTicket, VoiceService},
 };
 
@@ -110,10 +112,14 @@ impl StreamService {
                 let title = title.unwrap_or_default();
                 match service.go_live(user_id, &username, &title).await {
                     Ok(event) => {
-                        tracing::info!(room_id = %match &event {
-                            StreamEvent::GoLiveReady { room_id, .. } => *room_id,
-                            _ => Uuid::nil(),
-                        }, "stream registered");
+                        match &event {
+                            StreamEvent::GoLiveReady { room_id, .. } => {
+                                tracing::info!(room_id = %room_id, "stream registered");
+                            }
+                            StreamEvent::GoLiveFailed { .. } => {
+                                tracing::info!(user_id = %user_id, "go live refused: voice-blocked user");
+                            }
+                        }
                         let _ = service.evt_tx.send(event);
                     }
                     Err(error) => {
@@ -137,6 +143,15 @@ impl StreamService {
     ) -> anyhow::Result<StreamEvent> {
         if !self.voice.config().enabled {
             anyhow::bail!("voice/LiveKit is not configured");
+        }
+        if self.voice.is_blocked(user_id) {
+            // Surface the block at command time: without this the stream
+            // half-registers (room, rail row) and only the page's grant
+            // fetch fails, as a generic error.
+            return Ok(StreamEvent::GoLiveFailed {
+                user_id,
+                message: "You have been removed from voice by a moderator.".to_string(),
+            });
         }
         let client = self.db.get().await.context("getting db client")?;
         let room = ChatRoom::get_or_create_stream_room(&client, username, user_id)
@@ -167,9 +182,38 @@ impl StreamService {
         })
     }
 
-    /// `/golive stop`: tear the stream down now. Returns whether one existed.
+    /// `/golive stop` (also fired by a moderation voice kick): tear the
+    /// stream down now and force-disconnect the go-live console from
+    /// LiveKit. Returns whether one existed.
     pub fn stop(&self, user_id: Uuid) -> bool {
-        self.registry.end_for_user(user_id)
+        match self.registry.end_for_user(user_id) {
+            Some(ended) => {
+                self.disconnect_publisher_task(ended);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Registry removal kills the capability URLs; this kills the media.
+    /// Fire and forget, so it logs its own failures: the page also stops
+    /// itself when its next state report 404s, so a failed removal degrades
+    /// to a short delay instead of an endless broadcast. Debug level because
+    /// a pending stream's console may never have connected at all.
+    fn disconnect_publisher_task(&self, ended: EndedStream) {
+        let voice = self.voice.clone();
+        tokio::spawn(async move {
+            if let Err(error) = voice
+                .remove_stream_publisher(ended.voice_channel_id, ended.user_id)
+                .await
+            {
+                tracing::debug!(
+                    error = ?error,
+                    user_id = %ended.user_id,
+                    "stream publisher disconnect failed; page stops itself on the next report"
+                );
+            }
+        });
     }
 
     /// Resolve a publisher URL token into LiveKit connection details for the
@@ -222,10 +266,16 @@ impl StreamService {
 
     /// Subscribe-only LiveKit ticket for a watch page. Minted with a random
     /// anonymous identity per call; the grant physically cannot publish.
+    /// Withheld while the stream is pending: nobody subscribes to the room's
+    /// voice channel before media has actually flowed (grace still counts as
+    /// live, so a page refresh mid-stream reconnects).
     pub fn watch_grant(&self, stream_id: &str) -> anyhow::Result<Option<StreamMediaTicket>> {
         let Some(view) = self.registry.watch_view(stream_id) else {
             return Ok(None);
         };
+        if !view.live {
+            return Ok(None);
+        }
         let identity = format!("viewer-{}", Uuid::new_v4().simple());
         let ticket = self
             .voice
@@ -243,8 +293,12 @@ impl StreamService {
         view.live.then(|| self.watch_url(&view.stream_id))
     }
 
-    /// Registry hygiene pass; run periodically from `main.rs`.
+    /// Registry hygiene pass; run periodically from `main.rs`. Streams the
+    /// sweep tears down (pending TTL, grace ran out) get their publisher
+    /// disconnected, same as an explicit stop.
     pub fn sweep(&self) {
-        self.registry.sweep();
+        for ended in self.registry.sweep() {
+            self.disconnect_publisher_task(ended);
+        }
     }
 }

@@ -169,6 +169,12 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert_eq!(status, 200);
     assert!(body.contains("\"live\":false"), "pending stream: {body}");
     assert!(body.contains("demo show"));
+    // No subscribe grant while pending: nobody listens to the room's voice
+    // channel before media has actually flowed.
+    let (status, _) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
+        .await
+        .expect("pending watch grant");
+    assert_eq!(status, 404);
 
     // The publisher page fetches its grant and reports media flowing.
     let (status, body) =
@@ -213,6 +219,17 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
         .expect("watch state");
     assert_eq!(status, 200);
     assert!(body.contains("\"watching\":1"), "watcher count: {body}");
+    // Watcher ids are client-generated (a browser UUID); junk beyond the
+    // cap is rejected at the boundary and never reaches the registry.
+    let long_id = "x".repeat(65);
+    let (status, _) = http_post_json(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/heartbeat"),
+        &format!("{{\"watcher_id\":\"{long_id}\"}}"),
+    )
+    .await
+    .expect("oversized heartbeat");
+    assert_eq!(status, 400);
 
     // Dead capability ids answer 404, never a grant.
     let (status, _) = http_get_with_retry(addr, "/api/stream/watch/unknown-id", 3)

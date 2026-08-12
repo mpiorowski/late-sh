@@ -23,6 +23,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::stream::svc::StreamService;
 use crate::app::ultimates::UltimateKind;
 use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
@@ -48,6 +49,7 @@ pub struct ModerationInfra {
     force_admin: bool,
     artboard: Option<ArtboardRestoreHandles>,
     voice: Option<VoiceService>,
+    stream: Option<StreamService>,
 }
 
 #[derive(Clone)]
@@ -108,12 +110,21 @@ impl ModerationInfra {
         self
     }
 
+    pub fn with_stream(mut self, stream: StreamService) -> Self {
+        self.stream = Some(stream);
+        self
+    }
+
     fn force_admin(&self) -> bool {
         self.force_admin
     }
 
     fn voice(&self) -> Option<&VoiceService> {
         self.voice.as_ref()
+    }
+
+    fn stream(&self) -> Option<&StreamService> {
+        self.stream.as_ref()
     }
 
     fn artboard_handles(
@@ -1284,6 +1295,15 @@ impl ModerationService {
                     self.force_remove_voice_participants(vec![(room, target.id)], voice)
                         .await;
                 }
+                // A voice kick also ends the target's live stream: the
+                // go-live console connects as `stream-{user_id}`, outside
+                // the CLI voice state `kick` resolves, so without this a
+                // browser streamer keeps broadcasting after the kick.
+                if let Some(stream) = self.infra.stream()
+                    && stream.stop(target.id)
+                {
+                    tracing::info!(target = %target.id, "voice kick ended the target's stream");
+                }
             }
             VoiceAction::Allow => {
                 voice.allow(target.id);
@@ -1316,7 +1336,7 @@ impl ModerationService {
         voice: &VoiceService,
     ) {
         for (room, user_id) in removals {
-            if let Err(err) = voice.remove_participant(&room, user_id).await {
+            if let Err(err) = voice.remove_participant(&room, &user_id.to_string()).await {
                 tracing::warn!(
                     error = %err,
                     user_id = %user_id,

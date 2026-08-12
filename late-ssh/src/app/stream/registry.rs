@@ -29,6 +29,14 @@ pub const PUBLISHER_GRACE: Duration = Duration::from_secs(30);
 /// Watch pages heartbeat while the tab is open; a watcher silent for this
 /// long stops counting.
 pub const WATCHER_TTL: Duration = Duration::from_secs(45);
+/// Hard cap on distinct watcher ids tracked per stream. The heartbeat
+/// endpoint is unauthenticated (the watch URL is the auth), so both the
+/// "N watching" count and registry memory must stay bounded no matter what
+/// a link-holder posts; heartbeats for new ids beyond the cap are dropped.
+pub const WATCHERS_MAX: usize = 500;
+/// Watcher ids are client-generated (a browser UUID, 36 chars); anything
+/// longer is rejected at the API boundary before it reaches the registry.
+pub const WATCHER_ID_MAX_LEN: usize = 64;
 
 /// Lifecycle of one registered stream. `Pending` is the window between
 /// `/golive` and the page's first media report; the announcement fires only
@@ -139,6 +147,16 @@ pub struct PublisherInfo {
     pub stream_id: String,
 }
 
+/// A stream the registry just tore down. The caller (StreamService) uses
+/// this to force-disconnect the publisher's LiveKit session: registry
+/// removal alone only kills the capability URLs, not an already-connected
+/// go-live page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndedStream {
+    pub user_id: Uuid,
+    pub voice_channel_id: Uuid,
+}
+
 /// Outcome of a publisher page state report.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublisherReport {
@@ -227,14 +245,19 @@ impl StreamRegistry {
         handles
     }
 
-    /// Tear the user's stream down now (`/golive stop`). Returns whether a
-    /// stream existed.
-    pub fn end_for_user(&self, user_id: Uuid) -> bool {
-        let removed = self.inner.lock_recover().remove(&user_id).is_some();
-        if removed {
+    /// Tear the user's stream down now (`/golive stop`, moderation kick).
+    /// Returns the ended stream so the caller can disconnect the publisher's
+    /// LiveKit session, `None` when no stream existed.
+    pub fn end_for_user(&self, user_id: Uuid) -> Option<EndedStream> {
+        let removed = self.inner.lock_recover().remove(&user_id);
+        let ended = removed.map(|entry| EndedStream {
+            user_id: entry.user_id,
+            voice_channel_id: entry.voice_channel_id,
+        });
+        if ended.is_some() {
             self.publish();
         }
-        removed
+        ended
     }
 
     /// Resolve a publish token to what the grant endpoint needs. Valid for
@@ -301,23 +324,30 @@ impl StreamRegistry {
     }
 
     /// Record a watch-page heartbeat. Returns false when the stream is gone.
+    /// New watcher ids past [`WATCHERS_MAX`] are dropped (known ids still
+    /// refresh), and only a count change republishes the snapshot, so a
+    /// heartbeat flood can neither grow memory nor spam every session.
     pub fn watch_heartbeat(&self, stream_id: &str, watcher_id: &str) -> bool {
-        let known = {
+        let (known, count_changed) = {
             let mut inner = self.inner.lock_recover();
             match inner
                 .values_mut()
                 .find(|entry| entry.stream_id == stream_id)
             {
                 Some(entry) => {
-                    entry
-                        .watchers
-                        .insert(watcher_id.to_string(), Instant::now());
-                    true
+                    let seen_before = entry.watchers.contains_key(watcher_id);
+                    let admitted = seen_before || entry.watchers.len() < WATCHERS_MAX;
+                    if admitted {
+                        entry
+                            .watchers
+                            .insert(watcher_id.to_string(), Instant::now());
+                    }
+                    (true, admitted && !seen_before)
                 }
-                None => false,
+                None => (false, false),
             }
         };
-        if known {
+        if count_changed {
             self.publish();
         }
         known
@@ -334,12 +364,17 @@ impl StreamRegistry {
 
     /// Expire pending streams nobody ever published to, move stale-publisher
     /// streams into grace, tear down streams whose grace ran out, and prune
-    /// stale watchers. Run periodically from `main.rs`.
-    pub fn sweep(&self) {
-        let changed = {
+    /// stale watchers. Run periodically from `main.rs`. Returns the streams
+    /// torn down this pass so the caller can disconnect their publishers.
+    pub fn sweep(&self) -> Vec<EndedStream> {
+        self.sweep_at(Instant::now())
+    }
+
+    /// [`sweep`](Self::sweep) against an explicit clock, so the TTL
+    /// transitions are testable without sleeping.
+    pub fn sweep_at(&self, now: Instant) -> Vec<EndedStream> {
+        let (changed, ended) = {
             let mut inner = self.inner.lock_recover();
-            let now = Instant::now();
-            let before = inner.len();
             let mut changed = false;
             for entry in inner.values_mut() {
                 let stale_watchers = entry
@@ -360,18 +395,32 @@ impl StreamRegistry {
                     changed = true;
                 }
             }
-            inner.retain(|_, entry| match entry.phase {
-                StreamPhase::Pending => now.duration_since(entry.created_at) < PENDING_TTL,
-                StreamPhase::Live => true,
-                StreamPhase::Grace => entry
-                    .grace_since
-                    .is_none_or(|since| now.duration_since(since) < PUBLISHER_GRACE),
-            });
-            changed || inner.len() != before
+            let expired: Vec<Uuid> = inner
+                .values()
+                .filter(|entry| match entry.phase {
+                    StreamPhase::Pending => now.duration_since(entry.created_at) >= PENDING_TTL,
+                    StreamPhase::Live => false,
+                    StreamPhase::Grace => entry
+                        .grace_since
+                        .is_some_and(|since| now.duration_since(since) >= PUBLISHER_GRACE),
+                })
+                .map(|entry| entry.user_id)
+                .collect();
+            let ended: Vec<EndedStream> = expired
+                .into_iter()
+                .filter_map(|user_id| {
+                    inner.remove(&user_id).map(|entry| EndedStream {
+                        user_id: entry.user_id,
+                        voice_channel_id: entry.voice_channel_id,
+                    })
+                })
+                .collect();
+            (changed || !ended.is_empty(), ended)
         };
         if changed {
             self.publish();
         }
+        ended
     }
 
     fn publish(&self) {

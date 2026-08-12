@@ -249,10 +249,16 @@ fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
         "" => GoLiveCommand::Start { title: None },
         "stop" => GoLiveCommand::Stop,
         title => GoLiveCommand::Start {
-            title: Some(title.to_string()),
+            // Free text that ends up in the rail, the stream header, and
+            // the #lounge announcement; clamp it at the boundary so no
+            // downstream surface needs its own cap.
+            title: Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect()),
         },
     })
 }
+
+/// Longest `/golive` title kept; the rest is cut at the parse boundary.
+const GOLIVE_TITLE_MAX_CHARS: usize = 80;
 
 /// An aquarium control requested from the composer (`/aquarium`,
 /// `/aquarium feed`). `App` owns the tray state and entitlements, so the

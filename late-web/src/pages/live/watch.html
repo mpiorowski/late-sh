@@ -54,6 +54,7 @@
         let muted = true;
         let ended = false;
         let room = null;
+        let connecting = false;
         const audioEls = [];
 
         function setStatus(text) { statusEl.textContent = text; }
@@ -74,7 +75,18 @@
             streamerEl.textContent = '@' + state.streamer + (state.title ? ' · ' : '');
             titleEl.textContent = state.title || '';
             watchingEl.textContent = state.watching + ' watching';
-            if (!state.live) { setStatus('not live yet - hang tight.'); }
+            // The page subscribes only once media has flowed: the server
+            // withholds the grant while the stream is pending, so nobody
+            // listens in on the room's voice channel before the show starts.
+            if (!state.live) { setStatus('not live yet - hang tight.'); return; }
+            if (!room && !connecting) {
+                connecting = true;
+                connect().catch(function () {
+                    room = null;
+                    connecting = false;
+                    setStatus('could not connect - retrying.');
+                });
+            }
         }
 
         function heartbeat() {
@@ -101,10 +113,13 @@
         async function connect() {
             let res;
             try { res = await fetch('/live/' + streamId + '/grant'); } catch (e) {
-                setStatus('could not reach the server - reload to retry.');
+                setStatus('could not reach the server - retrying.');
+                connecting = false;
                 return;
             }
-            if (!res.ok) { endStream('this stream has ended.'); return; }
+            // A 404 here while the state poll says live is a race with the
+            // stream ending; the next poll settles it either way.
+            if (!res.ok) { connecting = false; return; }
             const grant = await res.json();
             room = new LivekitClient.Room();
             room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track) { attachTrack(track); });
@@ -131,7 +146,6 @@
 
         poll();
         heartbeat();
-        connect().catch(function () { setStatus('could not connect - reload to retry.'); });
         setInterval(poll, 10000);
         setInterval(heartbeat, 15000);
     })();

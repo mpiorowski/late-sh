@@ -387,3 +387,36 @@ async fn room_state_lists_the_same_rooms_in_the_same_order_as_list_for_user() {
         assert!(state.last_message_at.contains_key(&room.id));
     }
 }
+
+#[tokio::test]
+async fn test_stream_room_follows_the_account_not_the_username() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let alice = create_test_user(&test_db.db, "streamer-alice").await;
+    let usurper = create_test_user(&test_db.db, "streamer-mallory").await;
+
+    let original = ChatRoom::get_or_create_stream_room(&client, &alice.username, alice.id)
+        .await
+        .expect("alice stream room");
+    assert_eq!(original.created_by, Some(alice.id));
+
+    // A second /golive reuses the same room.
+    let again = ChatRoom::get_or_create_stream_room(&client, &alice.username, alice.id)
+        .await
+        .expect("alice stream room again");
+    assert_eq!(again.id, original.id);
+
+    // Alice renamed: her room follows her account, old slug and all.
+    let renamed = ChatRoom::get_or_create_stream_room(&client, "totally-new-name", alice.id)
+        .await
+        .expect("renamed stream room");
+    assert_eq!(renamed.id, original.id);
+
+    // Another account claiming alice's freed username must NOT inherit her
+    // room (and its chat history); it gets a room of its own.
+    let taken_over = ChatRoom::get_or_create_stream_room(&client, &alice.username, usurper.id)
+        .await
+        .expect("usurper stream room");
+    assert_ne!(taken_over.id, original.id);
+    assert_eq!(taken_over.created_by, Some(usurper.id));
+}

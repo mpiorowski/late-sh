@@ -62,6 +62,7 @@
         const speakerBtn = document.getElementById('speaker-btn');
         let room = null;
         let publishing = false;
+        let over = false;
         // Born silent in both directions: mic off, room audio muted. The
         // human opens each direction with a click; nothing detects anything.
         let micLive = false;
@@ -70,11 +71,31 @@
 
         function setStatus(text) { statusEl.textContent = text; }
 
+        // The server ended the stream (/golive stop, a moderator, or the
+        // grace timer): this console must stop broadcasting too, even if the
+        // server-side disconnect never reaches LiveKit.
+        function streamOver() {
+            if (over) return;
+            over = true;
+            publishing = false;
+            micLive = false;
+            shareBtn.disabled = true;
+            micBtn.disabled = true;
+            speakerBtn.disabled = true;
+            setStatus('this stream has ended. run /golive in the terminal to start a new one.');
+            if (room) { room.disconnect(); }
+        }
+
         function report() {
+            if (over) return;
             fetch('/golive/' + publishToken + '/state', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ publishing: publishing, mic_live: micLive }),
+            }).then(function (res) {
+                // A dead publish token means the stream is gone; a report
+                // that vanished into a non-2xx must not keep the share up.
+                if (res.status === 404) { streamOver(); }
             }).catch(function () { });
         }
 

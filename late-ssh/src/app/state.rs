@@ -1284,10 +1284,17 @@ impl App {
                 .stream_service
                 .as_ref()
                 .map(|service| service.subscribe_events()),
-            stream_snapshot_rx: config
-                .stream_service
-                .as_ref()
-                .map(|service| service.subscribe()),
+            stream_snapshot_rx: config.stream_service.as_ref().map(|service| {
+                let mut rx = service.subscribe();
+                // `watch::Sender::subscribe` marks the current value as seen
+                // (same trap as the leaderboard channel below): without this
+                // a session connecting mid-stream shows no rail row or LIVE
+                // tag until the registry next publishes, which for a quiet
+                // pending stream is minutes away. Forcing `has_changed` makes
+                // the first `tick_stream` apply the snapshot sitting there.
+                rx.mark_changed();
+                rx
+            }),
             stream_service: config.stream_service,
             pending_on_air_voice_confirm: None,
             stream_qr_modal: None,
@@ -2646,17 +2653,22 @@ impl App {
             self.active_voice_channel(),
         ) {
             VoiceToggleIntent::JoinOrSwitch => {
-                // Joining voice in a room whose stream is on air makes you
-                // audible to anonymous link-holders; one explicit confirm
-                // before the first join (per channel, re-armed on switch).
+                // Joining voice in a room with a registered stream makes you
+                // audible to anonymous link-holders, now (live) or the moment
+                // media flows (pending): consent arms at registration, not at
+                // first media, so a co-host cannot join un-warned during the
+                // setup window. One explicit confirm before the first join
+                // (per channel, re-armed on switch).
                 if let Some(channel_id) = self.active_voice_channel()
-                    && self.active_stream_on_air(channel_id)
+                    && let Some(live) = self.stream_on_channel(channel_id)
                     && self.pending_on_air_voice_confirm != Some(channel_id)
                 {
                     self.pending_on_air_voice_confirm = Some(channel_id);
-                    return Banner::error(
-                        "ON AIR: voice here is broadcast to stream watchers. Ctrl+V again to join.",
-                    );
+                    return Banner::error(if live {
+                        "ON AIR: voice here is broadcast to stream watchers. Ctrl+V again to join."
+                    } else {
+                        "Stream room: voice here reaches watchers once the stream starts. Ctrl+V again to join."
+                    });
                 }
                 self.pending_on_air_voice_confirm = None;
                 self.voice_join()
@@ -2668,12 +2680,15 @@ impl App {
         }
     }
 
-    /// Whether the stream owning `channel_id`'s room is on air right now.
-    fn active_stream_on_air(&self, channel_id: Uuid) -> bool {
+    /// The registered stream owning `channel_id`'s room, as `Some(live)`.
+    /// `Some(false)` is a pending stream: not broadcasting yet, but the
+    /// voice channel becomes audible to link-holders when media starts.
+    fn stream_on_channel(&self, channel_id: Uuid) -> Option<bool> {
         self.chat
             .live_streams
             .iter()
-            .any(|stream| stream.voice_channel_id == channel_id && stream.live)
+            .find(|stream| stream.voice_channel_id == channel_id)
+            .map(|stream| stream.live)
     }
 
     /// Stream plumbing drained once per tick: composer commands, go-live
@@ -2754,10 +2769,39 @@ impl App {
                     stream.watch_url = service.watch_url(&stream.stream_id);
                 }
             }
+            // Pending -> Live edges for someone else's stream: the co-host
+            // case. The channel persists between streams, so a co-host can
+            // be sitting in voice before `/golive` even runs; the join-time
+            // confirm cannot cover them, this banner does.
+            let previously_live: HashSet<Uuid> = self
+                .chat
+                .live_streams
+                .iter()
+                .filter(|stream| stream.live)
+                .map(|stream| stream.voice_channel_id)
+                .collect();
+            let newly_live: Vec<Uuid> = snapshot
+                .streams
+                .iter()
+                .filter(|stream| {
+                    stream.live
+                        && stream.user_id != self.user_id
+                        && !previously_live.contains(&stream.voice_channel_id)
+                })
+                .map(|stream| stream.voice_channel_id)
+                .collect();
             if self.chat.set_live_streams(snapshot.streams) {
                 // LIVE tags live inside cached chat rows; rail rows and the
                 // stream header re-render on the same epoch bump.
                 self.chat_ctx_epoch += 1;
+                changed = true;
+            }
+            if let Some(current_channel) = self.voice.current_room(self.user_id)
+                && newly_live.contains(&current_channel)
+            {
+                self.banner = Some(Banner::error(
+                    "⦿ ON AIR: this room's stream went live. Voice here is broadcast to watchers (Ctrl+V to leave).",
+                ));
                 changed = true;
             }
         }

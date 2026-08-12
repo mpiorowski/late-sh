@@ -3,7 +3,8 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-11 (initial v1 build, from the STREAM.md seed doc)
+- Last updated: 2026-08-12 (review hardening: publisher kill switch, pending
+  consent gates, heartbeat caps, owner-keyed rooms)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -54,7 +55,11 @@ Cross-domain touchpoints:
   `{username}-live`, public. Chat history persists between streams; `kind='game'`
   keeps it out of the normal rail/IRC surfaces, and the public game-room
   join path (`ChatService::join_game_room_task`) lets anyone enter from the
-  rail. No migration was needed (`game_kind` is free-form TEXT).
+  rail. No migration was needed (`game_kind` is free-form TEXT). The room
+  follows the **account**, not the name: lookup is by `created_by` first, so
+  a renamed streamer keeps their room (old slug) and a freed-and-reclaimed
+  username never inherits another account's room; a squatted slug falls back
+  to `{username}-live-{id-suffix}`.
 - `app/voice/svc.rs` — `stream_publish_ticket` (publish restricted at the
   SFU grant level to `screen_share`/`screen_share_audio`/`microphone`,
   identity `stream-{user_id}` so it never collides with the CLI voice
@@ -107,7 +112,13 @@ Cross-domain touchpoints:
 4. Ending: `/golive stop`, or close the tab / stop sharing → grace
    (~30s, survives a refresh) → the registry sweeps the stream, watch and
    publisher URLs die, the rail row disappears. A registered stream whose
-   page never reports media is swept after 5 minutes.
+   page never reports media is swept after 5 minutes. **Teardown kills the
+   media, not just the URLs**: every path out of the registry (`stop`, a
+   moderation voice kick, grace/pending sweep) also force-disconnects the
+   go-live console from LiveKit (`VoiceService::remove_stream_publisher`,
+   identity `stream-{user_id}`), and the console itself treats a 404 on its
+   state report as stream-over (unpublish + disconnect), so neither side
+   can keep broadcasting into the voice channel after the stream is gone.
 
 ## 4. Consent invariants (non-negotiable, from STREAM.md)
 
@@ -116,13 +127,20 @@ Cross-domain touchpoints:
    human clicks to open each direction. The page reports its own state.
 2. **ON AIR is loud.** The voice strip in a live room leads with ⦿ ON AIR,
    and the first Ctrl+V there demands a second Ctrl+V to confirm you are
-   audible to anonymous link-holders.
-3. **No invisible speaker.** A browser-mic streamer appears in the voice
+   audible to anonymous link-holders. The confirm arms at **registration**
+   (a pending stream warns too, with softer wording), and a session already
+   sitting in the voice channel gets a banner on the Pending → Live edge:
+   the channel persists between streams, so a co-host can predate `/golive`.
+3. **Nobody subscribes before media flows.** The watch grant is withheld
+   while the stream is pending (grace still counts as live so refreshes
+   reconnect); the watch page connects off the state poll's `live` flag,
+   never on load. A pending stream's voice channel is not listenable.
+4. **No invisible speaker.** A browser-mic streamer appears in the voice
    strip as `{name} · on air`, fed by the page's own mic report. Anonymous
    *ears* are expected (the count is shown); anonymous *mouths* are
    forbidden — watch grants are `canPublish=false` at the SFU level, so a
    tampered page still cannot open a mic.
-4. **Voice stays CLI-only** as a system. The streamer's own broadcast
+5. **Voice stays CLI-only** as a system. The streamer's own broadcast
    console is the one scoped exception (room owner, own stream room,
    per-stream token); see `../voice/CONTEXT.md` §7/§10.
 
@@ -130,7 +148,15 @@ Cross-domain touchpoints:
 
 - `registry_test.rs` — the phase machine: one-stream-per-user, pending
   visibility, the exactly-once `went_live` transition, grace on stop,
-  heartbeat counting, mic state, teardown, username lookup, sweep.
+  heartbeat counting (including the `WATCHERS_MAX` cap), mic state,
+  teardown, username lookup, and all four TTL transitions via the
+  clock-injected `sweep_at` (pending expiry, live → grace, grace teardown,
+  watcher pruning).
+- `activity/event_test.rs` — feed titles are mention-safe: `@` is stripped
+  before a `/golive` or cyberspace title lands in a #lounge body (the
+  lounge feed's "bodies never contain `@`" contract).
+- `chat_room_test.rs` (late-core) — the stream room follows the account
+  through a rename; a reclaimed username does not inherit the old room.
 - `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow` — the
   whole HTTP flow end to end against a real registry + DB, including the
   404s for dead capability ids.
@@ -139,16 +165,26 @@ Cross-domain touchpoints:
 - LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh -E
   'test(stream)'"`; never raw cargo test.
 
-## 6. Known gaps / follow-ups
+## 6. Moderation
+
+- `/mod voice kick @user` is the stream kill switch: it blocks future voice
+  tickets (which `go_live` and `stream_publish_ticket` both check, so the
+  target cannot restart), ends the target's registered stream, and
+  force-disconnects the go-live console from LiveKit (`ModerationInfra`
+  carries the `StreamService`; see `moderation/service.rs::voice_action`).
+  `/mod voice allow @user` lifts the block.
+- `/mod` room tools (ban, kick-from-room, slow mode) work on the stream
+  chat room like any other room.
+- A minted LiveKit token stays valid until it expires; the force-disconnect
+  plus the no-new-tickets block is what makes a kick bite immediately.
+
+## 7. Known gaps / follow-ups
 
 - Metrics: no `record_stream_*` telemetry yet (streams started, watcher
   peaks — the experiment metrics in STREAM.md are currently only readable
   from logs/registry).
-- The stream room keeps its slug from the username at first `/golive`; a
-  renamed user gets a fresh room (old history orphaned but harmless).
+- A renamed streamer keeps their room under the old `{username}-live` slug
+  (cosmetic only: the slug is not shown anywhere user-facing).
 - Splash tips carry no `/golive` line yet.
-- Moderation: `/mod` room tools work on the chat room, but there is no
-  stream-specific kill switch beyond `/golive stop` + LiveKit voice mod
-  tools. Fine at ~40 trusted users; revisit before any public watch page.
 - The tavern TV prop, arena spectator reuse, and a public `late.sh/live`
   stay future work (see STREAM.md).

@@ -461,6 +461,15 @@ async fn post_stream_watch_heartbeat(
     AxumState(state): AxumState<State>,
     Json(body): Json<StreamWatchHeartbeatBody>,
 ) -> StatusCode {
+    // The endpoint is unauthenticated (the watch URL is the auth) and the
+    // watcher id is client-generated (a browser UUID, 36 chars). Ids beyond
+    // the cap are junk from a tampered client; reject them at the boundary
+    // so the registry only ever stores well-formed ids.
+    if body.watcher_id.is_empty()
+        || body.watcher_id.len() > crate::app::stream::registry::WATCHER_ID_MAX_LEN
+    {
+        return StatusCode::BAD_REQUEST;
+    }
     if state
         .stream_service
         .watch_heartbeat(&stream_id, &body.watcher_id)

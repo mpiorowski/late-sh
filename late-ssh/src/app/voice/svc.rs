@@ -544,13 +544,30 @@ impl VoiceService {
         }
     }
 
+    /// Force-disconnect the streamer's go-live console from a stream room's
+    /// LiveKit channel. The console connects as `stream-{user_id}` (distinct
+    /// from the CLI voice identity), so a plain participant removal by user
+    /// id never finds it; this is the kill switch behind `/golive stop`,
+    /// grace teardown, and a moderation voice kick.
+    pub async fn remove_stream_publisher(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let room = self.livekit_room_name(room_id);
+        self.remove_participant(&room, &format!("stream-{user_id}"))
+            .await
+    }
+
     /// Force-disconnect a participant from a LiveKit room via the server API.
     /// This is what actually ends an in-progress session on `kick`; the block
     /// set only prevents rejoining. No-op when voice is not configured.
+    /// `identity` is the LiveKit identity: `{user_id}` for CLI voice,
+    /// `stream-{user_id}` for a go-live console.
     pub async fn remove_participant(
         &self,
         livekit_room: &str,
-        user_id: Uuid,
+        identity: &str,
     ) -> anyhow::Result<()> {
         if !self.config.enabled {
             return Ok(());
@@ -582,7 +599,7 @@ impl VoiceService {
             .bearer_auth(token)
             .json(&RemoveParticipantRequest {
                 room: livekit_room,
-                identity: &user_id.to_string(),
+                identity,
             })
             .send()
             .await

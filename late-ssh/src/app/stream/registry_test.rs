@@ -1,6 +1,11 @@
+use std::time::Instant;
+
 use uuid::Uuid;
 
-use super::{PublisherReport, StreamRegistry};
+use super::{
+    PENDING_TTL, PUBLISHER_GRACE, PUBLISHER_TTL, PublisherReport, StreamRegistry, WATCHER_TTL,
+    WATCHERS_MAX,
+};
 
 fn ids() -> (Uuid, Uuid, Uuid) {
     (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7())
@@ -124,8 +129,12 @@ fn end_for_user_kills_the_watch_url() {
     let handles = registry.begin(user, "mat", "show", room, channel);
     registry.report_publisher(&handles.publish_token, true, false);
 
-    assert!(registry.end_for_user(user));
-    assert!(!registry.end_for_user(user));
+    // The ended stream carries the voice channel so the caller can
+    // force-disconnect the publisher's LiveKit session.
+    let ended = registry.end_for_user(user).expect("ended stream");
+    assert_eq!(ended.user_id, user);
+    assert_eq!(ended.voice_channel_id, channel);
+    assert!(registry.end_for_user(user).is_none());
 
     assert!(registry.watch_view(&handles.stream_id).is_none());
     assert!(registry.publisher_info(&handles.publish_token).is_none());
@@ -154,9 +163,82 @@ fn sweep_keeps_fresh_streams() {
     registry.report_publisher(&handles.publish_token, true, false);
     registry.watch_heartbeat(&handles.stream_id, "viewer-a");
 
-    registry.sweep();
+    assert!(registry.sweep().is_empty());
 
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.live);
     assert_eq!(view.watching, 1);
+}
+
+#[test]
+fn sweep_expires_a_pending_stream_after_the_ttl() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = registry.begin(user, "mat", "never shown", room, channel);
+
+    assert!(registry.sweep_at(Instant::now()).is_empty());
+    let ended = registry.sweep_at(Instant::now() + PENDING_TTL);
+
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].user_id, user);
+    assert_eq!(ended[0].voice_channel_id, channel);
+    assert!(registry.watch_view(&handles.stream_id).is_none());
+    assert!(registry.snapshot().streams.is_empty());
+}
+
+#[test]
+fn sweep_moves_a_stale_publisher_into_grace_then_tears_down() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = registry.begin(user, "mat", "show", room, channel);
+    registry.report_publisher(&handles.publish_token, true, false);
+
+    // Publisher silent past its TTL: grace, still shown as live (the room
+    // row must not flicker out on a page refresh).
+    let stale_at = Instant::now() + PUBLISHER_TTL;
+    assert!(registry.sweep_at(stale_at).is_empty());
+    let view = registry.watch_view(&handles.stream_id).expect("watch view");
+    assert!(view.live);
+
+    // Grace runs out: torn down, capability URLs dead.
+    let ended = registry.sweep_at(stale_at + PUBLISHER_GRACE);
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].user_id, user);
+    assert!(registry.watch_view(&handles.stream_id).is_none());
+}
+
+#[test]
+fn sweep_prunes_stale_watchers() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = registry.begin(user, "mat", "show", room, channel);
+    registry.report_publisher(&handles.publish_token, true, false);
+    registry.watch_heartbeat(&handles.stream_id, "viewer-a");
+
+    let ended = registry.sweep_at(Instant::now() + WATCHER_TTL);
+
+    // WATCHER_TTL > PUBLISHER_TTL, so the same sweep also moves the silent
+    // publisher into grace; the stream survives this pass (still shown as
+    // live), the stale watcher does not.
+    assert!(ended.is_empty());
+    let view = registry.watch_view(&handles.stream_id).expect("watch view");
+    assert!(view.live);
+    assert_eq!(view.watching, 0);
+}
+
+#[test]
+fn watcher_cap_bounds_the_watching_count() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = registry.begin(user, "mat", "show", room, channel);
+    registry.report_publisher(&handles.publish_token, true, false);
+
+    for i in 0..(WATCHERS_MAX + 25) {
+        assert!(registry.watch_heartbeat(&handles.stream_id, &format!("viewer-{i}")));
+    }
+
+    // New ids past the cap are dropped; known ids still refresh.
+    let view = registry.watch_view(&handles.stream_id).expect("watch view");
+    assert_eq!(view.watching, WATCHERS_MAX);
+    assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-0"));
 }
