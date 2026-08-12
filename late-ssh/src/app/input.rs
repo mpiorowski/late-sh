@@ -804,7 +804,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     // Stream URL + QR modal: any key or click closes it. It sits above
     // everything except the announcements: the URL it shows was just
     // requested, so nothing else should swallow the dismissal.
-    if app.stream_qr_modal.is_some() {
+    if app.stream_modal.is_some() {
         if matches!(
             event,
             ParsedInput::Byte(_)
@@ -815,7 +815,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                     ..
                 })
         ) {
-            app.stream_qr_modal = None;
+            app.stream_modal = None;
         }
         return;
     }
@@ -2036,8 +2036,8 @@ fn dispatch_escape(app: &mut App) {
     // (it dispatches here via the pending-escape flush instead), so the
     // stream URL modal needs its own arm, first, mirroring its position
     // above everything else in that gate.
-    if app.stream_qr_modal.is_some() {
-        app.stream_qr_modal = None;
+    if app.stream_modal.is_some() {
+        app.stream_modal = None;
         return;
     }
     if app.show_quit_confirm {

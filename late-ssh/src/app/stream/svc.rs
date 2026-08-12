@@ -21,8 +21,8 @@ use uuid::Uuid;
 use crate::app::{
     activity::publisher::ActivityPublisher,
     stream::registry::{
-        EndedStream, LiveStreamView, PublisherAccess, PublisherReport, StreamRegistry,
-        StreamSnapshot,
+        BeginObsOutcome, BeginOutcome, EndedStream, LiveStreamView, ObsIngress, PublisherAccess,
+        PublisherReport, StreamRegistry, StreamSnapshot,
     },
     voice::svc::{StreamMediaTicket, VoiceService},
 };
@@ -38,8 +38,32 @@ pub enum StreamEvent {
         watch_url: String,
         room_id: Uuid,
     },
+    /// `/golive obs`: the stream is registered and OBS connection details
+    /// are ready to show. OBS pushes to `whip_url` with `stream_key` as the
+    /// bearer token; going live waits for the ingress status poll to see
+    /// media, same contract as the console's first media report.
+    GoLiveObsReady {
+        user_id: Uuid,
+        title: String,
+        whip_url: String,
+        stream_key: String,
+        watch_url: String,
+        room_id: Uuid,
+    },
     GoLiveFailed {
         user_id: Uuid,
+        message: String,
+    },
+}
+
+/// Outcome of the shared `/golive` groundwork (ban gates, room + voice
+/// channel ensured, streamer joined), before any publisher-specific step.
+enum GoLivePrep {
+    Ready {
+        room_id: Uuid,
+        voice_channel_id: Uuid,
+    },
+    Refused {
         message: String,
     },
 }
@@ -127,37 +151,59 @@ impl StreamService {
         tokio::spawn(
             async move {
                 let title = title.unwrap_or_default();
-                match service.go_live(user_id, &username, &title).await {
-                    Ok(event) => {
-                        match &event {
-                            StreamEvent::GoLiveReady { room_id, .. } => {
-                                tracing::info!(room_id = %room_id, "stream registered");
-                            }
-                            StreamEvent::GoLiveFailed { message, .. } => {
-                                tracing::info!(user_id = %user_id, reason = %message, "go live refused");
-                            }
-                        }
-                        let _ = service.evt_tx.send(event);
-                    }
-                    Err(error) => {
-                        tracing::error!(error = ?error, user_id = %user_id, "go live failed");
-                        let _ = service.evt_tx.send(StreamEvent::GoLiveFailed {
-                            user_id,
-                            message: "Could not start the stream. Try again.".to_string(),
-                        });
-                    }
-                }
+                let event = service.go_live(user_id, &username, &title).await;
+                service.send_go_live_event(user_id, event);
             }
             .instrument(span),
         );
     }
 
-    async fn go_live(
-        &self,
-        user_id: Uuid,
-        username: &str,
-        title: &str,
-    ) -> anyhow::Result<StreamEvent> {
+    /// `/golive obs [title]`: same registration flow, but the media comes
+    /// from OBS through a WHIP ingress instead of a browser console.
+    pub fn go_live_obs_task(&self, user_id: Uuid, username: String, title: Option<String>) {
+        let service = self.clone();
+        let span = info_span!("stream.go_live_obs_task", user_id = %user_id, username = %username);
+        tokio::spawn(
+            async move {
+                let title = title.unwrap_or_default();
+                let event = service.go_live_obs(user_id, &username, &title).await;
+                service.send_go_live_event(user_id, event);
+            }
+            .instrument(span),
+        );
+    }
+
+    /// The one place a `/golive` outcome is logged and delivered, whatever
+    /// the publisher kind.
+    fn send_go_live_event(&self, user_id: Uuid, event: anyhow::Result<StreamEvent>) {
+        match event {
+            Ok(event) => {
+                match &event {
+                    StreamEvent::GoLiveReady { room_id, .. } => {
+                        tracing::info!(room_id = %room_id, "stream registered");
+                    }
+                    StreamEvent::GoLiveObsReady { room_id, .. } => {
+                        tracing::info!(room_id = %room_id, "obs stream registered");
+                    }
+                    StreamEvent::GoLiveFailed { message, .. } => {
+                        tracing::info!(user_id = %user_id, reason = %message, "go live refused");
+                    }
+                }
+                let _ = self.evt_tx.send(event);
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, user_id = %user_id, "go live failed");
+                let _ = self.evt_tx.send(StreamEvent::GoLiveFailed {
+                    user_id,
+                    message: "Could not start the stream. Try again.".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Shared `/golive` groundwork for both publisher kinds: ban gates, the
+    /// permanent stream room, its voice channel, streamer membership.
+    async fn prepare_go_live(&self, user_id: Uuid, username: &str) -> anyhow::Result<GoLivePrep> {
         if !self.voice.config().enabled {
             anyhow::bail!("voice/LiveKit is not configured");
         }
@@ -165,8 +211,7 @@ impl StreamService {
             // Surface the block at command time: without this the stream
             // half-registers (room, rail row) and only the page's grant
             // fetch fails, as a generic error.
-            return Ok(StreamEvent::GoLiveFailed {
-                user_id,
+            return Ok(GoLivePrep::Refused {
                 message: "You have been removed from voice by a moderator.".to_string(),
             });
         }
@@ -175,8 +220,7 @@ impl StreamService {
             .await
             .context("checking stream ban")?
         {
-            return Ok(StreamEvent::GoLiveFailed {
-                user_id,
+            return Ok(GoLivePrep::Refused {
                 message: "A moderator has blocked you from streaming.".to_string(),
             });
         }
@@ -195,17 +239,119 @@ impl StreamService {
         ChatRoomMember::join(&client, room.id, user_id)
             .await
             .context("joining streamer to stream room")?;
-
-        let handles = self
-            .registry
-            .begin(user_id, username, title, room.id, voice_channel.id);
-        Ok(StreamEvent::GoLiveReady {
-            user_id,
-            title: title.to_string(),
-            publish_url: self.publish_url(&handles.publish_token),
-            watch_url: self.watch_url(&handles.stream_id),
+        Ok(GoLivePrep::Ready {
             room_id: room.id,
+            voice_channel_id: voice_channel.id,
         })
+    }
+
+    async fn go_live(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        title: &str,
+    ) -> anyhow::Result<StreamEvent> {
+        let (room_id, voice_channel_id) = match self.prepare_go_live(user_id, username).await? {
+            GoLivePrep::Ready {
+                room_id,
+                voice_channel_id,
+            } => (room_id, voice_channel_id),
+            GoLivePrep::Refused { message } => {
+                return Ok(StreamEvent::GoLiveFailed { user_id, message });
+            }
+        };
+        match self
+            .registry
+            .begin(user_id, username, title, room_id, voice_channel_id)
+        {
+            BeginOutcome::Ready(handles) => Ok(StreamEvent::GoLiveReady {
+                user_id,
+                title: title.to_string(),
+                publish_url: self.publish_url(&handles.publish_token),
+                watch_url: self.watch_url(&handles.stream_id),
+                room_id,
+            }),
+            BeginOutcome::PublisherConflict => Ok(StreamEvent::GoLiveFailed {
+                user_id,
+                message: "You are set up to stream from OBS. Run /golive stop first.".to_string(),
+            }),
+        }
+    }
+
+    async fn go_live_obs(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        title: &str,
+    ) -> anyhow::Result<StreamEvent> {
+        let (room_id, voice_channel_id) = match self.prepare_go_live(user_id, username).await? {
+            GoLivePrep::Ready {
+                room_id,
+                voice_channel_id,
+            } => (room_id, voice_channel_id),
+            GoLivePrep::Refused { message } => {
+                return Ok(StreamEvent::GoLiveFailed { user_id, message });
+            }
+        };
+        // Reuse the stored ingress on a re-run so the same connection
+        // details re-show; mint one only when none is registered.
+        let (ingress, minted) = match self.registry.obs_ingress(user_id) {
+            Some(existing) => (existing, false),
+            None => {
+                let created = self
+                    .voice
+                    .create_whip_ingress(voice_channel_id, user_id, username)
+                    .await
+                    .context("creating WHIP ingress")?;
+                (
+                    ObsIngress {
+                        ingress_id: created.ingress_id,
+                        whip_url: created.url,
+                        stream_key: created.stream_key,
+                    },
+                    true,
+                )
+            }
+        };
+        match self.registry.begin_obs(
+            user_id,
+            username,
+            title,
+            room_id,
+            voice_channel_id,
+            ingress.clone(),
+        ) {
+            BeginObsOutcome::Ready {
+                handles,
+                ingress: stored,
+            } => {
+                if minted && stored.ingress_id != ingress.ingress_id {
+                    // Lost a same-user race; the stored ingress wins and the
+                    // duplicate must not stay a valid stream key.
+                    self.delete_ingress_task(ingress.ingress_id);
+                }
+                Ok(StreamEvent::GoLiveObsReady {
+                    user_id,
+                    title: title.to_string(),
+                    whip_url: stored.whip_url,
+                    stream_key: stored.stream_key,
+                    watch_url: self.watch_url(&handles.stream_id),
+                    room_id,
+                })
+            }
+            BeginObsOutcome::PublisherConflict => {
+                if minted {
+                    // The refused begin must not leave a live stream key
+                    // pointed at the conflicting stream's room.
+                    self.delete_ingress_task(ingress.ingress_id);
+                }
+                Ok(StreamEvent::GoLiveFailed {
+                    user_id,
+                    message: "You are streaming from the browser console. Run /golive stop first."
+                        .to_string(),
+                })
+            }
+        }
     }
 
     /// `/golive stop` (also fired by a moderation voice kick): tear the
@@ -227,6 +373,12 @@ impl StreamService {
     /// to a short delay instead of an endless broadcast. Debug level because
     /// a pending stream's console may never have connected at all.
     fn disconnect_publisher_task(&self, ended: EndedStream) {
+        // An OBS stream's ingress dies with the stream: the participant
+        // removal below only cuts the current session, while the stream key
+        // stays valid and OBS auto-reconnects through it.
+        if let Some(ingress_id) = &ended.ingress_id {
+            self.delete_ingress_task(ingress_id.clone());
+        }
         let voice = self.voice.clone();
         tokio::spawn(async move {
             if let Err(error) = voice
@@ -238,6 +390,18 @@ impl StreamService {
                     user_id = %ended.user_id,
                     "stream publisher disconnect failed; page stops itself on the next report"
                 );
+            }
+        });
+    }
+
+    /// Fire-and-forget ingress deletion, so it logs its own failures. Warn
+    /// level: a leaked ingress is a stream key that still publishes into the
+    /// room.
+    fn delete_ingress_task(&self, ingress_id: String) {
+        let voice = self.voice.clone();
+        tokio::spawn(async move {
+            if let Err(error) = voice.delete_ingress(&ingress_id).await {
+                tracing::warn!(error = ?error, ingress_id = %ingress_id, "stream ingress delete failed");
             }
         });
     }
@@ -334,6 +498,38 @@ impl StreamService {
     pub fn watch_url_for_username(&self, username: &str) -> Option<String> {
         let view = self.registry.stream_for_username(username)?;
         view.live.then(|| self.watch_url(&view.stream_id))
+    }
+
+    /// Ingress status poll for OBS streams; run right before [`sweep`] from
+    /// the same periodic task. The poll is the OBS analogue of the go-live
+    /// page's state reports: `ENDPOINT_PUBLISHING` keeps the stream live
+    /// (and fires the one #lounge announcement on the first hit), any other
+    /// ingress state reports stopped and starts grace.
+    pub async fn poll_obs_publishers(&self) {
+        for poll in self.registry.obs_streams() {
+            let publishing = match self.voice.ingress_publishing(&poll.ingress_id).await {
+                Ok(publishing) => publishing,
+                Err(error) => {
+                    // Skip, not stop: a flaky LiveKit API call must not
+                    // shove a live stream into grace. A truly dead ingress
+                    // is caught by the publisher TTL once reports stop
+                    // landing.
+                    tracing::debug!(
+                        error = ?error,
+                        user_id = %poll.user_id,
+                        "ingress status poll failed"
+                    );
+                    continue;
+                }
+            };
+            if let PublisherReport::Live { went_live: true } =
+                self.registry.report_obs(poll.user_id, publishing)
+            {
+                tracing::info!(user_id = %poll.user_id, "stream went live via obs");
+                let title = Some(poll.title).filter(|title| !title.trim().is_empty());
+                self.activity.went_live_task(poll.user_id, title);
+            }
+        }
     }
 
     /// Registry hygiene pass; run periodically from `main.rs`. Streams the

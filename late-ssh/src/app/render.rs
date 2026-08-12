@@ -249,7 +249,7 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
-    stream_qr_modal: Option<&'a crate::app::state::StreamQrModal>,
+    stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -1077,7 +1077,7 @@ impl App {
                         } else {
                             None
                         },
-                        stream_qr_modal: self.stream_qr_modal.as_ref(),
+                        stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1794,16 +1794,29 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
 
-        // Stream URL + QR modal (publisher URL from `/golive`, watch URL
-        // from `/watch`): topmost, since it was just explicitly requested.
-        if let Some(modal) = ctx.stream_qr_modal {
-            crate::app::common::qr::draw_qr_overlay(
-                frame,
-                inner,
-                &modal.url,
-                &modal.title,
-                &modal.subtitle,
-            );
+        // Stream handoff modal (publisher URL from `/golive`, watch URL
+        // from `/watch`, OBS details from `/golive obs`): topmost, since it
+        // was just explicitly requested.
+        match ctx.stream_modal {
+            Some(crate::app::state::StreamModal::Qr(modal)) => {
+                crate::app::common::qr::draw_qr_overlay(
+                    frame,
+                    inner,
+                    &modal.url,
+                    &modal.title,
+                    &modal.subtitle,
+                );
+            }
+            Some(crate::app::state::StreamModal::Obs(modal)) => {
+                crate::app::stream::ui::draw_obs_overlay(
+                    frame,
+                    inner,
+                    &modal.whip_url,
+                    &modal.stream_key,
+                    &modal.watch_url,
+                );
+            }
+            None => {}
         }
     }
 }
@@ -1819,7 +1832,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
-        || ctx.stream_qr_modal.is_some()
+        || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()

@@ -3,8 +3,9 @@
 # =============================================================================
 
 locals {
-  livekit_host = "${local.livekit_subdomain}.${var.DOMAIN}"
-  livekit_url  = "wss://${local.livekit_host}"
+  livekit_host      = "${local.livekit_subdomain}.${var.DOMAIN}"
+  livekit_url       = "wss://${local.livekit_host}"
+  livekit_whip_host = "${local.livekit_whip_subdomain}.${var.DOMAIN}"
 
   livekit_config = yamlencode({
     port = 7880
@@ -24,6 +25,18 @@ locals {
       key_file  = "/etc/livekit-tls/tls.key"
     }
 
+    # Message bus shared with the ingress service; also where ingress
+    # definitions live. The server refuses Ingress API calls without it.
+    redis = {
+      address = "redis-sv:6379"
+    }
+
+    # Returned in IngressInfo.url by CreateIngress: the public WHIP endpoint
+    # OBS pushes to (served by the livekit-ingress deployment behind nginx).
+    ingress = {
+      whip_base_url = "https://${local.livekit_whip_host}/w"
+    }
+
     keys = {
       (local.livekit_api_key) = random_password.livekit_api_secret.result
     }
@@ -32,9 +45,18 @@ locals {
       auto_create       = true
       empty_timeout     = 300
       departure_timeout = 20
+      # Video codecs are required by the stream rooms (go-live screen share
+      # and OBS/WHIP ingest); opus-only here silently refuses every video
+      # publish at SDP negotiation.
       enabled_codecs = [
         {
           mime = "audio/opus"
+        },
+        {
+          mime = "video/h264"
+        },
+        {
+          mime = "video/vp8"
         }
       ]
     }

@@ -504,6 +504,9 @@ async fn main() -> anyhow::Result<()> {
             tokio::select! {
                 _ = stream_sweep_shutdown.cancelled() => break,
                 _ = interval.tick() => {
+                    // The poll feeds the OBS streams' publisher reports; the
+                    // sweep right after acts on whatever state it left.
+                    stream_sweep_service.poll_obs_publishers().await;
                     stream_sweep_service.sweep();
                 }
             }

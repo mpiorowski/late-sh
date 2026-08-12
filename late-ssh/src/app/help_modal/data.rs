@@ -481,6 +481,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /golive [title]    stream your screen: opens a browser publisher page, the",
         "                     room shows up under the rail's `stream` section, and a",
         "                     `is live` line hits #lounge once media flows; /golive stop ends it",
+        "  /golive obs [..]   stream from OBS instead: shows a WHIP server URL + bearer",
+        "                     token to paste into OBS (Settings > Stream > Service: WHIP)",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
         "  /pomodoro [m] [..] focus countdown in the top bar, 1-180 min (default 25)",
         "                     [..] names the block; /pomodoro stop cancels it",

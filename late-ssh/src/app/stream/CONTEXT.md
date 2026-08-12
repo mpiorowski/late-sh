@@ -3,9 +3,11 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-12 (stream moderation scope: `/mod kick stream`,
-  `/mod ban stream` backed by `stream_bans`, and server bans now stop the
-  broadcast too)
+- Last updated: 2026-08-12 (OBS streaming: `/golive obs` publishes through a
+  LiveKit WHIP ingress instead of the browser console; registry entries
+  carry a `StreamPublisher` kind, liveness for OBS streams comes from the
+  server-side ingress status poll, and teardown also deletes the ingress.
+  New infra: `infra/redis.tf`, `infra/livekit-ingress.tf`, `whip.<domain>`)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -24,13 +26,19 @@ it moves capability ids, registry state, and one activity line.
 Owned by this domain:
 - `registry.rs` — the process-global `StreamRegistry`: one stream per user,
   phase machine (`Pending -> Live -> Grace`), watcher heartbeats, publisher
-  heartbeats/grace, capability ids. In-memory only, single replica, dies
-  with the process (scratchpad-registry tier).
+  heartbeats/grace, capability ids, and the `StreamPublisher` kind
+  (`Console` vs `Obs(ObsIngress)` — the publisher kinds conflict instead of
+  silently rewiring; `/golive stop` switches). In-memory only, single
+  replica, dies with the process (scratchpad-registry tier).
 - `svc.rs` — `StreamService` orchestration: lazy stream-room creation,
-  ticket minting via `VoiceService`, the `WentLive` announcement, the event
-  channel back to sessions, the sweeper.
-- The `/golive [title|stop]` and `/watch @user` composer commands (parsed in
-  `chat/state.rs`, drained by `App::tick_stream` in `app/state.rs`).
+  ticket minting via `VoiceService`, WHIP ingress create/reuse/delete, the
+  `WentLive` announcement, the event channel back to sessions, the ingress
+  status poll, the sweeper.
+- `ui.rs` — the OBS handoff overlay (`/golive obs`: WHIP server URL +
+  bearer token + watch link, hand-copied into OBS, dismissed by any key).
+- The `/golive [title|stop]`, `/golive obs [title]`, and `/watch @user`
+  composer commands (parsed in `chat/state.rs`, drained by
+  `App::tick_stream` in `app/state.rs`).
 - The `/api/stream/*` routes in `api.rs` and their late-web proxies/pages.
 
 Out of scope (deliberate v1 boundaries, from STREAM.md):
@@ -47,7 +55,8 @@ Out of scope (deliberate v1 boundaries, from STREAM.md):
 late-ssh/src/app/stream/
 ├── mod.rs        # declarations only
 ├── registry.rs   # StreamRegistry state machine + snapshot watch
-└── svc.rs        # StreamService: DB, VoiceService tickets, activity, events
+├── svc.rs        # StreamService: DB, VoiceService tickets, ingress, events
+└── ui.rs         # OBS handoff overlay (WHIP URL + bearer token modal)
 ```
 
 Cross-domain touchpoints:
@@ -65,6 +74,17 @@ Cross-domain touchpoints:
   SFU grant level to `screen_share`/`screen_share_audio`/`microphone`,
   identity `stream-{user_id}` so it never collides with the CLI voice
   identity) and `stream_watch_ticket` (`canPublish=false`, `hidden=true`).
+  For OBS: the LiveKit Ingress API client (`create_whip_ingress`,
+  `delete_ingress`, `ingress_publishing`; `ingressAdmin` Twirp calls). The
+  ingress participant identity is also `stream-{user_id}`, so teardown and
+  moderation reach an OBS publisher through the exact same paths; see
+  `../voice/CONTEXT.md` §7.
+- Infra: `infra/redis.tf` (LiveKit<->ingress bus; the server refuses
+  Ingress API calls without redis), `infra/livekit-ingress.tf`
+  (`whip.<domain>`, WHIP only — no RTMP ingest is ever minted), the
+  `redis`/`livekit-ingress` docker-compose services with
+  `infra/livekit/dev-config.yaml` + `infra/livekit-ingress/dev-config.yaml`
+  (dev OBS pushes to `http://localhost:7888/w`).
 - `api.rs` — `/api/stream/publish/{token}`, `/api/stream/publish/{token}/state`,
   `/api/stream/watch/{id}`, `/api/stream/watch/{id}/grant`,
   `/api/stream/watch/{id}/heartbeat`. Capability id in the URL is the whole
@@ -118,6 +138,17 @@ Cross-domain touchpoints:
 3. Watch pages resolve `/live/{id}`, poll state (10s), heartbeat (15s;
    45s TTL drives the "N watching" count), and subscribe with an anonymous
    hidden grant. Pages are born silent; a human click opens each direction.
+3a. OBS variant: `/golive obs [title]` runs the same registration but mints
+   a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
+   and shows a modal with the WHIP server URL + bearer token to paste into
+   OBS (Settings → Stream → Service: WHIP). There is no console page, so
+   liveness comes from `StreamService::poll_obs_publishers` (the 5s sweeper
+   task): `ENDPOINT_PUBLISHING` synthesizes the publisher reports the phase
+   machine already understands, fires the same one #lounge line on the
+   first hit, and marks the streamer `on air` for the whole broadcast (OBS
+   program audio may carry a mic; a possibly-audible speaker is never
+   invisible). A failed poll call skips the report (never forges a stop);
+   a truly dead ingress falls to grace via the publisher TTL.
 4. Ending: `/golive stop`, or close the tab / stop sharing → grace
    (~30s, survives a refresh) → the registry sweeps the stream, watch and
    publisher URLs die, the rail row disappears. A registered stream whose
@@ -128,6 +159,9 @@ Cross-domain touchpoints:
    identity `stream-{user_id}`), and the console itself treats a 404 on its
    state report as stream-over (unpublish + disconnect), so neither side
    can keep broadcasting into the voice channel after the stream is gone.
+   An OBS stream's `EndedStream` additionally carries the ingress id and
+   teardown deletes the ingress: participant removal alone leaves the
+   stream key valid and OBS auto-reconnects through it.
 
 ## 4. Consent invariants (non-negotiable, from STREAM.md)
 
@@ -160,7 +194,14 @@ Cross-domain touchpoints:
   heartbeat counting (including the `WATCHERS_MAX` cap), mic state,
   teardown, username lookup, the claim-once publisher lock, and all four
   TTL transitions via the clock-injected `sweep_at` (pending expiry,
-  live → grace, grace teardown, watcher pruning).
+  live → grace, grace teardown, watcher pruning). OBS side: ingress
+  stored/reused on re-runs, publisher-kind conflicts both ways, `report_obs`
+  phase transitions + on-air, and `EndedStream.ingress_id` on stop and
+  sweep.
+- `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
+  and survives a tiny terminal.
+- `chat/state_internal_test.rs` — `/golive` parse routing (console vs `obs`
+  vs `stop`) and the title clamp.
 - `activity/event_test.rs` — feed titles are mention-safe: `@` is stripped
   before a `/golive` or cyberspace title lands in a #lounge body (the
   lounge feed's "bodies never contain `@`" contract).

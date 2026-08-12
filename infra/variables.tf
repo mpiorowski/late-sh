@@ -323,6 +323,24 @@ variable "LIVEKIT_API_KEY" {
   default     = ""
 }
 
+variable "LIVEKIT_INGRESS_IMAGE" {
+  description = "LiveKit ingress service image (WHIP ingest for OBS streams)."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_WHIP_SUBDOMAIN" {
+  description = "Subdomain used for the public WHIP ingest endpoint under DOMAIN."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_INGRESS_WHIP_PORT" {
+  description = "LiveKit ingress WHIP HTTP port (behind the nginx ingress)."
+  type        = string
+  default     = ""
+}
+
 variable "LIVEKIT_RTC_TCP_PORT" {
   description = "LiveKit ICE/TCP fallback port exposed directly on the node."
   type        = string

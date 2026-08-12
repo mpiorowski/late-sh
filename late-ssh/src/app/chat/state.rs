@@ -233,26 +233,34 @@ pub(crate) enum GoLiveCommand {
     /// `/golive [title]`: register (or re-surface) this user's stream and
     /// show the publisher URL modal.
     Start { title: Option<String> },
+    /// `/golive obs [title]`: register the stream with OBS as the
+    /// publisher and show the WHIP connection details modal.
+    StartObs { title: Option<String> },
     /// `/golive stop`: tear the stream down now.
     Stop,
 }
 
-/// `/golive` with an optional title or the `stop` subcommand. `None` means
-/// the body is not a golive command at all.
+/// `/golive` with an optional title, or the `stop` / `obs [title]`
+/// subcommands. `None` means the body is not a golive command at all.
 fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
     let trimmed = body.trim();
     let rest = trimmed.strip_prefix("/golive")?;
     if !rest.is_empty() && !rest.starts_with(' ') {
         return None;
     }
+    // Free text that ends up in the rail, the stream header, and the
+    // #lounge announcement; clamp it at the parse boundary so no downstream
+    // surface needs its own cap.
+    let clamp = |title: &str| Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect());
     Some(match rest.trim() {
         "" => GoLiveCommand::Start { title: None },
         "stop" => GoLiveCommand::Stop,
-        title => GoLiveCommand::Start {
-            // Free text that ends up in the rail, the stream header, and
-            // the #lounge announcement; clamp it at the boundary so no
-            // downstream surface needs its own cap.
-            title: Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect()),
+        "obs" => GoLiveCommand::StartObs { title: None },
+        text => match text.strip_prefix("obs ") {
+            Some(title) => GoLiveCommand::StartObs {
+                title: clamp(title.trim()),
+            },
+            None => GoLiveCommand::Start { title: clamp(text) },
         },
     })
 }
