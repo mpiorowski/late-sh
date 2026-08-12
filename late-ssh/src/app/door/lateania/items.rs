@@ -76,6 +76,10 @@ pub enum ItemKind {
     Equipment(Slot),
     /// Used from inventory; heals or restores resource.
     Consumable { heal: i32, restore: i32 },
+    /// Used from inventory for a non-heal effect (a poison vial coats a
+    /// weapon, applied via `poison_tier`/`coat_weapon`). Groups with
+    /// `Consumable` under the "Consumables" category, but never a heal.
+    Utility,
     /// Sold for gold; no other use.
     Valuable,
 }
@@ -153,6 +157,7 @@ impl Item {
                 }
                 parts.join(" / ")
             }
+            ItemKind::Utility => format!("sell {}g", self.sell_price()),
             ItemKind::Valuable => format!("valuable / sell {}g", self.sell_price()),
         }
     }
@@ -224,6 +229,34 @@ const fn valuable(
         name,
         desc,
         kind: ItemKind::Valuable,
+        rarity,
+        mods: StatMods {
+            attack: 0,
+            max_hp: 0,
+            armor: 0,
+        },
+        price,
+        class_hint: None,
+    }
+}
+
+/// A consumable that isn't a heal - a buff/effect item like a poison vial
+/// (`use_item` recognizes it by id via `poison_tier` and applies it, same as
+/// any other consumable use). Kept distinct from `Consumable { heal, restore }`
+/// so it groups under its own "Consumables" category rather than "Heals", and
+/// distinct from `Valuable` so batch-sell never sweeps it up as sell-fodder.
+const fn utility(
+    id: u32,
+    name: &'static str,
+    desc: &'static str,
+    rarity: Rarity,
+    price: i64,
+) -> Item {
+    Item {
+        id,
+        name,
+        desc,
+        kind: ItemKind::Utility,
         rarity,
         mods: StatMods {
             attack: 0,
@@ -1510,8 +1543,7 @@ fn build_crafted() -> Vec<Item> {
             0,
             POTION_PRICE[t],
         ));
-        // Poisons are sellable for now; the depth update makes them applyable.
-        out.push(valuable(
+        out.push(utility(
             poison_id(tu),
             POISON_NAMES[t],
             "A stoppered vial of poison, meant to coat a blade.",

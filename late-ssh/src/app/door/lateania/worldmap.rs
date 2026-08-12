@@ -445,7 +445,16 @@ pub struct Poi {
     /// A tameable wild beast roaming here, if any.
     pub tameable: Option<&'static str>,
     /// A harvestable resource here (the gather trade worked at it), if any.
-    pub gather: Option<&'static str>,
+    pub gather: Option<GatherPoi>,
+}
+
+/// A gather node's skill and level gate, for the map inspector - previously
+/// the map only ever showed the skill name, with no way to scout whether a
+/// node was even worth the walk before physically standing in its room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherPoi {
+    pub skill: &'static str,
+    pub level_req: i32,
 }
 
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
@@ -494,7 +503,10 @@ fn build_pois() -> HashMap<RoomId, Poi> {
             Some(super::taming::TAMEABLE[beast.species].name);
     }
     for n in super::world::NODES {
-        map.entry(n.home).or_default().gather = Some(n.skill.key());
+        map.entry(n.home).or_default().gather = Some(GatherPoi {
+            skill: n.skill.key(),
+            level_req: n.level_req,
+        });
     }
     map
 }
