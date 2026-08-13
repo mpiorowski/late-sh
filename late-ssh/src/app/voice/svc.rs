@@ -25,7 +25,14 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone)]
 pub struct VoiceConfig {
     pub enabled: bool,
+    /// Client-facing LiveKit URL, handed to browsers in join grants. In dev
+    /// this is `ws://localhost:7880`, which only resolves from the host.
     pub livekit_url: Option<String>,
+    /// Server-to-server base for Twirp API calls (RemoveParticipant, the
+    /// Ingress API). Split from `livekit_url` because the two audiences
+    /// differ: in dev the browser needs `localhost` while this process runs
+    /// in a container where `localhost` is itself, not LiveKit.
+    pub livekit_api_url: Option<String>,
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
     /// Base name for LiveKit rooms. Each voice channel gets its own LiveKit
@@ -38,6 +45,7 @@ impl VoiceConfig {
         Self {
             enabled: false,
             livekit_url: None,
+            livekit_api_url: None,
             api_key: None,
             api_secret: None,
             room_name: "late-voice".to_string(),
@@ -46,12 +54,16 @@ impl VoiceConfig {
 
     pub fn enabled(
         livekit_url: String,
+        livekit_api_url: String,
         api_key: String,
         api_secret: String,
         room_name: String,
     ) -> anyhow::Result<Self> {
         if livekit_url.trim().is_empty() {
             anyhow::bail!("LATE_LIVEKIT_URL must not be empty when voice is enabled");
+        }
+        if livekit_api_url.trim().is_empty() {
+            anyhow::bail!("LATE_LIVEKIT_API_URL must not be empty when voice is enabled");
         }
         if api_key.trim().is_empty() {
             anyhow::bail!("LATE_LIVEKIT_API_KEY must not be empty when voice is enabled");
@@ -65,6 +77,7 @@ impl VoiceConfig {
         Ok(Self {
             enabled: true,
             livekit_url: Some(livekit_url),
+            livekit_api_url: Some(livekit_api_url),
             api_key: Some(api_key),
             api_secret: Some(api_secret),
             room_name,
@@ -77,6 +90,7 @@ impl fmt::Debug for VoiceConfig {
         f.debug_struct("VoiceConfig")
             .field("enabled", &self.enabled)
             .field("livekit_url", &self.livekit_url)
+            .field("livekit_api_url", &self.livekit_api_url)
             .field("api_key_present", &self.api_key.is_some())
             .field("api_secret_present", &self.api_secret.is_some())
             .field("room_name", &self.room_name)
@@ -585,9 +599,9 @@ impl VoiceService {
         }
         let url = self
             .config
-            .livekit_url
+            .livekit_api_url
             .as_deref()
-            .context("voice enabled without LiveKit URL")?;
+            .context("voice enabled without LiveKit API URL")?;
         let http_base = livekit_http_base(url)?;
         let token = self.mint_livekit_token_with_grants(
             &Uuid::new_v4().to_string(),
@@ -704,9 +718,9 @@ impl VoiceService {
         }
         let url = self
             .config
-            .livekit_url
+            .livekit_api_url
             .as_deref()
-            .context("voice enabled without LiveKit URL")?;
+            .context("voice enabled without LiveKit API URL")?;
         let http_base = livekit_http_base(url)?;
         let token = self.mint_livekit_token_with_grants(
             &Uuid::new_v4().to_string(),
@@ -979,30 +993,27 @@ struct RemoveParticipantRequest<'a> {
     identity: &'a str,
 }
 
+// LiveKit's Twirp endpoints speak proto field names on the wire (snake_case:
+// `ingress_id`, `stream_key`), not protojson camelCase. Requests are parsed
+// leniently (either form works) but responses are emitted snake_case only, so
+// these structs keep the raw Rust field names with no renames.
 #[derive(Serialize)]
 struct CreateIngressRequest<'a> {
-    #[serde(rename = "inputType")]
     input_type: &'a str,
     name: &'a str,
-    #[serde(rename = "roomName")]
     room_name: &'a str,
-    #[serde(rename = "participantIdentity")]
     participant_identity: &'a str,
-    #[serde(rename = "participantName")]
     participant_name: &'a str,
-    #[serde(rename = "enableTranscoding")]
     enable_transcoding: bool,
 }
 
 #[derive(Serialize)]
 struct DeleteIngressRequest<'a> {
-    #[serde(rename = "ingressId")]
     ingress_id: &'a str,
 }
 
 #[derive(Serialize)]
 struct ListIngressRequest<'a> {
-    #[serde(rename = "ingressId")]
     ingress_id: &'a str,
 }
 
@@ -1014,9 +1025,9 @@ struct ListIngressResponse {
 
 #[derive(Deserialize)]
 struct IngressInfo {
-    #[serde(rename = "ingressId", default)]
+    #[serde(default)]
     ingress_id: String,
-    #[serde(rename = "streamKey", default)]
+    #[serde(default)]
     stream_key: String,
     #[serde(default)]
     url: String,

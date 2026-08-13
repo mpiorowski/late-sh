@@ -7,6 +7,7 @@ fn enabled_service() -> VoiceService {
     VoiceService::new(
         VoiceConfig::enabled(
             "ws://localhost:7880".to_string(),
+            "http://livekit:7880".to_string(),
             "devkey".to_string(),
             "secret".to_string(),
             "late-voice".to_string(),

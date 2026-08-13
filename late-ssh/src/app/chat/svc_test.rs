@@ -2679,6 +2679,7 @@ async fn mod_stream_ban_ends_the_live_stream_and_persists_the_block() {
     let voice = crate::app::voice::svc::VoiceService::new(
         crate::app::voice::svc::VoiceConfig::enabled(
             "wss://rtc.test".to_string(),
+            "http://livekit-sv.test".to_string(),
             "test-key".to_string(),
             "test-secret".to_string(),
             "late-voice".to_string(),

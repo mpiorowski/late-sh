@@ -263,7 +263,13 @@ ingresses lives entirely in `../stream` — this service only speaks the API.
 
 Config env vars (`late-ssh/src/config.rs`):
 - `LATE_VOICE_ENABLED` — defaults false in config parsing.
-- `LATE_LIVEKIT_URL` — required when voice is enabled.
+- `LATE_LIVEKIT_URL` — required when voice is enabled. Client-facing URL,
+  handed to browsers in join grants.
+- `LATE_LIVEKIT_API_URL` — required when voice is enabled. Server-to-server
+  Twirp base (RemoveParticipant, Ingress API). Split from the client URL:
+  in dev the browser needs `ws://localhost:7880` while late-ssh runs in a
+  container where `localhost` is itself, so it uses `http://livekit:7880`;
+  in prod it points at the cluster-internal `http://livekit-sv`.
 - `LATE_LIVEKIT_API_KEY` — required when voice is enabled.
 - `LATE_LIVEKIT_API_SECRET` — required when voice is enabled.
 - `LATE_VOICE_ROOM` — optional; default `late-voice`.
