@@ -45,18 +45,26 @@ locals {
       auto_create       = true
       empty_timeout     = 300
       departure_timeout = 20
-      # Video codecs are required by the stream rooms (go-live screen share
-      # and OBS/WHIP ingest); opus-only here silently refuses every video
-      # publish at SDP negotiation.
+      # Gates what any participant may publish into a room. Voice-only would
+      # be opus alone; the video mimes are what let a `/golive` screen share
+      # or an OBS/WHIP ingest publish at all (a browser offering vp8 into an
+      # opus-only room times out on publish and watch pages subscribe to
+      # nothing).
       enabled_codecs = [
         {
           mime = "audio/opus"
         },
         {
-          mime = "video/h264"
+          mime = "video/VP8"
         },
         {
-          mime = "video/vp8"
+          mime = "video/H264"
+        },
+        {
+          mime = "video/VP9"
+        },
+        {
+          mime = "video/AV1"
         }
       ]
     }

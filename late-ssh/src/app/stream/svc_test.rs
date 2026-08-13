@@ -9,6 +9,7 @@ use late_core::{
 };
 
 use crate::app::activity::publisher::ActivityPublisher;
+use crate::app::stream::registry::EndReason;
 use crate::app::stream::svc::{StreamEvent, StreamService};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
 
@@ -77,7 +78,10 @@ async fn stream_banned_user_cannot_go_live_until_the_ban_is_lifted() {
         StreamEvent::GoLiveReady { user_id, .. } => assert_eq!(user_id, target.id),
         other => panic!("expected GoLiveReady before the ban, got {other:?}"),
     }
-    assert!(service.stop(target.id), "stream should have been live");
+    assert!(
+        service.stop(target.id, EndReason::Command),
+        "stream should have been live"
+    );
 
     StreamBan::activate(&client, target.id, actor.id, "nsfw", None)
         .await

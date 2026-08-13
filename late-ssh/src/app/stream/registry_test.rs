@@ -3,8 +3,9 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::{
-    BeginObsOutcome, BeginOutcome, ObsIngress, PENDING_TTL, PUBLISHER_GRACE, PUBLISHER_TTL,
-    PublisherReport, StreamHandles, StreamRegistry, WATCHER_TTL, WATCHERS_MAX,
+    BeginObsOutcome, BeginOutcome, EndReason, ObsIngress, PENDING_TTL, PUBLISHER_GRACE,
+    PUBLISHER_TTL, PublisherReport, StreamHandles, StreamPhase, StreamRegistry, WATCHER_TTL,
+    WATCHERS_MAX,
 };
 
 fn ids() -> (Uuid, Uuid, Uuid) {
@@ -152,13 +153,20 @@ fn end_for_user_kills_the_watch_url() {
     registry.report_publisher(&handles.publish_token, true, false, None);
 
     // The ended stream carries the voice channel so the caller can
-    // force-disconnect the publisher's LiveKit session.
-    let ended = registry.end_for_user(user).expect("ended stream");
+    // force-disconnect the publisher's LiveKit session, plus the teardown
+    // story the orchestration layer logs.
+    let ended = registry
+        .end_for_user(user, EndReason::Command)
+        .expect("ended stream");
     assert_eq!(ended.user_id, user);
+    assert_eq!(ended.username, "mat");
     assert_eq!(ended.voice_channel_id, channel);
     // A console stream has no ingress to delete.
     assert_eq!(ended.ingress_id, None);
-    assert!(registry.end_for_user(user).is_none());
+    assert_eq!(ended.reason, EndReason::Command);
+    assert_eq!(ended.phase, StreamPhase::Live);
+    assert!(ended.announced);
+    assert!(registry.end_for_user(user, EndReason::Command).is_none());
 
     assert!(registry.watch_view(&handles.stream_id).is_none());
     assert!(registry.publisher_info(&handles.publish_token).is_none());
@@ -206,6 +214,11 @@ fn sweep_expires_a_pending_stream_after_the_ttl() {
     assert_eq!(ended.len(), 1);
     assert_eq!(ended[0].user_id, user);
     assert_eq!(ended[0].voice_channel_id, channel);
+    // A stream that never went live is the one teardown a streamer cannot
+    // see coming, so the reason has to say so.
+    assert_eq!(ended[0].reason, EndReason::PendingExpired);
+    assert_eq!(ended[0].phase, StreamPhase::Pending);
+    assert!(!ended[0].announced);
     assert!(registry.watch_view(&handles.stream_id).is_none());
     assert!(registry.snapshot().streams.is_empty());
 }
@@ -228,6 +241,13 @@ fn sweep_moves_a_stale_publisher_into_grace_then_tears_down() {
     let ended = registry.sweep_at(stale_at + PUBLISHER_GRACE);
     assert_eq!(ended.len(), 1);
     assert_eq!(ended[0].user_id, user);
+    assert_eq!(ended[0].reason, EndReason::GraceExpired);
+    assert_eq!(ended[0].phase, StreamPhase::Grace);
+    assert!(ended[0].announced);
+    // The age of the console's last report is what tells a silent page apart
+    // from one that reported a stop, so it is measured from the report, not
+    // from the start of grace.
+    assert!(ended[0].since_publisher_report >= PUBLISHER_TTL + PUBLISHER_GRACE);
     assert!(registry.watch_view(&handles.stream_id).is_none());
 }
 
@@ -314,7 +334,9 @@ fn publisher_claim_locks_the_token_to_the_first_caller() {
     );
 
     // A fresh stream after a stop starts unclaimed with new ids.
-    registry.end_for_user(user).expect("ended stream");
+    registry
+        .end_for_user(user, EndReason::Command)
+        .expect("ended stream");
     let fresh = begin_ok(&registry, user, "mat", "next show", room, channel);
     assert_ne!(fresh.publish_token, handles.publish_token);
     assert!(matches!(
@@ -386,7 +408,9 @@ fn publisher_kinds_conflict_instead_of_rewiring_a_stream() {
     // The console stream is untouched by the refused OBS begin.
     assert_eq!(registry.obs_ingress(user), None);
 
-    registry.end_for_user(user).expect("ended stream");
+    registry
+        .end_for_user(user, EndReason::Command)
+        .expect("ended stream");
     registry.begin_obs(user, "mat", "obs", room, channel, example_ingress("in-1"));
     assert_eq!(
         registry.begin(user, "mat", "console", room, channel),
@@ -442,7 +466,9 @@ fn obs_reports_drive_the_phase_machine_and_on_air() {
     );
 
     // Ending carries the ingress id so teardown can delete it.
-    let ended = registry.end_for_user(user).expect("ended stream");
+    let ended = registry
+        .end_for_user(user, EndReason::Command)
+        .expect("ended stream");
     assert_eq!(ended.ingress_id, Some("in-1".to_string()));
 }
 

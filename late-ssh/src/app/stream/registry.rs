@@ -139,17 +139,6 @@ impl StreamEntry {
         }
     }
 
-    fn into_ended(self) -> EndedStream {
-        EndedStream {
-            user_id: self.user_id,
-            voice_channel_id: self.voice_channel_id,
-            ingress_id: match self.publisher {
-                StreamPublisher::Console => None,
-                StreamPublisher::Obs(ingress) => Some(ingress.ingress_id),
-            },
-        }
-    }
-
     fn view(&self) -> LiveStreamView {
         LiveStreamView {
             user_id: self.user_id,
@@ -162,6 +151,23 @@ impl StreamEntry {
             mic_on_air: self.mic_on_air,
             watching: self.watchers.len(),
             watch_url: String::new(),
+        }
+    }
+
+    fn ended(&self, reason: EndReason, now: Instant) -> EndedStream {
+        EndedStream {
+            user_id: self.user_id,
+            username: self.username.clone(),
+            voice_channel_id: self.voice_channel_id,
+            ingress_id: match &self.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.ingress_id.clone()),
+            },
+            reason,
+            phase: self.phase,
+            announced: self.announced,
+            watching: self.watchers.len(),
+            since_publisher_report: now.duration_since(self.last_publisher_report),
         }
     }
 }
@@ -257,16 +263,57 @@ pub struct PublisherInfo {
     pub stream_id: String,
 }
 
+/// Why a stream left the registry. Carried on [`EndedStream`] so the
+/// orchestration layer can log one line per teardown: the sweeper's two
+/// reasons are invisible from the TUI, and "my stream ended and I don't know
+/// why" is otherwise undiagnosable after the fact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndReason {
+    /// `/golive stop` in the composer.
+    Command,
+    /// A moderation action (stream kick/ban, voice kick, server kick/ban).
+    Moderation,
+    /// Registered, but the go-live page never reported media
+    /// ([`PENDING_TTL`]).
+    PendingExpired,
+    /// The console stopped reporting media and [`PUBLISHER_GRACE`] ran out.
+    GraceExpired,
+}
+
+impl EndReason {
+    /// Log label. Exhaustive: a new variant has to name itself here.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EndReason::Command => "command",
+            EndReason::Moderation => "moderation",
+            EndReason::PendingExpired => "pending_expired",
+            EndReason::GraceExpired => "grace_expired",
+        }
+    }
+}
+
 /// A stream the registry just tore down. The caller (StreamService) uses
-/// this to force-disconnect the publisher's LiveKit session: registry
+/// this to force-disconnect the publisher's LiveKit session (registry
 /// removal alone only kills the capability URLs, not an already-connected
-/// go-live page. For an OBS stream, `ingress_id` is the WHIP ingress to
-/// delete: without that, the stream key stays valid and OBS reconnects.
+/// go-live page) and to log the teardown. For an OBS stream, `ingress_id`
+/// is the WHIP ingress to delete: without that, the stream key stays valid
+/// and OBS reconnects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EndedStream {
     pub user_id: Uuid,
+    pub username: String,
     pub voice_channel_id: Uuid,
     pub ingress_id: Option<String>,
+    pub reason: EndReason,
+    /// Phase the stream was in when it left the registry.
+    pub phase: StreamPhase,
+    /// Whether the stream ever went live (the `Pending -> Live` edge fired).
+    pub announced: bool,
+    /// Watchers still counted at teardown.
+    pub watching: usize,
+    /// Age of the go-live page's last state report. The field that separates
+    /// "the console reported a stop" from "the console went silent".
+    pub since_publisher_report: Duration,
 }
 
 /// Outcome of resolving a publish token for the grant endpoint.
@@ -487,10 +534,10 @@ impl StreamRegistry {
 
     /// Tear the user's stream down now (`/golive stop`, moderation kick).
     /// Returns the ended stream so the caller can disconnect the publisher's
-    /// LiveKit session, `None` when no stream existed.
-    pub fn end_for_user(&self, user_id: Uuid) -> Option<EndedStream> {
+    /// LiveKit session and log the teardown, `None` when no stream existed.
+    pub fn end_for_user(&self, user_id: Uuid, reason: EndReason) -> Option<EndedStream> {
         let removed = self.inner.lock_recover().remove(&user_id);
-        let ended = removed.map(StreamEntry::into_ended);
+        let ended = removed.map(|entry| entry.ended(reason, Instant::now()));
         if ended.is_some() {
             self.publish();
         }
@@ -678,20 +725,23 @@ impl StreamRegistry {
                     changed = true;
                 }
             }
-            let expired: Vec<Uuid> = inner
+            let expired: Vec<(Uuid, EndReason)> = inner
                 .values()
-                .filter(|entry| match entry.phase {
-                    StreamPhase::Pending => now.duration_since(entry.created_at) >= PENDING_TTL,
-                    StreamPhase::Live => false,
+                .filter_map(|entry| match entry.phase {
+                    StreamPhase::Pending => (now.duration_since(entry.created_at) >= PENDING_TTL)
+                        .then_some((entry.user_id, EndReason::PendingExpired)),
+                    StreamPhase::Live => None,
                     StreamPhase::Grace => entry
                         .grace_since
-                        .is_some_and(|since| now.duration_since(since) >= PUBLISHER_GRACE),
+                        .is_some_and(|since| now.duration_since(since) >= PUBLISHER_GRACE)
+                        .then_some((entry.user_id, EndReason::GraceExpired)),
                 })
-                .map(|entry| entry.user_id)
                 .collect();
             let ended: Vec<EndedStream> = expired
                 .into_iter()
-                .filter_map(|user_id| inner.remove(&user_id).map(StreamEntry::into_ended))
+                .filter_map(|(user_id, reason)| {
+                    inner.remove(&user_id).map(|entry| entry.ended(reason, now))
+                })
                 .collect();
             (changed || !ended.is_empty(), ended)
         };

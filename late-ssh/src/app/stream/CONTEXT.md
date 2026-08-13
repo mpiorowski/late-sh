@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-12 (OBS streaming: `/golive obs` publishes through a
+- Last updated: 2026-08-13 (OBS streaming: `/golive obs` publishes through a
   LiveKit WHIP ingress instead of the browser console; registry entries
   carry a `StreamPublisher` kind, liveness for OBS streams comes from the
   server-side ingress status poll, and teardown also deletes the ingress.
@@ -159,9 +159,17 @@ Cross-domain touchpoints:
    identity `stream-{user_id}`), and the console itself treats a 404 on its
    state report as stream-over (unpublish + disconnect), so neither side
    can keep broadcasting into the voice channel after the stream is gone.
-   An OBS stream's `EndedStream` additionally carries the ingress id and
-   teardown deletes the ingress: participant removal alone leaves the
-   stream key valid and OBS auto-reconnects through it.
+   Every one of those paths funnels through `StreamService::end_stream_task`,
+   which logs one `stream ended` line before the disconnect: `reason` (the
+   `EndReason` enum: `command`, `moderation`, `pending_expired`,
+   `grace_expired`), `phase`, `went_live`, `watching`, and
+   `since_publisher_report_ms`. That last field is the diagnostic one: a
+   console that reported a stop shows a fresh report age, a console that went
+   silent shows a stale one. Without it a streamer's "it just ended" is
+   unanswerable after the fact. An OBS stream's `EndedStream` additionally
+   carries the ingress id and the same funnel deletes the ingress:
+   participant removal alone leaves the stream key valid and OBS
+   auto-reconnects through it.
 
 ## 4. Consent invariants (non-negotiable, from STREAM.md)
 
@@ -194,10 +202,11 @@ Cross-domain touchpoints:
   heartbeat counting (including the `WATCHERS_MAX` cap), mic state,
   teardown, username lookup, the claim-once publisher lock, and all four
   TTL transitions via the clock-injected `sweep_at` (pending expiry,
-  live → grace, grace teardown, watcher pruning). OBS side: ingress
-  stored/reused on re-runs, publisher-kind conflicts both ways, `report_obs`
-  phase transitions + on-air, and `EndedStream.ingress_id` on stop and
-  sweep.
+  live → grace, grace teardown, watcher pruning). The teardown tests pin
+  the `EndReason` and the report age each path hands the log line. OBS
+  side: ingress stored/reused on re-runs, publisher-kind conflicts both
+  ways, `report_obs` phase transitions + on-air, and
+  `EndedStream.ingress_id` on stop and sweep.
 - `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
   and survives a tiny terminal.
 - `chat/state_internal_test.rs` — `/golive` parse routing (console vs `obs`
@@ -258,7 +267,8 @@ user id). `ModerationInfra` carries the `StreamService` for all of it.
 
 - Metrics: no `record_stream_*` telemetry yet (streams started, watcher
   peaks — the experiment metrics in STREAM.md are currently only readable
-  from logs/registry).
+  from logs/registry). The `stream ended` line carries the fields a
+  teardown-reason counter would want.
 - A renamed streamer keeps their room under the old `{username}-live` slug
   (cosmetic only: the slug is not shown anywhere user-facing).
 - Splash tips carry no `/golive` line yet.

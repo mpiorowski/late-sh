@@ -24,6 +24,7 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::stream::registry::EndReason;
 use crate::app::stream::svc::StreamService;
 use crate::app::ultimates::UltimateKind;
 use crate::app::voice::svc::VoiceService;
@@ -1169,7 +1170,7 @@ impl ModerationService {
         // anonymous link-holders after their SSH session is gone.
         if matches!(action, ServerUserAction::Kick | ServerUserAction::Ban)
             && let Some(stream) = self.infra.stream()
-            && stream.stop(target.id)
+            && stream.stop(target.id, EndReason::Moderation)
         {
             tracing::info!(
                 target_user_id = %target.id,
@@ -1357,7 +1358,7 @@ impl ModerationService {
                 // the CLI voice state `kick` resolves, so without this a
                 // browser streamer keeps broadcasting after the kick.
                 if let Some(stream) = self.infra.stream()
-                    && stream.stop(target.id)
+                    && stream.stop(target.id, EndReason::Moderation)
                 {
                     tracing::info!(target = %target.id, "voice kick ended the target's stream");
                 }
@@ -1447,7 +1448,7 @@ impl ModerationService {
         // watch and publisher URLs, and the console is force-disconnected
         // from LiveKit.
         let ended = match action {
-            StreamAction::Kick | StreamAction::Ban => stream.stop(target.id),
+            StreamAction::Kick | StreamAction::Ban => stream.stop(target.id, EndReason::Moderation),
             StreamAction::Unban => false,
         };
         if ended {

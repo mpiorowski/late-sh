@@ -2727,11 +2727,16 @@ impl App {
                     self.banner = Some(Banner::success("Setting up your OBS stream..."));
                 }
                 (Some(service), crate::app::chat::state::GoLiveCommand::Stop) => {
-                    self.banner = Some(if service.stop(self.user_id) {
-                        Banner::success("Stream ended.")
-                    } else {
-                        Banner::error("You are not streaming.")
-                    });
+                    self.banner = Some(
+                        if service.stop(
+                            self.user_id,
+                            crate::app::stream::registry::EndReason::Command,
+                        ) {
+                            Banner::success("Stream ended.")
+                        } else {
+                            Banner::error("You are not streaming.")
+                        },
+                    );
                 }
             }
         }
