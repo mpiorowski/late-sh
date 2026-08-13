@@ -226,7 +226,10 @@ fn streaming_guide_covers_golive_and_obs_setup() {
         "born silent",
         "ON AIR",
     ] {
-        assert!(streaming.contains(expected), "streaming guide missing {expected}");
+        assert!(
+            streaming.contains(expected),
+            "streaming guide missing {expected}"
+        );
     }
     // The chat commands list stays an index and defers the details here.
     let chat = chat_help_lines(false).join("\n");

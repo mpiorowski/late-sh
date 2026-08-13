@@ -3329,7 +3329,10 @@ fn parse_golive_routes_console_obs_and_stop() {
             title: Some("fixing the render loop".to_string())
         })
     );
-    assert_eq!(parse_golive_command("/golive stop"), Some(GoLiveCommand::Stop));
+    assert_eq!(
+        parse_golive_command("/golive stop"),
+        Some(GoLiveCommand::Stop)
+    );
     assert_eq!(
         parse_golive_command("/golive obs"),
         Some(GoLiveCommand::StartObs { title: None })

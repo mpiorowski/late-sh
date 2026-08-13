@@ -580,14 +580,13 @@ impl StreamService {
         // The polls run concurrently and the HTTP client carries a request
         // timeout, so one slow LiveKit call delays the sweep behind this by
         // at most one timeout, not one per stream.
-        let statuses =
-            futures_util::future::join_all(self.registry.obs_streams().into_iter().map(
-                |poll| async move {
-                    let publishing = self.voice.ingress_publishing(&poll.ingress_id).await;
-                    (poll, publishing)
-                },
-            ))
-            .await;
+        let statuses = futures_util::future::join_all(self.registry.obs_streams().into_iter().map(
+            |poll| async move {
+                let publishing = self.voice.ingress_publishing(&poll.ingress_id).await;
+                (poll, publishing)
+            },
+        ))
+        .await;
         for (poll, publishing) in statuses {
             let publishing = match publishing {
                 Ok(publishing) => publishing,

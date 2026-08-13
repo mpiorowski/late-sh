@@ -474,10 +474,12 @@ impl StreamRegistry {
     /// `/golive obs` re-runs skip minting a duplicate ingress.
     pub fn obs_ingress(&self, user_id: Uuid) -> Option<ObsIngress> {
         let inner = self.inner.lock_recover();
-        inner.get(&user_id).and_then(|entry| match &entry.publisher {
-            StreamPublisher::Console => None,
-            StreamPublisher::Obs(ingress) => Some(ingress.clone()),
-        })
+        inner
+            .get(&user_id)
+            .and_then(|entry| match &entry.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.clone()),
+            })
     }
 
     /// Every registered OBS stream, for the ingress status poll.
