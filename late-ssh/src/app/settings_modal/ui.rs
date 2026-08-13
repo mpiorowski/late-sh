@@ -396,7 +396,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Username row
         Constraint::Length(1), // Country row
         Constraint::Length(1), // Timezone row
-        Constraint::Length(1), // Birthday row
         Constraint::Length(1), // Theme row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // late.fetch heading
@@ -478,16 +477,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::Birthday,
-            width,
-            "Birthday",
-            system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
-        )),
-        sections[4],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
             Row::Theme,
             width,
             "Theme",
@@ -503,10 +492,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[5],
+        sections[4],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[7]);
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[6]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -515,7 +504,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "IDE",
             system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
-        sections[8],
+        sections[7],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -525,7 +514,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Terminal",
             system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
-        sections[9],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -535,7 +524,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "OS",
             system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
-        sections[10],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -549,10 +538,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
             ),
         )),
-        sections[11],
+        sections[10],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Translation")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading("Translation")), sections[12]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -561,7 +550,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Target language",
             translate_to_span(state.draft().translate_to),
         )),
-        sections[14],
+        sections[13],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -571,7 +560,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Auto-translate new messages",
             toggle_span(state.draft().auto_translate),
         )),
-        sections[15],
+        sections[14],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -581,12 +570,12 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Translate my messages to English",
             toggle_span(state.draft().translate_mine_to_en),
         )),
-        sections[16],
+        sections[15],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[18],
+        sections[17],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -596,7 +585,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[19],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -606,7 +595,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[20],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -616,7 +605,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[21],
+        sections[20],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -626,7 +615,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[22],
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -643,7 +632,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[23],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -656,10 +645,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[24],
+        sections[23],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[26]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[25]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {
@@ -2507,7 +2496,6 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             .filter(|value| !value.is_empty())
         {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
-            None if row == Row::Birthday => value_span("MM-DD", theme::TEXT_FAINT()),
             None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }

@@ -8,8 +8,8 @@ use super::chips::INITIAL_CHIP_BALANCE;
 use super::message_translation::TranslateLang;
 use super::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_auto_translate,
-    extract_bio, extract_birthday, extract_country, extract_enable_background_color,
-    extract_favorite_room_ids, extract_ide, extract_keep_composer_focused, extract_land_on_home,
+    extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
+    extract_ide, extract_keep_composer_focused, extract_land_on_home,
     extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
     extract_notify_kinds, extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
     extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
@@ -69,8 +69,6 @@ pub struct Profile {
     pub translate_mine_to_en: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
-    /// Year-less `MM-DD` birthday, or `None` if unset.
-    pub birthday: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,7 +110,6 @@ impl Default for Profile {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         }
     }
 }
@@ -148,8 +145,6 @@ pub struct ProfileParams {
     pub auto_translate: bool,
     pub translate_mine_to_en: bool,
     pub favorite_room_ids: Vec<Uuid>,
-    /// Year-less `MM-DD` birthday, normalised on write. Empty/invalid clears it.
-    pub birthday: Option<String>,
 }
 
 impl Profile {
@@ -249,10 +244,6 @@ impl Profile {
         let os = normalize_profile_text(params.os.as_deref());
         let langs = normalize_profile_tags(params.langs.iter().map(String::as_str));
         let langs_json = serde_json::to_value(&langs)?;
-        let birthday = params
-            .birthday
-            .as_deref()
-            .and_then(crate::models::birthday::normalize_birthday);
         let current_user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
@@ -298,18 +289,17 @@ impl Profile {
                          'terminal', $19::text,
                          'os', $20::text,
                          'langs', $21::jsonb,
-                         'birthday', $22::text,
-                         'keep_composer_focused', $23::bool,
-                         'start_with_music_muted', $24::bool,
-                         'show_flag_fallback', $25::bool,
-                         'land_on_home', $26::bool,
-                         'show_pet_strip', $27::bool,
-                         'translate_to', $28::text,
-                         'auto_translate', $29::bool,
-                         'translate_mine_to_en', $30::bool
+                         'keep_composer_focused', $22::bool,
+                         'start_with_music_muted', $23::bool,
+                         'show_flag_fallback', $24::bool,
+                         'land_on_home', $25::bool,
+                         'show_pet_strip', $26::bool,
+                         'translate_to', $27::text,
+                         'auto_translate', $28::bool,
+                         'translate_mine_to_en', $29::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $31
+                 WHERE id = $30
                  RETURNING *",
                 &[
                     &params.username,
@@ -333,7 +323,6 @@ impl Profile {
                     &terminal,
                     &os,
                     &langs_json,
-                    &birthday,
                     &params.keep_composer_focused,
                     &params.start_with_music_muted,
                     &params.show_flag_fallback,
@@ -382,7 +371,6 @@ impl Profile {
             auto_translate: extract_auto_translate(&user.settings),
             translate_mine_to_en: extract_translate_mine_to_en(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
-            birthday: extract_birthday(&user.settings),
         }
     }
 }
