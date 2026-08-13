@@ -20,6 +20,7 @@ fn test_stream_service(db: late_core::db::Db) -> StreamService {
     let voice = VoiceService::new(
         VoiceConfig::enabled(
             "wss://rtc.test".to_string(),
+            "http://livekit-sv.test".to_string(),
             "test-key".to_string(),
             "test-secret".to_string(),
             "late-voice".to_string(),

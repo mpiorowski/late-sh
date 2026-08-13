@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-11 ("watch me" streaming rooms shipped: `/golive` publishes a screen share into the streamer's permanent `#<user>-live` room's LiveKit voice channel, browser watch pages subscribe through unlisted capability URLs, the Home rail grows a `stream` section, and #lounge gets one `is live` line when media actually flows. New domain context at `late-ssh/src/app/stream/CONTEXT.md`; web pages in `late-web/src/pages/live`; the voice-scope exception is documented in `late-ssh/src/app/voice/CONTEXT.md` §7)
+- Last updated: 2026-08-12 (OBS streaming: `/golive obs [title]` publishes into the same stream room through a LiveKit WHIP ingress — new `redis` + `livekit-ingress` deployments in infra and dev compose, `whip.<domain>` ingest endpoint, video codecs enabled in the LiveKit config, liveness via a server-side ingress poll. Domain details in `late-ssh/src/app/stream/CONTEXT.md`; the Ingress API client lives in `VoiceService`, see `late-ssh/src/app/voice/CONTEXT.md` §7)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

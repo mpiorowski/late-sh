@@ -49,6 +49,9 @@ LATE_LIVEKIT_RTC_TCP_PORT ?= 7881
 LATE_LIVEKIT_RTC_UDP_PORT ?= 7882
 # Public LiveKit WebSocket URL sent to browsers and the CLI.
 LATE_LIVEKIT_URL ?= ws://localhost:$(LATE_LIVEKIT_HOST_PORT)
+# Server-to-server Twirp API base: late-ssh runs in a container, so it must
+# reach LiveKit by compose service name, not localhost.
+LATE_LIVEKIT_API_URL ?= http://livekit:7880
 # Local LiveKit credentials.
 LATE_LIVEKIT_API_KEY ?= devkey
 LATE_LIVEKIT_API_SECRET ?= secret
@@ -155,6 +158,7 @@ LATE_FILES_S3_SECRET_ACCESS_KEY ?=  								                        # S3/R2 secr
 	@echo "LATE_ICECAST_HOST_PORT=$(LATE_ICECAST_HOST_PORT)" >> .env
 	@echo "LATE_VOICE_ENABLED=$(LATE_VOICE_ENABLED)" >> .env
 	@echo "LATE_LIVEKIT_URL=$(LATE_LIVEKIT_URL)" >> .env
+	@echo "LATE_LIVEKIT_API_URL=$(LATE_LIVEKIT_API_URL)" >> .env
 	@echo "LATE_LIVEKIT_HOST_PORT=$(LATE_LIVEKIT_HOST_PORT)" >> .env
 	@echo "LATE_LIVEKIT_RTC_TCP_PORT=$(LATE_LIVEKIT_RTC_TCP_PORT)" >> .env
 	@echo "LATE_LIVEKIT_RTC_UDP_PORT=$(LATE_LIVEKIT_RTC_UDP_PORT)" >> .env

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-11 (stream-room exception: `VoiceService` now also mints source-restricted publish tickets for the streamer's go-live page and hidden subscribe-only tickets for anonymous watch pages; see §7 and `../stream/CONTEXT.md`)
+- Last updated: 2026-08-12 (OBS/WHIP ingest: `VoiceService` also owns the LiveKit Ingress API client — `create_whip_ingress`/`delete_ingress`/`ingress_publishing`, Twirp calls authorized by an `ingressAdmin` token; see §7 and `../stream/CONTEXT.md`)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -246,13 +246,30 @@ deliberately and narrowly:
 Viewers never publish. General browser voice remains a separate, unmade
 decision.
 
+`/golive obs` adds a third, non-browser publisher: a WHIP ingress created
+through the LiveKit Ingress API (`create_whip_ingress`, with
+`delete_ingress` and `ingress_publishing` beside it; all Twirp calls on the
+LiveKit server authorized by a short-lived `ingressAdmin` admin token,
+server-to-server only, same pattern as `RemoveParticipant`). The ingress
+participant identity is `stream-{user_id}`, the same identity as the go-live
+console, so every existing teardown path finds it; transcoding is disabled
+at CreateIngress time (OBS already sends h264+opus), so the ingress service
+forwards packets instead of re-encoding. Ownership of when to create/delete
+ingresses lives entirely in `../stream` — this service only speaks the API.
+
 ---
 
 ## 8. Config, Infra, and Background Tasks
 
 Config env vars (`late-ssh/src/config.rs`):
 - `LATE_VOICE_ENABLED` — defaults false in config parsing.
-- `LATE_LIVEKIT_URL` — required when voice is enabled.
+- `LATE_LIVEKIT_URL` — required when voice is enabled. Client-facing URL,
+  handed to browsers in join grants.
+- `LATE_LIVEKIT_API_URL` — required when voice is enabled. Server-to-server
+  Twirp base (RemoveParticipant, Ingress API). Split from the client URL:
+  in dev the browser needs `ws://localhost:7880` while late-ssh runs in a
+  container where `localhost` is itself, so it uses `http://livekit:7880`;
+  in prod it points at the cluster-internal `http://livekit-sv`.
 - `LATE_LIVEKIT_API_KEY` — required when voice is enabled.
 - `LATE_LIVEKIT_API_SECRET` — required when voice is enabled.
 - `LATE_VOICE_ROOM` — optional; default `late-voice`.
@@ -262,6 +279,17 @@ Production infra:
 - `rtc.<domain>` is the public LiveKit signaling endpoint.
 - Media ports are bound directly on the node; keep DNS/networking assumptions distinct from SSH/API/web routing.
 - `infra/service-ssh.tf` wires the voice env vars into `service-ssh`.
+- `infra/redis.tf` + `infra/livekit-ingress.tf` back the OBS/WHIP ingest:
+  redis is the LiveKit<->ingress bus (the server refuses Ingress API calls
+  without it), `whip.<domain>` is the public WHIP endpoint (nginx TLS in
+  front of the ingress service's HTTP port; ICE/UDP bound on the node).
+  Note the blast radius: once livekit-server has redis configured it routes
+  room lookups and its server API RPCs through it, so redis health gates
+  voice joins, RemoveParticipant kicks, and stream teardown too, not just
+  OBS ingest. Media already flowing keeps flowing.
+  The LiveKit `room.enabled_codecs` list includes `video/h264` and
+  `video/vp8`: stream rooms need them, opus-only silently refuses every
+  video publish.
 
 Background tasks:
 - `main.rs` prunes stale voice participants every 30s with `ttl = 90s`.

@@ -201,14 +201,42 @@ services:
       - ./music:/music:ro
     command: ["liquidsoap", "/etc/liquidsoap/radio.liq"]
 
+  # Message bus between livekit and livekit-ingress; nothing persists.
+  redis:
+    image: redis:7-alpine
+    container_name: ${INSTANCE}-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
   livekit:
     image: livekit/livekit-server:latest
     container_name: ${INSTANCE}-livekit
-    command: ["--dev", "--bind", "0.0.0.0"]
+    # The config file replaces the old `--dev` flag: same devkey keys and
+    # ports, plus the redis bus and WHIP base URL the OBS ingest flow needs.
+    command: ["--config", "/etc/livekit/config.yaml"]
+    depends_on:
+      - redis
+    volumes:
+      - ./infra/livekit/dev-config.yaml:/etc/livekit/config.yaml:ro
     ports:
       - "${LATE_LIVEKIT_HOST_PORT}:7880"
       - "${LATE_LIVEKIT_RTC_TCP_PORT}:7881"
       - "${LATE_LIVEKIT_RTC_UDP_PORT}:7882/udp"
+
+  # WHIP ingest for `/golive obs`. Ports are fixed (not env vars) because
+  # they must match the two dev-config.yaml files exactly.
+  livekit-ingress:
+    image: livekit/ingress:v1.4.3
+    container_name: ${INSTANCE}-livekit-ingress
+    environment:
+      INGRESS_CONFIG_FILE: /etc/livekit-ingress/config.yaml
+    depends_on:
+      - redis
+      - livekit
+    volumes:
+      - ./infra/livekit-ingress/dev-config.yaml:/etc/livekit-ingress/config.yaml:ro
+    ports:
+      - "7888:7888" # WHIP HTTP: OBS Server URL is http://localhost:7888/w
+      - "7890:7890/udp" # WHIP ICE/UDP media
 
 volumes:
   cargo-registry:

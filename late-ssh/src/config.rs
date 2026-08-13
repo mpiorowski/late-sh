@@ -227,6 +227,7 @@ impl Config {
         tracing::info!(
             enabled = self.voice.enabled,
             livekit_url = ?self.voice.livekit_url,
+            livekit_api_url = ?self.voice.livekit_api_url,
             room = %self.voice.room_name,
             has_key = self.voice.api_key.is_some(),
             "voice: LiveKit RTC status"
@@ -314,6 +315,7 @@ impl Config {
         let voice = if optional_bool("LATE_VOICE_ENABLED", false)? {
             VoiceConfig::enabled(
                 required("LATE_LIVEKIT_URL")?,
+                required("LATE_LIVEKIT_API_URL")?,
                 required("LATE_LIVEKIT_API_KEY")?,
                 required("LATE_LIVEKIT_API_SECRET")?,
                 optional("LATE_VOICE_ROOM").unwrap_or_else(|| "late-voice".to_string()),

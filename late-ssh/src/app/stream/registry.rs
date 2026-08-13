@@ -50,6 +50,26 @@ pub enum StreamPhase {
     Grace,
 }
 
+/// How the stream's media reaches LiveKit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamPublisher {
+    /// Browser go-live console: claim-once publish token, page state reports.
+    Console,
+    /// OBS pushing to a WHIP ingress; liveness comes from the server-side
+    /// ingress status poll, not from any page.
+    Obs(ObsIngress),
+}
+
+/// The WHIP ingress behind an OBS stream. Kept in the registry so a re-run
+/// `/golive obs` re-shows the same connection details instead of minting a
+/// second ingress, and so teardown knows what to delete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObsIngress {
+    pub ingress_id: String,
+    pub whip_url: String,
+    pub stream_key: String,
+}
+
 struct StreamEntry {
     user_id: Uuid,
     username: String,
@@ -58,6 +78,7 @@ struct StreamEntry {
     voice_channel_id: Uuid,
     stream_id: String,
     publish_token: String,
+    publisher: StreamPublisher,
     phase: StreamPhase,
     created_at: Instant,
     last_publisher_report: Instant,
@@ -78,7 +99,46 @@ struct StreamEntry {
     watchers: HashMap<String, Instant>,
 }
 
+/// A fresh `Pending` entry with newly minted capability ids.
+fn new_entry(
+    user_id: Uuid,
+    username: &str,
+    title: &str,
+    room_id: Uuid,
+    voice_channel_id: Uuid,
+    publisher: StreamPublisher,
+) -> StreamEntry {
+    let now = Instant::now();
+    StreamEntry {
+        user_id,
+        username: username.to_string(),
+        title: title.to_string(),
+        room_id,
+        voice_channel_id,
+        stream_id: capability_id(),
+        publish_token: capability_id(),
+        publisher,
+        phase: StreamPhase::Pending,
+        created_at: now,
+        last_publisher_report: now,
+        grace_since: None,
+        announced: false,
+        publisher_claim: None,
+        watchers: HashMap::new(),
+        mic_on_air: false,
+    }
+}
+
 impl StreamEntry {
+    fn handles(&self) -> StreamHandles {
+        StreamHandles {
+            stream_id: self.stream_id.clone(),
+            publish_token: self.publish_token.clone(),
+            room_id: self.room_id,
+            voice_channel_id: self.voice_channel_id,
+        }
+    }
+
     fn view(&self) -> LiveStreamView {
         LiveStreamView {
             user_id: self.user_id,
@@ -99,6 +159,10 @@ impl StreamEntry {
             user_id: self.user_id,
             username: self.username.clone(),
             voice_channel_id: self.voice_channel_id,
+            ingress_id: match &self.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.ingress_id.clone()),
+            },
             reason,
             phase: self.phase,
             announced: self.announced,
@@ -157,6 +221,38 @@ pub struct StreamHandles {
     pub voice_channel_id: Uuid,
 }
 
+/// Outcome of registering a console stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeginOutcome {
+    Ready(StreamHandles),
+    /// The user's registered stream publishes through OBS; `/golive stop`
+    /// first.
+    PublisherConflict,
+}
+
+/// Outcome of registering an OBS stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeginObsOutcome {
+    Ready {
+        handles: StreamHandles,
+        /// The ingress actually stored on the stream. On a re-run this is
+        /// the existing one; a caller that just minted a duplicate compares
+        /// ingress ids and deletes its own.
+        ingress: ObsIngress,
+    },
+    /// The user's registered stream publishes through the browser console;
+    /// `/golive stop` first.
+    PublisherConflict,
+}
+
+/// One OBS stream as the ingress status poll sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObsPublisherPoll {
+    pub user_id: Uuid,
+    pub title: String,
+    pub ingress_id: String,
+}
+
 /// Everything the publisher grant endpoint needs to mint a publish ticket.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublisherInfo {
@@ -199,12 +295,15 @@ impl EndReason {
 /// A stream the registry just tore down. The caller (StreamService) uses
 /// this to force-disconnect the publisher's LiveKit session (registry
 /// removal alone only kills the capability URLs, not an already-connected
-/// go-live page) and to log the teardown.
+/// go-live page) and to log the teardown. For an OBS stream, `ingress_id`
+/// is the WHIP ingress to delete: without that, the stream key stays valid
+/// and OBS reconnects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EndedStream {
     pub user_id: Uuid,
     pub username: String,
     pub voice_channel_id: Uuid,
+    pub ingress_id: Option<String>,
     pub reason: EndReason,
     /// Phase the stream was in when it left the registry.
     pub phase: StreamPhase,
@@ -279,10 +378,12 @@ impl StreamRegistry {
         self.tx.subscribe()
     }
 
-    /// Register (or re-surface) the user's stream. One stream per user: a
-    /// second `/golive` while one is registered updates the title and hands
-    /// back the same capability ids, so re-running the command re-shows the
-    /// modal instead of minting a parallel stream.
+    /// Register (or re-surface) the user's console stream. One stream per
+    /// user: a second `/golive` while one is registered updates the title and
+    /// hands back the same capability ids, so re-running the command re-shows
+    /// the modal instead of minting a parallel stream. A registered OBS
+    /// stream is a conflict: a live broadcast is never silently rewired to a
+    /// different publisher.
     pub fn begin(
         &self,
         user_id: Uuid,
@@ -290,38 +391,147 @@ impl StreamRegistry {
         title: &str,
         room_id: Uuid,
         voice_channel_id: Uuid,
-    ) -> StreamHandles {
-        let handles = {
+    ) -> BeginOutcome {
+        let outcome = {
             let mut inner = self.inner.lock_recover();
-            let now = Instant::now();
-            let entry = inner.entry(user_id).or_insert_with(|| StreamEntry {
-                user_id,
-                username: username.to_string(),
-                title: title.to_string(),
-                room_id,
-                voice_channel_id,
-                stream_id: capability_id(),
-                publish_token: capability_id(),
-                phase: StreamPhase::Pending,
-                created_at: now,
-                last_publisher_report: now,
-                grace_since: None,
-                announced: false,
-                publisher_claim: None,
-                watchers: HashMap::new(),
-                mic_on_air: false,
-            });
-            entry.title = title.to_string();
-            entry.username = username.to_string();
-            StreamHandles {
-                stream_id: entry.stream_id.clone(),
-                publish_token: entry.publish_token.clone(),
-                room_id: entry.room_id,
-                voice_channel_id: entry.voice_channel_id,
+            match inner.get_mut(&user_id) {
+                Some(entry) => match &entry.publisher {
+                    StreamPublisher::Obs(_) => return BeginOutcome::PublisherConflict,
+                    StreamPublisher::Console => {
+                        entry.title = title.to_string();
+                        entry.username = username.to_string();
+                        BeginOutcome::Ready(entry.handles())
+                    }
+                },
+                None => {
+                    let entry = new_entry(
+                        user_id,
+                        username,
+                        title,
+                        room_id,
+                        voice_channel_id,
+                        StreamPublisher::Console,
+                    );
+                    let handles = entry.handles();
+                    inner.insert(user_id, entry);
+                    BeginOutcome::Ready(handles)
+                }
             }
         };
         self.publish();
-        handles
+        outcome
+    }
+
+    /// Register (or re-surface) the user's OBS stream. On a re-run the
+    /// stored ingress wins and is handed back so the same connection details
+    /// re-show; the caller compares ingress ids and deletes a freshly minted
+    /// duplicate. A registered console stream is a conflict, mirroring
+    /// [`begin`](Self::begin).
+    pub fn begin_obs(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        title: &str,
+        room_id: Uuid,
+        voice_channel_id: Uuid,
+        ingress: ObsIngress,
+    ) -> BeginObsOutcome {
+        let outcome = {
+            let mut inner = self.inner.lock_recover();
+            match inner.get_mut(&user_id) {
+                Some(entry) => match &entry.publisher {
+                    StreamPublisher::Console => return BeginObsOutcome::PublisherConflict,
+                    StreamPublisher::Obs(existing) => {
+                        let existing = existing.clone();
+                        entry.title = title.to_string();
+                        entry.username = username.to_string();
+                        BeginObsOutcome::Ready {
+                            handles: entry.handles(),
+                            ingress: existing,
+                        }
+                    }
+                },
+                None => {
+                    let entry = new_entry(
+                        user_id,
+                        username,
+                        title,
+                        room_id,
+                        voice_channel_id,
+                        StreamPublisher::Obs(ingress.clone()),
+                    );
+                    let handles = entry.handles();
+                    inner.insert(user_id, entry);
+                    BeginObsOutcome::Ready { handles, ingress }
+                }
+            }
+        };
+        self.publish();
+        outcome
+    }
+
+    /// The stored ingress of the user's registered OBS stream, if any. Lets
+    /// `/golive obs` re-runs skip minting a duplicate ingress.
+    pub fn obs_ingress(&self, user_id: Uuid) -> Option<ObsIngress> {
+        let inner = self.inner.lock_recover();
+        inner
+            .get(&user_id)
+            .and_then(|entry| match &entry.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.clone()),
+            })
+    }
+
+    /// Every registered OBS stream, for the ingress status poll.
+    pub fn obs_streams(&self) -> Vec<ObsPublisherPoll> {
+        let inner = self.inner.lock_recover();
+        inner
+            .values()
+            .filter_map(|entry| match &entry.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ObsPublisherPoll {
+                    user_id: entry.user_id,
+                    title: entry.title.clone(),
+                    ingress_id: ingress.ingress_id.clone(),
+                }),
+            })
+            .collect()
+    }
+
+    /// Apply an ingress status poll result to the user's OBS stream. Mirrors
+    /// [`report_publisher`](Self::report_publisher) without the claim
+    /// machinery: the server itself is the reporter, there is no page. While
+    /// OBS publishes, the streamer counts as on air: the program audio may
+    /// carry their mic and a possibly-audible speaker is never invisible.
+    /// `Gone` covers a stream that ended (or switched publisher) since the
+    /// poll snapshot was taken.
+    pub fn report_obs(&self, user_id: Uuid, publishing: bool) -> PublisherReport {
+        let outcome = {
+            let mut inner = self.inner.lock_recover();
+            let Some(entry) = inner
+                .get_mut(&user_id)
+                .filter(|entry| matches!(entry.publisher, StreamPublisher::Obs(_)))
+            else {
+                return PublisherReport::Gone;
+            };
+            entry.last_publisher_report = Instant::now();
+            entry.mic_on_air = publishing;
+            if publishing {
+                let went_live = !entry.announced;
+                entry.announced = true;
+                entry.phase = StreamPhase::Live;
+                entry.grace_since = None;
+                PublisherReport::Live { went_live }
+            } else {
+                if entry.phase == StreamPhase::Live {
+                    entry.phase = StreamPhase::Grace;
+                    entry.grace_since = Some(Instant::now());
+                }
+                PublisherReport::Stopped
+            }
+        };
+        self.publish();
+        outcome
     }
 
     /// Tear the user's stream down now (`/golive stop`, moderation kick).

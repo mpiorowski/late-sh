@@ -498,12 +498,19 @@ async fn main() -> anyhow::Result<()> {
     let stream_sweep_shutdown = singleton_shutdown.clone();
     let stream_sweep_service = state.stream_service.clone();
     tasks.spawn(async move {
+        // A restart wiped the in-memory registry, so any ingress LiveKit
+        // still holds is an orphaned stream key; collect them before the
+        // first poll can see them.
+        stream_sweep_service.reconcile_ingresses().await;
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.tick().await; // skip immediate first tick
         loop {
             tokio::select! {
                 _ = stream_sweep_shutdown.cancelled() => break,
                 _ = interval.tick() => {
+                    // The poll feeds the OBS streams' publisher reports; the
+                    // sweep right after acts on whatever state it left.
+                    stream_sweep_service.poll_obs_publishers().await;
                     stream_sweep_service.sweep();
                 }
             }

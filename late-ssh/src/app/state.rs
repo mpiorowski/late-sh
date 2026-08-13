@@ -53,12 +53,26 @@ struct VoiceJoinTaskResult {
     ticket: Result<crate::app::voice::svc::VoiceJoinTicket, String>,
 }
 
-/// Full-screen URL + QR modal for stream pages, drawn over everything and
-/// dismissed by any key.
+/// Full-screen stream handoff overlay, drawn over everything and dismissed
+/// by any key.
+pub(crate) enum StreamModal {
+    /// URL + QR (publisher URL from `/golive`, watch URL from `/watch`).
+    Qr(StreamQrModal),
+    /// OBS connection details from `/golive obs`. No QR: the values are
+    /// pasted into OBS settings on a desktop, not scanned by a phone.
+    Obs(StreamObsModal),
+}
+
 pub(crate) struct StreamQrModal {
     pub url: String,
     pub title: String,
     pub subtitle: String,
+}
+
+pub(crate) struct StreamObsModal {
+    pub whip_url: String,
+    pub stream_key: String,
+    pub watch_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,7 +522,7 @@ pub struct App {
     pub(crate) pending_on_air_voice_confirm: Option<Uuid>,
     /// Full-screen URL + QR modal for the stream pages (`/golive` publisher
     /// URL, `/watch` for raw SSH sessions). Any key closes it.
-    pub(crate) stream_qr_modal: Option<StreamQrModal>,
+    pub(crate) stream_modal: Option<StreamModal>,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -1297,7 +1311,7 @@ impl App {
             }),
             stream_service: config.stream_service,
             pending_on_air_voice_confirm: None,
-            stream_qr_modal: None,
+            stream_modal: None,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -2708,6 +2722,10 @@ impl App {
                     service.go_live_task(self.user_id, self.username.clone(), title);
                     self.banner = Some(Banner::success("Setting up your stream..."));
                 }
+                (Some(service), crate::app::chat::state::GoLiveCommand::StartObs { title }) => {
+                    service.go_live_obs_task(self.user_id, self.username.clone(), title);
+                    self.banner = Some(Banner::success("Setting up your OBS stream..."));
+                }
                 (Some(service), crate::app::chat::state::GoLiveCommand::Stop) => {
                     self.banner = Some(
                         if service.stop(
@@ -2835,11 +2853,33 @@ impl App {
                         false,
                     );
                 }
+                StreamEvent::GoLiveObsReady {
+                    user_id,
+                    whip_url,
+                    stream_key,
+                    watch_url,
+                    room_id,
+                    ..
+                } if user_id == self.user_id => {
+                    changed = true;
+                    // Same landing as the console flow: the streamer ends up
+                    // in their stream room with the header in front of them.
+                    self.chat.request_list();
+                    self.chat
+                        .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+                    self.stream_modal = Some(StreamModal::Obs(StreamObsModal {
+                        whip_url,
+                        stream_key,
+                        watch_url,
+                    }));
+                }
                 StreamEvent::GoLiveFailed { user_id, message } if user_id == self.user_id => {
                     changed = true;
                     self.banner = Some(Banner::error(&message));
                 }
-                StreamEvent::GoLiveReady { .. } | StreamEvent::GoLiveFailed { .. } => {}
+                StreamEvent::GoLiveReady { .. }
+                | StreamEvent::GoLiveObsReady { .. }
+                | StreamEvent::GoLiveFailed { .. } => {}
             }
         }
 
@@ -2871,11 +2911,11 @@ impl App {
                 return;
             }
         }
-        self.stream_qr_modal = Some(StreamQrModal {
+        self.stream_modal = Some(StreamModal::Qr(StreamQrModal {
             url,
             title,
             subtitle,
-        });
+        }));
     }
 
     fn voice_leave_current_channel(&mut self) -> bool {

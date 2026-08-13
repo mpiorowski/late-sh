@@ -3,8 +3,9 @@
 # =============================================================================
 
 locals {
-  livekit_host = "${local.livekit_subdomain}.${var.DOMAIN}"
-  livekit_url  = "wss://${local.livekit_host}"
+  livekit_host      = "${local.livekit_subdomain}.${var.DOMAIN}"
+  livekit_url       = "wss://${local.livekit_host}"
+  livekit_whip_host = "${local.livekit_whip_subdomain}.${var.DOMAIN}"
 
   livekit_config = yamlencode({
     port = 7880
@@ -24,6 +25,18 @@ locals {
       key_file  = "/etc/livekit-tls/tls.key"
     }
 
+    # Message bus shared with the ingress service; also where ingress
+    # definitions live. The server refuses Ingress API calls without it.
+    redis = {
+      address = "redis-sv:6379"
+    }
+
+    # Returned in IngressInfo.url by CreateIngress: the public WHIP endpoint
+    # OBS pushes to (served by the livekit-ingress deployment behind nginx).
+    ingress = {
+      whip_base_url = "https://${local.livekit_whip_host}/w"
+    }
+
     keys = {
       (local.livekit_api_key) = random_password.livekit_api_secret.result
     }
@@ -34,8 +47,9 @@ locals {
       departure_timeout = 20
       # Gates what any participant may publish into a room. Voice-only would
       # be opus alone; the video mimes are what let a `/golive` screen share
-      # publish at all (a browser offering vp8 into an opus-only room times
-      # out on publish and watch pages subscribe to nothing).
+      # or an OBS/WHIP ingest publish at all (a browser offering vp8 into an
+      # opus-only room times out on publish and watch pages subscribe to
+      # nothing).
       enabled_codecs = [
         {
           mime = "audio/opus"

@@ -3316,3 +3316,45 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
         ]
     );
 }
+
+#[test]
+fn parse_golive_routes_console_obs_and_stop() {
+    assert_eq!(
+        parse_golive_command("/golive"),
+        Some(GoLiveCommand::Start { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive fixing the render loop"),
+        Some(GoLiveCommand::Start {
+            title: Some("fixing the render loop".to_string())
+        })
+    );
+    assert_eq!(
+        parse_golive_command("/golive stop"),
+        Some(GoLiveCommand::Stop)
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs"),
+        Some(GoLiveCommand::StartObs { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs speedrun night"),
+        Some(GoLiveCommand::StartObs {
+            title: Some("speedrun night".to_string())
+        })
+    );
+    // Not the command at all: no space boundary after /golive.
+    assert_eq!(parse_golive_command("/golivenow"), None);
+    assert_eq!(parse_golive_command("hello"), None);
+}
+
+#[test]
+fn parse_golive_clamps_titles_at_the_boundary() {
+    let long = "x".repeat(GOLIVE_TITLE_MAX_CHARS + 20);
+    match parse_golive_command(&format!("/golive obs {long}")) {
+        Some(GoLiveCommand::StartObs { title: Some(title) }) => {
+            assert_eq!(title.chars().count(), GOLIVE_TITLE_MAX_CHARS);
+        }
+        other => panic!("expected clamped obs title, got {other:?}"),
+    }
+}

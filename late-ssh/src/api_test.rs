@@ -114,6 +114,7 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let mut config = test_config(test_db.db.config().clone());
     config.voice = crate::app::voice::svc::VoiceConfig::enabled(
         "wss://rtc.test".to_string(),
+        "http://livekit-sv.test".to_string(),
         "test-key".to_string(),
         "test-secret".to_string(),
         "late-voice".to_string(),

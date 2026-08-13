@@ -531,6 +531,12 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             value = local.livekit_url
           }
           env {
+            # Server-to-server Twirp API calls go to the cluster-internal
+            # service instead of looping out through the public ingress.
+            name  = "LATE_LIVEKIT_API_URL"
+            value = "http://${kubernetes_service_v1.livekit.metadata[0].name}"
+          }
+          env {
             name = "LATE_LIVEKIT_API_KEY"
             value_from {
               secret_key_ref {
