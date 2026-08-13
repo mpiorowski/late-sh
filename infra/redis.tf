@@ -1,8 +1,12 @@
 # =============================================================================
-# Redis: message bus between livekit-server and the livekit-ingress service.
-# No persistence on purpose: it only carries the psrpc bus and ingress
-# definitions, all of which are re-minted by the app (a restart just ends any
-# in-flight OBS stream, same failure tier as the in-memory stream registry).
+# Redis: the psrpc message bus shared by livekit-server and livekit-ingress.
+# Once livekit-server has redis configured it routes room lookups and its
+# server API RPCs through it, so a redis outage degrades all LiveKit control
+# plane work: voice joins, RemoveParticipant kicks, and stream teardown, not
+# just OBS ingest. Media already flowing keeps flowing.
+# No persistence on purpose: it carries the bus and ingress definitions, both
+# re-minted per stream; a restart ends in-flight OBS streams, same failure
+# tier as the in-memory stream registry.
 # =============================================================================
 
 resource "kubernetes_deployment_v1" "redis" {

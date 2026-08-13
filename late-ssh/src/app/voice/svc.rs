@@ -252,8 +252,20 @@ impl VoiceService {
             db: None,
             inner: Arc::new(Mutex::new(VoiceInner::default())),
             tx,
-            http: reqwest::Client::new(),
+            // Everything through this client is a server-to-server Twirp
+            // call, and one of them runs inline in the stream sweep loop:
+            // without a timeout a wedged LiveKit connection would stall
+            // every stream TTL in the app for as long as the OS lets the
+            // socket hang.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("building reqwest client"),
         }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled
     }
 
     pub fn with_db(mut self, db: Db) -> Self {
@@ -687,6 +699,16 @@ impl VoiceService {
             .ingress_api_call("DeleteIngress", &DeleteIngressRequest { ingress_id })
             .await?;
         Ok(())
+    }
+
+    /// Every ingress id LiveKit currently holds, publishing or not. An empty
+    /// filter lists them all: the boot reconciliation pass uses this to find
+    /// stream keys left valid by a previous process.
+    pub async fn list_ingress_ids(&self) -> anyhow::Result<Vec<String>> {
+        let resp: ListIngressResponse = self
+            .ingress_api_call("ListIngress", &ListIngressRequest { ingress_id: "" })
+            .await?;
+        Ok(resp.items.into_iter().map(|item| item.ingress_id).collect())
     }
 
     /// Whether an ingress is currently receiving and publishing media.

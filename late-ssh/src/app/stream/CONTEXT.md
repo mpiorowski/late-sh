@@ -169,7 +169,11 @@ Cross-domain touchpoints:
    unanswerable after the fact. An OBS stream's `EndedStream` additionally
    carries the ingress id and the same funnel deletes the ingress:
    participant removal alone leaves the stream key valid and OBS
-   auto-reconnects through it.
+   auto-reconnects through it. The delete retries with backoff (an ingress
+   is a LiveKit-side resource; a failed delete is a still-valid stream key
+   with no page to stop itself), and `reconcile_ingresses` runs at boot to
+   delete every ingress the registry does not know, since a restart wipes
+   the registry while LiveKit keeps the keys.
 
 ## 4. Consent invariants (non-negotiable, from STREAM.md)
 

@@ -411,16 +411,70 @@ impl StreamService {
         });
     }
 
-    /// Fire-and-forget ingress deletion, so it logs its own failures. Warn
-    /// level: a leaked ingress is a stream key that still publishes into the
-    /// room.
+    /// Fire-and-forget ingress deletion, so it logs its own failures. A
+    /// leaked ingress is a stream key OBS keeps publishing through, and OBS
+    /// has no page that stops itself the way the go-live console does, so a
+    /// transient LiveKit failure gets a few retries before giving up. The
+    /// boot reconciliation pass ([`Self::reconcile_ingresses`]) is the
+    /// backstop for an outage that outlasts them.
     fn delete_ingress_task(&self, ingress_id: String) {
         let voice = self.voice.clone();
         tokio::spawn(async move {
-            if let Err(error) = voice.delete_ingress(&ingress_id).await {
-                tracing::warn!(error = ?error, ingress_id = %ingress_id, "stream ingress delete failed");
+            let backoff = [
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(30),
+            ];
+            let mut attempt = 1;
+            loop {
+                let error = match voice.delete_ingress(&ingress_id).await {
+                    Ok(()) => return,
+                    Err(error) => error,
+                };
+                match backoff.get(attempt - 1) {
+                    Some(delay) => {
+                        tracing::debug!(error = ?error, ingress_id = %ingress_id, attempt, "stream ingress delete failed; retrying");
+                        tokio::time::sleep(*delay).await;
+                        attempt += 1;
+                    }
+                    None => {
+                        tracing::warn!(error = ?error, ingress_id = %ingress_id, attempts = attempt, "stream ingress delete failed; orphan until the next boot reconciliation");
+                        return;
+                    }
+                }
             }
         });
+    }
+
+    /// Boot-time reconciliation. A WHIP ingress is a LiveKit-side resource
+    /// whose stream key outlives this process, while the registry that owns
+    /// it is process memory: after a restart, every ingress LiveKit still
+    /// holds is an orphan (a key OBS can publish through with all app-side
+    /// trace of the stream gone, which breaks the no-invisible-speaker
+    /// invariant). Delete every ingress the registry does not know.
+    pub async fn reconcile_ingresses(&self) {
+        if !self.voice.is_enabled() {
+            return;
+        }
+        let ids = match self.voice.list_ingress_ids().await {
+            Ok(ids) => ids,
+            Err(error) => {
+                tracing::warn!(error = ?error, "ingress reconciliation list failed");
+                return;
+            }
+        };
+        let known: std::collections::HashSet<String> = self
+            .registry
+            .obs_streams()
+            .into_iter()
+            .map(|poll| poll.ingress_id)
+            .collect();
+        for ingress_id in ids {
+            if known.contains(&ingress_id) {
+                continue;
+            }
+            tracing::info!(ingress_id = %ingress_id, "deleting orphaned stream ingress");
+            self.delete_ingress_task(ingress_id);
+        }
     }
 
     /// Resolve a publisher URL token into LiveKit connection details for the
@@ -523,8 +577,19 @@ impl StreamService {
     /// (and fires the one #lounge announcement on the first hit), any other
     /// ingress state reports stopped and starts grace.
     pub async fn poll_obs_publishers(&self) {
-        for poll in self.registry.obs_streams() {
-            let publishing = match self.voice.ingress_publishing(&poll.ingress_id).await {
+        // The polls run concurrently and the HTTP client carries a request
+        // timeout, so one slow LiveKit call delays the sweep behind this by
+        // at most one timeout, not one per stream.
+        let statuses =
+            futures_util::future::join_all(self.registry.obs_streams().into_iter().map(
+                |poll| async move {
+                    let publishing = self.voice.ingress_publishing(&poll.ingress_id).await;
+                    (poll, publishing)
+                },
+            ))
+            .await;
+        for (poll, publishing) in statuses {
+            let publishing = match publishing {
                 Ok(publishing) => publishing,
                 Err(error) => {
                     // Skip, not stop: a flaky LiveKit API call must not

@@ -283,6 +283,10 @@ Production infra:
   redis is the LiveKit<->ingress bus (the server refuses Ingress API calls
   without it), `whip.<domain>` is the public WHIP endpoint (nginx TLS in
   front of the ingress service's HTTP port; ICE/UDP bound on the node).
+  Note the blast radius: once livekit-server has redis configured it routes
+  room lookups and its server API RPCs through it, so redis health gates
+  voice joins, RemoveParticipant kicks, and stream teardown too, not just
+  OBS ingest. Media already flowing keeps flowing.
   The LiveKit `room.enabled_codecs` list includes `video/h264` and
   `video/vp8`: stream rooms need them, opus-only silently refuses every
   video publish.
