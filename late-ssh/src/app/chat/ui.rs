@@ -4126,12 +4126,7 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
 fn stream_on_air_view(
     stream: &crate::app::stream::registry::LiveStreamView,
 ) -> crate::app::voice::ui::OnAirView {
-    crate::app::voice::ui::OnAirView {
-        live: stream.live,
-        streamer_mic: stream
-            .mic_on_air
-            .then(|| (stream.user_id, stream.username.clone())),
-    }
+    crate::app::voice::ui::OnAirView { live: stream.live }
 }
 
 /// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.

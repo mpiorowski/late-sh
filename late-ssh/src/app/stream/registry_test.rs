@@ -74,8 +74,8 @@ fn first_media_report_goes_live_exactly_once() {
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
 
-    let first = registry.report_publisher(&handles.publish_token, true, false, None);
-    let second = registry.report_publisher(&handles.publish_token, true, false, None);
+    let first = registry.report_publisher(&handles.publish_token, true, None);
+    let second = registry.report_publisher(&handles.publish_token, true, None);
 
     assert_eq!(first, PublisherReport::Live { went_live: true });
     assert_eq!(second, PublisherReport::Live { went_live: false });
@@ -89,7 +89,7 @@ fn first_media_report_goes_live_exactly_once() {
 fn unknown_publish_token_reports_gone() {
     let registry = StreamRegistry::new();
     assert_eq!(
-        registry.report_publisher("nope", true, false, None),
+        registry.report_publisher("nope", true, None),
         PublisherReport::Gone
     );
 }
@@ -99,9 +99,9 @@ fn publisher_stop_keeps_the_stream_in_grace() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
-    let outcome = registry.report_publisher(&handles.publish_token, false, false, None);
+    let outcome = registry.report_publisher(&handles.publish_token, false, None);
 
     assert_eq!(outcome, PublisherReport::Stopped);
     // Grace still counts as live so the room row does not flicker out on a
@@ -109,7 +109,7 @@ fn publisher_stop_keeps_the_stream_in_grace() {
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.live);
     assert_eq!(
-        registry.report_publisher(&handles.publish_token, true, false, None),
+        registry.report_publisher(&handles.publish_token, true, None),
         PublisherReport::Live { went_live: false }
     );
 }
@@ -119,7 +119,7 @@ fn watch_heartbeats_drive_the_watching_count() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
     assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-a"));
     assert!(registry.watch_heartbeat(&handles.stream_id, "viewer-b"));
@@ -131,26 +131,11 @@ fn watch_heartbeats_drive_the_watching_count() {
 }
 
 #[test]
-fn mic_state_reaches_the_view() {
-    let registry = StreamRegistry::new();
-    let (user, room, channel) = ids();
-    let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-
-    registry.report_publisher(&handles.publish_token, true, true, None);
-    let view = registry.watch_view(&handles.stream_id).expect("watch view");
-    assert!(view.mic_on_air);
-
-    registry.report_publisher(&handles.publish_token, true, false, None);
-    let view = registry.watch_view(&handles.stream_id).expect("watch view");
-    assert!(!view.mic_on_air);
-}
-
-#[test]
 fn end_for_user_kills_the_watch_url() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
     // The ended stream carries the voice channel so the caller can
     // force-disconnect the publisher's LiveKit session, plus the teardown
@@ -178,7 +163,7 @@ fn stream_lookup_by_username_is_case_insensitive() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "Mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
     let view = registry
         .stream_for_username("mat")
@@ -192,7 +177,7 @@ fn sweep_keeps_fresh_streams() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
     registry.watch_heartbeat(&handles.stream_id, "viewer-a");
 
     assert!(registry.sweep().is_empty());
@@ -228,7 +213,7 @@ fn sweep_moves_a_stale_publisher_into_grace_then_tears_down() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
     // Publisher silent past its TTL: grace, still shown as live (the room
     // row must not flicker out on a page refresh).
@@ -256,7 +241,7 @@ fn sweep_prunes_stale_watchers() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
     registry.watch_heartbeat(&handles.stream_id, "viewer-a");
 
     let ended = registry.sweep_at(Instant::now() + WATCHER_TTL);
@@ -275,7 +260,7 @@ fn watcher_cap_bounds_the_watching_count() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
 
     for i in 0..(WATCHERS_MAX + 25) {
         assert!(registry.watch_heartbeat(&handles.stream_id, &format!("viewer-{i}")));
@@ -316,7 +301,7 @@ fn publisher_claim_locks_the_token_to_the_first_caller() {
         PublisherAccess::Denied
     );
     assert_eq!(
-        registry.report_publisher(&handles.publish_token, false, false, None),
+        registry.report_publisher(&handles.publish_token, false, None),
         PublisherReport::Denied
     );
 
@@ -329,7 +314,7 @@ fn publisher_claim_locks_the_token_to_the_first_caller() {
         }
     ));
     assert_eq!(
-        registry.report_publisher(&handles.publish_token, true, false, Some(&secret)),
+        registry.report_publisher(&handles.publish_token, true, Some(&secret)),
         PublisherReport::Live { went_live: true }
     );
 
@@ -419,7 +404,7 @@ fn publisher_kinds_conflict_instead_of_rewiring_a_stream() {
 }
 
 #[test]
-fn obs_reports_drive_the_phase_machine_and_on_air() {
+fn obs_reports_drive_the_phase_machine() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = match registry.begin_obs(
@@ -439,8 +424,7 @@ fn obs_reports_drive_the_phase_machine_and_on_air() {
     assert_eq!(polls[0].user_id, user);
     assert_eq!(polls[0].ingress_id, "in-1");
 
-    // First publishing poll goes live exactly once; while OBS publishes the
-    // streamer counts as on air (program audio may carry their mic).
+    // First publishing poll goes live exactly once.
     assert_eq!(
         registry.report_obs(user, true),
         PublisherReport::Live { went_live: true }
@@ -451,13 +435,11 @@ fn obs_reports_drive_the_phase_machine_and_on_air() {
     );
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.live);
-    assert!(view.mic_on_air);
 
     // A non-publishing poll starts grace; the stream still shows live.
     assert_eq!(registry.report_obs(user, false), PublisherReport::Stopped);
     let view = registry.watch_view(&handles.stream_id).expect("watch view");
     assert!(view.live);
-    assert!(!view.mic_on_air);
 
     // Unknown or non-OBS users report gone.
     assert_eq!(
@@ -496,7 +478,7 @@ fn note_viewer_announces_each_named_viewer_once_per_stream() {
     let registry = StreamRegistry::new();
     let (user, room, channel) = ids();
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
     let (alice, bob, _) = ids();
 
     // First arrival names the streamer for the feed line; coming back to the
@@ -513,7 +495,7 @@ fn note_viewer_announces_each_named_viewer_once_per_stream() {
     // The set is per stream: tomorrow's broadcast announces the regular again.
     registry.end_for_user(user, EndReason::Command);
     let handles = begin_ok(&registry, user, "mat", "show", room, channel);
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
     assert_eq!(registry.note_viewer(user, alice), Some("mat".to_string()));
 }
 
@@ -528,6 +510,6 @@ fn note_viewer_stays_quiet_while_the_stream_is_pending() {
     // burn the announcement either.
     assert_eq!(registry.note_viewer(user, alice), None);
 
-    registry.report_publisher(&handles.publish_token, true, false, None);
+    registry.report_publisher(&handles.publish_token, true, None);
     assert_eq!(registry.note_viewer(user, alice), Some("mat".to_string()));
 }

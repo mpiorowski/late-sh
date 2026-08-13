@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-13 (Stream audience signals: a friend going live fires a banner + desktop notification, and the first time a named late.sh user opens a stream — `/watch @user` or walking into the stream room — it posts an `is watching` #lounge line and alerts the streamer the same way. New `ActivityKind::WatchingStream` and a new opt-in `notify::Kind::Streams` carrying both stream notifications; anonymous watch-page viewers stay count-only. Domain details in `late-ssh/src/app/stream/CONTEXT.md` §3b)
+- Last updated: 2026-08-14 (Stream audio: one path per sound, and voice is CLI-only with zero exceptions. CLI voice plays human mics only — program audio and your own `stream-{id}` publisher are unsubscribed in `late-cli`, fixing the streamer's OBS echo and CLI users hearing the game mix through voice. The go-live console's browser mic and the whole `mic_live`/on-air pipeline were removed (macOS CLI voice landed). The watch page defaults audio ON with a separate voices toggle, volume slider, and fullscreen. Details in `late-ssh/src/app/stream/CONTEXT.md` §4 and `late-ssh/src/app/voice/CONTEXT.md` §6/§7)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -148,7 +148,7 @@ make check
 ### Known environment caveats
 
 - Some integration/smoke tests require Docker-backed Postgres and may fail in restricted sandboxes.
-- macOS `late-cli` builds no longer compile or advertise native LiveKit voice. The repo-local `vendor/webrtc-sys` patch was removed; Linux/Windows voice uses the upstream registry `webrtc-sys`.
+- macOS `late-cli` builds compile and advertise native LiveKit voice again, from the upstream registry `webrtc-sys` with no repo-local patch. What replaced the old `vendor/webrtc-sys` fork is two darwin link args in `late-cli/build.rs` (`-ObjC` and the microphone `Info.plist` section); see `late-cli/CONTEXT.md` §9. Voice on a mac cannot be verified from Linux CI-style checks, so treat a macOS voice change as untested until someone joins a room from a mac build.
 - If a feature area is intentionally WIP, temporary lint/test gaps are acceptable only when explicitly documented and tracked for cleanup.
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
 - **Cargo environment setup:** For local host development, use Cargo's normal defaults, including the standard repo-local `target/` directory. Docker/dev containers still use `/app/target` via container configuration. `CARGO_HOME=$HOME/.cargo` remains a valid override when an environment needs it, but it is not a repo-wide requirement.

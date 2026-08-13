@@ -2326,7 +2326,6 @@ async fn sync_selection_keeps_a_selected_stream_room() {
         voice_channel_id: Uuid::now_v7(),
         stream_id: "stream-id".to_string(),
         live: true,
-        mic_on_air: false,
         watching: 0,
         watch_url: String::new(),
     }];

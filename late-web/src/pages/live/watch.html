@@ -21,12 +21,24 @@
             playsinline muted></video>
     </div>
 
-    <div class="flex items-center justify-between gap-4 mt-3">
+    <div class="flex items-center justify-between gap-4 mt-3 flex-wrap">
         <div class="text-xs text-gray-400" id="status">connecting&hellip;</div>
-        <button type="button" id="mute-btn"
-            class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
-            unmute room audio
-        </button>
+        <div class="flex items-center gap-2">
+            <button type="button" id="voices-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                voices: on
+            </button>
+            <input type="range" id="volume" min="0" max="100" value="100" class="w-24 accent-green-600"
+                title="stream volume">
+            <button type="button" id="mute-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                mute room audio
+            </button>
+            <button type="button" id="fullscreen-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                fullscreen
+            </button>
+        </div>
     </div>
 
     <p class="text-xs text-gray-500 mt-6 leading-relaxed">
@@ -48,14 +60,32 @@
         const streamerEl = document.getElementById('streamer');
         const watchingEl = document.getElementById('watching');
         const muteBtn = document.getElementById('mute-btn');
-        // Born silent: browser autoplay policy demands the muted-until-gesture
-        // shape anyway, and a CLI viewer already hearing voice through the
-        // terminal must not get the room twice.
-        let muted = true;
+        const voicesBtn = document.getElementById('voices-btn');
+        const volumeEl = document.getElementById('volume');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        // Audio defaults on; when the browser's autoplay policy blocks it,
+        // we fall back to muted and the button reads "unmute". The voices
+        // toggle exists for the CLI viewer who already hears the room's
+        // voices through the terminal and only wants the stream audio here:
+        // one audio path per sound.
+        let audioOn = true;
+        let voicesOn = true;
+        let volume = 1;
         let ended = false;
         let room = null;
         let connecting = false;
-        const audioEls = [];
+        // Each entry: { el, voice }. Mic-source tracks are voices; everything
+        // else (the OBS mix, the console's screen-share audio) is the stream.
+        const audioTracks = [];
+
+        function applyAudio() {
+            audioTracks.forEach(function (t) {
+                t.el.muted = !audioOn || (t.voice && !voicesOn);
+                t.el.volume = volume;
+            });
+            muteBtn.textContent = audioOn ? 'mute room audio' : 'unmute room audio';
+            voicesBtn.textContent = voicesOn ? 'voices: on' : 'voices: off';
+        }
 
         function setStatus(text) { statusEl.textContent = text; }
 
@@ -104,9 +134,12 @@
                 setStatus('');
             } else if (track.kind === 'audio') {
                 const el = track.attach();
-                el.muted = muted;
-                audioEls.push(el);
+                audioTracks.push({
+                    el: el,
+                    voice: track.source === LivekitClient.Track.Source.Microphone,
+                });
                 document.body.appendChild(el);
+                applyAudio();
             }
         }
 
@@ -126,22 +159,47 @@
             room.on(LivekitClient.RoomEvent.Disconnected, function () {
                 if (!ended) { setStatus('disconnected - reload to retry.'); }
             });
+            // Autoplay-on-by-default: if the browser refuses audio without a
+            // gesture, fall back to muted and let the button do its old job.
+            room.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, function () {
+                if (!room.canPlaybackAudio && audioOn) {
+                    audioOn = false;
+                    applyAudio();
+                }
+            });
             await room.connect(grant.livekit_url, grant.token);
             room.remoteParticipants.forEach(function (participant) {
                 participant.trackPublications.forEach(function (publication) {
                     if (publication.track) { attachTrack(publication.track); }
                 });
             });
+            try { await room.startAudio(); } catch (e) {
+                audioOn = false;
+                applyAudio();
+            }
         }
 
         muteBtn.addEventListener('click', async function () {
-            muted = !muted;
-            if (!muted && room) {
+            audioOn = !audioOn;
+            if (audioOn && room) {
                 try { await room.startAudio(); } catch (e) { }
             }
-            audioEls.forEach(function (el) { el.muted = muted; });
-            video.muted = muted;
-            muteBtn.textContent = muted ? 'unmute room audio' : 'mute room audio';
+            applyAudio();
+        });
+
+        voicesBtn.addEventListener('click', function () {
+            voicesOn = !voicesOn;
+            applyAudio();
+        });
+
+        volumeEl.addEventListener('input', function () {
+            volume = volumeEl.value / 100;
+            applyAudio();
+        });
+
+        fullscreenBtn.addEventListener('click', function () {
+            if (video.requestFullscreen) { video.requestFullscreen(); }
+            else if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); }
         });
 
         poll();

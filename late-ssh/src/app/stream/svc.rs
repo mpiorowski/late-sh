@@ -530,13 +530,12 @@ impl StreamService {
         &self,
         publish_token: &str,
         publishing: bool,
-        mic_live: bool,
         presented_claim: Option<&str>,
     ) -> PublisherReport {
         let info = self.registry.publisher_info(publish_token);
-        let outcome =
-            self.registry
-                .report_publisher(publish_token, publishing, mic_live, presented_claim);
+        let outcome = self
+            .registry
+            .report_publisher(publish_token, publishing, presented_claim);
         if let PublisherReport::Live { went_live: true } = outcome
             && let Some(info) = info
         {

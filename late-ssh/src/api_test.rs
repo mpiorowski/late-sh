@@ -207,7 +207,7 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let (status, _) = http_post_json(
         addr,
         &format!("/api/stream/publish/{publish_token}/state"),
-        "{\"publishing\":false,\"mic_live\":false}",
+        "{\"publishing\":false}",
     )
     .await
     .expect("unclaimed state report");
@@ -217,6 +217,8 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let (status, _) = http_post_json_with_header(
         addr,
         &format!("/api/stream/publish/{publish_token}/state"),
+        // The legacy `mic_live` field (removed with the browser mic) must
+        // stay ignored: an older cached go-live page still sends it.
         "{\"publishing\":true,\"mic_live\":false}",
         Some(("x-late-publish-claim", &claim)),
     )

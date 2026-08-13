@@ -91,11 +91,6 @@ struct StreamEntry {
     /// it; leaked *before* claiming, the intruder claims first and the real
     /// console fails loudly (403), so the hijack is visible, never silent.
     publisher_claim: Option<String>,
-    /// The go-live page's self-reported browser-mic state. Feeds the "on
-    /// air" line in the room's voice display so a browser-mic streamer is
-    /// never an invisible speaker. Nothing detects anything: the page
-    /// reports its own state.
-    mic_on_air: bool,
     watchers: HashMap<String, Instant>,
     /// Named late.sh users already announced for this stream. A different
     /// thing from `watchers`: those are anonymous browser ids behind the "N
@@ -131,7 +126,6 @@ fn new_entry(
         publisher_claim: None,
         watchers: HashMap::new(),
         viewers: HashSet::new(),
-        mic_on_air: false,
     }
 }
 
@@ -154,7 +148,6 @@ impl StreamEntry {
             voice_channel_id: self.voice_channel_id,
             stream_id: self.stream_id.clone(),
             live: self.phase != StreamPhase::Pending,
-            mic_on_air: self.mic_on_air,
             watching: self.watchers.len(),
             watch_url: String::new(),
         }
@@ -190,7 +183,6 @@ pub struct LiveStreamView {
     pub voice_channel_id: Uuid,
     pub stream_id: String,
     pub live: bool,
-    pub mic_on_air: bool,
     pub watching: usize,
     /// Public watch-page URL. The registry does not know the web base URL,
     /// so it leaves this empty; `App::tick_stream` fills it from
@@ -506,9 +498,7 @@ impl StreamRegistry {
 
     /// Apply an ingress status poll result to the user's OBS stream. Mirrors
     /// [`report_publisher`](Self::report_publisher) without the claim
-    /// machinery: the server itself is the reporter, there is no page. While
-    /// OBS publishes, the streamer counts as on air: the program audio may
-    /// carry their mic and a possibly-audible speaker is never invisible.
+    /// machinery: the server itself is the reporter, there is no page.
     /// `Gone` covers a stream that ended (or switched publisher) since the
     /// poll snapshot was taken.
     pub fn report_obs(&self, user_id: Uuid, publishing: bool) -> PublisherReport {
@@ -521,7 +511,6 @@ impl StreamRegistry {
                 return PublisherReport::Gone;
             };
             entry.last_publisher_report = Instant::now();
-            entry.mic_on_air = publishing;
             if publishing {
                 let went_live = !entry.announced;
                 entry.announced = true;
@@ -607,15 +596,14 @@ impl StreamRegistry {
         }
     }
 
-    /// Apply a go-live page state report (media flowing or stopped, plus the
-    /// page's own browser-mic state). Once the token is claimed, reports must
-    /// present the claim secret: a bare URL-holder must not be able to shove
-    /// a live stream into grace with a forged `publishing: false`.
+    /// Apply a go-live page state report (media flowing or stopped). Once
+    /// the token is claimed, reports must present the claim secret: a bare
+    /// URL-holder must not be able to shove a live stream into grace with a
+    /// forged `publishing: false`.
     pub fn report_publisher(
         &self,
         publish_token: &str,
         publishing: bool,
-        mic_live: bool,
         presented_claim: Option<&str>,
     ) -> PublisherReport {
         let outcome = {
@@ -632,7 +620,6 @@ impl StreamRegistry {
                 return PublisherReport::Denied;
             }
             entry.last_publisher_report = Instant::now();
-            entry.mic_on_air = mic_live;
             if publishing {
                 let went_live = !entry.announced;
                 entry.announced = true;

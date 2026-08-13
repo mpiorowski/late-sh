@@ -351,14 +351,12 @@ struct StreamPublishGrantResponse {
 }
 
 /// Go-live page state report: `publishing` is whether media is flowing
-/// right now, `mic_live` is the page's own browser-mic state (feeds the "on
-/// air" roster line; nothing detects anything). Sent on every transition
-/// and as a periodic heartbeat.
+/// right now. Sent on every transition and as a periodic heartbeat.
+/// (Unknown fields are ignored, so an older cached page still sending
+/// `mic_live` keeps working.)
 #[derive(Deserialize)]
 struct StreamPublishStateBody {
     publishing: bool,
-    #[serde(default)]
-    mic_live: bool,
 }
 
 /// Everything the watch page polls: liveness, title, and the count. The
@@ -441,7 +439,7 @@ async fn post_stream_publish_state(
     let claim = publish_claim_from_headers(&headers);
     match state
         .stream_service
-        .report_publisher(&token, body.publishing, body.mic_live, claim)
+        .report_publisher(&token, body.publishing, claim)
     {
         PublisherReport::Gone => StatusCode::NOT_FOUND,
         PublisherReport::Denied => StatusCode::FORBIDDEN,

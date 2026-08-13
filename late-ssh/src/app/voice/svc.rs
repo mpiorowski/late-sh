@@ -673,6 +673,13 @@ impl VoiceService {
                     participant_identity: &format!("stream-{user_id}"),
                     participant_name: username,
                     enable_transcoding: false,
+                    // Label the mix as program audio so voice-vs-program
+                    // consumers (CLI runtime, watch page) can tell it from a
+                    // human microphone. Needs a real OBS push to confirm the
+                    // label survives `enable_transcoding: false` passthrough.
+                    audio: IngressAudioOptions {
+                        source: "SCREEN_SHARE_AUDIO",
+                    },
                 },
             )
             .await?;
@@ -779,13 +786,13 @@ impl VoiceService {
     }
 
     /// Publisher ticket for the streamer's go-live console page. Publishing
-    /// is restricted at the SFU grant level to screen share plus microphone
-    /// (the streamer-mic exception; the page keeps the mic off by default),
-    /// so the page can never publish a camera. Subscribe is allowed: a
-    /// non-CLI streamer hears co-hosts through this page. The identity is
-    /// `stream-{user_id}`, distinct from the user's CLI voice identity so a
-    /// CLI streamer in voice is not kicked out of LiveKit by their own
-    /// console connecting.
+    /// is restricted at the SFU grant level to screen share only: no
+    /// browser mic exists anywhere in the system, so voice stays CLI-only
+    /// with zero exceptions (a streamer talks through CLI voice like
+    /// everyone else). Subscribe is allowed: a non-CLI streamer hears
+    /// co-hosts through this page. The identity is `stream-{user_id}`,
+    /// distinct from the user's CLI voice identity so a CLI streamer in
+    /// voice is not kicked out of LiveKit by their own console connecting.
     pub fn stream_publish_ticket(
         &self,
         room_id: Uuid,
@@ -813,7 +820,7 @@ impl VoiceService {
                 room_create: false,
                 ingress_admin: false,
                 can_publish: true,
-                can_publish_sources: Some(&["screen_share", "screen_share_audio", "microphone"]),
+                can_publish_sources: Some(&["screen_share", "screen_share_audio"]),
                 can_subscribe: true,
                 can_publish_data: false,
                 hidden: false,
@@ -1027,6 +1034,16 @@ struct CreateIngressRequest<'a> {
     participant_identity: &'a str,
     participant_name: &'a str,
     enable_transcoding: bool,
+    audio: IngressAudioOptions<'a>,
+}
+
+/// Track-source label for the ingress's published audio. The OBS mix is
+/// program audio, not a voice: the CLI voice runtime and the watch page both
+/// discriminate on this label (mic = voice, everything else = program), so
+/// `SCREEN_SHARE_AUDIO` here is load-bearing, not cosmetic.
+#[derive(Serialize)]
+struct IngressAudioOptions<'a> {
+    source: &'a str,
 }
 
 #[derive(Serialize)]
