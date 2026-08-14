@@ -48,7 +48,6 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-      TF_VAR_DOMAIN: ${{ vars.DOMAIN }}
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
       TF_VAR_SSH_IMAGE_TAG: ${{ inputs.ssh_image_tag }}
       TF_VAR_WEB_IMAGE_TAG: ${{ inputs.web_image_tag }}
@@ -62,11 +61,6 @@ jobs:
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
       TF_VAR_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-      TF_VAR_NETHACK_ENABLED: ${{ vars.NETHACK_ENABLED }}
-      TF_VAR_DCSS_ENABLED: ${{ vars.DCSS_ENABLED }}
-      TF_VAR_USURPER_ENABLED: ${{ vars.USURPER_ENABLED }}
-      TF_VAR_BROGUE_ENABLED: ${{ vars.BROGUE_ENABLED }}
-      TF_VAR_LIVEKIT_SUBDOMAIN: ${{ vars.LIVEKIT_SUBDOMAIN }}
       TF_VAR_LIVEKIT_IMAGE: ${{ vars.LIVEKIT_IMAGE }}
       TF_VAR_LIVEKIT_LOG_LEVEL: ${{ vars.LIVEKIT_LOG_LEVEL }}
       TF_VAR_LIVEKIT_API_KEY: ${{ vars.LIVEKIT_API_KEY }}

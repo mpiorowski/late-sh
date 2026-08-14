@@ -84,11 +84,11 @@ If IRC is split later, the split must include a cross-process event/control desi
 ## 4. Config And Listener
 
 Config:
-- `IrcConfig::default()` is disabled by default.
+- Every profile sets `irc.enabled = true`; there is no `Default` impl.
 - The dev profiles enable plaintext IRC on 6667 (6668 for dev2); the Makefile only keeps the matching compose port mapping.
 - Docker Compose publishes the IRC port on `service-ssh`.
 - TLS is enabled only when the profile sets both `tls_cert_path` and `tls_key_path` (prod: the mounted `irc-tls` secret, port 6697; dev: none, plaintext).
-- Partial TLS cert/key env is validated only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
+- A partial TLS cert/key pair is rejected by `Config::validate()` only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
 
 Listener behavior:
 - `serve.rs` binds `0.0.0.0:{port}`.

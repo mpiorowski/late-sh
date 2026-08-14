@@ -39,6 +39,16 @@ fn irc_tls_cert_without_key_is_rejected() {
 }
 
 #[test]
+fn irc_tls_key_without_cert_is_rejected() {
+    let mut config = valid_config();
+    config.irc.enabled = true;
+    config.irc.tls_cert_path = None;
+    config.irc.tls_key_path = Some(std::path::PathBuf::from("/tmp/tls.key"));
+    let error = config.validate().expect_err("must reject");
+    assert!(error.to_string().contains("key is set without a cert"));
+}
+
+#[test]
 fn ai_enabled_without_api_key_is_rejected() {
     let mut config = valid_config();
     config.ai.enabled = true;

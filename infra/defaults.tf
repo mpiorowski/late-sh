@@ -18,7 +18,12 @@ locals {
   door_cpu_limit      = "1000m"
   door_memory_limit   = "1Gi"
 
-  livekit_subdomain           = trimspace(var.LIVEKIT_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_SUBDOMAIN) : "rtc"
+  # The root domain and public subdomains are code, not variables: changing a
+  # hostname must land as a reviewed diff here and in the late-ssh/late-web
+  # prod profiles together (they hardcode late.sh / rtc.late.sh).
+  domain = "late.sh"
+
+  livekit_subdomain           = "rtc"
   livekit_image               = trimspace(var.LIVEKIT_IMAGE) != "" ? trimspace(var.LIVEKIT_IMAGE) : "livekit/livekit-server:v1.9.12"
   livekit_log_level           = trimspace(var.LIVEKIT_LOG_LEVEL) != "" ? trimspace(var.LIVEKIT_LOG_LEVEL) : "info"
   livekit_api_key             = trimspace(var.LIVEKIT_API_KEY) != "" ? trimspace(var.LIVEKIT_API_KEY) : "late-voice"
@@ -30,7 +35,7 @@ locals {
   livekit_turn_tls_port       = tonumber(trimspace(var.LIVEKIT_TURN_TLS_PORT) != "" ? trimspace(var.LIVEKIT_TURN_TLS_PORT) : "5349")
 
   livekit_ingress_image     = trimspace(var.LIVEKIT_INGRESS_IMAGE) != "" ? trimspace(var.LIVEKIT_INGRESS_IMAGE) : "livekit/ingress:v1.4.3"
-  livekit_whip_subdomain    = trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) : "whip"
+  livekit_whip_subdomain    = "whip"
   livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
 
   # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
@@ -40,7 +45,7 @@ locals {
   irc_enabled_bool    = true
   irc_proxy_emit      = trimspace(var.IRC_PROXY_EMIT) != "" ? trimspace(var.IRC_PROXY_EMIT) : "0"
   irc_proxy_emit_bool = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_emit))
-  irc_host            = "irc.${var.DOMAIN}"
+  irc_host            = "irc.${local.domain}"
   irc_port            = 6697
   irc_tls_secret_name = "irc-tls"
   irc_tls_mount_path  = "/etc/irc-tls"

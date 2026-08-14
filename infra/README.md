@@ -155,7 +155,6 @@ secrets/variables for CI/CD).
 
 | Variable | Description |
 |----------|-------------|
-| `DOMAIN` | Root domain, defaults to `late.sh` |
 | `LOG_LEVEL` | Rust log level (`RUST_LOG`) |
 | `SSH_HOST_KEY` | Ed25519 private key for SSH server |
 | `SSH_IMAGE_TAG` | Docker image for late-ssh |
@@ -164,7 +163,7 @@ secrets/variables for CI/CD).
 ### IRC
 
 The IRC edge is always provisioned: Terraform requests a Let's Encrypt
-certificate for `irc.<DOMAIN>` with cert-manager, mounts the generated
+certificate for `irc.late.sh` with cert-manager, mounts the generated
 Kubernetes TLS secret into `service-ssh`, and exposes port 6697 through
 ingress. The listener itself (ports, limits, TLS paths, trusted proxy CIDRs)
 is part of the late-ssh prod profile.
@@ -198,7 +197,6 @@ always accepts PROXY headers, so the old accept-side toggle is gone.
 
 | Variable | Description |
 |----------|-------------|
-| `LIVEKIT_SUBDOMAIN` | Public LiveKit subdomain under `DOMAIN`, defaults to `rtc` |
 | `LIVEKIT_IMAGE` | LiveKit server image |
 | `LIVEKIT_LOG_LEVEL` | LiveKit server log level |
 | `LIVEKIT_API_KEY` | LiveKit API key; API secret is generated into the Kubernetes `livekit` secret |

@@ -21,12 +21,6 @@ variable "LOG_LEVEL" {
   type        = string
 }
 
-variable "DOMAIN" {
-  description = "The root domain."
-  type        = string
-  default     = "late.sh"
-}
-
 variable "GRAFANA_URL" {
   description = "The URL for the Grafana dashboard."
   type        = string
@@ -128,12 +122,6 @@ variable "YOUTUBE_API_KEY" {
 # Voice / LiveKit
 # =============================================================================
 
-variable "LIVEKIT_SUBDOMAIN" {
-  description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
-  type        = string
-  default     = ""
-}
-
 variable "LIVEKIT_IMAGE" {
   description = "LiveKit server image."
   type        = string
@@ -154,12 +142,6 @@ variable "LIVEKIT_API_KEY" {
 
 variable "LIVEKIT_INGRESS_IMAGE" {
   description = "LiveKit ingress service image (WHIP ingest for OBS streams)."
-  type        = string
-  default     = ""
-}
-
-variable "LIVEKIT_WHIP_SUBDOMAIN" {
-  description = "Subdomain used for the public WHIP ingest endpoint under DOMAIN."
   type        = string
   default     = ""
 }

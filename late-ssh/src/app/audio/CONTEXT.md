@@ -340,7 +340,7 @@ TUI sees, and it holds no per-user server state at all.
 
 - **One poll, no socket.** The page fetches same-origin `/listen/state` every
   10s, which late-web fills server-side from late-ssh `GET /api/listen` over
-  `LATE_SSH_INTERNAL_URL`. No browser ever calls late-ssh directly, which is
+  its profile's `ssh_internal_url`. No browser ever calls late-ssh directly, which is
   why late-ssh carries no CORS layer.
 - **`/api/listen` is memory-only.** It reads `AudioService::current_snapshot()`
   (the `snapshot_tx` watch, not the DB-backed `snapshot()`), the now-playing

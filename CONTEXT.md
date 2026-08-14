@@ -945,13 +945,11 @@ let tracks = late_core::icecast::fetch_tracks(&icecast_url)?;  // blocking; moun
 ```bash
 # Start full dev stack
 docker compose up -d
-
-# Or run services individually:
-# Postgres + Icecast + Liquidsoap via docker, Rust services via cargo
-docker compose up -d postgres icecast liquidsoap
-cargo run -p late-ssh   # Needs LATE_ENV=dev plus the secrets from .env
-cargo run -p late-web   # Needs LATE_ENV=dev plus the DB secrets from .env
 ```
+
+There is no bare-cargo path: the dev profiles pin compose-internal hostnames
+(`postgres`, `icecast`) and container paths (`/app/server_key`), so late-ssh
+and late-web only run inside the compose network.
 
 ### 10.2 Database
 
