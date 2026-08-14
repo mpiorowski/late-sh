@@ -99,6 +99,12 @@ fn body_lines(state: &State) -> Vec<Line<'static>> {
                 )));
             }
         }
+        Phase::DropFor { .. } => {
+            lines.push(Line::from(Span::styled(
+                "not enough room. choose what to drop:",
+                Style::default().fg(theme::TEXT()),
+            )));
+        }
         Phase::Story | Phase::Spoils { .. } => {
             for text in active.scene.text {
                 lines.push(Line::from(Span::styled(
