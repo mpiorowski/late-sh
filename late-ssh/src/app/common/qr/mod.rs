@@ -28,13 +28,25 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
         .with_style(Style::default().fg(Color::Black).bg(Color::White));
     let qr_size = qr_widget.size(area);
 
-    let header_h = 5u16;
+    // The popup prefers to be wide enough to show the whole URL on one row:
+    // capability URLs are hand-copied from this modal, and a clipped URL is
+    // a silently broken one. When the terminal is narrower than the URL,
+    // the header wraps it across extra rows instead of clipping.
+    let content_w = qr_size
+        .width
+        .max(28)
+        .max((url.len() as u16).saturating_add(4));
     let footer_h = 3u16;
-    let content_h = header_h + qr_size.height + footer_h;
-    let content_w = qr_size.width.max(28);
 
+    let w = (content_w + 4)
+        .max((area.height.saturating_sub(4)) * 2)
+        .min(area.width.saturating_sub(4));
+    let inner_w = w.saturating_sub(2).max(1);
+    let url_rows = (url.len() as u16 + 2).div_ceil(inner_w).max(1);
+    let subtitle_rows = (subtitle.len() as u16 + 2).div_ceil(inner_w).max(1);
+    let header_h = 3 + subtitle_rows + url_rows;
+    let content_h = header_h + qr_size.height + footer_h;
     let h = (content_h + 2).min(area.height.saturating_sub(4));
-    let w = (content_w + 4).max(h * 2).min(area.width.saturating_sub(4));
 
     let [popup_area] = Layout::vertical([Constraint::Length(h)])
         .flex(Flex::Center)
@@ -80,7 +92,8 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
             Line::from(Span::styled(format!("  {url}"), amber)),
             Line::from(""),
         ])
-        .centered(),
+        .centered()
+        .wrap(ratatui::widgets::Wrap { trim: true }),
         header_area,
     );
 

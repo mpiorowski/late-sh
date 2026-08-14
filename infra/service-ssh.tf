@@ -37,7 +37,8 @@ resource "kubernetes_deployment_v1" "service_ssh" {
 
         # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
         # which owns the nethack-save PVC + seed init_container. service-ssh only
-        # needs network reach to it (LATE_NETHACK_HOST below).
+        # needs network reach to it; the host address is a late-ssh config.rs
+        # prod-profile literal (late-nethack-sv).
 
         container {
           image = var.SSH_IMAGE_TAG
@@ -274,7 +275,9 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Voice / LiveKit (credentials; URL and room live in config.rs) ---
+          # --- Voice / LiveKit (credentials only; both URLs and the room name
+          # are prod-profile literals in late-ssh/src/config.rs, including the
+          # cluster-internal Twirp base http://livekit-sv) ---
           env {
             name = "LATE_LIVEKIT_API_KEY"
             value_from {

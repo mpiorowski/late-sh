@@ -91,11 +91,13 @@ struct BannerEntry {
 /// then the tour is FORCED: while it runs, the input gate in `app/input.rs`
 /// (`handle_tour_gate`) swallows everything except the single key the
 /// current box names (`State::tutorial_forced_step`) and the quit keys. The
-/// route walks every top-level page in number order, ends back in the
-/// tavern, and `Done` is persisted once on the homecoming Enter. The
-/// bartender is deliberately absent from the route: his comped welcome pour
-/// stays a hidden treasure for whoever walks up to the glowing bar after
-/// the send-off (see [`State::welcome_pour_due`]).
+/// route walks every top-level page in number order with two Enter
+/// interludes for the features that have no page of their own (the music on
+/// Home, the Ctrl+G lobby on The Arcade), ends back in the tavern, and
+/// `Done` is persisted once on the homecoming Enter. The bartender is
+/// deliberately absent from the route: his comped welcome pour stays a
+/// hidden treasure for whoever walks up to the glowing bar after the
+/// send-off (see [`State::welcome_pour_due`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tutorial {
     /// Nothing to run (returning user).
@@ -104,10 +106,16 @@ pub enum Tutorial {
     Pending,
     /// Centered box at the door: what late.sh is, then `1`.
     Welcome,
-    /// On Home: the chat pitch, then `2`.
+    /// On Home: the chat pitch, then Enter.
     VisitChat,
-    /// On The Arcade: dailies and high scores, then `3`.
+    /// Still on Home: the music pitch (sources, how to actually hear it),
+    /// then `2`.
+    VisitMusic,
+    /// On The Arcade: solo games and chips, then Enter.
     VisitArcade,
+    /// Still on The Arcade: the Ctrl+G lobby pitch (daily duels, live
+    /// tables), then `3`.
+    VisitLobby,
     /// On the Games hub: the heavy-door pitch, then `4`.
     VisitGames,
     /// On the Artboard: the shared canvas, then `5`.
@@ -122,7 +130,8 @@ pub enum Tutorial {
 }
 
 /// The one input the forced tour accepts right now: a page digit and the
-/// screen it leads to, or Enter on the homecoming box.
+/// screen it leads to, or Enter (the mid-route interlude boxes and the
+/// homecoming box).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourStep {
     Page(u8, Screen),
@@ -478,8 +487,8 @@ impl State {
     pub fn tutorial_screen_entered(&mut self, screen: Screen) {
         self.tutorial = match (self.tutorial, screen) {
             (Tutorial::Welcome, Screen::Dashboard) => Tutorial::VisitChat,
-            (Tutorial::VisitChat, Screen::Arcade) => Tutorial::VisitArcade,
-            (Tutorial::VisitArcade, Screen::Games) => Tutorial::VisitGames,
+            (Tutorial::VisitMusic, Screen::Arcade) => Tutorial::VisitArcade,
+            (Tutorial::VisitLobby, Screen::Games) => Tutorial::VisitGames,
             (Tutorial::VisitGames, Screen::Artboard) => Tutorial::VisitArtboard,
             (Tutorial::VisitArtboard, Screen::Profiles) => Tutorial::VisitDirectory,
             (Tutorial::VisitDirectory, Screen::Leaderboard) => Tutorial::VisitLeaderboard,
@@ -495,8 +504,10 @@ impl State {
         match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => None,
             Tutorial::Welcome => Some(TourStep::Page(b'1', Screen::Dashboard)),
-            Tutorial::VisitChat => Some(TourStep::Page(b'2', Screen::Arcade)),
-            Tutorial::VisitArcade => Some(TourStep::Page(b'3', Screen::Games)),
+            Tutorial::VisitChat => Some(TourStep::Enter),
+            Tutorial::VisitMusic => Some(TourStep::Page(b'2', Screen::Arcade)),
+            Tutorial::VisitArcade => Some(TourStep::Enter),
+            Tutorial::VisitLobby => Some(TourStep::Page(b'3', Screen::Games)),
             Tutorial::VisitGames => Some(TourStep::Page(b'4', Screen::Artboard)),
             Tutorial::VisitArtboard => Some(TourStep::Page(b'5', Screen::Profiles)),
             Tutorial::VisitDirectory => Some(TourStep::Page(b'6', Screen::Leaderboard)),
@@ -527,10 +538,20 @@ impl State {
         matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done) && !self.welcome_pour_claimed
     }
 
-    /// Advance past the homecoming popup (Enter, via the input gate).
-    /// Returns true when the tour just finished and should be persisted.
+    /// Advance past an Enter box (via the input gate): the two mid-route
+    /// interludes flip to the next stop on their page, and the homecoming
+    /// popup finishes the tour. Returns true only when the tour just
+    /// finished and should be persisted.
     pub fn tutorial_advance(&mut self) -> bool {
         match self.tutorial {
+            Tutorial::VisitChat => {
+                self.tutorial = Tutorial::VisitMusic;
+                false
+            }
+            Tutorial::VisitArcade => {
+                self.tutorial = Tutorial::VisitLobby;
+                false
+            }
             Tutorial::Homecoming => {
                 self.tutorial = Tutorial::Done;
                 true

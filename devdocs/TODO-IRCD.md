@@ -110,13 +110,14 @@ logging, session effects, and broadcast events as `/mod` in the TUI.
 
 Spec: FRD-IRCD.md §5.2 / §7. Implemented as a single listener:
 
-- Plaintext dev mode when `LATE_IRC_TLS_CERT` / `LATE_IRC_TLS_KEY` are absent
-  (default port 6667).
-- TLS mode when both env vars are present; certs/keys are loaded from PEM and
-  accepted with `tokio_rustls::TlsAcceptor`. If `LATE_IRC_PORT` is omitted in
-  TLS mode, default port is 6697.
-- Config validates both-or-neither TLS env vars. Production cert requirements
-  remain: publicly trusted CA, full chain, exact hostname (e.g. `irc.late.sh`).
+- Plaintext mode when the profile leaves the TLS cert/key paths unset (the dev
+  profiles, port 6667; 6668 for dev2).
+- TLS mode when the profile sets both; certs/keys are loaded from PEM and
+  accepted with `tokio_rustls::TlsAcceptor`. The prod profile pins port 6697
+  and the paths under the mounted `irc-tls` secret.
+- `Config::validate` rejects a cert without a key and vice versa. Production
+  cert requirements remain: publicly trusted CA, full chain, exact hostname
+  (e.g. `irc.late.sh`).
 - Production IPv4 ingress-nginx and the IPv6 HAProxy edge send PROXY v1 metadata.
   `serve.rs` consumes trusted headers before rustls and keeps an unavailable
   client IP as `None` instead of substituting the shared transport address.
@@ -176,16 +177,15 @@ late-ssh/tests/helpers/mod.rs               test State has irc_registry + IrcCon
 
 ## Config / runtime notes
 
-- `IrcConfig` defaults: `enabled = false`, `port = 6667` (or 6697 when
-  `LATE_IRC_TLS_CERT` / `LATE_IRC_TLS_KEY` are configured and `LATE_IRC_PORT`
-  is unset),
-  `max_conns_global = 200`, `max_conns_per_user = 3`,
-  `max_auth_failures_per_ip = 20`, `auth_failure_window_secs = 300`,
-  `proxy_protocol = false`, and an empty trusted-proxy list. All env-parsed,
-  all optional. ircd only spawns when `config.irc.enabled`.
-- The root `Makefile` intentionally enables plaintext ircd for generated local
-  dev `.env` files with `LATE_IRC_ENABLED=1` and `LATE_IRC_PORT=6667`; optional
-  TLS and tuning env vars are emitted as commented examples.
+- `IrcConfig` is a profile literal in `late-ssh/src/config.rs`, not env-parsed.
+  Every current profile sets `enabled = true`; the dev profiles run plaintext
+  on 6667 (6668 for dev2) with no TLS paths, prod runs TLS on 6697. The limits
+  are the same everywhere: `max_conns_global = 200`, `max_conns_per_user = 3`,
+  `max_auth_failures_per_ip = 20`, `auth_failure_window_secs = 300`. Only prod
+  sets `proxy_protocol` and a trusted-proxy list. ircd only spawns when
+  `config.irc.enabled`.
+- The root `Makefile` still emits `LATE_IRC_PORT` into the local `.env`, but
+  that is the compose host port mapping only; it must match the dev profile.
 - Brute-force defense is **token strength** (160-bit), not rate limiting; the IP
   auth-failure limiter is a light backstop only (FRD §5).
 - Registration: CAP/PASS/NICK/USER with 60s timeout; auth tarpit on failure

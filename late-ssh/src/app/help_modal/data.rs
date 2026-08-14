@@ -31,10 +31,11 @@ pub enum HelpTopic {
     Bonsai,
     Settings,
     Voice,
+    Streaming,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 22] = [
+    pub const ALL: [HelpTopic; 23] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -56,6 +57,7 @@ impl HelpTopic {
         HelpTopic::Bonsai,
         HelpTopic::Settings,
         HelpTopic::Voice,
+        HelpTopic::Streaming,
         HelpTopic::Architecture,
     ];
 
@@ -83,6 +85,7 @@ impl HelpTopic {
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
             HelpTopic::Voice => "Voice",
+            HelpTopic::Streaming => "Streaming",
         }
     }
 
@@ -109,7 +112,8 @@ impl HelpTopic {
             HelpTopic::Bonsai => 18,
             HelpTopic::Settings => 19,
             HelpTopic::Voice => 20,
-            HelpTopic::Architecture => 21,
+            HelpTopic::Streaming => 21,
+            HelpTopic::Architecture => 22,
         }
     }
 }
@@ -154,6 +158,7 @@ pub(crate) fn lines_for(
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
         HelpTopic::Voice => voice_help_lines(),
+        HelpTopic::Streaming => streaming_help_lines(),
     }
 }
 
@@ -478,6 +483,10 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
         "  /pair @user        shared live coding scratchpad (both of you must run it)",
+        "  /golive [title]    stream your screen via a browser publisher page",
+        "  /golive obs [..]   stream from OBS over WHIP; /golive stop ends either",
+        "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
+        "                     setup and OBS details live in the Streaming tab",
         "  /pomodoro [m] [..] focus countdown in the top bar, 1-180 min (default 25)",
         "                     [..] names the block; /pomodoro stop cancels it",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
@@ -803,7 +812,7 @@ fn directory_help_lines() -> Vec<String> {
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, birthday, country, timezone/current time, chips, markdown bio,",
+        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
         "  bonsai, late.fetch fields, and the user's showcases when available.",
     ]
     .into_iter()
@@ -1158,7 +1167,6 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
-        "  birthday as month/day".to_string(),
         "  theme and terminal background sync".to_string(),
         "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
@@ -1248,7 +1256,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "tmux strips notification escapes by default; see the Notifications tab for passthrough setup."
             .to_string(),
-        "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
+        "Notifications can fire for DMs, mentions, friend joins, game events, and streams (a friend going live, or someone opening yours).".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
         "".to_string(),
         "Native CLI config file".to_string(),
@@ -1292,6 +1300,7 @@ fn voice_help_lines() -> Vec<String> {
         "  DMs, private rooms, and game rooms have voice enabled by default.",
         "  Public rooms stay voice-off until a staffer turns them on.",
         "  When voice is off on the server or in this room, the strip says so and no one can join.",
+        "  Stream rooms (`/golive`) use the same voice channel; while the stream is on air the strip shows ⦿ ON AIR and joining asks for one extra Ctrl+V confirm, because voice there is audible to anonymous watch-page viewers.",
         "",
         "Joining and controls",
         "  Ctrl+V            join the room's voice, switch to it if you are in another, or leave when already in this one",
@@ -1320,14 +1329,89 @@ fn voice_help_lines() -> Vec<String> {
         "",
         "What you need to join",
         "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
-        "  Supported for joining on Linux and Windows.",
-        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  Supported for joining on Linux, macOS, and Windows.",
+        "  Raw `ssh late.sh` sessions can see the roster and badge but cannot join or listen yet.",
         "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
         "",
         "How it works under the hood",
         "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
         "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
         "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn streaming_help_lines() -> Vec<String> {
+    [
+        "Streaming",
+        "",
+        "/golive puts you live in your own stream room: viewers watch in a browser, chat rides the room, and the room's voice channel is the stream's voice. One stream per account.",
+        "",
+        "Two ways to publish",
+        "  /golive [title]    stream your screen from a browser publisher page;",
+        "                     late.sh opens it via your paired CLI, or shows a QR",
+        "  /golive obs [..]   stream from OBS over WHIP; shows the server URL and",
+        "                     bearer token to paste into OBS",
+        "  The two kinds do not mix: to switch, /golive stop first, then start the other.",
+        "  Rerunning /golive obs while set up shows the same credentials again.",
+        "  /golive stop       end your stream (either kind)",
+        "",
+        "Watching",
+        "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
+        "  Live streams also show under the room rail's `stream` section, and an",
+        "  `is live` line hits #lounge once media flows.",
+        "  Watch pages are born silent: nothing is audible until the viewer turns sound on.",
+        "  When a friend goes live you get a banner and a desktop notification.",
+        "",
+        "Your audience",
+        "  The first time a late.sh user opens your stream, by /watch or by walking",
+        "  into your stream room, you get an `is watching` banner and #lounge gets",
+        "  an `is watching` line.",
+        "  Both stream notifications share one settings row, `Streams`; banners",
+        "  show either way.",
+        "  Browser viewers who only have the link stay anonymous: they show up in",
+        "  the header's watcher count and nowhere else.",
+        "",
+        "OBS setup: Settings > Stream",
+        "  Service           WHIP",
+        "  Server            the WHIP URL from /golive obs",
+        "  Bearer Token      the token from /golive obs",
+        "",
+        "OBS setup: Settings > Output",
+        "  Video Encoder     H.264: hardware if you have it (NVENC, AMF, VAAPI,",
+        "                    Apple VT), otherwise x264",
+        "  Audio Encoder     Opus, required: WHIP cannot carry AAC",
+        "  Bitrate           whatever your upload handles; 4000-8000 Kbps is plenty",
+        "  The server forwards your encoding untouched (no re-encode), so what you",
+        "  send is exactly what viewers get.",
+        "",
+        "If OBS says \"at least one video or audio encoder is not set\"",
+        "  Switching Service to WHIP resets any encoder it cannot carry, including",
+        "  the Recording ones, and OBS refuses to save while any output has none.",
+        "  Simple output mode: set Recording Quality to \"Same as stream\".",
+        "  Advanced output mode: check the Recording tab and pick its encoders",
+        "  (\"Use stream encoder\" is fine).",
+        "  Still complaining with everything set? Restart OBS: older versions do",
+        "  not rebind encoders after the service switch until a restart.",
+        "",
+        "Credentials",
+        "  The WHIP URL and bearer token are minted per stream and die with it:",
+        "  /golive stop (or the stream ending) invalidates them, and the next",
+        "  /golive obs mints a fresh pair to paste in.",
+        "",
+        "On air and voice",
+        "  While you publish, the stream room's voice strip shows ⦿ ON AIR.",
+        "  Voice in a stream room is audible to watch-page viewers, and an OBS",
+        "  stream counts as on air the whole time it publishes, since program",
+        "  audio can carry a microphone.",
+        "",
+        "Disconnects",
+        "  OBS dropping does not kill the stream instantly: after ~30 seconds",
+        "  without media it falls to a reconnect grace, and ends ~30 seconds",
+        "  later if OBS has not come back. OBS's automatic reconnect picks the",
+        "  stream back up within that window.",
     ]
     .into_iter()
     .map(str::to_string)

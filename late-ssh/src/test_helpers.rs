@@ -137,6 +137,21 @@ pub fn test_irc_config() -> crate::config::IrcConfig {
     }
 }
 
+/// Session-scoped `StreamService` for app tests. Every session has one, in
+/// tests as in production; what tests lack is LiveKit, so `/golive` here fails
+/// the voice check inside `prepare_go_live` rather than the service missing.
+fn test_stream_service(
+    db: Db,
+    activity_tx: broadcast::Sender<ActivityEvent>,
+) -> crate::app::stream::svc::StreamService {
+    crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        VoiceService::new(VoiceConfig::disabled()),
+        ActivityPublisher::new(db, activity_tx),
+        "http://localhost:3000".to_string(),
+    )
+}
+
 pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     Config {
         env: crate::config::Env::Dev,
@@ -256,6 +271,12 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = crate::app::UltimateService::new(db.clone());
     let voice_service = VoiceService::new(config.voice.clone());
+    let stream_service = crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
@@ -277,6 +298,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
+        stream_service,
         chat_service,
         notification_service,
         ai_service,
@@ -432,6 +454,7 @@ fn make_app_with_chat_service_and_permissions(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: chat_service.clone(),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),
@@ -636,6 +659,7 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),

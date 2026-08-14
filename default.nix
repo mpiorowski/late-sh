@@ -19,6 +19,7 @@
   gtk3 ? null,
   mold,
   webkitgtk_4_1 ? null,
+  xcbuild ? null,
 }: let
   packageVersion = (builtins.fromTOML (builtins.readFile ./late-ssh/Cargo.toml)).package.version;
   gstPluginsBadNoLv2 =
@@ -67,13 +68,21 @@
         triple = "linux-arm64-release";
         hash = "sha256-tVymLCixjcW7cgpwgq5GjXjyE8o5vMz4QZXy/ljP5xM=";
       };
+      x86_64-darwin = {
+        triple = "mac-x64-release";
+        hash = "sha256-Fx8boIZuWUfg1CDswcM4FEduGRkTG4G7h8hynUXXISc=";
+      };
+      aarch64-darwin = {
+        triple = "mac-arm64-release";
+        hash = "sha256-+b5Juf7pzRWI2opAyFvaIfXqScTtgmYtyImxyRlWmgg=";
+      };
     };
   in
     if builtins.hasAttr stdenv.hostPlatform.system archives
     then builtins.getAttr stdenv.hostPlatform.system archives
     else throw "unsupported LiveKit WebRTC platform for Nix: ${stdenv.hostPlatform.system}";
   livekitWebrtcZip =
-    if stdenv.isLinux
+    if stdenv.isLinux || stdenv.isDarwin
     then
       fetchurl {
         url = "https://github.com/livekit/rust-sdks/releases/download/webrtc-51ef663/webrtc-${livekitWebrtc.triple}.zip";
@@ -116,6 +125,13 @@ in
         makeWrapper
         mold
         unzip
+      ]
+      # `unzip` unpacks the prebuilt WebRTC below. `xcbuild` supplies `xcrun`,
+      # which webrtc-sys's build script shells out to for the macOS SDK path
+      # and which the sandbox does not otherwise have.
+      ++ lib.optionals stdenv.isDarwin [
+        unzip
+        xcbuild
       ];
 
     buildInputs =
@@ -129,7 +145,9 @@ in
 
     # webrtc-sys downloads this archive in build.rs by default. Nix builds are
     # sandboxed, so provide it up front and point the build script at it.
-    preBuild = lib.optionalString stdenv.isLinux ''
+    # Both Linux and macOS link LiveKit voice, and both archives unpack to the
+    # same `{triple}/` layout.
+    preBuild = lib.optionalString (stdenv.isLinux || stdenv.isDarwin) ''
       mkdir -p "$TMPDIR/livekit-webrtc"
       unzip -q "${livekitWebrtcZip}" -d "$TMPDIR/livekit-webrtc"
       export LK_CUSTOM_WEBRTC="$TMPDIR/livekit-webrtc/${livekitWebrtc.triple}"

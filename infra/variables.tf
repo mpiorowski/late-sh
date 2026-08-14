@@ -109,54 +109,6 @@ variable "IPV6_PROXY_IMAGE" {
 }
 
 # =============================================================================
-# Door Games (host pod gating; the late-ssh client side lives in config.rs)
-# =============================================================================
-
-variable "NETHACK_ENABLED" {
-  description = "Enable the NetHack SSH door game (real upstream binary on a PTY). Empty defaults to on; the nethack-save PVC is provisioned regardless. See infra/nethack.tf."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
-    error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "DCSS_ENABLED" {
-  description = "Enable the DCSS door game host resources. Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DCSS_ENABLED)))
-    error_message = "DCSS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "BROGUE_ENABLED" {
-  description = "Enable the Brogue door game host resources. Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.BROGUE_ENABLED)))
-    error_message = "BROGUE_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "USURPER_ENABLED" {
-  description = "Enable the Usurper door game host resources. Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.USURPER_ENABLED)))
-    error_message = "USURPER_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-# =============================================================================
 # Secrets injected into late-ssh
 # =============================================================================
 
@@ -196,6 +148,24 @@ variable "LIVEKIT_LOG_LEVEL" {
 
 variable "LIVEKIT_API_KEY" {
   description = "LiveKit API key used by late-ssh for token minting."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_INGRESS_IMAGE" {
+  description = "LiveKit ingress service image (WHIP ingest for OBS streams)."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_WHIP_SUBDOMAIN" {
+  description = "Subdomain used for the public WHIP ingest endpoint under DOMAIN."
+  type        = string
+  default     = ""
+}
+
+variable "LIVEKIT_INGRESS_WHIP_PORT" {
+  description = "LiveKit ingress WHIP HTTP port (behind the nginx ingress)."
   type        = string
   default     = ""
 }

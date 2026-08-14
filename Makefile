@@ -33,7 +33,15 @@ LATE_ICECAST_HOST_PORT ?= 8000                              # Host-side port map
 LATE_LIVEKIT_HOST_PORT ?= 7880
 LATE_LIVEKIT_RTC_TCP_PORT ?= 7881
 LATE_LIVEKIT_RTC_UDP_PORT ?= 7882
-# Local LiveKit credentials (shared between late-ssh and the LiveKit container).
+# Host-side ports for the WHIP ingest container (`/golive obs`). Only the host
+# side is variable: the container side must match the two dev-config.yaml
+# files, and the WHIP URL handed to streamers is baked into
+# infra/livekit/dev-config.yaml, so OBS ingest targets instance 1 only.
+LATE_LIVEKIT_WHIP_HOST_PORT ?= 7888
+LATE_LIVEKIT_WHIP_UDP_HOST_PORT ?= 7890
+# Local LiveKit credentials. The LiveKit and ingress containers read them
+# from their own dev-config.yaml files, so a change here must be mirrored in
+# infra/livekit/dev-config.yaml and infra/livekit-ingress/dev-config.yaml.
 LATE_LIVEKIT_API_KEY ?= devkey
 LATE_LIVEKIT_API_SECRET ?= secret
 
@@ -94,6 +102,8 @@ LATE_AI_API_KEY ?=
 	@echo "LATE_LIVEKIT_HOST_PORT=$(LATE_LIVEKIT_HOST_PORT)" >> .env
 	@echo "LATE_LIVEKIT_RTC_TCP_PORT=$(LATE_LIVEKIT_RTC_TCP_PORT)" >> .env
 	@echo "LATE_LIVEKIT_RTC_UDP_PORT=$(LATE_LIVEKIT_RTC_UDP_PORT)" >> .env
+	@echo "LATE_LIVEKIT_WHIP_HOST_PORT=$(LATE_LIVEKIT_WHIP_HOST_PORT)" >> .env
+	@echo "LATE_LIVEKIT_WHIP_UDP_HOST_PORT=$(LATE_LIVEKIT_WHIP_UDP_HOST_PORT)" >> .env
 	@echo "LATE_LIVEKIT_API_KEY=$(LATE_LIVEKIT_API_KEY)" >> .env
 	@echo "LATE_LIVEKIT_API_SECRET=$(LATE_LIVEKIT_API_SECRET)" >> .env
 	@echo "LATE_IRC_PORT=$(LATE_IRC_PORT)" >> .env
@@ -134,7 +144,9 @@ INSTANCE2_OVERRIDES = \
   LATE_IRC_TLS_HOST_PORT=6698 \
   LATE_LIVEKIT_HOST_PORT=7883 \
   LATE_LIVEKIT_RTC_TCP_PORT=7884 \
-  LATE_LIVEKIT_RTC_UDP_PORT=7885
+  LATE_LIVEKIT_RTC_UDP_PORT=7885 \
+  LATE_LIVEKIT_WHIP_HOST_PORT=7891 \
+  LATE_LIVEKIT_WHIP_UDP_HOST_PORT=7892
 
 CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview
 CHECK_CARGO_ENV = CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0

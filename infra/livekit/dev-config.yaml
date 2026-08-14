@@ -1,0 +1,22 @@
+# Local dev LiveKit server config. Replaces the old `--dev` flag with the
+# same defaults (devkey keys, dev ports) plus what the OBS/WHIP ingest flow
+# needs: the redis bus shared with the livekit-ingress container and the
+# WHIP base URL returned by CreateIngress. Ports here must match
+# docker-compose.yml and infra/livekit-ingress/dev-config.yaml.
+port: 7880
+bind_addresses:
+  - "0.0.0.0"
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+redis:
+  address: redis:6379
+ingress:
+  whip_base_url: http://localhost:7888/w
+keys:
+  devkey: secret
+room:
+  auto_create: true
+logging:
+  level: info

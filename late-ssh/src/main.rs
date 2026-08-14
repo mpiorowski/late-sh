@@ -142,6 +142,12 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
     );
     let voice_service = VoiceService::new(config.voice.clone()).with_db(db.clone());
+    let stream_service = late_ssh::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
     let session_registry = SessionRegistry::new();
     let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let notification_service = NotificationService::new(db.clone());
@@ -264,7 +270,8 @@ async fn main() -> anyhow::Result<()> {
             ModerationInfra::default()
                 .with_force_admin(config.force_admin)
                 .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
-                .with_voice(voice_service.clone()),
+                .with_voice(voice_service.clone())
+                .with_stream(stream_service.clone()),
         )
         .with_chip_service(chip_service.clone());
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
@@ -317,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
         translation_service: translation_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
+        stream_service,
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
@@ -481,6 +489,29 @@ async fn main() -> anyhow::Result<()> {
                 _ = voice_prune_shutdown.cancelled() => break,
                 _ = interval.tick() => {
                     voice_prune_service.prune_stale(chrono::Duration::seconds(90));
+                }
+            }
+        }
+        Ok(())
+    });
+
+    let stream_sweep_shutdown = singleton_shutdown.clone();
+    let stream_sweep_service = state.stream_service.clone();
+    tasks.spawn(async move {
+        // A restart wiped the in-memory registry, so any ingress LiveKit
+        // still holds is an orphaned stream key; collect them before the
+        // first poll can see them.
+        stream_sweep_service.reconcile_ingresses().await;
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            tokio::select! {
+                _ = stream_sweep_shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    // The poll feeds the OBS streams' publisher reports; the
+                    // sweep right after acts on whatever state it left.
+                    stream_sweep_service.poll_obs_publishers().await;
+                    stream_sweep_service.sweep();
                 }
             }
         }

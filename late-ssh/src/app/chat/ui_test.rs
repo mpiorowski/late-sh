@@ -100,6 +100,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -114,6 +115,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         versions: ChatRowsVersions::default(),
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -151,6 +153,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -171,6 +174,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         versions,
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -357,6 +361,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -370,6 +375,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         versions: ChatRowsVersions::default(),
         current_user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -436,6 +442,7 @@ fn background_wash_fills_the_whole_row_width() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
@@ -449,6 +456,7 @@ fn background_wash_fills_the_whole_row_width() {
         versions: ChatRowsVersions::default(),
         current_user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -581,6 +589,7 @@ fn chat_view<'a>(
         chat_ctx_epoch: 0,
         app_ctx_epoch: 0,
         chat_rooms: rooms,
+        live_streams: &[],
         overlay: None,
         image_modal: None,
         usernames,
@@ -607,6 +616,7 @@ fn chat_view<'a>(
         composing: false,
         current_user_id: Uuid::nil(),
         afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+        live_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
         ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
         sticky_unread_dm: None,
         show_flag_fallback: false,
@@ -2064,6 +2074,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
@@ -2104,6 +2115,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
@@ -2126,6 +2138,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),

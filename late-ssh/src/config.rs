@@ -193,6 +193,10 @@ struct DevInstance {
     api_port: u16,
     irc_port: u16,
     web_port: u16,
+    /// Host-side LiveKit port. Client-facing only: browsers and the CLI
+    /// reach LiveKit through the compose port mapping, while this process
+    /// reaches it by service name inside the instance's own network.
+    livekit_host_port: u16,
 }
 
 impl Config {
@@ -205,6 +209,7 @@ impl Config {
                     api_port: 4001,
                     irc_port: 6667,
                     web_port: 3000,
+                    livekit_host_port: 7880,
                 },
             )?,
             Env::Dev2 => Self::dev(
@@ -214,6 +219,7 @@ impl Config {
                     api_port: 4001,
                     irc_port: 6668,
                     web_port: 3001,
+                    livekit_host_port: 7883,
                 },
             )?,
             Env::Prod => Self::prod()?,
@@ -260,7 +266,11 @@ impl Config {
             // Personal opt-in: link validation stays off without a key.
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice: VoiceConfig::enabled(
-                "ws://localhost:7880".to_string(),
+                // Client-facing: browsers and the CLI run on the host.
+                format!("ws://localhost:{}", instance.livekit_host_port),
+                // Server-to-server: this process runs in a container, where
+                // localhost is itself and not LiveKit.
+                "http://livekit:7880".to_string(),
                 required("LATE_LIVEKIT_API_KEY")?,
                 required("LATE_LIVEKIT_API_SECRET")?,
                 "late-voice".to_string(),
@@ -353,7 +363,11 @@ impl Config {
             },
             youtube_api_key: Some(required("LATE_YOUTUBE_API_KEY")?),
             voice: VoiceConfig::enabled(
+                // Client-facing: the public signaling endpoint through ingress.
                 "wss://rtc.late.sh".to_string(),
+                // Server-to-server: stay inside the cluster instead of
+                // looping back out through the public ingress.
+                "http://livekit-sv".to_string(),
                 required("LATE_LIVEKIT_API_KEY")?,
                 required("LATE_LIVEKIT_API_SECRET")?,
                 "late-voice".to_string(),
@@ -507,6 +521,7 @@ impl Config {
         tracing::info!(
             enabled = self.voice.enabled,
             livekit_url = ?self.voice.livekit_url,
+            livekit_api_url = ?self.voice.livekit_api_url,
             room = %self.voice.room_name,
             has_key = self.voice.api_key.is_some(),
             "voice: LiveKit RTC status"

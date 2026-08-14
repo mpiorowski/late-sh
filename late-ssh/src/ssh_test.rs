@@ -272,21 +272,21 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
         .expect("dismiss splash after token close");
     expect_shell_data_contains(&mut shell_channel, b"welcome to the late lounge").await;
 
-    // A brand-new account runs the forced tour: only the named digit works,
-    // so follow the route (1 chat, 2 arcade, ...).
-    shell_channel
-        .data(&b"1"[..])
-        .await
-        .expect("send shell input after token close");
-    shell_channel
-        .data(&b"2"[..])
-        .await
-        .expect("send shell input after token close");
+    // A brand-new account runs the forced tour, which swallows every key but
+    // the one its current stop asks for: a page digit, or Enter on the two
+    // mid-route interlude boxes (the music on Home, the lobby on The Arcade).
+    // The route is pinned in `clubhouse/state_test.rs`.
+    for key in [&b"1"[..], b"\r", b"2"] {
+        shell_channel
+            .data(key)
+            .await
+            .expect("send shell input after token close");
+    }
     expect_shell_data_contains(&mut shell_channel, b"The Arcade").await;
 
     // A further post-close interaction proves the first frame was not merely
     // the render loop's final draw while shutting down.
-    for key in [&b"3"[..], b"4", b"5"] {
+    for key in [&b"\r"[..], b"3", b"4", b"5"] {
         shell_channel
             .data(key)
             .await

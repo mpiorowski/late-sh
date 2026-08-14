@@ -29,6 +29,10 @@ locals {
   livekit_turn_udp_port       = tonumber(trimspace(var.LIVEKIT_TURN_UDP_PORT) != "" ? trimspace(var.LIVEKIT_TURN_UDP_PORT) : "3478")
   livekit_turn_tls_port       = tonumber(trimspace(var.LIVEKIT_TURN_TLS_PORT) != "" ? trimspace(var.LIVEKIT_TURN_TLS_PORT) : "5349")
 
+  livekit_ingress_image     = trimspace(var.LIVEKIT_INGRESS_IMAGE) != "" ? trimspace(var.LIVEKIT_INGRESS_IMAGE) : "livekit/ingress:v1.4.3"
+  livekit_whip_subdomain    = trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) : "whip"
+  livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
+
   # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
   # side is compiled into late-ssh's prod profile and always listens; these
   # gate only what the edge exposes. IRC_PROXY_EMIT stays a variable because

@@ -42,7 +42,6 @@ pub(crate) enum PickerKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Row {
     Username,
-    Birthday,
     Ide,
     Terminal,
     Os,
@@ -56,6 +55,7 @@ pub(crate) enum Row {
     DirectMessages,
     Mentions,
     GameEvents,
+    Streams,
     Bell,
     Cooldown,
     NotifyFormat,
@@ -66,7 +66,6 @@ impl Row {
         Row::Username,
         Row::Country,
         Row::Timezone,
-        Row::Birthday,
         Row::Theme,
         Row::Ide,
         Row::Terminal,
@@ -78,6 +77,7 @@ impl Row {
         Row::DirectMessages,
         Row::Mentions,
         Row::GameEvents,
+        Row::Streams,
         Row::Bell,
         Row::Cooldown,
         Row::NotifyFormat,
@@ -146,7 +146,6 @@ pub(crate) enum LinkAccountEnterCodeFocus {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SystemField {
-    Birthday,
     Ide,
     Terminal,
     Os,
@@ -156,7 +155,6 @@ pub(crate) enum SystemField {
 impl SystemField {
     pub(crate) fn from_row(row: Row) -> Option<Self> {
         match row {
-            Row::Birthday => Some(Self::Birthday),
             Row::Ide => Some(Self::Ide),
             Row::Terminal => Some(Self::Terminal),
             Row::Os => Some(Self::Os),
@@ -167,7 +165,6 @@ impl SystemField {
 
     fn value(self, profile: &Profile) -> Option<String> {
         match self {
-            Self::Birthday => profile.birthday.clone(),
             Self::Ide => profile.ide.clone(),
             Self::Terminal => profile.terminal.clone(),
             Self::Os => profile.os.clone(),
@@ -177,9 +174,6 @@ impl SystemField {
 
     fn set_value(self, profile: &mut Profile, text: String) {
         match self {
-            Self::Birthday => {
-                profile.birthday = late_core::models::birthday::normalize_birthday(&text);
-            }
             Self::Ide => profile.ide = normalize_optional_text(&text),
             Self::Terminal => profile.terminal = normalize_optional_text(&text),
             Self::Os => profile.os = normalize_optional_text(&text),
@@ -1906,6 +1900,10 @@ impl SettingsModalState {
                 toggle_kind(&mut self.draft.notify_kinds, "game_events");
                 true
             }
+            Row::Streams => {
+                toggle_kind(&mut self.draft.notify_kinds, "streams");
+                true
+            }
             Row::Bell => {
                 self.draft.notify_bell ^= true;
                 true
@@ -1933,7 +1931,7 @@ impl SettingsModalState {
                 self.draft.translate_mine_to_en ^= true;
                 true
             }
-            Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
+            Row::Ide | Row::Terminal | Row::Os | Row::Langs => false,
             _ => false,
         };
         if mutated {
@@ -1979,7 +1977,6 @@ impl SettingsModalState {
                 auto_translate: self.draft.auto_translate,
                 translate_mine_to_en: self.draft.translate_mine_to_en,
                 favorite_room_ids: self.draft.favorite_room_ids.clone(),
-                birthday: self.draft.birthday.clone(),
             },
         );
     }

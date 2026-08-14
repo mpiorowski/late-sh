@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     extract::{
-        ConnectInfo, Query, State as AxumState, WebSocketUpgrade,
+        ConnectInfo, Path, Query, State as AxumState, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     http::HeaderMap,
     http::StatusCode,
     middleware::{self},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use late_core::api_types::{NowPlayingResponse, StatusResponse, Track};
@@ -199,6 +199,20 @@ pub async fn run_api_server_with_listener(
         .route("/api/radio-meta", get(get_radio_meta))
         .route("/api/listen", get(get_listen))
         .route("/api/status", get(get_status))
+        .route("/api/stream/publish/{token}", get(get_stream_publish_grant))
+        .route(
+            "/api/stream/publish/{token}/state",
+            post(post_stream_publish_state),
+        )
+        .route("/api/stream/watch/{stream_id}", get(get_stream_watch_state))
+        .route(
+            "/api/stream/watch/{stream_id}/grant",
+            get(get_stream_watch_grant),
+        )
+        .route(
+            "/api/stream/watch/{stream_id}/heartbeat",
+            post(post_stream_watch_heartbeat),
+        )
         .route("/api/ws/pair", get(ws_handler))
         .layer(middleware::from_fn(http_telemetry_middleware))
         .with_state(state);
@@ -320,6 +334,176 @@ async fn get_listen(AxumState(state): AxumState<State>) -> Json<ListenResponse> 
                 .collect(),
         },
     })
+}
+
+/// What the go-live console page needs to start publishing. The publish
+/// token in the URL is the whole capability: it is minted per stream from
+/// the TUI, shown only to the streamer, and dies with the stream.
+#[derive(Serialize)]
+struct StreamPublishGrantResponse {
+    livekit_url: String,
+    room: String,
+    token: String,
+    title: String,
+    streamer: String,
+    stream_id: String,
+    watch_url: String,
+}
+
+/// Go-live page state report: `publishing` is whether media is flowing
+/// right now. Sent on every transition and as a periodic heartbeat.
+/// (Unknown fields are ignored, so an older cached page still sending
+/// `mic_live` keeps working.)
+#[derive(Deserialize)]
+struct StreamPublishStateBody {
+    publishing: bool,
+}
+
+/// Everything the watch page polls: liveness, title, and the count. The
+/// LiveKit grant is fetched once, separately.
+#[derive(Serialize)]
+struct StreamWatchStateResponse {
+    live: bool,
+    title: String,
+    streamer: String,
+    watching: usize,
+}
+
+#[derive(Serialize)]
+struct StreamWatchGrantResponse {
+    livekit_url: String,
+    room: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct StreamWatchHeartbeatBody {
+    watcher_id: String,
+}
+
+/// Header carrying the publish-token claim secret between the late-web
+/// proxy (where it lives as an HttpOnly cookie on the console's browser)
+/// and this API.
+pub const PUBLISH_CLAIM_HEADER: &str = "x-late-publish-claim";
+
+fn publish_claim_from_headers(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(PUBLISH_CLAIM_HEADER)
+        .and_then(|value| value.to_str().ok())
+}
+
+async fn get_stream_publish_grant(
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    use crate::app::stream::svc::PublishGrantAccess;
+    let claim = publish_claim_from_headers(&headers);
+    match state.stream_service.publisher_grant(&token, claim) {
+        Ok(PublishGrantAccess::Granted { grant, new_claim }) => {
+            let mut response = Json(StreamPublishGrantResponse {
+                livekit_url: grant.ticket.url,
+                room: grant.ticket.room,
+                token: grant.ticket.token,
+                title: grant.title,
+                streamer: grant.username,
+                stream_id: grant.stream_id,
+                watch_url: grant.watch_url,
+            })
+            .into_response();
+            // The claiming fetch hands the minted secret back in a header;
+            // the late-web proxy turns it into the console's cookie.
+            if let Some(secret) = new_claim
+                && let Ok(value) = axum::http::HeaderValue::from_str(&secret)
+            {
+                response.headers_mut().insert(PUBLISH_CLAIM_HEADER, value);
+            }
+            response
+        }
+        Ok(PublishGrantAccess::Denied) => StatusCode::FORBIDDEN.into_response(),
+        Ok(PublishGrantAccess::Gone) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = ?error, "failed to mint stream publish grant");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn post_stream_publish_state(
+    Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
+    AxumState(state): AxumState<State>,
+    Json(body): Json<StreamPublishStateBody>,
+) -> StatusCode {
+    use crate::app::stream::registry::PublisherReport;
+    let claim = publish_claim_from_headers(&headers);
+    match state
+        .stream_service
+        .report_publisher(&token, body.publishing, claim)
+    {
+        PublisherReport::Gone => StatusCode::NOT_FOUND,
+        PublisherReport::Denied => StatusCode::FORBIDDEN,
+        PublisherReport::Live { .. } | PublisherReport::Stopped => StatusCode::NO_CONTENT,
+    }
+}
+
+async fn get_stream_watch_state(
+    Path(stream_id): Path<String>,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    match state.stream_service.watch_view(&stream_id) {
+        Some(view) => Json(StreamWatchStateResponse {
+            live: view.live,
+            title: view.title,
+            streamer: view.username,
+            watching: view.watching,
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn get_stream_watch_grant(
+    Path(stream_id): Path<String>,
+    AxumState(state): AxumState<State>,
+) -> impl IntoResponse {
+    match state.stream_service.watch_grant(&stream_id) {
+        Ok(Some(ticket)) => Json(StreamWatchGrantResponse {
+            livekit_url: ticket.url,
+            room: ticket.room,
+            token: ticket.token,
+        })
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = ?error, "failed to mint stream watch grant");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn post_stream_watch_heartbeat(
+    Path(stream_id): Path<String>,
+    AxumState(state): AxumState<State>,
+    Json(body): Json<StreamWatchHeartbeatBody>,
+) -> StatusCode {
+    // The endpoint is unauthenticated (the watch URL is the auth) and the
+    // watcher id is client-generated (a browser UUID, 36 chars). Ids beyond
+    // the cap are junk from a tampered client; reject them at the boundary
+    // so the registry only ever stores well-formed ids.
+    if body.watcher_id.is_empty()
+        || body.watcher_id.len() > crate::app::stream::registry::WATCHER_ID_MAX_LEN
+    {
+        return StatusCode::BAD_REQUEST;
+    }
+    if state
+        .stream_service
+        .watch_heartbeat(&stream_id, &body.watcher_id)
+    {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 async fn get_health(AxumState(state): AxumState<State>) -> (StatusCode, &'static str) {

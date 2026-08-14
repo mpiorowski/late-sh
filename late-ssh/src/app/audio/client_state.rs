@@ -125,6 +125,14 @@ impl ClientAudioState {
                 .any(|capability| capability == "voice")
     }
 
+    pub fn supports_open_url(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "open_url")
+    }
+
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;

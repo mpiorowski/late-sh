@@ -1297,7 +1297,9 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         // lets the route's digits through, and `0` lands straight on
         // Homecoming.
         Tutorial::VisitChat
+        | Tutorial::VisitMusic
         | Tutorial::VisitArcade
+        | Tutorial::VisitLobby
         | Tutorial::VisitGames
         | Tutorial::VisitArtboard
         | Tutorial::VisitDirectory
@@ -1387,6 +1389,51 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         Span::styled(" wait in the rail", text),
                     ]),
                 ],
+                "Enter",
+                "the music",
+            ),
+            Tutorial::VisitMusic => (
+                Screen::Dashboard,
+                " ✦ the tour · the music ",
+                vec![
+                    Line::from(Span::styled(
+                        "the house has a soundtrack, always on: our own radio",
+                        text,
+                    )),
+                    Line::from(vec![
+                        Span::styled("streams, ", text),
+                        Span::styled("Nightride", name),
+                        Span::styled(" guest stations, and a community ", text),
+                        Span::styled("YouTube", name),
+                    ]),
+                    Line::from(Span::styled(
+                        "jukebox: queue tracks, vote on them, browse the history.",
+                        text,
+                    )),
+                    Line::default(),
+                    Line::from(Span::styled(
+                        "one catch: SSH carries no sound. two ways to listen:",
+                        text,
+                    )),
+                    Line::from(vec![
+                        Span::styled("late.sh/listen", name),
+                        Span::styled(" plays it in any browser, nothing to install;", text),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("the ", text),
+                        Span::styled("late", name),
+                        Span::styled(" CLI plays it right here in your terminal.", text),
+                    ]),
+                    Line::default(),
+                    Line::from(vec![
+                        Span::styled("[v v] ", key),
+                        Span::styled("Music Booth · ", text),
+                        Span::styled("[v x] ", key),
+                        Span::styled("source · ", text),
+                        Span::styled("[?] ", key),
+                        Span::styled("the install guide", text),
+                    ]),
+                ],
                 "2",
                 "the arcade",
             ),
@@ -1414,14 +1461,19 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "a pet companion to feed, an aquarium with real fish.",
                         text,
                     )),
-                    Line::default(),
+                ],
+                "Enter",
+                "the lobby",
+            ),
+            Tutorial::VisitLobby => (
+                Screen::Arcade,
+                " ✦ the tour · the lobby ",
+                vec![
                     Line::from(vec![
                         Span::styled("[Ctrl+G] ", key),
-                        Span::styled(
-                            "the lobby, where most of the house's games are played:",
-                            text,
-                        ),
+                        Span::styled("opens the lobby from anywhere: all the multiplayer.", text),
                     ]),
+                    Line::default(),
                     Line::from(vec![
                         Span::styled("seven daily duels: ", text),
                         Span::styled("chess, backgammon, battleship,", name),
@@ -1434,11 +1486,16 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                         "walk away, play a move whenever; 24h on the clock per move.",
                         text,
                     )),
+                    Line::default(),
                     Line::from(vec![
-                        Span::styled("plus live tables: ", text),
-                        Span::styled("Poker, Blackjack, Asterion, Tron, Super Snake", name),
-                        Span::styled(".", text),
+                        Span::styled("five live tables, always open: ", text),
+                        Span::styled("Poker, Blackjack,", name),
                     ]),
+                    Line::from(vec![
+                        Span::styled("Asterion, Tron, Super Snake", name),
+                        Span::styled(". every table seats its own", text),
+                    ]),
+                    Line::from(Span::styled("chat and voice; pull up a chair.", text)),
                 ],
                 "3",
                 "the heavy door",

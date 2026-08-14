@@ -212,6 +212,12 @@ async fn ensure_no_active_link_blocking_bans(
                      FROM audio_bans
                      WHERE target_user_id = ANY($1)
                        AND (expires_at IS NULL OR expires_at > current_timestamp)
+                 )
+                 OR EXISTS (
+                     SELECT 1
+                     FROM stream_bans
+                     WHERE target_user_id = ANY($1)
+                       AND (expires_at IS NULL OR expires_at > current_timestamp)
                  )",
             &[&user_ids],
         )

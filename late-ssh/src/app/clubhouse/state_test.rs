@@ -92,23 +92,48 @@ fn tutorial_tours_every_page_then_comes_home() {
     assert_eq!(state.tutorial, Tutorial::Welcome);
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
 
-    // Every stop forces exactly one key, and its screen advances the route.
-    for (expected_key, screen, next_stage) in [
-        (b'1', Screen::Dashboard, Tutorial::VisitChat),
-        (b'2', Screen::Arcade, Tutorial::VisitArcade),
-        (b'3', Screen::Games, Tutorial::VisitGames),
-        (b'4', Screen::Artboard, Tutorial::VisitArtboard),
-        (b'5', Screen::Profiles, Tutorial::VisitDirectory),
-        (b'6', Screen::Leaderboard, Tutorial::VisitLeaderboard),
-        (b'0', Screen::Clubhouse, Tutorial::Homecoming),
+    // Every stop forces exactly one input: a page digit whose screen
+    // advances the route, or Enter on the two mid-route interlude boxes
+    // (the music on Home, the lobby on The Arcade).
+    for (step, next_stage) in [
+        (TourStep::Page(b'1', Screen::Dashboard), Tutorial::VisitChat),
+        (TourStep::Enter, Tutorial::VisitMusic),
+        (TourStep::Page(b'2', Screen::Arcade), Tutorial::VisitArcade),
+        (TourStep::Enter, Tutorial::VisitLobby),
+        (TourStep::Page(b'3', Screen::Games), Tutorial::VisitGames),
+        (
+            TourStep::Page(b'4', Screen::Artboard),
+            Tutorial::VisitArtboard,
+        ),
+        (
+            TourStep::Page(b'5', Screen::Profiles),
+            Tutorial::VisitDirectory,
+        ),
+        (
+            TourStep::Page(b'6', Screen::Leaderboard),
+            Tutorial::VisitLeaderboard,
+        ),
+        (
+            TourStep::Page(b'0', Screen::Clubhouse),
+            Tutorial::Homecoming,
+        ),
     ] {
-        assert_eq!(
-            state.tutorial_forced_step(),
-            Some(TourStep::Page(expected_key, screen))
-        );
-        // A wrong page never advances a stop; the route waits for its page.
-        state.tutorial_screen_entered(Screen::Games);
-        state.tutorial_screen_entered(screen);
+        assert_eq!(state.tutorial_forced_step(), Some(step));
+        match step {
+            TourStep::Page(_, screen) => {
+                // A wrong page never advances a stop; the route waits for
+                // its page.
+                let wrong = if screen == Screen::Games {
+                    Screen::Artboard
+                } else {
+                    Screen::Games
+                };
+                state.tutorial_screen_entered(wrong);
+                state.tutorial_screen_entered(screen);
+            }
+            // The interludes advance without finishing the tour.
+            TourStep::Enter => assert!(!state.tutorial_advance()),
+        }
         assert_eq!(state.tutorial, next_stage);
     }
 
@@ -126,9 +151,11 @@ fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
     assert!(!state.welcome_pour_due());
     assert!(!state.bar_glow());
+    state.tutorial_screen_entered(Screen::Dashboard);
+    assert!(!state.tutorial_advance()); // the music interlude
+    state.tutorial_screen_entered(Screen::Arcade);
+    assert!(!state.tutorial_advance()); // the lobby interlude
     for screen in [
-        Screen::Dashboard,
-        Screen::Arcade,
         Screen::Games,
         Screen::Artboard,
         Screen::Profiles,

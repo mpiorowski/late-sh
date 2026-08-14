@@ -112,6 +112,7 @@ const COMMANDS: &[Command] = &[
     global("friend", "mark a friend (/friend @user; bare lists)"),
     global("friends", "list friends"),
     global("gift", "send chips (/gift @user 50 [note])"),
+    global("golive", "stream your screen (/golive <title>; stop)"),
     global("icons", "open icon picker"),
     global("ignore", "mute a user (/ignore @user; bare lists)"),
     global("invite", "add a user to this room (/invite @user)"),
@@ -141,6 +142,7 @@ const COMMANDS: &[Command] = &[
     global("unfriend", "remove a friend mark (/unfriend @user)"),
     global("unignore", "unmute a user (/unignore @user)"),
     global("upload", "upload an image by url (/upload <url>)"),
+    global("watch", "open someone's live stream (/watch @user)"),
     room(RoomScopedCommand::Sheet),
 ];
 

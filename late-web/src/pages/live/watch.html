@@ -1,0 +1,222 @@
+{% extends "pages/app.html" %}
+
+{% block title %}live · late.sh{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto pt-4">
+
+    <div class="mb-4">
+        <div class="flex items-baseline justify-between gap-4">
+            <h1 class="text-2xl text-green-500 tracking-tight">late.sh <span class="text-gray-400">· live</span></h1>
+            <div class="text-xs text-gray-400 shrink-0" id="watching"></div>
+        </div>
+        <p class="text-gray-300 mt-2">
+            <span class="text-green-400" id="streamer"></span>
+            <span id="title" class="text-gray-200"></span>
+        </p>
+    </div>
+
+    <div class="border border-gray-700 rounded overflow-hidden bg-black">
+        <video id="stream-video" class="w-full block" style="aspect-ratio: 16 / 9; object-fit: contain;" autoplay
+            playsinline muted></video>
+    </div>
+
+    <div class="flex items-center justify-between gap-4 mt-3 flex-wrap">
+        <div class="text-xs text-gray-400" id="status">connecting&hellip;</div>
+        <div class="flex items-center gap-2">
+            <button type="button" id="voices-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                voices: on
+            </button>
+            <input type="range" id="volume" min="0" max="100" value="100" class="w-24 accent-green-600"
+                title="stream volume">
+            <button type="button" id="mute-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                mute room audio
+            </button>
+            <button type="button" id="fullscreen-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                fullscreen
+            </button>
+        </div>
+    </div>
+
+    <p class="text-xs text-gray-500 mt-6 leading-relaxed">
+        the conversation around this stream lives in the terminal clubhouse:
+        <span class="text-green-400">ssh late.sh</span>. this page is eyes and ears only.
+    </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
+<script>
+    (function () {
+        const streamId = "{{ stream_id }}";
+        const watcherId = (self.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : String(Math.random()).slice(2) + Date.now();
+        const video = document.getElementById('stream-video');
+        const statusEl = document.getElementById('status');
+        const titleEl = document.getElementById('title');
+        const streamerEl = document.getElementById('streamer');
+        const watchingEl = document.getElementById('watching');
+        const muteBtn = document.getElementById('mute-btn');
+        const voicesBtn = document.getElementById('voices-btn');
+        const volumeEl = document.getElementById('volume');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        // Audio defaults on; when the browser's autoplay policy blocks it,
+        // we fall back to muted and the button reads "unmute". The voices
+        // toggle exists for the CLI viewer who already hears the room's
+        // voices through the terminal and only wants the stream audio here:
+        // one audio path per sound.
+        let audioOn = true;
+        let voicesOn = true;
+        let volume = 1;
+        let ended = false;
+        let room = null;
+        let connecting = false;
+        // Each entry: { el, voice }. Mic-source tracks are voices; everything
+        // else (the OBS mix, the console's screen-share audio) is the stream.
+        const audioTracks = [];
+
+        function applyAudio() {
+            audioTracks.forEach(function (t) {
+                t.el.muted = !audioOn || (t.voice && !voicesOn);
+                // The slider is stream volume only; voices have their own
+                // on/off toggle and stay at full level.
+                t.el.volume = t.voice ? 1 : volume;
+            });
+            muteBtn.textContent = audioOn ? 'mute room audio' : 'unmute room audio';
+            voicesBtn.textContent = voicesOn ? 'voices: on' : 'voices: off';
+        }
+
+        function setStatus(text) { statusEl.textContent = text; }
+
+        function endStream(message) {
+            ended = true;
+            setStatus(message);
+            if (room) { room.disconnect(); }
+        }
+
+        async function poll() {
+            if (ended) return;
+            let res;
+            try { res = await fetch('/live/' + streamId + '/state'); } catch (e) { return; }
+            if (res.status === 404) { endStream('this stream has ended.'); return; }
+            if (!res.ok) return;
+            const state = await res.json();
+            streamerEl.textContent = '@' + state.streamer + (state.title ? ' · ' : '');
+            titleEl.textContent = state.title || '';
+            watchingEl.textContent = state.watching + ' watching';
+            // The page subscribes only once media has flowed: the server
+            // withholds the grant while the stream is pending, so nobody
+            // listens in on the room's voice channel before the show starts.
+            if (!state.live) { setStatus('not live yet - hang tight.'); return; }
+            if (!room && !connecting) {
+                connecting = true;
+                connect().catch(function () {
+                    room = null;
+                    connecting = false;
+                    setStatus('could not connect - retrying.');
+                });
+            }
+        }
+
+        function heartbeat() {
+            if (ended) return;
+            fetch('/live/' + streamId + '/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watcher_id: watcherId }),
+            }).catch(function () { });
+        }
+
+        function attachTrack(track, participant) {
+            if (track.kind === 'video') {
+                track.attach(video);
+                setStatus('');
+            } else if (track.kind === 'audio') {
+                const el = track.attach();
+                // Anything published by a stream-* identity (OBS ingress,
+                // go-live console) is the stream, whatever source label it
+                // carries: the ingress label is not guaranteed to survive
+                // transcoding-off passthrough. Voices are mics from everyone
+                // else.
+                const fromStream = participant.identity.indexOf('stream-') === 0;
+                audioTracks.push({
+                    el: el,
+                    voice: !fromStream
+                        && track.source === LivekitClient.Track.Source.Microphone,
+                });
+                document.body.appendChild(el);
+                applyAudio();
+            }
+        }
+
+        async function connect() {
+            let res;
+            try { res = await fetch('/live/' + streamId + '/grant'); } catch (e) {
+                setStatus('could not reach the server - retrying.');
+                connecting = false;
+                return;
+            }
+            // A 404 here while the state poll says live is a race with the
+            // stream ending; the next poll settles it either way.
+            if (!res.ok) { connecting = false; return; }
+            const grant = await res.json();
+            room = new LivekitClient.Room();
+            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track, publication, participant) {
+                attachTrack(track, participant);
+            });
+            room.on(LivekitClient.RoomEvent.Disconnected, function () {
+                if (!ended) { setStatus('disconnected - reload to retry.'); }
+            });
+            // Autoplay-on-by-default: if the browser refuses audio without a
+            // gesture, fall back to muted and let the button do its old job.
+            room.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, function () {
+                if (!room.canPlaybackAudio && audioOn) {
+                    audioOn = false;
+                    applyAudio();
+                }
+            });
+            await room.connect(grant.livekit_url, grant.token);
+            room.remoteParticipants.forEach(function (participant) {
+                participant.trackPublications.forEach(function (publication) {
+                    if (publication.track) { attachTrack(publication.track, participant); }
+                });
+            });
+            try { await room.startAudio(); } catch (e) {
+                audioOn = false;
+                applyAudio();
+            }
+        }
+
+        muteBtn.addEventListener('click', async function () {
+            audioOn = !audioOn;
+            if (audioOn && room) {
+                try { await room.startAudio(); } catch (e) { }
+            }
+            applyAudio();
+        });
+
+        voicesBtn.addEventListener('click', function () {
+            voicesOn = !voicesOn;
+            applyAudio();
+        });
+
+        volumeEl.addEventListener('input', function () {
+            volume = volumeEl.value / 100;
+            applyAudio();
+        });
+
+        fullscreenBtn.addEventListener('click', function () {
+            if (video.requestFullscreen) { video.requestFullscreen(); }
+            else if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); }
+        });
+
+        poll();
+        heartbeat();
+        setInterval(poll, 10000);
+        setInterval(heartbeat, 15000);
+    })();
+</script>
+{% endblock %}
