@@ -1377,6 +1377,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Brogue
                     | HubGame::Usurper
                     | HubGame::Dopewars
+                    | HubGame::Bashquest
                     | HubGame::Codekeep => {}
                 }
                 true
@@ -1535,6 +1536,18 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             }
             app.set_screen(Screen::Dopewars);
             if let Some(state) = app.dopewars_state.as_mut() {
+                state.connect();
+            }
+        }
+        HubGame::Bashquest => {
+            if !app.bashquest_enabled {
+                app.banner = Some(crate::app::common::primitives::Banner::error(
+                    "BashQuest is currently unavailable.",
+                ));
+                return;
+            }
+            app.set_screen(Screen::Bashquest);
+            if let Some(state) = app.bashquest_state.as_mut() {
                 state.connect();
             }
         }
@@ -1707,6 +1720,28 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
                 state.connect();
             }
             return true;
+        }
+        return false;
+    }
+
+    if ctx.screen == Screen::Bashquest {
+        // Same as Usurper above: the claim modal's keys belong to the modal
+        // router; otherwise launcher-first key routing with `Char` and `Byte`
+        // both funneled into the arcade-name state machine.
+        if app
+            .bashquest_state
+            .as_ref()
+            .is_some_and(|s| s.name_modal_visible())
+        {
+            return false;
+        }
+        if let Some(b) = launcher_key_byte(event) {
+            app.enter_bashquest();
+            if let Some(state) = app.bashquest_state.as_mut()
+                && state.launcher_key(b)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -3036,6 +3071,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Brogue => false,
         Screen::Usurper => false,
         Screen::Dopewars => false,
+        Screen::Bashquest => false,
         Screen::Codekeep => false,
         Screen::Arcade => crate::app::arcade::input::handle_arrow(app, key),
         Screen::Leaderboard => crate::app::leaderboard::input::handle_arrow(app, key),
@@ -3096,6 +3132,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     }
     if ctx.screen == Screen::Usurper
         && let Some(state) = app.usurper_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.launcher_key(byte);
+        }
+        return true;
+    }
+    if ctx.screen == Screen::Bashquest
+        && let Some(state) = app.bashquest_state.as_mut()
         && state.name_modal_visible()
     {
         if byte == 0x1B {
@@ -3820,6 +3867,12 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
             // Same as Nethack: Launcher Enter is handled in
             // handle_dedicated_screen_input; Running-mode bytes are forwarded
             // raw in App::handle_input before reaching this path.
+        }
+        Screen::Bashquest => {
+            // Same as Usurper: Launcher keys (incl. the claim modal) are
+            // handled in handle_dedicated_screen_input; Running-mode bytes
+            // are forwarded raw in App::handle_input before reaching this
+            // path.
         }
         Screen::Codekeep => {
             // Running-mode bytes are forwarded raw in App::handle_input; a

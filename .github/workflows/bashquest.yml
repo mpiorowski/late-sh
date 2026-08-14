@@ -1,0 +1,170 @@
+name: bashquest
+
+# Dedicated CI/CD for the BashQuest door, responsible only for the pinned-script
+# asset image (docker/doors/bashquest.Dockerfile):
+#   - build_validate: compile the door Dockerfile and prove the fetched script
+#     is present, executable, and passes `bash -n`. Runs on changes to the
+#     build and weekly, to catch a stale commit pin or checksum drift early
+#     (the build fetches the pinned file from GitHub over the network).
+#   - push_image: on push to main, publish the image the root Dockerfile pins
+#     as its bashquest-build stage (ghcr door-bashquest, tag from
+#     DOOR_IMAGE_TAG).
+#   - verify_deployed: manual, per-environment. Confirms the live late-bashquest
+#     deployment is rolled out and the door is enabled. There's no PVC seed to
+#     check beyond ownership (bashquest.sh creates its own users.db/save files
+#     on first write).
+#
+# The late-bashquest host image (runtime-bashquest) builds from the root
+# Dockerfile in deploy_bashquest.yml; it is not built here.
+
+on:
+  pull_request:
+    paths:
+      - docker/doors/bashquest.Dockerfile
+      - .github/workflows/bashquest.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/doors/bashquest.Dockerfile
+      - .github/workflows/bashquest.yml
+  schedule:
+    - cron: "0 6 * * 3" # Wednesdays 06:00 UTC (staggered after dopewars' Tuesday)
+  workflow_dispatch:
+    inputs:
+      run_verify_deployed:
+        description: "Also verify the door is enabled on the live pod after building"
+        required: false
+        default: false
+        type: boolean
+      environment:
+        description: "Target environment for verify_deployed"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The published door image tag. Must match the pin in the root Dockerfile's
+# bashquest-build stage; bump both together on any recipe change.
+env:
+  DOOR_IMAGE_TAG: v1
+
+jobs:
+  build_validate:
+    name: build_validate_bashquest_stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build the door Dockerfile and load it locally so we can inspect the
+      # fetched script. The stage itself already fails closed on a checksum
+      # mismatch; this re-proves the result is present, executable, and
+      # syntactically valid.
+      - name: build_bashquest_stage
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/doors/bashquest.Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: bashquest-build:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke_test_script
+        run: |
+          docker run --rm bashquest-build:ci sh -c '
+            set -e
+            [ -x /bashquest.sh ] || { echo "::error::bashquest.sh is not executable"; exit 1; }
+            bash -n /bashquest.sh
+            echo "bashquest.sh present, executable, and syntactically valid"
+          '
+
+  push_image:
+    name: push_door_bashquest_image
+    needs: build_validate
+    # push: keep the published image in sync with main. workflow_dispatch: the
+    # manual bootstrap/re-push lever (first publication happens from the branch
+    # that introduces the door Dockerfile, before the root Dockerfile pin can
+    # resolve). Scheduled runs never push: the weekly drift check must not
+    # silently mutate a pinned tag.
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_docker_buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: login_to_ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the image the root Dockerfile pins as its bashquest-build
+      # stage. The tag is stable per recipe revision, so re-pushing it on an
+      # unrelated main push is a layer-cached no-op.
+      - name: push_door_image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/doors/bashquest.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository }}/door-bashquest:${{ env.DOOR_IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  verify_deployed:
+    name: verify_deployed
+    needs: build_validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_verify_deployed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment/late-bashquest -n default --timeout=180s
+
+      - name: verify_door_enabled
+        run: |
+          # LATE_BASHQUEST_ENABLED is a CLIENT flag: it lives on service-ssh
+          # (which reaches the host over SSH), NOT on the late-bashquest host
+          # pod. Read it there, mirroring dopewars.yml/dcss.yml.
+          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "service-ssh pod: ${POD}"
+          enabled=$(kubectl exec "${POD}" -- printenv LATE_BASHQUEST_ENABLED || true)
+          echo "LATE_BASHQUEST_ENABLED=${enabled}"
+          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) echo "door enabled" ;;
+            *) echo "::warning::bashquest door is not enabled (LATE_BASHQUEST_ENABLED=${enabled})" ;;
+          esac

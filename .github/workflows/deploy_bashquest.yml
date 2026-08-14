@@ -1,0 +1,207 @@
+name: deploy_bashquest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-bashquest"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+concurrency:
+  group: ${{ ((github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-bashquest')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-bashquest'))) && format('deploy-bashquest-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production')) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    name: ci
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-bashquest')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-bashquest')) }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: late-bashquest
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  build_bashquest:
+    name: build_late_bashquest_image
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-bashquest')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-bashquest')) }}
+    needs: ci
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: late-bashquest
+      image_tag: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.event.release.tag_name }}
+      context: .
+      dockerfile: ./Dockerfile
+      docker_target: runtime-bashquest
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+  # Every release takes one of two paths, decided by live cluster state: the
+  # deployment exists -> image-only kubectl update; it does not exist (first
+  # deploy) -> a terraform apply scoped with -target to the late-bashquest
+  # resources, which creates them and touches nothing else.
+  check_deployment:
+    name: check_deployment_exists
+    if: ${{ (github.event_name == 'workflow_dispatch' && endsWith(inputs.release_tag, '-bashquest')) || (github.event_name != 'workflow_dispatch' && endsWith(github.ref, '-bashquest')) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: check
+        id: check
+        run: |
+          if kubectl get deployment late-bashquest -n default >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Bootstrap path: the other image tags are read from the cluster only to
+  # satisfy terraform.yml's required inputs; the targeted apply never plans
+  # the resources that consume them.
+  get_images:
+    name: get_current_image_tags
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: check_deployment
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    outputs:
+      ssh_image_tag: ${{ steps.ssh_image.outputs.image_tag }}
+      web_image_tag: ${{ steps.web_image.outputs.image_tag }}
+      nethack_image_tag: ${{ steps.nethack_image.outputs.image_tag }}
+      dopewars_image_tag: ${{ steps.dopewars_image.outputs.image_tag }}
+      codekeep_image_tag: ${{ steps.codekeep_image.outputs.image_tag }}
+      dcss_image_tag: ${{ steps.dcss_image.outputs.image_tag }}
+      usurper_image_tag: ${{ steps.usurper_image.outputs.image_tag }}
+      brogue_image_tag: ${{ steps.brogue_image.outputs.image_tag }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: get_ssh_image_tag
+        id: ssh_image
+        run: |
+          tag=$(kubectl get deployment service-ssh -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_web_image_tag
+        id: web_image
+        run: |
+          tag=$(kubectl get deployment service-web -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_nethack_image_tag
+        id: nethack_image
+        run: |
+          tag=$(kubectl get deployment late-nethack -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_dopewars_image_tag
+        id: dopewars_image
+        run: |
+          tag=$(kubectl get deployment late-dopewars -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_codekeep_image_tag
+        id: codekeep_image
+        run: |
+          tag=$(kubectl get deployment late-codekeep -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_dcss_image_tag
+        id: dcss_image
+        run: |
+          tag=$(kubectl get deployment late-dcss -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_usurper_image_tag
+        id: usurper_image
+        run: |
+          tag=$(kubectl get deployment late-usurper -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: get_brogue_image_tag
+        id: brogue_image
+        run: |
+          tag=$(kubectl get deployment late-brogue -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  terraform_bootstrap:
+    name: terraform_bootstrap_bashquest
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: [build_bashquest, get_images, check_deployment]
+    uses: ./.github/workflows/terraform.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      ssh_image_tag: ${{ needs.get_images.outputs.ssh_image_tag }}
+      web_image_tag: ${{ needs.get_images.outputs.web_image_tag }}
+      nethack_image_tag: ${{ needs.get_images.outputs.nethack_image_tag }}
+      dopewars_image_tag: ${{ needs.get_images.outputs.dopewars_image_tag }}
+      codekeep_image_tag: ${{ needs.get_images.outputs.codekeep_image_tag }}
+      dcss_image_tag: ${{ needs.get_images.outputs.dcss_image_tag }}
+      usurper_image_tag: ${{ needs.get_images.outputs.usurper_image_tag }}
+      brogue_image_tag: ${{ needs.get_images.outputs.brogue_image_tag }}
+      bashquest_image_tag: ${{ needs.build_bashquest.outputs.image_tag }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+      targets: kubernetes_deployment_v1.late_bashquest kubernetes_service_v1.late_bashquest_sv
+
+  deploy:
+    name: deploy_bashquest_image
+    if: ${{ needs.check_deployment.outputs.exists == 'true' }}
+    needs: [build_bashquest, check_deployment]
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      # Image-only deploy: touch nothing but this game's containers. Manifest
+      # changes (env, resources, PVCs) ship through deploy_infra instead.
+      - name: set_image
+        run: |
+          kubectl set image deployment/late-bashquest -n default \
+            bashquest-save-seed=${{ needs.build_bashquest.outputs.image_tag }} \
+            late-bashquest=${{ needs.build_bashquest.outputs.image_tag }}
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment late-bashquest -n default --timeout=180s

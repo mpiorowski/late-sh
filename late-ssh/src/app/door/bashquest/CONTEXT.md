@@ -1,0 +1,206 @@
+# BashQuest Door Context
+
+## Metadata
+- Scope: the BashQuest door as a whole — the **client** in `late-ssh/src/app/door/bashquest` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-bashquest/`**. There is no separate `late-bashquest/CONTEXT.md`; this file is the single source for both halves.
+- Domain: BashQuest, a native late.sh original (not a foreign upstream binary): an interactive terminal game teaching Linux/Bash, 61 levels across 12 tiers, written by Tony "Hardlygospel" Hosaroygard (GPL-3.0, `github.com/hardlygospel/bashquest`), run on a PTY inside a **dedicated `late-bashquest` SSH host** and reached by late-ssh as a network-proxied door (same transport model as dopewars/DCSS).
+- Primary audience: LLM agents changing the BashQuest launcher UI, the SSH client transport, the host crate (PTY bridge / auth), input forwarding, or its config/deploy wiring.
+- Last updated: 2026-08-15 (initial door integration).
+- Status: Active
+- Parent context: `../../../../../CONTEXT.md`
+- Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI or build/deploy wiring.
+
+---
+
+## 0. Context Maintenance Protocol [STABLE]
+
+Read this after root `CONTEXT.md` whenever a task touches the BashQuest launcher, launch/leave behavior, the SSH client transport, the `late-bashquest` host (PTY bridge, auth), input forwarding, or BashQuest config/deploy wiring.
+
+- Keep this file aligned with the SSH transport contract, the client/host split, the spawn args, config knobs, and known gotchas.
+- Update root `CONTEXT.md` when routing, the top-level screen list/tab order, or global keybindings change.
+- Treat tests and code as authoritative when comments drift; patch stale comments or this file before handoff.
+- Do not add `pub use` re-export layers; `mod.rs` stays declaration-only.
+
+---
+
+## 1. Summary [STABLE]
+
+BashQuest runs **bashquest.sh on a PTY**, but **not** inside late-ssh. It lives in its own crate/pod, `late-bashquest`, a minimal russh **server** that spawns one `bashquest.sh` child per SSH session. late-ssh reaches it exactly like the dopewars/DCSS doors reach their hosts: the door is a russh **client** that streams the remote terminal through a `vt100::Parser` and blits it into a ratatui widget below the top bar. SSH *is* the transport — there is no custom IPC.
+
+Core shape:
+- `Screen::Bashquest` has no top-level number key. It is reached by selecting the BashQuest card in the Games hub (page `3`) and pressing `Enter`.
+- **Identity is the arcade handle, exactly like DCSS/Usurper/Brogue** (`door::arcade::HandleFlow`, shared across every arcade-handle door — a player who already claimed a handle elsewhere never sees a second prompt here). The claimed handle is sent as the SSH username; the host re-sanitizes it and hands it to the child as `BASHQUEST_AUTOLOGIN`, which makes bashquest.sh skip its own login/register screen and resume (or silently create) the save matching that exact handle. See bashquest.sh's own `autologin()` function.
+- One per-session `BashquestProcess` (a russh client) owns a background Tokio task that connects to `late-bashquest`, requests a PTY + shell, and bridges the remote bytes into a shared `vt100::Parser`. The foreground reads that screen and a `ProxyStatus` flag.
+- Auth is shared-secret-derived (Ed25519 key from `LATE_BASHQUEST_SECRET`), same as every other door.
+- While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise) — bashquest.sh, not late.sh, interprets keys. There is **no** key remap: bashquest.sh is menu- and prompt-driven, not modal like a roguelike, so there's no help key worth intercepting. There is also **no detach**: unlike the roguelike doors, leaving the screen always tears the session down (see §3), matching Usurper/dopewars' shape rather than nethack/DCSS/brogue's.
+- **Persistence: a single shared, persistent HOME**, not per-player (unlike nethack/DCSS's per-`-u`/`-name` playground). bashquest.sh keeps `users.db` and every player's `<name>.save` under `$HOME/.bashquest`; every session gets the *same* `LATE_BASHQUEST_DATA_DIR` as `HOME`, because bashquest.sh's own in-game leaderboard (`leaderboard()`) only means anything if every late.sh player's save lands in the same place. bashquest.sh saves continuously — after nearly every state-changing action (wrong answer, hint, skip, level/tier complete, graduation), not just on explicit logout — so there is **no SIGHUP-save dance** on the host: teardown is a plain kill, same as dopewars, and the worst case loss is the single in-flight unanswered challenge.
+
+The door is gated behind `LATE_BASHQUEST_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
+
+---
+
+## 2. Module Map [STABLE]
+
+### Client — `late-ssh/src/app/door/bashquest/`
+
+| File | Responsibility |
+|---|---|
+| `mod.rs` | Module declarations + framing comment. Declaration-only. |
+| `proxy.rs` | `BashquestProcess`: per-session russh **client** to the host. Owns the bridge task (`run_bridge`), the shared `vt100::Parser`, the `ProxyStatus` flag, and the input/resize command channel; `ProcessConfig.playname` carries the arcade handle (sent as the SSH username). Near-clone of `door::dopewars::proxy`, with DCSS's playname-as-identity contract instead of dopewars' opaque session label. |
+| `identity.rs` | `derive_client_key(secret)`: the shared-secret → Ed25519 key derivation (blake3, domain `late.sh/bashquest/v1`). Must stay byte-identical to the host's copy — a KAT pins it (§8). |
+| `state.rs` | Per-session `State`: launcher/running `Mode`, connection config (host/port/secret/term/enabled), the optional `BashquestProcess`, last viewport `Rect`, the post-exit input grace, the shared `HandleFlow` (lookup/claim prompt/launch intent — DCSS/Usurper pattern), `connect`/`tick`/`launcher_key`/`forward_input`/`strip_input_noise`. |
+| `render.rs` | Ratatui rendering: `draw_launcher` (via `landing::handle_launch_block`, the shared arcade-handle claim UI) / `draw_landing` (hub card, no live/resume state) and `draw_running` which blits the live `vt100` screen via `rebels::render::blit_screen`. |
+
+### Host — `late-bashquest/` crate (standalone binary)
+
+| File | Responsibility |
+|---|---|
+| `main.rs` | Tracing init, `Config::from_env`, load/generate the SSH host key, `create_dir_all` the data dir, run the russh server (`run_on_address`). Exits promptly on SIGTERM (no save to drain). |
+| `config.rs` | `Config`: `bin`, `data_dir` (shared, persistent `HOME` for every session — DCSS's shape, not dopewars' per-session scratch dir), `secret`, listen addr/port, idle timeout. |
+| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key, captures + sanitizes the playname from the SSH username — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. No TERM fallback needed: bashquest.sh emits plain ANSI, not curses, so there's no `Unknown terminal type` failure mode to guard against. |
+| `host.rs` | `PtyHost`: the per-session PTY bridge. `openpty` + `env_clear` + `setsid`/`TIOCSCTTY` + `IXON/IXOFF/IXANY` clear + `TIOCSWINSZ` + the **detached** reader. Spawns `bashquest.sh` directly (its own shebang, no CLI args) with `HOME` set to the *shared* `data_dir` and `BASHQUEST_AUTOLOGIN` set to the playname. Output flows to the SSH channel handle; client bytes flow to the PTY master. Teardown is a plain kill — bashquest.sh has no hangup-save need (see §1). |
+| `identity.rs` | `derive_client_key(secret)` — identical to the client copy (KAT-pinned). |
+| `playname.rs` | `sanitize(username)`: keep `[A-Za-z0-9_]`, cap at 20 (matching the arcade handle's own `HANDLE_MAX_LEN`), fall back to `"player"`. Defense in depth on top of the already-validated arcade handle and bashquest.sh's own re-sanitizing `autologin()`. |
+
+Cross-module wiring (client side, outside this folder — mirrors dopewars/DCSS's ~10 touchpoints):
+- `app/common/primitives.rs`: `Screen::Bashquest` (+ `next`/`prev` fall back to `Games`, `draw_tabs`/page title label `"BashQuest"`).
+- `app/door/arcade.rs`: shared `ArcadeHandleService`/`HandleFlow` (not BashQuest-specific; reused as-is).
+- `app/door/hub/state.rs`: `HubGame::Bashquest` + `ALL` (in the `Doors` group, after Dopewars) + label + `rc_game() -> None` (no pushed config file).
+- `app/door/hub/ui.rs`: `HubView.bashquest_enabled` + the landing match arm (no `bashquest_live`: this door has no detach/resume model).
+- `app/state.rs`: `App::bashquest_state`/`bashquest_term`/`bashquest_enabled`/`bashquest_host`/`bashquest_port`/`bashquest_secret`, `enter_bashquest`/`leave_bashquest`, `set_screen` enter/leave arms (unconditional teardown on leave, no detach guard), and the Running-mode passthrough + exit-grace swallow in `App::handle_input`.
+- `app/tick.rs`: `State::tick()` each app tick + return-to-`Games` once `!is_running() && !in_exit_grace() && !awaiting_handle()`.
+- `app/render.rs`: `DrawContext.bashquest_enabled`/`bashquest_state`, take/restore `bashquest_state` so the draw path can `set_viewport(content_area)` before blitting, the dispatch arm (via `.as_deref_mut()`, not a move — the modal-check code below reads the field again), the name-claim-modal draw call, the title-bar credit + in-game `Ctrl-C quit` hint.
+- `app/input.rs`: hub launch arm (`set_screen` + `connect`, banner if disabled), dedicated-screen launcher-key routing (`launcher_key_byte` + `HandleFlow`, mirroring Usurper's shape, not dopewars' plain-Enter shape), the modal-key routing function (Esc dismisses / other bytes go to `launcher_key`), and arrow/key dispatch no-ops (Running-mode bytes are forwarded raw upstream).
+- `config.rs`, `state.rs` (`SessionConfig`), `ssh.rs`, `session_bootstrap.rs`, `src/test_helpers.rs`: thread `bashquest_enabled`/`bashquest_host`/`bashquest_port`/`bashquest_secret`.
+
+---
+
+## 3. Screen Lifecycle And Input Capture [STABLE]
+
+- `Enter` on the selected BashQuest card in the hub calls `set_screen(Screen::Bashquest)` (which runs `enter_bashquest`, constructing `State`) then `State::connect`. If the account has no arcade handle yet, `connect` records launch intent and the launcher shows the claim prompt instead; `tick()` fires the deferred `connect()` once the handle lands (see `door::arcade::HandleFlow`).
+- **No detach.** Unlike nethack/DCSS/brogue, leaving the screen **always tears the session down** (`leave_bashquest`, unconditional — same as Usurper/dopewars): bashquest.sh saves continuously, so there is nothing worth keeping a background SSH connection alive for, and no SIGHUP-save to give it time for. Dropping `bashquest_state` drops `BashquestProcess`, whose `Drop` aborts the client bridge task → the SSH connection closes → the host's `channel_close` drops its `PtyHost`, which kills the child immediately.
+- `State::tick` (each app tick) flips back to `Mode::Launcher` if the connection closed for any reason (logout, quit, graduation, crash, or network drop) — all exits are treated identically. `App::tick` then returns the session to the Games hub once the post-exit input grace (`in_exit_grace`) has elapsed and the handle flow isn't mid-lookup/claim (`awaiting_handle`).
+
+Input capture contract (client side):
+- The **launcher** behaves like DCSS/Usurper's: while the claim modal is visible, its keys belong to the modal router (Esc dismisses, everything else composes/submits the handle); once claimed, only Enter is consumed to launch, every other key falls through to normal global handling. **Exception:** for a short post-exit grace window the launcher swallows *all* input — see the exit-grace gotcha in §9.
+- While **Running**, `App::handle_input` intercepts bytes *before* the normal input pipeline: if `state.is_running()`, it `forward_input`s straight to the host and returns. There is **no** key remap — bashquest.sh is prompt-driven, so number/letter keys, `hint`/`skip` typed as words, Enter, etc. all reach the game verbatim.
+- `forward_input` strips mouse reports (SGR `ESC [ < … M/m`, legacy X10 `ESC [ M b x y`) and bracketed-paste markers, identical to every other PTY door — late.sh keeps any-event mouse tracking on for its own UI, and those motion reports' leading `ESC` would otherwise leak into bashquest.sh as stray input.
+
+---
+
+## 4. Transport Architecture [STABLE]
+
+### Client (`proxy.rs`, in late-ssh) — the vt100 side
+
+- `BashquestProcess::spawn` creates an mpsc command channel, a shared `vt100::Parser` (sized to the viewport), a `ProxyStatus` mutex, and spawns the bridge task. On task end it forces `ProxyStatus::Closed` and wakes the render loop.
+- `run_bridge` is a russh client (`AcceptAnyHostKey`): `client::connect` → `authenticate_publickey(username = cfg.playname (the arcade handle), key = derive_client_key(secret))` → `channel_open_session` → `request_pty` → `request_shell` → status `Running`. Then a `tokio::select!` loop identical to dopewars/DCSS's.
+- The vt100 parser lives **client-side only**.
+
+### Host (`late-bashquest`) — the PTY side
+
+- `ClientHandler` (one per SSH connection): `auth_publickey` checks the derived key and captures + sanitizes the playname from the SSH username; `pty_request` records term/cols/rows; `shell_request` spawns a `PtyHost`.
+- `PtyHost::spawn` → `run_bridge` (unix only): `openpty`, clear `IXON/IXOFF/IXANY` on the slave termios before exec, build the `bashquest.sh` `Command` with `env_clear()` + allowlist (`TERM`, `HOME=<shared data_dir>`, `BASHQUEST_AUTOLOGIN=<playname>`, `LANG`/`LC_ALL=C.UTF-8` for the box-drawing/emoji output, `LINES`/`COLUMNS`), wire slave→stdio, `pre_exec` `setsid` + `TIOCSCTTY`. A blocking reader thread pumps PTY output to an unbounded channel; the select loop forwards those chunks to `handle.data(channel, …)`, writes client `Input` to the PTY master, applies `Resize` via `TIOCSWINSZ`, and breaks on `child.wait()`.
+- **No TERM fallback.** bashquest.sh writes ANSI escapes directly (`printf '\033[...'`), it never calls `initscr()`/`newterm()`, so there is no "Unknown terminal type" abort mode the way ncurses-based doors (nethack/DCSS/dopewars/brogue) have. Any TERM value the client sends is passed through unmodified.
+- On child exit or client disconnect: close the SSH channel first (so the client returns to its launcher now), then kill the child. No SIGHUP dance — see §1.
+
+### Sizing
+- `State::set_viewport` (client, from the draw path) resizes the local parser and sends a `Resize` command; the client forwards a `window_change`, the host applies `TIOCSWINSZ`, and the kernel signals `SIGWINCH` — bashquest.sh doesn't read window size dynamically mid-challenge, but a fresh screen redraw (e.g. the next menu) picks up `$LINES`/`$COLUMNS` correctly since they're re-read, not cached, at each render.
+
+### Render
+- `draw_running` blits the current `vt100` screen; before `Running` it shows "Starting bashquest...". The app frame title shows a dimmed `by github.com/hardlygospel/bashquest` credit, plus `· Ctrl-C quit` while running.
+
+---
+
+## 5. Launcher UI [VOLATILE]
+
+- `draw_launcher`: a BashQuest ASCII logo, a one-line blurb, a tier-progression strip (Beginner → Networking → SAN → Kernel → Ricing), stat lines (61 levels, 12 tiers, the challenge/answer loop), a flavor quote from the in-game mentor Tasmania, and `landing::handle_launch_block` for the Launch line (claim prompt / claiming / launch action / retry, depending on `HandleStatus`), an "Once Inside" hint block (`hint`, `skip`, `Ctrl-C`), and the GitHub URL.
+- The app frame title shows a dimmed "by github.com/hardlygospel/bashquest" credit on this screen, plus the in-game `Ctrl-C quit` hint while running.
+
+---
+
+## 6. Configuration And Deploy [VOLATILE]
+
+### Client config (env → `Config` → `SessionConfig` → `App`)
+- `LATE_BASHQUEST_ENABLED` (default `false`): when false, `connect` is a no-op and the launcher shows "Currently unavailable".
+- `LATE_BASHQUEST_HOST` (default `127.0.0.1`): the host service. In compose it's `service-bashquest`; in prod the Service `late-bashquest-sv`.
+- `LATE_BASHQUEST_PORT` (default `2329`).
+- `LATE_BASHQUEST_SECRET`: shared secret; **must equal the host's**. Required when enabled.
+
+### Host config (`late-bashquest` env)
+- `LATE_BASHQUEST_SECRET` (required), `LATE_BASHQUEST_BIN` (default `/usr/local/bin/bashquest.sh`), `LATE_BASHQUEST_DATA_DIR` (default `/var/lib/late-bashquest`, the one shared persistent HOME on the PVC), `LATE_BASHQUEST_LISTEN_ADDR` (default `0.0.0.0`), `LATE_BASHQUEST_PORT` (default `2329`), `LATE_BASHQUEST_IDLE_TIMEOUT`.
+
+### Binary sourcing — **pinned commit, not a compiled build**
+- Unlike every other door, there is nothing to compile: `bashquest.sh` is fetched by exact commit SHA and SHA-256-verified in `docker/doors/bashquest.Dockerfile` (`bashquest-build` stage), then `chmod 0755`'d. Bump `BASHQUEST_COMMIT`/`BASHQUEST_URL`/`BASHQUEST_SHA256` together when pulling in a newer upstream version, and update `NOTICE`.
+- `BASHQUEST_AUTOLOGIN` is not a late.sh patch: it's an upstream feature bashquest.sh itself added specifically to support this integration (opt-in, backward-compatible — unset, the script behaves exactly as it always has for standalone `curl | bash` users). No source is forked or modified.
+
+### Images (Dockerfile)
+- `base` copies the verified script to `/usr/local/bin/bashquest.sh` (from the `bashquest-build` stage) so `dev-bashquest` (which derives from `base`) can run it; prod ships the same copy in `runtime-bashquest`. `late-bashquest` (the host binary) builds in its own `builder-bashquest` cargo-chef stage, same shape as every other door host.
+- `Makefile` + `.env` thread `LATE_BASHQUEST_ENABLED=1` / `LATE_BASHQUEST_HOST=service-bashquest` / `_PORT=2329` / `_SECRET` / `_DATA_DIR` (mirroring the dopewars/DCSS block).
+
+### Prod (Kubernetes / terraform)
+- `infra/service-bashquest.tf`: the `late-bashquest` Deployment (replicas **1**, `runtime-bashquest` image, `bashquest-save` PVC mounted at the shared HOME, a `bashquest-save-seed` initContainer that chowns the mount to `late`, `RUST_LOG`/`LATE_BASHQUEST_SECRET`/`LATE_BASHQUEST_DATA_DIR` env) + `late-bashquest-sv` ClusterIP Service on 2329. **Deployed unconditionally**; kill-before-create rollout (`maxSurge=0`/`maxUnavailable=1`) so the old pod releases the RWO volume before the new one mounts it.
+- `infra/bashquest.tf`: the RWO `bashquest-save` PVC (`local-path`, 256Mi, `prevent_destroy`) + the host/port/data-dir locals.
+- `infra/secrets.tf`: `bashquest-identity-secret` (random 64-char), injected into **both** service-ssh and late-bashquest so they derive the same key.
+- `infra/service-ssh.tf` injects the client env (`LATE_BASHQUEST_HOST/PORT/SECRET/ENABLED`).
+- `replicas` must stay 1 (one RWO volume holds every player's shared save data; assumes the single-node `local-path` cluster).
+- `terraform.yml`'s `bashquest_image_tag` input is **optional** (unlike every other door's `required: true`), to avoid a coordinated breaking change across all nine existing `deploy_*.yml` callers in one PR — see the comment in `.github/workflows/terraform.yml`. Only `deploy_infra.yml` and `deploy_bashquest.yml` supply a real value; every other door's own `terraform_bootstrap` job is `-target`-scoped to just that door's resources, so an empty value there is never read.
+- CI: `.github/workflows/deploy_bashquest.yml` builds and rolls out BashQuest, and only BashQuest, for `-bashquest` releases, mirroring `deploy_dcss.yml` exactly (image-only `kubectl set image` on the existing deployment, or a targeted terraform bootstrap on first deploy). `.github/workflows/bashquest.yml` build-validates `docker/doors/bashquest.Dockerfile` (fetch + checksum + `bash -n` smoke test) and publishes the pinned `door-bashquest` image on main pushes.
+
+---
+
+## 7. Critical Invariants [STABLE]
+
+- The child process (on the host) is authoritative for game state. late.sh owns only the terminal bytes (vt100) and a status flag. The only durable state anywhere is the host's shared `$HOME/.bashquest` directory (users.db + saves + certificates) on the PVC.
+- **`HOME` is shared across every session, deliberately, unlike nethack/DCSS's per-player playground.** Do not "fix" this into a per-account directory without also deciding what happens to the in-game leaderboard, which currently only works because every player's `users.db` is the same file.
+- While Running, do not route bashquest.sh bytes through the normal late.sh input pipeline — forward them raw. There is no key remap.
+- Keep mouse/paste stripping in client `forward_input`.
+- **Auth: compare the key DATA, not the whole `PublicKey`.** Same gotcha as every other door's host (`ssh_key::PublicKey`'s `PartialEq` includes the comment field).
+- **`derive_client_key` must stay byte-identical across the two crates** (same `KEY_DOMAIN` `late.sh/bashquest/v1`, same blake3 steps). Drift → client derives a different key → host rejects everything. Pinned by a KAT in both crates' `identity_test.rs` (§8).
+- Keep XON/XOFF flow control **off** on the host PTY, or a stray Ctrl-S freezes output until Ctrl-Q.
+- Spawn the child with `env_clear()` + an explicit allowlist (incl. a UTF-8 `LANG`/`LC_ALL`, since bashquest.sh's box-drawing characters and emoji need it).
+- Treat all exits identically — logout, quit, graduation, crash, network drop all return to the hub.
+- When disabled, fail soft (launcher message + no-op connect), never panic.
+- `mod.rs` stays declaration-only.
+
+---
+
+## 8. Tests And Verification [STABLE]
+
+Root policy applies: agents should not run `cargo test`/`nextest`/`clippy` as blocking verification; mention the focused command in handoff.
+
+Inline pure tests cover:
+- Client `identity.rs` / host `identity.rs`: derivation determinism + a cross-crate known-answer fingerprint test (`SHA256:9NHbIJzzfj+WQ4YoYYlgWtjvH7N+FE2m1KYAp3X/73c` for secret `late-bashquest-kat-v1`), pinning the cross-crate contract from day one (unlike dopewars, which shipped this as a TODO).
+- Host `playname.rs`: sanitization (alnum+underscore only, cap at 20, empty falls back to `"player"`).
+- Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down; a disabled door's `HandleFlow` settles to `Missing` instead of hanging in `Loading`.
+- `app/door/hub/state_test.rs` + `app/door/hub/ui_test.rs`: selector ordering, screen `next`/`prev` placement, and sidebar hit-test coordinates (updated for the 11th `HubGame`/19-row sidebar).
+
+The PTY bridge (`host.rs`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/play/logout manually against a real host.
+
+Focused commands for human verification:
+
+```bash
+cargo test -p late-bashquest && cargo test -p late-ssh bashquest
+```
+
+(Don't fold these into one `-p late-bashquest -p late-ssh bashquest` — the `bashquest` name filter would also apply to the host crate and skip its tests.)
+
+---
+
+## 9. Known Gotchas [VOLATILE]
+
+### Client-side
+- **Trailing game keys can quit the whole app (exit-grace).** Same pattern as every other door: bashquest.sh's "Press Enter to continue" prompts make players mash keys right as a run ends; the guard is `EXIT_GRACE_TICKS` (~0.66s) during which the launcher swallows input.
+- **No detach.** If a future change wants BashQuest to support the backtick workspace cycle like the roguelikes, that's a real design change (bashquest.sh has no hangup-save, so "keep it running in the background" would need the game to gain one, or accept that a detached game silently dies on the next teardown path).
+
+### Host-side (`late-bashquest`)
+- **Ctrl-S freeze (XON/XOFF).** Cleared on the PTY before exec, same as every other door host.
+- **No terminfo/TERM fallback needed.** bashquest.sh is plain ANSI, not curses — don't add `effective_term`/`ncurses-term` machinery here by copy-pasting from another door's host; it would be dead code.
+- **Shared HOME is a feature, not a bug.** Every session getting the *same* `LATE_BASHQUEST_DATA_DIR` is deliberate (see §7), unlike almost every other door host in this codebase.
+
+### Operational
+- **Continuous save, not save-on-exit.** bashquest.sh calls `save_progress` after nearly every state change (see the `save_progress` call sites in `bashquest.sh`), so a pod restart or dropped connection loses at most the single in-flight unanswered challenge — never earned XP, level progress, or achievements.
+- **Playground on the PVC.** `LATE_BASHQUEST_DATA_DIR` is one shared directory; `replicas` must stay 1 (RWO volume, single-node `local-path`). bashquest.sh's own account system (`register_user`/`login_user`/`autologin`) handles concurrent access to `users.db` the same way it always has for any multi-user install of the script.
+- Script fetched by pinned commit (see §6); when bumping versions, update the `BASHQUEST_*` Dockerfile `ARG`s (incl. `BASHQUEST_SHA256`) and `NOTICE`.
+
+### Possible future work
+- Milestones/chips/awards for graduation (all 61 levels complete) or tier completions, mirroring `nethack/milestone.rs` + `award.rs`. Would need either a screen scrape (bashquest.sh has no machine-readable achievement file the way DCSS does) or a small bashquest.sh addition to write one, similar in spirit to `BASHQUEST_AUTOLOGIN`.
+- `terraform.yml`'s `bashquest_image_tag` input could be promoted to `required: true` for full consistency with every other door, at the cost of touching all nine existing `deploy_*.yml` callers in one coordinated PR (see §6).

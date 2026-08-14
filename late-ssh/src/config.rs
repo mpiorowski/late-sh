@@ -101,6 +101,13 @@ pub struct Config {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// BashQuest door game: reached over SSH like dcss, identity carried by
+    /// the arcade handle. `enabled` gates only the client; the host
+    /// (`late-bashquest`) is deployed unconditionally.
+    pub bashquest_enabled: bool,
+    pub bashquest_host: String,
+    pub bashquest_port: u16,
+    pub bashquest_secret: String,
     /// CodeKeep: The Pale door game (host `late-codekeep`).
     pub codekeep_enabled: bool,
     pub codekeep_host: String,
@@ -285,6 +292,13 @@ impl Config {
             "dopewars: dopewars door-game host (late-dopewars) target and status"
         );
         tracing::info!(
+            enabled = self.bashquest_enabled,
+            host = %self.bashquest_host,
+            port = self.bashquest_port,
+            has_secret = !self.bashquest_secret.is_empty(),
+            "bashquest: BashQuest door-game host (late-bashquest) target and status"
+        );
+        tracing::info!(
             enabled = self.codekeep_enabled,
             host = %self.codekeep_host,
             port = self.codekeep_port,
@@ -369,6 +383,14 @@ impl Config {
                 .context("LATE_DOPEWARS_SECRET must be set when LATE_DOPEWARS_ENABLED is true")?
         } else {
             optional("LATE_DOPEWARS_SECRET").unwrap_or_default()
+        };
+
+        let bashquest_enabled = optional_bool("LATE_BASHQUEST_ENABLED", false)?;
+        let bashquest_secret = if bashquest_enabled {
+            optional("LATE_BASHQUEST_SECRET")
+                .context("LATE_BASHQUEST_SECRET must be set when LATE_BASHQUEST_ENABLED is true")?
+        } else {
+            optional("LATE_BASHQUEST_SECRET").unwrap_or_default()
         };
 
         let codekeep_enabled = optional_bool("LATE_CODEKEEP_ENABLED", false)?;
@@ -503,6 +525,11 @@ impl Config {
                 .unwrap_or_else(|| "127.0.0.1".to_string()),
             dopewars_port: optional_parse("LATE_DOPEWARS_PORT", 2324)?,
             dopewars_secret,
+            bashquest_enabled,
+            bashquest_host: optional("LATE_BASHQUEST_HOST")
+                .unwrap_or_else(|| "127.0.0.1".to_string()),
+            bashquest_port: optional_parse("LATE_BASHQUEST_PORT", 2329)?,
+            bashquest_secret,
             codekeep_enabled,
             codekeep_host: optional("LATE_CODEKEEP_HOST")
                 .unwrap_or_else(|| "127.0.0.1".to_string()),

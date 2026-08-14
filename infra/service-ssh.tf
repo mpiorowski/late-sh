@@ -307,6 +307,32 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
+          # BashQuest is served by the late-bashquest host pod
+          # (service-bashquest.tf); late-ssh connects to it over SSH.
+          # HOST/PORT target that Service and SECRET (shared with the host)
+          # authorizes the connection.
+          env {
+            name  = "LATE_BASHQUEST_ENABLED"
+            value = local.bashquest_enabled
+          }
+          env {
+            name  = "LATE_BASHQUEST_HOST"
+            value = local.bashquest_service_host
+          }
+          env {
+            name  = "LATE_BASHQUEST_PORT"
+            value = local.bashquest_port
+          }
+          env {
+            name = "LATE_BASHQUEST_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.bashquest_identity_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
           # Brogue is served by the late-brogue host pod (service-brogue.tf);
           # late-ssh connects to it over SSH. HOST/PORT target that Service and
           # SECRET (shared with the host) authorizes the connection.

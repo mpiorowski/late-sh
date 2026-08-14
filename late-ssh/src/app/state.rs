@@ -294,6 +294,12 @@ pub struct SessionConfig {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// BashQuest door game: reached over SSH like dcss (host `late-bashquest`),
+    /// identity carried by the arcade handle like dcss/brogue.
+    pub bashquest_enabled: bool,
+    pub bashquest_host: String,
+    pub bashquest_port: u16,
+    pub bashquest_secret: String,
     /// CodeKeep door game: reached through the dedicated `late-codekeep` host.
     pub codekeep_enabled: bool,
     pub codekeep_host: String,
@@ -679,6 +685,16 @@ pub struct App {
     pub(crate) dopewars_host: String,
     pub(crate) dopewars_port: u16,
     pub(crate) dopewars_secret: String,
+    pub(crate) bashquest_state: Option<crate::app::door::bashquest::state::State>,
+    /// Per-session TERM string (from the PTY request), forwarded to the
+    /// bashquest host.
+    pub(crate) bashquest_term: String,
+    /// BashQuest door game: enable flag + host connection details (global
+    /// Config).
+    pub(crate) bashquest_enabled: bool,
+    pub(crate) bashquest_host: String,
+    pub(crate) bashquest_port: u16,
+    pub(crate) bashquest_secret: String,
     pub(crate) codekeep_state: Option<crate::app::door::codekeep::state::State>,
     pub(crate) codekeep_term: String,
     pub(crate) codekeep_enabled: bool,
@@ -1443,6 +1459,12 @@ impl App {
             dopewars_host: config.dopewars_host,
             dopewars_port: config.dopewars_port,
             dopewars_secret: config.dopewars_secret,
+            bashquest_state: None,
+            bashquest_term: config.term.clone(),
+            bashquest_enabled: config.bashquest_enabled,
+            bashquest_host: config.bashquest_host,
+            bashquest_port: config.bashquest_port,
+            bashquest_secret: config.bashquest_secret,
             codekeep_state: None,
             codekeep_term: config.term.clone(),
             codekeep_enabled: config.codekeep_enabled,
@@ -1745,6 +1767,29 @@ impl App {
         self.dopewars_state = None;
     }
 
+    pub(crate) fn enter_bashquest(&mut self) {
+        if self.bashquest_state.is_some() {
+            return;
+        }
+        self.bashquest_state = Some(crate::app::door::bashquest::state::State::new(
+            self.user_id,
+            self.bashquest_host.clone(),
+            self.bashquest_port,
+            self.bashquest_secret.clone(),
+            self.bashquest_term.clone(),
+            self.bashquest_enabled,
+            self.repaint_signal.clone(),
+            Some(self.arcade_handle_service.clone()),
+        ));
+    }
+
+    fn leave_bashquest(&mut self) {
+        // Dropping the State drops the process, which kills the child
+        // bashquest.sh. It saves continuously, so this loses at most the
+        // current unanswered challenge.
+        self.bashquest_state = None;
+    }
+
     pub(crate) fn enter_codekeep(&mut self) {
         if self.codekeep_state.is_some() {
             return;
@@ -1889,6 +1934,9 @@ impl App {
             if screen == Screen::Dopewars {
                 self.enter_dopewars();
             }
+            if screen == Screen::Bashquest {
+                self.enter_bashquest();
+            }
             if screen == Screen::Codekeep {
                 self.enter_codekeep();
             }
@@ -1984,6 +2032,11 @@ impl App {
             self.force_full_repaint();
         }
 
+        if self.screen == Screen::Bashquest {
+            self.leave_bashquest();
+            self.force_full_repaint();
+        }
+
         if self.screen == Screen::Codekeep {
             self.leave_codekeep();
             self.force_full_repaint();
@@ -2041,6 +2094,9 @@ impl App {
         }
         if self.screen == Screen::Dopewars {
             self.enter_dopewars();
+        }
+        if self.screen == Screen::Bashquest {
+            self.enter_bashquest();
         }
         if self.screen == Screen::Codekeep {
             self.enter_codekeep();
@@ -2292,6 +2348,23 @@ impl App {
         }
         if self.screen == crate::app::common::primitives::Screen::Dopewars
             && let Some(state) = self.dopewars_state.as_ref()
+            && state.in_exit_grace()
+        {
+            return;
+        }
+        // BashQuest: raw passthrough with no F1 remap or detach (bashquest.sh
+        // has no universal help key and saves continuously, so there is
+        // nothing to keep alive across a screen switch, matching Usurper's
+        // shape rather than the roguelikes'). Same post-exit input grace.
+        if self.screen == crate::app::common::primitives::Screen::Bashquest
+            && let Some(state) = self.bashquest_state.as_ref()
+            && state.is_running()
+        {
+            state.forward_input(data);
+            return;
+        }
+        if self.screen == crate::app::common::primitives::Screen::Bashquest
+            && let Some(state) = self.bashquest_state.as_ref()
             && state.in_exit_grace()
         {
             return;

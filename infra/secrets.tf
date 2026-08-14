@@ -197,6 +197,31 @@ resource "kubernetes_secret_v1" "dcss_identity_secret" {
 }
 
 # =============================================================================
+# BashQuest Door Identity Seed
+# =============================================================================
+# Shared secret authorizing late-ssh -> late-bashquest. The same value is
+# injected into BOTH the service-ssh client (LATE_BASHQUEST_SECRET) and the
+# late-bashquest host pod, which each derive the same ed25519 key from it
+# (see late-bashquest).
+
+resource "random_password" "bashquest_identity_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "bashquest_identity_secret" {
+  metadata {
+    name = "bashquest-identity-secret"
+  }
+
+  data = {
+    secret = random_password.bashquest_identity_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Brogue Door Identity Seed
 # =============================================================================
 # Shared secret authorizing late-ssh -> late-brogue. The same value is injected
