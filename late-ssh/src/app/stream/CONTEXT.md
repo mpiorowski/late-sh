@@ -3,12 +3,13 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-13 (One audio path per sound: the CLI voice runtime
+- Last updated: 2026-08-14 (One audio path per sound: the CLI voice runtime
   now plays human microphones only — program audio (the OBS ingress mix,
-  the console's screen-share audio) and the user's own `stream-{user_id}`
-  publisher are unsubscribed, killing the streamer-hears-their-own-OBS echo
-  and CLI users eating the game mix. The OBS ingress audio is labeled
-  `SCREEN_SHARE_AUDIO` at CreateIngress so both consumers can discriminate.
+  the console's screen-share audio) and every `stream-*` publisher are
+  unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
+  users eating the game mix. Both consumers classify program audio by the
+  `stream-*` identity; the `SCREEN_SHARE_AUDIO` label set at CreateIngress
+  is advisory only, since it may not survive transcoding-off passthrough.
   The watch page defaults audio ON (autoplay permitting), grows a separate
   voices on/off toggle for CLI viewers, a volume slider, and fullscreen.
   The go-live console's browser mic and its whole `mic_live`/on-air
@@ -139,11 +140,12 @@ Cross-domain touchpoints:
 - `late-cli/src/voice.rs` — the audio-only voice runtime unsubscribes from
   any remote video track (`publication.set_subscribed(false)`), so a CLI
   voice participant in a stream room never downloads the screen share. Same
-  rule for audio (`keep_remote_audio`): only microphone-source tracks play,
-  and never from the user's own `stream-{user_id}` publisher. One audio path
-  per sound: program audio (the OBS mix, console screen-share audio) lives
-  on the watch page; CLI voice carries human voices; the console mic of
-  *another* streamer still plays (the macOS-streamer voice path).
+  rule for audio (`keep_remote_audio`): only microphone-source tracks from
+  non-`stream-*` identities play. Any `stream-*` publisher (OBS ingress,
+  go-live console) is program audio whatever source label it carries, since
+  the ingress label may not survive transcoding-off passthrough. One audio
+  path per sound: program audio lives on the watch page; CLI voice carries
+  human voices; a streamer talks through CLI voice like everyone else.
 - `main.rs` — service construction and the 5s sweeper task.
 
 ## 3. Lifecycle
@@ -292,8 +294,8 @@ Cross-domain touchpoints:
   toggle, volume, fullscreen pinned; the go-live page has no browser mic),
   upstream-status forwarding, and the claim cookie exchange.
 - `late-cli/src/voice_test.rs` — the `keep_remote_audio` policy: other
-  users' mics play; your own `stream-{id}` publisher and all program audio
-  never do.
+  users' mics play; `stream-*` publishers (any source label) and all
+  program audio never do.
 - LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh -E
   'test(stream)'"`; never raw cargo test.
 

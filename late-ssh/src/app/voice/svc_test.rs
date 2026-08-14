@@ -40,6 +40,45 @@ fn join_ticket_targets_the_rooms_livekit_channel() {
     assert_eq!(claims["video"]["canSubscribe"], true);
 }
 
+/// Voice stays CLI-only at the SFU grant level: the streamer's console
+/// ticket may publish screen share only, never a microphone. Loosening
+/// this array silently restores a browser mic, so the grant is pinned.
+#[test]
+fn stream_publish_ticket_grants_screen_share_sources_only() {
+    let service = enabled_service();
+    let ticket = service
+        .stream_publish_ticket(ROOM, Uuid::from_u128(1), "alice")
+        .expect("publish ticket");
+    let claims = claims_from_token(&ticket.token);
+
+    assert_eq!(claims["sub"], "stream-00000000-0000-0000-0000-000000000001");
+    assert_eq!(claims["video"]["room"], ticket.room);
+    assert_eq!(claims["video"]["canPublish"], true);
+    assert_eq!(
+        claims["video"]["canPublishSources"],
+        serde_json::json!(["screen_share", "screen_share_audio"])
+    );
+    assert_eq!(claims["video"]["canSubscribe"], true);
+    assert_eq!(claims["video"]["canPublishData"], false);
+}
+
+/// A tampered watch page still cannot open a mic: subscribe-only, hidden
+/// from participant rosters.
+#[test]
+fn stream_watch_ticket_is_subscribe_only_and_hidden() {
+    let service = enabled_service();
+    let ticket = service
+        .stream_watch_ticket(ROOM, "viewer-abc")
+        .expect("watch ticket");
+    let claims = claims_from_token(&ticket.token);
+
+    assert_eq!(claims["video"]["room"], ticket.room);
+    assert_eq!(claims["video"]["canPublish"], false);
+    assert_eq!(claims["video"]["canSubscribe"], true);
+    assert_eq!(claims["video"]["canPublishData"], false);
+    assert_eq!(claims["video"]["hidden"], true);
+}
+
 #[test]
 fn round_trips_the_room_id_through_the_livekit_name() {
     let service = enabled_service();

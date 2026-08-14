@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-13 (CLI voice is mic-only on the subscribe side: `late-cli` unsubscribes non-microphone remote audio and the user's own `stream-{user_id}` publisher, and the OBS ingress audio is labeled `SCREEN_SHARE_AUDIO` at CreateIngress so consumers can tell program audio from voices; see §6/§7 and `../stream/CONTEXT.md`)
+- Last updated: 2026-08-14 (CLI voice is mic-only on the subscribe side: `late-cli` unsubscribes non-microphone remote audio and every `stream-*` publisher, whatever source label it carries. The `SCREEN_SHARE_AUDIO` label set at CreateIngress is advisory; consumers classify program audio by the `stream-*` identity since the label may not survive transcoding-off passthrough; see §6/§7 and `../stream/CONTEXT.md`)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -206,11 +206,12 @@ Events:
 - Disconnected sets an atomic flag. The pair-WS heartbeat checks `media_disconnected()`, then leaves and sends `voice_state`.
 - `ActiveSpeakersChanged` updates the CLI runtime `speaking` flag; pair WS reports that state quickly so SSH can render the green speaking indicator.
 - `TrackSubscribed` keeps only microphone-source remote audio, and never
-  from the local user's own `stream-{user_id}` publisher (`keep_remote_audio`
-  + `voice_test.rs`): program audio (the OBS ingress mix, a console's
-  screen-share audio) is unsubscribed like video, so it lives on the watch
-  page only and a streamer never hears their own broadcast echo. Kept
-  tracks are disabled immediately if deafened.
+  from any `stream-*` publisher whatever source label it carries
+  (`keep_remote_audio` + `voice_test.rs`): program audio (the OBS ingress
+  mix, a console's screen-share audio) is disabled locally then
+  unsubscribed like video, so it lives on the watch page only and a
+  streamer never hears their own broadcast echo. Kept tracks are disabled
+  immediately if deafened.
 - `TrackUnsubscribed` logs the remote track id.
 
 Unsupported platforms:
@@ -263,10 +264,11 @@ participant identity is `stream-{user_id}`, the same identity as the go-live
 console, so every existing teardown path finds it; transcoding is disabled
 at CreateIngress time (OBS already sends h264+opus), so the ingress service
 forwards packets instead of re-encoding. The ingress audio is labeled
-`SCREEN_SHARE_AUDIO` (program audio, not a voice): the CLI voice runtime
-and the watch page both discriminate mic-vs-program on track source, so
-this label is load-bearing. Needs a real OBS push to confirm it survives
-the `enable_transcoding: false` passthrough. Ownership of when to create/delete
+`SCREEN_SHARE_AUDIO` (program audio, not a voice), but the label is
+advisory only: it may not survive the `enable_transcoding: false`
+passthrough, so the CLI voice runtime and the watch page both classify
+program audio by the `stream-*` identity instead of trusting the source
+label. Ownership of when to create/delete
 ingresses lives entirely in `../stream` — this service only speaks the API.
 
 ---

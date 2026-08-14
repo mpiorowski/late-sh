@@ -223,10 +223,6 @@ async fn connect_voice_media(
     let speaking = Arc::new(AtomicBool::new(false));
     let event_speaking = Arc::clone(&speaking);
     let local_participant_sid = room.local_participant().sid();
-    // A streamer's browser console / OBS ingress publishes into this same
-    // LiveKit room under `stream-{user_id}`; that identity is "you" for the
-    // purposes of echo, even though LiveKit treats it as a remote participant.
-    let own_stream_identity = format!("stream-{}", room.local_participant().identity());
     let events_task = tokio::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
@@ -252,13 +248,17 @@ async fn connect_voice_media(
                             // One audio path per sound: CLI voice carries
                             // human mics only. Program audio (the OBS ingress
                             // mix, the console's screen-share audio) lives on
-                            // the watch page, and your own `stream-{id}`
-                            // publisher must never come back at you.
+                            // the watch page.
                             if !keep_remote_audio(
-                                &own_stream_identity,
                                 &participant.identity().to_string(),
                                 publication.source(),
                             ) {
+                                // The track is already attached and audible;
+                                // disable it locally right now, then tell the
+                                // server to stop forwarding. Unsubscribe alone
+                                // leaves an audible burst until the server
+                                // acks.
+                                track.disable();
                                 publication.set_subscribed(false);
                                 info!(
                                     track_id = %track_id,
@@ -348,15 +348,14 @@ async fn connect_voice_media(
 /// Whether the audio-only voice runtime should stay subscribed to a remote
 /// audio track. CLI voice plays human microphones only: program audio (the
 /// OBS ingress mix, the console's screen-share audio) belongs to the watch
-/// page, and the local user's own `stream-{user_id}` publisher (their
-/// go-live console mic) must never echo back into their own ears.
+/// page. Any `stream-*` identity is a program publisher (OBS ingress or
+/// go-live console), never a human mic, so its audio is dropped whatever
+/// source label it carries: the ingress label is not guaranteed to survive
+/// the transcoding-off passthrough, and this also covers the local user's
+/// own `stream-{user_id}` publisher echoing back.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn keep_remote_audio(
-    own_stream_identity: &str,
-    participant_identity: &str,
-    source: TrackSource,
-) -> bool {
-    participant_identity != own_stream_identity && matches!(source, TrackSource::Microphone)
+fn keep_remote_audio(participant_identity: &str, source: TrackSource) -> bool {
+    !participant_identity.starts_with("stream-") && matches!(source, TrackSource::Microphone)
 }
 
 #[cfg(all(

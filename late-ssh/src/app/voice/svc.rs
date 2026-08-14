@@ -673,10 +673,11 @@ impl VoiceService {
                     participant_identity: &format!("stream-{user_id}"),
                     participant_name: username,
                     enable_transcoding: false,
-                    // Label the mix as program audio so voice-vs-program
-                    // consumers (CLI runtime, watch page) can tell it from a
-                    // human microphone. Needs a real OBS push to confirm the
-                    // label survives `enable_transcoding: false` passthrough.
+                    // Label the mix as program audio. Advisory only: the
+                    // label is not guaranteed to survive the
+                    // `enable_transcoding: false` passthrough, so both
+                    // consumers (CLI runtime, watch page) classify program
+                    // audio by the `stream-*` identity, not by this label.
                     audio: IngressAudioOptions {
                         source: "SCREEN_SHARE_AUDIO",
                     },

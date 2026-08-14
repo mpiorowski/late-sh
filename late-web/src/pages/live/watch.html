@@ -81,7 +81,9 @@
         function applyAudio() {
             audioTracks.forEach(function (t) {
                 t.el.muted = !audioOn || (t.voice && !voicesOn);
-                t.el.volume = volume;
+                // The slider is stream volume only; voices have their own
+                // on/off toggle and stay at full level.
+                t.el.volume = t.voice ? 1 : volume;
             });
             muteBtn.textContent = audioOn ? 'mute room audio' : 'unmute room audio';
             voicesBtn.textContent = voicesOn ? 'voices: on' : 'voices: off';
@@ -128,15 +130,22 @@
             }).catch(function () { });
         }
 
-        function attachTrack(track) {
+        function attachTrack(track, participant) {
             if (track.kind === 'video') {
                 track.attach(video);
                 setStatus('');
             } else if (track.kind === 'audio') {
                 const el = track.attach();
+                // Anything published by a stream-* identity (OBS ingress,
+                // go-live console) is the stream, whatever source label it
+                // carries: the ingress label is not guaranteed to survive
+                // transcoding-off passthrough. Voices are mics from everyone
+                // else.
+                const fromStream = participant.identity.indexOf('stream-') === 0;
                 audioTracks.push({
                     el: el,
-                    voice: track.source === LivekitClient.Track.Source.Microphone,
+                    voice: !fromStream
+                        && track.source === LivekitClient.Track.Source.Microphone,
                 });
                 document.body.appendChild(el);
                 applyAudio();
@@ -155,7 +164,9 @@
             if (!res.ok) { connecting = false; return; }
             const grant = await res.json();
             room = new LivekitClient.Room();
-            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track) { attachTrack(track); });
+            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track, publication, participant) {
+                attachTrack(track, participant);
+            });
             room.on(LivekitClient.RoomEvent.Disconnected, function () {
                 if (!ended) { setStatus('disconnected - reload to retry.'); }
             });
@@ -170,7 +181,7 @@
             await room.connect(grant.livekit_url, grant.token);
             room.remoteParticipants.forEach(function (participant) {
                 participant.trackPublications.forEach(function (publication) {
-                    if (publication.track) { attachTrack(publication.track); }
+                    if (publication.track) { attachTrack(publication.track, participant); }
                 });
             });
             try { await room.startAudio(); } catch (e) {
