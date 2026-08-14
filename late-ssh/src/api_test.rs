@@ -233,12 +233,61 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
         .expect("watch state");
     assert_eq!(status, 200);
     assert!(body.contains("\"live\":true"), "live stream: {body}");
-    let (status, body) =
-        http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
-            .await
-            .expect("watch grant");
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("watch grant");
     assert_eq!(status, 200);
     assert!(body.contains("\"livekit_url\":\"wss://rtc.test\""));
+    // The viewer's LiveKit identity is derived from its watcher id, not
+    // minted fresh per fetch: a viewer whose media path keeps failing
+    // retries under one identity instead of leaving a new ghost
+    // participant in the room every 10 seconds.
+    let first_identity = grant_token_subject(&body);
+    assert_eq!(first_identity, "viewer-watcher-a", "grant: {body}");
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("watch grant retry");
+    assert_eq!(status, 200);
+    assert_eq!(
+        grant_token_subject(&body),
+        first_identity,
+        "a retry reuses the same identity"
+    );
+    // A different viewer is still a different participant.
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-b"),
+        3,
+    )
+    .await
+    .expect("second watcher grant");
+    assert_eq!(status, 200);
+    assert_eq!(grant_token_subject(&body), "viewer-watcher-b");
+    // The watcher id is required and shaped: it becomes a LiveKit identity,
+    // so junk is refused at the boundary rather than minted into a token.
+    for query in [
+        String::new(),
+        "?watcher_id=".to_string(),
+        format!("?watcher_id={}", "x".repeat(65)),
+        "?watcher_id=a/b".to_string(),
+    ] {
+        let (status, _) = http_get_with_retry(
+            addr,
+            &format!("/api/stream/watch/{stream_id}/grant{query}"),
+            3,
+        )
+        .await
+        .expect("malformed watcher id grant");
+        assert_eq!(status, 400, "watcher id query {query:?}");
+    }
     let (status, _) = http_post_json(
         addr,
         &format!("/api/stream/watch/{stream_id}/heartbeat"),
@@ -275,6 +324,20 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert_eq!(status, 404);
 
     api_task.abort();
+}
+
+/// The LiveKit identity a watch grant minted, read out of the JWT's `sub`
+/// claim. The identity is what LiveKit dedupes participants by, so it is
+/// the observable the retry behaviour hangs on.
+fn grant_token_subject(grant_body: &str) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let grant: serde_json::Value = serde_json::from_str(grant_body).expect("grant json");
+    let token = grant["token"].as_str().expect("grant token");
+    let payload = token.split('.').nth(1).expect("jwt payload segment");
+    let decoded = URL_SAFE_NO_PAD.decode(payload).expect("jwt payload base64");
+    let claims: serde_json::Value = serde_json::from_slice(&decoded).expect("jwt claims");
+    claims["sub"].as_str().expect("jwt sub").to_string()
 }
 
 /// GET that also returns the raw response head, for header assertions.

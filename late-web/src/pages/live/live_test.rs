@@ -37,7 +37,7 @@ async fn proxies_forward_upstream_404_instead_of_500() {
     let client = reqwest::Client::new();
     for path in [
         "/live/deadbeef/state",
-        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=abc-123",
         "/golive/deadbeef/grant",
     ] {
         let response = client
@@ -46,6 +46,22 @@ async fn proxies_forward_upstream_404_instead_of_500() {
             .await
             .expect("proxy get");
         assert_eq!(response.status(), 404, "GET {path}");
+    }
+
+    // The watcher id is interpolated into the internal query string and
+    // becomes a LiveKit identity upstream, so an absent or off-shape one is
+    // refused here instead of being forwarded.
+    for path in [
+        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=",
+        "/live/deadbeef/grant?watcher_id=a%2Fb",
+    ] {
+        let response = client
+            .get(format!("http://{addr}{path}"))
+            .send()
+            .await
+            .expect("proxy get");
+        assert_eq!(response.status(), 400, "GET {path}");
     }
     let response = client
         .post(format!("http://{addr}/golive/deadbeef/state"))
@@ -186,6 +202,18 @@ fn watch_and_golive_pages_render_with_the_id_embedded() {
     assert!(
         watch.contains("id=\"fullscreen-btn\""),
         "fullscreen control"
+    );
+    // The grant fetch carries the page's watcher id, so every retry from
+    // one viewer joins LiveKit under the same identity.
+    assert!(
+        watch.contains("grant?watcher_id="),
+        "the grant fetch carries the watcher id"
+    );
+    // A dropped connection must be recoverable in place: telling the viewer
+    // to reload was a dead end the page could never leave on its own.
+    assert!(
+        !watch.contains("reload to retry"),
+        "a lost connection reconnects instead of demanding a reload"
     );
 
     let golive = super::GoLivePage {

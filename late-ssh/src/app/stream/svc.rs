@@ -557,14 +557,25 @@ impl StreamService {
     /// Withheld while the stream is pending: nobody subscribes to the room's
     /// voice channel before media has actually flowed (grace still counts as
     /// live, so a page refresh mid-stream reconnects).
-    pub fn watch_grant(&self, stream_id: &str) -> anyhow::Result<Option<StreamMediaTicket>> {
+    /// The viewer's identity is derived from its (stable, client-generated)
+    /// watcher id rather than minted fresh per call. A viewer whose media
+    /// path keeps failing re-fetches a grant on every retry, and a random
+    /// identity per fetch left a new ghost participant in the LiveKit room
+    /// each time, with nothing tying the attempts to one person. Reusing
+    /// the id also means a reconnect *replaces* the stale participant
+    /// instead of racing it.
+    pub fn watch_grant(
+        &self,
+        stream_id: &str,
+        watcher_id: &str,
+    ) -> anyhow::Result<Option<StreamMediaTicket>> {
         let Some(view) = self.registry.watch_view(stream_id) else {
             return Ok(None);
         };
         if !view.live {
             return Ok(None);
         }
-        let identity = format!("viewer-{}", Uuid::new_v4().simple());
+        let identity = format!("viewer-{watcher_id}");
         let ticket = self
             .voice
             .stream_watch_ticket(view.voice_channel_id, &identity)?;

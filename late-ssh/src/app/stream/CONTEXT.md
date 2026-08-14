@@ -3,7 +3,13 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-14 (One audio path per sound: the CLI voice runtime
+- Last updated: 2026-08-14 (Watch-page reconnect: the viewer's LiveKit
+  identity is now `viewer-{watcher_id}` from the page's stable id instead of
+  a fresh random per grant fetch, connect failures back off instead of
+  retrying every 10s forever, a failed `Room` is disposed instead of
+  abandoned, and a dropped connection reconnects in place instead of
+  dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
+  path per sound: the CLI voice runtime
   now plays human microphones only — program audio (the OBS ingress mix,
   the console's screen-share audio) and every `stream-*` publisher are
   unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
@@ -163,7 +169,23 @@ Cross-domain touchpoints:
 3. Watch pages resolve `/live/{id}`, poll state (10s), heartbeat (15s;
    45s TTL drives the "N watching" count), and subscribe with an anonymous
    hidden grant. Playback defaults on (autoplay permitting, see §4.1);
-   publishing from a page is impossible by grant.
+   publishing from a page is impossible by grant. The page's `watcher_id`
+   (a random per-page-load browser UUID) is both the heartbeat key and,
+   as `viewer-{watcher_id}`, the viewer's LiveKit identity: the grant fetch
+   carries it and `StreamService::watch_grant` requires it. It used to mint
+   `viewer-{random}` per fetch, so a viewer whose media path kept failing
+   left a new ghost participant in the room every 10 seconds with nothing
+   tying the attempts together; reusing the id also makes a reconnect
+   *replace* the stale participant instead of racing it. The id is
+   shape-checked (`registry::valid_watcher_id`, alnum + dash, <= 64) at both
+   the late-web proxy and the late-ssh API, since it reaches a LiveKit
+   identity. Connect failures back off (10s, 20s, 40s, capped at 60s,
+   reset on success) and a dropped connection clears the room so the state
+   poll reconnects in place: "reload to retry" was a dead end the page could
+   never leave on its own. Note the two halves take different network paths
+   (the page over HTTPS to `late.sh`, media over WebRTC to `rtc.late.sh`),
+   so a working page with no picture is a normal failure mode and the status
+   line says so after three failures.
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -288,11 +310,17 @@ Cross-domain touchpoints:
   row; `/mod unban stream` clears it.
 - `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow` — the
   whole HTTP flow end to end against a real registry + DB, including the
-  404s for dead capability ids.
+  404s for dead capability ids and the watch grant's identity contract:
+  the token's `sub` is `viewer-{watcher_id}`, a retry with the same watcher
+  id reuses it, a different watcher is a different participant, and a
+  missing or off-shape watcher id is a 400 (asserted by decoding the JWT,
+  since the identity is what LiveKit dedupes participants by).
 - `late-web/src/pages/live/live_test.rs` — capability-id validation (the
   proxy-path injection gate), page rendering (audio-on defaults, voices
-  toggle, volume, fullscreen pinned; the go-live page has no browser mic),
-  upstream-status forwarding, and the claim cookie exchange.
+  toggle, volume, fullscreen pinned; the grant fetch carries the watcher id;
+  no "reload to retry" dead end; the go-live page has no browser mic),
+  the watcher-id gate on the grant proxy, upstream-status forwarding, and
+  the claim cookie exchange.
 - `late-cli/src/voice_test.rs` — the `keep_remote_audio` policy: other
   users' mics play; `stream-*` publishers (any source label) and all
   program audio never do.
@@ -340,5 +368,25 @@ user id). `ModerationInfra` carries the `StreamService` for all of it.
 - A renamed streamer keeps their room under the old `{username}-live` slug
   (cosmetic only: the slug is not shown anywhere user-facing).
 - Splash tips carry no `/golive` line yet.
+- "N watching" counts heartbeats, which are page presence, not media. A
+  viewer stuck on "could not connect" still counts, so the streamer's number
+  can overstate who is actually seeing the picture. Deliberate for now (the
+  page is the audience signal, and watch pages are anonymous by design), but
+  it is why a broken viewer is invisible from the streamer's side.
+- The node's UDP receive buffer is the kernel default and LiveKit says so at
+  every boot: `UDP receive buffer is too small for a production set-up
+  {current: 425984, suggested: 5000000}`. A screen share fanned out to
+  several subscribers overruns it, which reads as sustained loss on *every*
+  viewer (nack ratios around 0.4-0.5 in the congestion logs), not just the
+  one with a bad link. Fix is `net.core.rmem_max`/`rmem_default` on the
+  host; it cannot come from the pod, since a hostNetwork pod may not set
+  `net.*` sysctls, and it has no home in this repo (the RKE2 script is
+  one-shot bootstrap, not a reconciler).
+- TURN is enabled (`infra/livekit.tf`: UDP 3478, TLS 5349, relay range
+  30000-40000) and clients do allocate relay candidates, but there is no
+  TURN on 443: nginx owns that port. A viewer behind a firewall that permits
+  only 443 has no path. Separately, ICE prefers a direct host pair, so a
+  path that comes up and *then* dies is not rescued by TURN without an ICE
+  restart; that is what the page's reconnect now covers.
 - The tavern TV prop, arena spectator reuse, and a public `late.sh/live`
   stay future work (see STREAM.md).

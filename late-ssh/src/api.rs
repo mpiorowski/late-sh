@@ -381,6 +381,13 @@ struct StreamWatchHeartbeatBody {
     watcher_id: String,
 }
 
+/// The watch page's stable per-page-load id, carried on the grant fetch so
+/// every retry from one viewer joins LiveKit under the same identity.
+#[derive(Deserialize)]
+struct StreamWatchGrantParams {
+    watcher_id: String,
+}
+
 /// Header carrying the publish-token claim secret between the late-web
 /// proxy (where it lives as an HttpOnly cookie on the console's browser)
 /// and this API.
@@ -465,9 +472,18 @@ async fn get_stream_watch_state(
 
 async fn get_stream_watch_grant(
     Path(stream_id): Path<String>,
+    Query(params): Query<StreamWatchGrantParams>,
     AxumState(state): AxumState<State>,
 ) -> impl IntoResponse {
-    match state.stream_service.watch_grant(&stream_id) {
+    // The watcher id becomes this viewer's LiveKit identity, so it is
+    // required and shape-checked here rather than trusted downstream.
+    if !crate::app::stream::registry::valid_watcher_id(&params.watcher_id) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    match state
+        .stream_service
+        .watch_grant(&stream_id, &params.watcher_id)
+    {
         Ok(Some(ticket)) => Json(StreamWatchGrantResponse {
             livekit_url: ticket.url,
             room: ticket.room,
@@ -488,12 +504,10 @@ async fn post_stream_watch_heartbeat(
     Json(body): Json<StreamWatchHeartbeatBody>,
 ) -> StatusCode {
     // The endpoint is unauthenticated (the watch URL is the auth) and the
-    // watcher id is client-generated (a browser UUID, 36 chars). Ids beyond
-    // the cap are junk from a tampered client; reject them at the boundary
+    // watcher id is client-generated (a browser UUID, 36 chars). Anything
+    // off-shape is junk from a tampered client; reject it at the boundary
     // so the registry only ever stores well-formed ids.
-    if body.watcher_id.is_empty()
-        || body.watcher_id.len() > crate::app::stream::registry::WATCHER_ID_MAX_LEN
-    {
+    if !crate::app::stream::registry::valid_watcher_id(&body.watcher_id) {
         return StatusCode::BAD_REQUEST;
     }
     if state

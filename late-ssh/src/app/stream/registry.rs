@@ -38,6 +38,18 @@ pub const WATCHERS_MAX: usize = 500;
 /// longer is rejected at the API boundary before it reaches the registry.
 pub const WATCHER_ID_MAX_LEN: usize = 64;
 
+/// A watcher id is both the heartbeat key and (as `viewer-{id}`) the
+/// viewer's LiveKit identity, so it is validated once here and refused at
+/// the API boundary rather than trusted downstream. The shape is what the
+/// watch page generates: a browser UUID, or its digits-only fallback.
+pub fn valid_watcher_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= WATCHER_ID_MAX_LEN
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// Lifecycle of one registered stream. `Pending` is the window between
 /// `/golive` and the page's first media report; the announcement fires only
 /// on the `Pending -> Live` transition (no "live" lines pointing at black
