@@ -946,6 +946,9 @@ impl russh::server::Handler for ClientHandler {
             bashquest_host: self.state.config.bashquest_host.clone(),
             bashquest_port: self.state.config.bashquest_port,
             bashquest_secret: self.state.config.bashquest_secret.clone(),
+            bashquest_awards: Some(crate::app::door::bashquest::graduate::BashquestAwards::new(
+                self.state.db.clone(),
+            )),
             codekeep_enabled: self.state.config.codekeep_enabled,
             codekeep_host: self.state.config.codekeep_host.clone(),
             codekeep_port: self.state.config.codekeep_port,

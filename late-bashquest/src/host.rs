@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use russh::ChannelId;
 use russh::server::Handle;
@@ -193,6 +195,18 @@ async fn run_bridge(
     )
     .await;
 
+    // If bashquest.sh just wrote a graduation certificate for this session's
+    // handle, report it once before the channel closes: a marker sent
+    // directly here from the host, never derived from anything the child
+    // process wrote to the pty. Nothing the player typed or pasted flows
+    // through this call site, so it cannot be spoofed from the game side --
+    // only an actual `$SAVE_DIR/<handle>.certificate.txt` on disk (written
+    // solely by bashquest.sh's own `graduation_ceremony`, which is only
+    // reached by completing every level) makes this fire. late-ssh strips the
+    // marker out of the rendered stream and treats it as the authoritative
+    // "this account graduated" signal (see `door::bashquest::proxy`).
+    report_certificate_if_new(&cfg, &handle, channel).await;
+
     // Close the SSH channel first so the late-ssh client returns to its
     // launcher immediately.
     let _ = handle.eof(channel).await;
@@ -261,5 +275,69 @@ fn set_winsize(master: &std::fs::File, cols: u16, rows: u16) {
     };
     unsafe {
         libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+    }
+}
+
+/// Tag prefixing the graduation marker. Not a byte sequence any real
+/// terminal client would send as input, and not something bashquest.sh
+/// itself ever prints; late-ssh's proxy scans for it specifically (see
+/// `door::bashquest::proxy::CERT_MARKER_TAG`, which MUST stay byte-identical
+/// to this).
+const CERT_MARKER_TAG: &[u8] = b"\x00BQCERT\x01";
+
+/// `$HOME/.bashquest/<handle>.certificate.txt`, matching bashquest.sh's own
+/// `graduation_ceremony` (`cert_file="$SAVE_DIR/${PLAYER_NAME}.certificate.txt"`,
+/// `SAVE_DIR="$HOME/.bashquest"`).
+fn certificate_path(cfg: &HostConfig) -> PathBuf {
+    Path::new(&cfg.data_dir)
+        .join(".bashquest")
+        .join(format!("{}.certificate.txt", cfg.playname))
+}
+
+/// Sentinel this host writes once it has reported a graduation, so a
+/// graduate logging back in to keep playing doesn't resend the marker every
+/// session. Purely a local dedup: late-ssh's DB write is idempotent on
+/// account id regardless, this just avoids the noise.
+fn reported_path(cfg: &HostConfig) -> PathBuf {
+    Path::new(&cfg.data_dir)
+        .join(".bashquest")
+        .join(format!("{}.certificate.reported", cfg.playname))
+}
+
+/// `TAG <64-hex blake3 digest of certificate> \x01 <handle> \x01 <certificate> \x00`.
+/// The fixed-length digest right after the tag lets late-ssh validate the
+/// marker wasn't truncated before trusting the (variable-length) handle and
+/// certificate fields that follow it. MUST stay byte-identical in shape to
+/// `door::bashquest::proxy::extract_marker` on the client side.
+fn build_certificate_marker(playname: &str, cert: &[u8]) -> Vec<u8> {
+    let digest = blake3::hash(cert).to_hex();
+    let mut out = Vec::with_capacity(
+        CERT_MARKER_TAG.len() + digest.len() + 1 + playname.len() + 1 + cert.len() + 1,
+    );
+    out.extend_from_slice(CERT_MARKER_TAG);
+    out.extend_from_slice(digest.as_bytes());
+    out.push(0x01);
+    out.extend_from_slice(playname.as_bytes());
+    out.push(0x01);
+    out.extend_from_slice(cert);
+    out.push(0x00);
+    out
+}
+
+/// Checks for a fresh, not-yet-reported certificate and, if present, sends
+/// the marker and records that it has been reported. Best-effort: any
+/// failure here (no certificate yet, IO error, channel already gone) just
+/// means nothing is reported this session -- never fatal to teardown.
+async fn report_certificate_if_new(cfg: &HostConfig, handle: &Handle, channel: ChannelId) {
+    let reported = reported_path(cfg);
+    if reported.exists() {
+        return;
+    }
+    let Ok(cert) = std::fs::read(certificate_path(cfg)) else {
+        return; // no certificate written this session: not a graduation
+    };
+    let marker = build_certificate_marker(&cfg.playname, &cert);
+    if handle.data(channel, marker).await.is_ok() {
+        let _ = std::fs::write(&reported, b"");
     }
 }

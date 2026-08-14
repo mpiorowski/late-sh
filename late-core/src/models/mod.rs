@@ -14,6 +14,9 @@ mod article_feed_read_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
+pub mod bashquest_graduate;
+#[cfg(test)]
+mod bashquest_graduate_test;
 pub mod blackjack;
 pub mod bonsai;
 pub mod bonsai_decay_protection;

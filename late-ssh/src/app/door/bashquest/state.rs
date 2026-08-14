@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
+use super::graduate::BashquestAwards;
 use super::proxy::{BashquestProcess, ProcessConfig, ProxyStatus};
 use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
 use crate::render_signal::RenderSignal;
@@ -22,6 +23,10 @@ pub enum Mode {
 const EXIT_GRACE_TICKS: u8 = 10;
 
 pub struct State {
+    /// The real account id for this session, used to record a verified
+    /// graduation (see `tick`). Not derived from anything the player
+    /// controls.
+    user_id: uuid::Uuid,
     host: String,
     port: u16,
     secret: String,
@@ -47,6 +52,9 @@ pub struct State {
     /// player who already claimed one elsewhere (DCSS, NetHack) sees it here
     /// too -- no second prompt.
     handle: HandleFlow,
+    /// Records a verified graduation to the database when one arrives over
+    /// the proxy. `None` on headless/test paths where there is no database.
+    awards: Option<BashquestAwards>,
 }
 
 impl State {
@@ -60,8 +68,10 @@ impl State {
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
         handle_svc: Option<ArcadeHandleService>,
+        awards: Option<BashquestAwards>,
     ) -> Self {
         Self {
+            user_id,
             host,
             port,
             secret,
@@ -78,6 +88,7 @@ impl State {
             ),
             repaint,
             exit_grace: 0,
+            awards,
         }
     }
 
@@ -178,6 +189,12 @@ impl State {
     /// lands.
     pub fn tick(&mut self) {
         if self.mode == Mode::Running {
+            if let Some(proxy) = &self.proxy
+                && let Some(record) = proxy.take_graduation()
+                && let Some(awards) = &self.awards
+            {
+                awards.spawn_record(self.user_id, record.handle, record.certificate);
+            }
             let closed = self
                 .proxy
                 .as_ref()

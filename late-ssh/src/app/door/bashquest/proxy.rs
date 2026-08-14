@@ -54,6 +54,17 @@ pub struct BashquestProcess {
     task: JoinHandle<()>,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<ProxyStatus>>,
+    graduation: Arc<Mutex<Option<GraduationRecord>>>,
+}
+
+/// A verified graduation observed on the wire: late-bashquest only ever sends
+/// this marker after independently confirming bashquest.sh wrote a
+/// certificate file on its own PVC, which only its own `graduation_ceremony`
+/// can do. See [`extract_marker`] for the format and the anti-forgery
+/// reasoning.
+pub struct GraduationRecord {
+    pub handle: String,
+    pub certificate: Vec<u8>,
 }
 
 pub struct ProcessConfig {
@@ -77,15 +88,25 @@ impl BashquestProcess {
         let (cmd_tx, cmd_rx) = mpsc::channel::<OutboundCommand>(256);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(cfg.rows, cfg.cols, 0)));
         let status = Arc::new(Mutex::new(ProxyStatus::Connecting));
+        let graduation = Arc::new(Mutex::new(None));
 
         let task_parser = parser.clone();
         let task_status = status.clone();
+        let task_graduation = graduation.clone();
         // Wake the render loop when the connection closes so the foreground
         // runs `tick()`, sees `Closed`, and repaints the launcher. Without
         // this the screen freezes on the last game frame.
         let exit_repaint = cfg.repaint.clone();
         let task = tokio::spawn(async move {
-            if let Err(e) = run_bridge(cfg, cmd_rx, task_parser, task_status.clone()).await {
+            if let Err(e) = run_bridge(
+                cfg,
+                cmd_rx,
+                task_parser,
+                task_status.clone(),
+                task_graduation,
+            )
+            .await
+            {
                 tracing::warn!(error = ?e, "bashquest proxy bridge ended with error");
             }
             *task_status.lock().expect("status mutex") = ProxyStatus::Closed;
@@ -99,6 +120,7 @@ impl BashquestProcess {
             task,
             parser,
             status,
+            graduation,
         }
     }
 
@@ -132,6 +154,13 @@ impl BashquestProcess {
         let guard = self.parser.lock().expect("parser mutex");
         f(guard.screen())
     }
+
+    /// Take a verified graduation observed on the wire since the last call,
+    /// if any. Clears it, so a caller that records it to the database will
+    /// only ever see it once per process.
+    pub fn take_graduation(&self) -> Option<GraduationRecord> {
+        self.graduation.lock().expect("graduation mutex").take()
+    }
 }
 
 impl Drop for BashquestProcess {
@@ -145,6 +174,7 @@ async fn run_bridge(
     mut cmd_rx: mpsc::Receiver<OutboundCommand>,
     parser: Arc<Mutex<vt100::Parser>>,
     status: Arc<Mutex<ProxyStatus>>,
+    graduation: Arc<Mutex<Option<GraduationRecord>>>,
 ) -> Result<()> {
     let config = Arc::new(Config {
         inactivity_timeout: Some(Duration::from_secs(3600)),
@@ -214,7 +244,23 @@ async fn run_bridge(
                 let Some(msg) = msg else { break };
                 match msg {
                     ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                        parser.lock().expect("parser mutex").process(&data);
+                        match extract_marker(&data) {
+                            Some((record, span)) => {
+                                *graduation.lock().expect("graduation mutex") = Some(record);
+                                // Strip the marker out so it never corrupts the
+                                // rendered game screen; feed whatever real
+                                // output surrounds it (there is normally none --
+                                // the host sends this as its own final message).
+                                let mut rest = data[..span.start].to_vec();
+                                rest.extend_from_slice(&data[span.end..]);
+                                if !rest.is_empty() {
+                                    parser.lock().expect("parser mutex").process(&rest);
+                                }
+                            }
+                            None => {
+                                parser.lock().expect("parser mutex").process(&data);
+                            }
+                        }
                         if let Some(sig) = &cfg.repaint {
                             sig.wake();
                         }
@@ -231,4 +277,128 @@ async fn run_bridge(
         .disconnect(Disconnect::ByApplication, "", "en")
         .await;
     Ok(())
+}
+
+/// Tag prefixing the graduation marker. MUST stay byte-identical to
+/// late-bashquest's `host::CERT_MARKER_TAG` -- a NUL byte, which bashquest.sh
+/// never legitimately prints (its own output is plain ANSI/UTF-8 text) and
+/// which the host only ever sends via a direct, host-originated
+/// `handle.data()` call made *after* the child has already exited, never as
+/// forwarded child/pty output. Nothing the player types or pastes reaches
+/// that call site, so this cannot be spoofed from inside the game.
+const CERT_MARKER_TAG: &[u8] = b"\x00BQCERT\x01";
+
+/// Length of the blake3 hex digest embedded right after the tag.
+const DIGEST_HEX_LEN: usize = 64;
+
+/// Look for a complete `TAG <64-hex-digest> \x01 <handle> \x01 <certificate> \x00`
+/// marker anywhere in `data`. Returns the parsed record and the byte range it
+/// occupies (to strip out of what gets fed to the vt100 parser).
+///
+/// Verifies the embedded digest against the extracted certificate bytes
+/// before returning anything, so a marker split across an unlucky chunk
+/// boundary is dropped rather than recorded with truncated content -- this
+/// only needs to be correct when the whole marker lands in one chunk (which
+/// it always does in practice: the host writes it in a single call
+/// immediately before closing the channel), not perfectly robust to
+/// adversarial fragmentation.
+fn extract_marker(data: &[u8]) -> Option<(GraduationRecord, std::ops::Range<usize>)> {
+    let tag_pos = data
+        .windows(CERT_MARKER_TAG.len())
+        .position(|w| w == CERT_MARKER_TAG)?;
+    let after_tag = tag_pos + CERT_MARKER_TAG.len();
+    let digest_end = after_tag.checked_add(DIGEST_HEX_LEN)?;
+    let digest_hex = data.get(after_tag..digest_end)?;
+
+    let mut pos = digest_end;
+    if data.get(pos)? != &0x01 {
+        return None;
+    }
+    pos += 1;
+
+    let handle_start = pos;
+    let handle_end = handle_start + data[handle_start..].iter().position(|&b| b == 0x01)?;
+    let handle = String::from_utf8(data[handle_start..handle_end].to_vec()).ok()?;
+
+    let cert_start = handle_end + 1;
+    let cert_end = cert_start + data[cert_start..].iter().position(|&b| b == 0x00)?;
+    let certificate = data[cert_start..cert_end].to_vec();
+
+    let expected_digest = blake3::hash(&certificate).to_hex();
+    if expected_digest.as_bytes() != digest_hex {
+        return None;
+    }
+
+    Some((
+        GraduationRecord {
+            handle,
+            certificate,
+        },
+        tag_pos..cert_end + 1,
+    ))
+}
+
+#[cfg(test)]
+mod marker_test {
+    use super::*;
+
+    /// Mirrors late-bashquest's `host::build_certificate_marker` byte layout
+    /// exactly; the two MUST stay in sync (see the cross-crate contract note
+    /// on `CERT_MARKER_TAG`).
+    fn build_marker(handle: &str, cert: &[u8]) -> Vec<u8> {
+        let digest = blake3::hash(cert).to_hex();
+        let mut out = Vec::new();
+        out.extend_from_slice(CERT_MARKER_TAG);
+        out.extend_from_slice(digest.as_bytes());
+        out.push(0x01);
+        out.extend_from_slice(handle.as_bytes());
+        out.push(0x01);
+        out.extend_from_slice(cert);
+        out.push(0x00);
+        out
+    }
+
+    #[test]
+    fn extracts_a_well_formed_marker() {
+        let marker = build_marker("grad_one", b"CERTIFICATE TEXT");
+        let (record, span) = extract_marker(&marker).expect("marker parses");
+        assert_eq!(record.handle, "grad_one");
+        assert_eq!(record.certificate, b"CERTIFICATE TEXT");
+        assert_eq!(span, 0..marker.len());
+    }
+
+    #[test]
+    fn extracts_a_marker_surrounded_by_other_bytes_and_reports_correct_span() {
+        let marker = build_marker("grad_two", b"cert");
+        let mut data = b"leading ".to_vec();
+        data.extend_from_slice(&marker);
+        data.extend_from_slice(b" trailing");
+        let (record, span) = extract_marker(&data).expect("marker parses");
+        assert_eq!(record.handle, "grad_two");
+        assert_eq!(&data[span.clone()], marker.as_slice());
+        let mut rest = data[..span.start].to_vec();
+        rest.extend_from_slice(&data[span.end..]);
+        assert_eq!(rest, b"leading  trailing");
+    }
+
+    #[test]
+    fn rejects_a_marker_whose_certificate_does_not_match_its_digest() {
+        let mut marker = build_marker("grad_three", b"real cert");
+        // Flip the certificate payload's first byte without recomputing the
+        // digest -- simulates a corrupted or forged marker.
+        let cert_start = marker.len() - "real cert".len() - 1;
+        marker[cert_start] = b'R';
+        assert!(extract_marker(&marker).is_none());
+    }
+
+    #[test]
+    fn ignores_plain_output_with_no_marker() {
+        assert!(extract_marker(b"just some normal bashquest.sh output\n").is_none());
+    }
+
+    #[test]
+    fn ignores_a_truncated_marker() {
+        let marker = build_marker("grad_four", b"cert");
+        assert!(extract_marker(&marker[..marker.len() - 5]).is_none());
+    }
 }

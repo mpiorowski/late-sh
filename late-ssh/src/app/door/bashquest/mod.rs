@@ -7,6 +7,7 @@
 // key, with identity carried by the account's arcade handle.
 //
 // bashquest.sh: https://github.com/hardlygospel/bashquest
+pub mod graduate;
 pub mod identity;
 pub mod proxy;
 pub mod render;

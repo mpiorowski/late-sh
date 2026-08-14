@@ -495,6 +495,9 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         bashquest_host: state.config.bashquest_host.clone(),
         bashquest_port: state.config.bashquest_port,
         bashquest_secret: state.config.bashquest_secret.clone(),
+        bashquest_awards: Some(crate::app::door::bashquest::graduate::BashquestAwards::new(
+            state.db.clone(),
+        )),
         codekeep_enabled: state.config.codekeep_enabled,
         codekeep_host: state.config.codekeep_host.clone(),
         codekeep_port: state.config.codekeep_port,

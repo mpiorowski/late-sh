@@ -300,6 +300,10 @@ pub struct SessionConfig {
     pub bashquest_host: String,
     pub bashquest_port: u16,
     pub bashquest_secret: String,
+    /// Records verified BashQuest graduations to the database. `None` on
+    /// headless/test paths, which disables recording (but never the game
+    /// itself).
+    pub bashquest_awards: Option<crate::app::door::bashquest::graduate::BashquestAwards>,
     /// CodeKeep door game: reached through the dedicated `late-codekeep` host.
     pub codekeep_enabled: bool,
     pub codekeep_host: String,
@@ -695,6 +699,9 @@ pub struct App {
     pub(crate) bashquest_host: String,
     pub(crate) bashquest_port: u16,
     pub(crate) bashquest_secret: String,
+    /// Verified-graduation record sink threaded into the per-session
+    /// BashQuest door state.
+    pub(crate) bashquest_awards: Option<crate::app::door::bashquest::graduate::BashquestAwards>,
     pub(crate) codekeep_state: Option<crate::app::door::codekeep::state::State>,
     pub(crate) codekeep_term: String,
     pub(crate) codekeep_enabled: bool,
@@ -1465,6 +1472,7 @@ impl App {
             bashquest_host: config.bashquest_host,
             bashquest_port: config.bashquest_port,
             bashquest_secret: config.bashquest_secret,
+            bashquest_awards: config.bashquest_awards,
             codekeep_state: None,
             codekeep_term: config.term.clone(),
             codekeep_enabled: config.codekeep_enabled,
@@ -1780,6 +1788,7 @@ impl App {
             self.bashquest_enabled,
             self.repaint_signal.clone(),
             Some(self.arcade_handle_service.clone()),
+            self.bashquest_awards.clone(),
         ));
     }
 
