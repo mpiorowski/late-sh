@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: `late-cli` - companion CLI for late.sh (plus the sibling `late-webview` helper crate)
 - Primary audience: LLM agents working on the CLI, human contributors
-- Last updated: 2026-08-13 (macOS native voice is back: `build.rs` passes `-ObjC` when linking the `late` binary on darwin, which is what the vendored `webrtc-sys` patch was working around, plus the microphone `Info.plist` section; see §9 "macOS voice link requirements")
+- Last updated: 2026-08-14 (macOS native voice is back: `build.rs` passes `-ObjC` when linking the `late` binary on darwin, which is what the vendored `webrtc-sys` patch was working around, plus the microphone `Info.plist` section; `default.nix` now predeclares the mac WebRTC archives too; see §9 "macOS voice link requirements")
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -458,7 +458,7 @@ Nix flake outputs:
 - `apps.${system}.late` runs that CLI package for `nix run ...#late`
 - `packages.${system}.late-sh` remains the default multi-binary package with `mainProgram = "late-ssh"`
 - On Linux, the Nix package builds with WebKitGTK 4.1, GTK3, ALSA, glib-networking, and GStreamer base/good/bad/ugly/libav plugins. The GStreamer path uses `gstreamer.out`, and `gst-plugins-bad` is overridden with `-Dlv2=disabled` to avoid `libgstlv2.so` crashes during plugin scanning. The flake's `late` package builds both the `late` and `late-webview` binaries; the installed binaries are wrapped with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`; on Linux the webview helper adds those GStreamer store paths to WebKitGTK's web-process sandbox before creating the webview.
-- On Linux, `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for x86_64/aarch64 and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox.
+- `default.nix` predeclares LiveKit's `webrtc-51ef663` WebRTC zip for all four voice-capable systems (`x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`) and exports `LK_CUSTOM_WEBRTC` during the Cargo build. This keeps `webrtc-sys` from trying to download WebRTC from GitHub inside the Nix sandbox. All four archives unpack to the same `{triple}/` layout, so `preBuild` asserts the same three files everywhere. Darwin builds also get `xcbuild` in `nativeBuildInputs` because `webrtc-sys` shells out to `xcrun` for the macOS SDK path. Bumping `webrtc-sys` means re-fetching every archive's hash, not just the Linux pair.
 
 ---
 
@@ -522,7 +522,7 @@ Relevant TUI controls:
 
 - Full desktop CLI audio still depends on a working configured or default local audio output device; without one, the CLI proceeds into SSH/pairing with local audio disabled.
 - Embedded YouTube on Linux depends on the `late-webview` helper binary being installed next to `late` (plus the host WebKitGTK/GStreamer packages). A missing helper or missing libraries only disables embedded YouTube via the crash backoff; radio and icecast are unaffected, and the queue stays listenable at late.sh/listen.
-- The Nix `late` package only predeclares LiveKit's prebuilt WebRTC archive for `x86_64-linux`/`aarch64-linux` (`default.nix`, `livekitWebrtc`). Now that macOS compiles `livekit`, a darwin `nix build .#late` would have `webrtc-sys` try to download WebRTC inside the sandbox and fail. Fixing it means adding the `mac-x64-release`/`mac-arm64-release` archives with their hashes; the cargo and release-workflow paths are unaffected.
+- Darwin Nix builds (`nix build .#late` on macOS) are wired but unverified: the WebRTC archives and `xcrun` provider are declared, and nobody has run the build on a mac yet.
 - OpenSSH mode is Unix-only; Windows users should use native mode.
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.
