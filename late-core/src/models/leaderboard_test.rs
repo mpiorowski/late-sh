@@ -165,6 +165,7 @@ async fn lateania_boards_rank_living_characters() {
     MudCharacter::save(
         &client,
         hero.id,
+        0,
         json!({
             "version": 17,
             "class": "runemaster",
@@ -178,6 +179,7 @@ async fn lateania_boards_rank_living_characters() {
     MudCharacter::save(
         &client,
         rival.id,
+        0,
         json!({
             "version": 17,
             "class": "warrior",
@@ -191,6 +193,7 @@ async fn lateania_boards_rank_living_characters() {
     MudCharacter::save(
         &client,
         shell.id,
+        0,
         json!({ "version": 17, "class": null, "level": 1, "xp": 0, "visited": [150] }),
     )
     .await

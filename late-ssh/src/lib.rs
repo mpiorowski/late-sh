@@ -4,11 +4,14 @@ mod api_test;
 pub mod app;
 pub mod authz;
 pub mod config;
+#[cfg(test)]
+mod config_test;
 pub mod dartboard;
 pub mod ircd;
 pub mod metrics;
 pub mod moderation;
 pub mod paired_clients;
+pub(crate) mod proxy_protocol;
 pub(crate) mod render_signal;
 pub mod session;
 pub mod session_bootstrap;

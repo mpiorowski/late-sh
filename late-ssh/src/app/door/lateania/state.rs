@@ -16,10 +16,24 @@ use uuid::Uuid;
 use super::classes::Class;
 use super::svc::{LateaniaService, MudSnapshot, PlayerView, empty_player_view};
 use super::world::Dir;
-use super::worldmap::{Coord, MapCamera};
+use super::world::RoomId;
+use super::worldmap::{Coord, MapCamera, Route};
 
 /// Lines moved per `[` / `]` press when scrolling a text panel.
 const SCROLL_STEP: usize = 3;
+
+/// Where the player has marked they're going, resolved against where they are
+/// standing now. Rendered as one line under the room's exits: the exits say
+/// what is available, this says which of them to take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Heading {
+    /// Standing in the marked room.
+    Arrived(&'static str),
+    /// The marked room, and the next exit to take toward it.
+    Toward(&'static str, Route),
+    /// Marked, but no walk over ground the player knows reaches it from here.
+    Unreachable(&'static str),
+}
 
 /// Which side panel the session is looking at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +73,11 @@ pub enum Panel {
     /// The whole-world atlas: exploration progress per region (read-only,
     /// scrollable with `[` / `]`). Toggled with `m`.
     Map,
+    /// The leaderboard: top adventurers currently online, by level, pvp
+    /// kills, and gold (read-only, scrollable with `[` / `]`). Toggled
+    /// with `!` (not `?`, which late.sh reserves globally for a cross-door
+    /// help overlay).
+    Leaderboard,
 }
 
 /// A combat action a player can trigger by clicking its on-screen chip, mapping
@@ -74,6 +93,9 @@ pub enum ClickAction {
     Ability(u8),
     /// Lock onto the foe with this spawn id (a click on its roster row).
     AttackMob(u32),
+    /// Lock onto a hostile adventurer (a click on their roster row in a
+    /// `pvp` room's "Adventurers here" list).
+    AttackPlayer(Uuid),
 }
 
 /// The first recorded chip whose rect contains cell `(x, y)`. Pure so the click
@@ -88,6 +110,17 @@ fn hit_at(hits: &[(Rect, ClickAction)], x: u16, y: u16) -> Option<ClickAction> {
         })
         .map(|(_, action)| *action)
 }
+
+/// Whether a leave-confirmation deadline is still live at `now`. Pure so the
+/// "press Esc twice to leave" window logic can be unit-tested without
+/// standing up a whole `State` (which needs a real service to construct).
+fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
+    until.is_some_and(|deadline| now < deadline)
+}
+
+/// A memoised route: the `(standing in, heading for)` pair it was computed for,
+/// and the walk it produced (`None` when no known-ground route exists).
+type CachedRoute = ((RoomId, RoomId), Option<Route>);
 
 pub struct State {
     user_id: Uuid,
@@ -119,10 +152,25 @@ pub struct State {
     /// mode captures keys). Chat is world-local via the service's `say`, so it
     /// never leaks into late.sh's global feed.
     chat_buffer: Option<String>,
+    /// Set by a first Esc press outside of chat: the deadline by which a
+    /// confirming second Esc must land to actually leave Lateania (see
+    /// `arm_leave_confirm`/`confirm_leave`). A single stray Esc - an easy
+    /// slip in a persistent world - must never instantly drop a player out.
+    leave_confirm_until: Option<Instant>,
     /// Where the overhead world map (Panel::Map) is looking, relative to the
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
     map_camera: MapCamera,
+    /// A room the player has marked to travel back to (`x` on the map's
+    /// crosshair). Local to the session and never persisted: it is a note to
+    /// oneself, not world truth.
+    map_dest: Option<RoomId>,
+    /// The last route computed, keyed by the (standing in, heading for) pair it
+    /// was computed for. A route only changes when one of those two changes, so
+    /// caching on that pair keeps the walk off the render path: the panel is
+    /// redrawn on every keystroke and every snapshot, but the search runs once
+    /// per room actually entered.
+    route_cache: RefCell<Option<CachedRoute>>,
 }
 
 impl State {
@@ -153,7 +201,10 @@ impl State {
             reset_version,
             reset_elsewhere: false,
             chat_buffer: None,
+            leave_confirm_until: None,
             map_camera: MapCamera::default(),
+            map_dest: None,
+            route_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
         state
@@ -295,6 +346,59 @@ impl State {
         };
         self.map_camera
             .change_level(player, super::worldmap::bounds(), delta);
+    }
+
+    /// The room under the map's crosshair, resolved the same way the canvas
+    /// resolves it, or None when the cursor sits on blank or fog.
+    fn cursor_room(&self) -> Option<RoomId> {
+        let player_room = self.snapshot.players.get(&self.user_id)?.room?;
+        let at = self.map_camera.center(self.player_coord()?);
+        let visited = &self.snapshot.players.get(&self.user_id)?.visited;
+        super::worldmap::room_at(super::worldmap::world_coords(), at, visited, player_room)
+    }
+
+    /// Mark (or unmark) the room under the map crosshair as where the player is
+    /// trying to get to. Marking the room already marked clears it, so one key
+    /// both sets and cancels.
+    pub fn toggle_map_dest(&mut self) {
+        let picked = self.cursor_room();
+        self.map_dest = match (picked, self.map_dest) {
+            (Some(room), Some(current)) if room == current => None,
+            (picked, _) => picked,
+        };
+        self.route_cache.replace(None);
+    }
+
+    /// The room the player marked, for drawing it on the map.
+    pub fn dest_room(&self) -> Option<RoomId> {
+        self.map_dest
+    }
+
+    /// Where the player marked they're going, and how to get there from the
+    /// room they're standing in right now. None when nothing is marked.
+    pub fn heading(&self) -> Option<Heading> {
+        let dest = self.map_dest?;
+        let name = super::worldmap::room_name(dest)?;
+        let player = self.snapshot.players.get(&self.user_id)?;
+        let here = player.room?;
+        if here == dest {
+            return Some(Heading::Arrived(name));
+        }
+        let mut cache = self.route_cache.borrow_mut();
+        let route = match *cache {
+            Some((key, route)) if key == (here, dest) => route,
+            _ => {
+                let route = super::worldmap::route(here, dest, &player.visited);
+                *cache = Some(((here, dest), route));
+                route
+            }
+        };
+        Some(match route {
+            Some(route) => Heading::Toward(name, route),
+            // Marked, reachable once, but no walk over known ground gets there
+            // from here now. Say so rather than showing a confident direction.
+            None => Heading::Unreachable(name),
+        })
     }
 
     /// Current list scroll offset (first visible line).
@@ -483,6 +587,35 @@ impl State {
         self.chat_buffer.is_some()
     }
 
+    /// How long a first Esc press keeps the "press again to leave" window
+    /// open (see `arm_leave_confirm`).
+    const LEAVE_CONFIRM_SECS: u64 = 6;
+
+    /// True while a first Esc press is waiting on a confirming second one.
+    /// The title bar shows a warning for as long as this is true. Factored
+    /// out as a pure function of the deadline so it can be unit-tested
+    /// without a live `State` (which needs a real service to construct).
+    pub fn leave_confirm_pending(&self) -> bool {
+        is_leave_confirm_pending(self.leave_confirm_until, Instant::now())
+    }
+
+    /// Arm the leave-confirmation window: called on a first Esc press
+    /// outside of chat compose. Any key other than a confirming second Esc
+    /// just lets the window lapse on its own.
+    pub fn arm_leave_confirm(&mut self) {
+        self.leave_confirm_until =
+            Some(Instant::now() + Duration::from_secs(Self::LEAVE_CONFIRM_SECS));
+    }
+
+    /// Consume the confirmation window: true only if it was armed and still
+    /// live, meaning this Esc is the confirming second press that should
+    /// actually leave Lateania.
+    pub fn confirm_leave(&mut self) -> bool {
+        let confirmed = self.leave_confirm_pending();
+        self.leave_confirm_until = None;
+        confirmed
+    }
+
     /// The line being composed, for the input prompt (None when not composing).
     pub fn chat_text(&self) -> Option<&str> {
         self.chat_buffer.as_deref()
@@ -651,6 +784,7 @@ impl State {
             ClickAction::Flee => self.flee(),
             ClickAction::Ability(slot) => self.use_ability(slot),
             ClickAction::AttackMob(mob_id) => self.attack_mob(mob_id),
+            ClickAction::AttackPlayer(target_id) => self.attack_player(target_id),
         }
         true
     }
@@ -660,6 +794,14 @@ impl State {
     pub fn attack_mob(&mut self, mob_id: u32) {
         if self.ensure_player_present() {
             self.svc.engage_mob_task(self.user_id, mob_id);
+        }
+    }
+
+    /// Lock onto a hostile adventurer in a `pvp` room (a click on their
+    /// roster row) and start duelling; the combat tick carries it from there.
+    pub fn attack_player(&mut self, target_id: Uuid) {
+        if self.ensure_player_present() {
+            self.svc.engage_player_task(self.user_id, target_id);
         }
     }
 

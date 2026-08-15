@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-08-03 (the first-visit page tour is now FORCED: while it runs, an input gate in `app/input.rs` swallows every input except the single key the current centered box names, plus quitting; the route walks pages 1-6 then 0 home, ends in the tavern, and the bartender's comped welcome pour stays the hidden treasure behind the pulsing bar sign, guarded once-ever in the DB)
+- Last updated: 2026-08-11 (the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
 - Status: Active
 
 ## 1. Summary
@@ -113,21 +113,29 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
   first clubhouse entry: a centered box at the door pitches what late.sh is
   (`Tutorial::Welcome`), then the tour walks every top-level page in number
-  order: `VisitChat` (1) -> `VisitArcade` (2) -> `VisitGames` (3) ->
-  `VisitArtboard` (4) -> `VisitDirectory` (5) -> `VisitLeaderboard` (6) ->
-  `Homecoming` (0, back in the tavern). Each stop draws a centered pitch
-  box over the real page (`ui::draw_tour_overlay`, called from `render.rs`)
-  ending in the next key; `Homecoming`'s Enter finishes the tour in place
-  and frees input: the player stays in the tavern.
+  order with two Enter interludes for the features that have no page of
+  their own: `VisitChat` (1) -> `VisitMusic` (Enter, still on Home: the
+  sources, the Music Booth, and the two ways to actually hear sound:
+  late.sh/listen or the `late` CLI) -> `VisitArcade` (2) -> `VisitLobby`
+  (Enter, still on The Arcade: the Ctrl+G daily duels and live tables) ->
+  `VisitGames` (3) -> `VisitArtboard` (4) -> `VisitDirectory` (5) ->
+  `VisitLeaderboard` (6) -> `Homecoming` (0, back in the tavern). Each stop
+  draws a centered pitch box over the real page (`ui::draw_tour_overlay`,
+  called from `render.rs`) ending in the next key; `Homecoming`'s Enter
+  finishes the tour in place and frees input: the player stays in the
+  tavern. Hold the line at these two interludes: pages are self-evidencing,
+  and every extra forced stop taxes all future newcomers.
 - **The tour is forced.** While `State::tutorial_forced_step` is `Some`,
   `handle_tour_gate` in `app/input.rs` (sitting above the reserved chords,
   below the quit-confirm modal) swallows every input, mouse and chords
   included, except the named digit (which runs `set_screen`; the stage
-  advances in `State::tutorial_screen_entered`, hooked there), the
-  homecoming Enter, and `q` (quitting always works; Esc's lone-byte path
-  can still arm the quit confirm). There is no skip. Completion persists
-  once via `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget,
-  failure only logged: worst case the tour runs again next session).
+  advances in `State::tutorial_screen_entered`, hooked there), Enter where
+  the box names it (the two interludes advance via `tutorial_advance`
+  without persisting; only the homecoming Enter finishes and persists),
+  and `q` (quitting always works; Esc's lone-byte path can still arm the
+  quit confirm). There is no skip. Completion persists once via
+  `ProfileService::set_clubhouse_tutorial_done` (fire-and-forget, failure
+  only logged: worst case the tour runs again next session).
 - **The hidden treasure:** the bartender is deliberately absent from the
   route. His scripted welcome (`ghost::bartender_tutorial_greeting`, local
   banner only, never posted to #lounge) plus the comped welcome pour fire

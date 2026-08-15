@@ -13,6 +13,7 @@ use late_core::{
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
+        stream_ban::{StreamBan, StreamBanListItem},
         user::{User, sanitize_username_input},
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
@@ -23,14 +24,16 @@ use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::app::artboard::provenance::{ArtboardProvenance, SharedArtboardProvenance};
+use crate::app::stream::registry::EndReason;
+use crate::app::stream::svc::StreamService;
 use crate::app::ultimates::UltimateKind;
 use crate::app::voice::svc::VoiceService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::dartboard;
 use crate::moderation::command::{
     ArtboardAction, ArtboardCurateSource, AudioAction, BanListScope, LIST_PAGE_SIZE, ModCommand,
-    RoleAction, RoomModAction, ServerUserAction, SlowListScope, SlowScope, VoiceAction,
-    mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
+    RoleAction, RoomModAction, ServerUserAction, SlowListScope, SlowScope, StreamAction,
+    VoiceAction, mod_help_lines, normalize_mod_slug, parse_mod_command, strip_user_prefix,
 };
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::session_effects::ModerationSessionEffects;
@@ -48,6 +51,7 @@ pub struct ModerationInfra {
     force_admin: bool,
     artboard: Option<ArtboardRestoreHandles>,
     voice: Option<VoiceService>,
+    stream: Option<StreamService>,
 }
 
 #[derive(Clone)]
@@ -108,12 +112,21 @@ impl ModerationInfra {
         self
     }
 
+    pub fn with_stream(mut self, stream: StreamService) -> Self {
+        self.stream = Some(stream);
+        self
+    }
+
     fn force_admin(&self) -> bool {
         self.force_admin
     }
 
     fn voice(&self) -> Option<&VoiceService> {
         self.voice.as_ref()
+    }
+
+    fn stream(&self) -> Option<&StreamService> {
+        self.stream.as_ref()
     }
 
     fn artboard_handles(
@@ -270,6 +283,22 @@ impl ModerationService {
                 self.voice_action(actor_user_id, permissions, action, &username, reason)
                     .await
             }
+            ModCommand::Stream {
+                action,
+                username,
+                duration,
+                reason,
+            } => {
+                self.stream_action(
+                    actor_user_id,
+                    permissions,
+                    action,
+                    &username,
+                    duration,
+                    reason,
+                )
+                .await
+            }
             ModCommand::Role { action, username } => {
                 self.role(actor_user_id, permissions, action, &username)
                     .await
@@ -288,6 +317,7 @@ impl ModerationService {
         let server_ban = ServerBan::find_active_for_user_id(&client, user.id).await?;
         let artboard_ban = ArtboardBan::find_active_for_user(&client, user.id).await?;
         let audio_ban = AudioBan::find_active_for_user(&client, user.id).await?;
+        let stream_ban = StreamBan::find_active_for_user(&client, user.id).await?;
         Ok(vec![
             format!("@{}", user.username),
             format!("id: {}", user.id),
@@ -298,6 +328,7 @@ impl ModerationService {
             format!("server_banned: {}", server_ban.is_some()),
             format!("artboard_banned: {}", artboard_ban.is_some()),
             format!("audio_banned: {}", audio_ban.is_some()),
+            format!("stream_banned: {}", stream_ban.is_some()),
         ])
     }
 
@@ -345,9 +376,16 @@ impl ModerationService {
                         .await?;
                 let audio =
                     AudioBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                let stream =
+                    StreamBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
                 let room =
                     RoomBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
-                if server.is_empty() && artboard.is_empty() && audio.is_empty() && room.is_empty() {
+                if server.is_empty()
+                    && artboard.is_empty()
+                    && audio.is_empty()
+                    && stream.is_empty()
+                    && room.is_empty()
+                {
                     return Ok(vec!["no active bans".to_string()]);
                 }
                 let mut lines = vec![format!(
@@ -373,6 +411,14 @@ impl ModerationService {
                     &mut lines,
                     "audio bans",
                     audio.iter().map(format_audio_ban_item).collect::<Vec<_>>(),
+                );
+                append_section(
+                    &mut lines,
+                    "stream bans",
+                    stream
+                        .iter()
+                        .map(format_stream_ban_item)
+                        .collect::<Vec<_>>(),
                 );
                 append_section(
                     &mut lines,
@@ -407,6 +453,15 @@ impl ModerationService {
                     &format!("active audio bans (page {page})"),
                     "no active audio bans",
                     items.iter().map(format_audio_ban_item).collect(),
+                ))
+            }
+            BanListScope::Stream => {
+                let items =
+                    StreamBan::active_with_usernames_page(&client, LIST_PAGE_SIZE, offset).await?;
+                Ok(single_section(
+                    &format!("active stream bans (page {page})"),
+                    "no active stream bans",
+                    items.iter().map(format_stream_ban_item).collect(),
                 ))
             }
             BanListScope::Room { slug } => {
@@ -1104,10 +1159,24 @@ impl ModerationService {
                 0
             };
         if let Some(voice) = self.infra.voice()
-            && let Some(target) = voice.revoke_user(target.id)
+            && let Some(voice_target) = voice.revoke_user(target.id)
         {
-            self.force_remove_voice_participants(vec![target], voice)
+            self.force_remove_voice_participants(vec![voice_target], voice)
                 .await;
+        }
+        // Sessions and CLI voice are not the whole footprint: a go-live
+        // console lives in a browser under the `stream-{user_id}` identity,
+        // so without this a server-banned user keeps broadcasting to
+        // anonymous link-holders after their SSH session is gone.
+        if matches!(action, ServerUserAction::Kick | ServerUserAction::Ban)
+            && let Some(stream) = self.infra.stream()
+            && stream.stop(target.id, EndReason::Moderation)
+        {
+            tracing::info!(
+                target_user_id = %target.id,
+                action = action.audit_name(),
+                "server moderation command ended a live stream"
+            );
         }
         let _ = self.event_tx.send(ModerationEvent::ServerUserAction {
             actor_user_id,
@@ -1284,6 +1353,15 @@ impl ModerationService {
                     self.force_remove_voice_participants(vec![(room, target.id)], voice)
                         .await;
                 }
+                // A voice kick also ends the target's live stream: the
+                // go-live console connects as `stream-{user_id}`, outside
+                // the CLI voice state `kick` resolves, so without this a
+                // browser streamer keeps broadcasting after the kick.
+                if let Some(stream) = self.infra.stream()
+                    && stream.stop(target.id, EndReason::Moderation)
+                {
+                    tracing::info!(target = %target.id, "voice kick ended the target's stream");
+                }
             }
             VoiceAction::Allow => {
                 voice.allow(target.id);
@@ -1310,13 +1388,91 @@ impl ModerationService {
         )])
     }
 
+    /// The stream kill switch, in both flavours. A kick ends the current
+    /// broadcast and stops there; a ban also persists a row that `go_live`
+    /// refuses on, so it survives a restart and a fresh `/golive`. Unlike
+    /// `kick voice` this leaves CLI voice untouched: a streamer who showed
+    /// the wrong window can keep talking in the room.
+    async fn stream_action(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        action: StreamAction,
+        username: &str,
+        duration: Option<chrono::Duration>,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        let stream = self
+            .infra
+            .stream()
+            .ok_or_else(|| anyhow::anyhow!("streaming is not configured"))?;
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        ensure_not_self(actor_user_id, target.id)?;
+        let target_tier = tier_for_user(&target);
+        let cap = match action {
+            StreamAction::Kick => Caps::KICK_STREAM,
+            StreamAction::Ban => Caps::BAN_FROM_STREAM,
+            StreamAction::Unban => Caps::UNBAN_FROM_STREAM,
+        };
+        ensure_can(permissions, cap, target_tier)?;
+
+        let expires_at = match action {
+            StreamAction::Ban => duration.map(|d| Utc::now() + d),
+            StreamAction::Kick | StreamAction::Unban => None,
+        };
+        let tx = client.transaction().await?;
+        match action {
+            StreamAction::Kick => {}
+            StreamAction::Ban => {
+                StreamBan::activate(&tx, target.id, actor_user_id, &reason, expires_at).await?;
+            }
+            StreamAction::Unban => {
+                StreamBan::delete_for_user(&tx, target.id).await?;
+            }
+        }
+        ModerationAuditLog::record_if(
+            &tx,
+            permissions.should_audit(false),
+            actor_user_id,
+            action.audit_name(),
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+
+        // The DB row only refuses the *next* `/golive`. Killing the live one
+        // is what makes either command bite now: registry teardown drops the
+        // watch and publisher URLs, and the console is force-disconnected
+        // from LiveKit.
+        let ended = match action {
+            StreamAction::Kick | StreamAction::Ban => stream.stop(target.id, EndReason::Moderation),
+            StreamAction::Unban => false,
+        };
+        if ended {
+            tracing::info!(
+                target_user_id = %target.id,
+                action = action.audit_name(),
+                "stream moderation command ended a live stream"
+            );
+        }
+
+        let mut lines = vec![format!("{} @{}", action.past_tense(), target.username)];
+        if matches!(action, StreamAction::Kick) && !ended {
+            lines.push("(they were not live)".to_string());
+        }
+        Ok(lines)
+    }
+
     async fn force_remove_voice_participants(
         &self,
         removals: Vec<(String, Uuid)>,
         voice: &VoiceService,
     ) {
         for (room, user_id) in removals {
-            if let Err(err) = voice.remove_participant(&room, user_id).await {
+            if let Err(err) = voice.remove_participant(&room, &user_id.to_string()).await {
                 tracing::warn!(
                     error = %err,
                     user_id = %user_id,
@@ -1675,6 +1831,24 @@ fn format_server_ban_item(item: &ServerBanListItem) -> String {
 }
 
 fn format_audio_ban_item(item: &AudioBanListItem) -> String {
+    let target = item
+        .target_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.target_user_id.to_string());
+    let actor = item
+        .actor_username
+        .as_deref()
+        .map(user_label)
+        .unwrap_or_else(|| item.ban.actor_user_id.to_string());
+    format!(
+        "- {target} by {actor} expires: {} reason: {}",
+        format_expires_at(item.ban.expires_at),
+        format_reason(&item.ban.reason)
+    )
+}
+
+fn format_stream_ban_item(item: &StreamBanListItem) -> String {
     let target = item
         .target_username
         .as_deref()

@@ -69,6 +69,22 @@ pub enum ActivityKind {
     CyberspacePosted {
         title: Option<String>,
     },
+    /// A streamer's go-live page reported media flowing: their "watch me"
+    /// stream room is on. Fired on the pending -> live transition only,
+    /// never at `/golive` command time, so no line ever points at a black
+    /// screen. There is no matching "stream ended" event (noise).
+    WentLive {
+        title: Option<String>,
+    },
+    /// A named late.sh user arrived at someone's live stream, through
+    /// `/watch @user` or by opening the stream room. `streamer` is the
+    /// broadcaster's username (the event itself is attributed to the
+    /// viewer). Fires once per viewer per stream; the anonymous watch-page
+    /// audience behind the "N watching" count has no identity and is never
+    /// named.
+    WatchingStream {
+        streamer: String,
+    },
     BonsaiWatered,
     BonsaiLost {
         survived_days: i32,
@@ -80,7 +96,9 @@ impl ActivityKind {
         match self {
             Self::UserJoined
             | Self::UsernameEffectApplied { .. }
-            | Self::CyberspacePosted { .. } => ActivityCategory::Session,
+            | Self::CyberspacePosted { .. }
+            | Self::WentLive { .. }
+            | Self::WatchingStream { .. } => ActivityCategory::Session,
             Self::GameWon { .. }
             | Self::GameEvent { .. }
             | Self::GameStarted { .. }
@@ -420,16 +438,43 @@ impl ActivityEvent {
         username: impl Into<String>,
         title: Option<String>,
     ) -> Self {
-        let action = match title.as_deref() {
-            Some(title) if !title.trim().is_empty() => {
-                format!("published \"{}\" on cyberspace", title.trim())
-            }
-            _ => "published an entry on cyberspace".to_string(),
+        let action = match feed_safe_title(title.as_deref()) {
+            Some(title) => format!("published \"{title}\" on cyberspace"),
+            None => "published an entry on cyberspace".to_string(),
         };
         Self::new(
             Some(user_id),
             username,
             ActivityKind::CyberspacePosted { title },
+            action,
+        )
+    }
+
+    /// A stream went on air: "mat is live: refactoring the render loop".
+    /// The line is the invitation; the room row is where the party moves.
+    pub fn went_live(user_id: Uuid, username: impl Into<String>, title: Option<String>) -> Self {
+        let action = match feed_safe_title(title.as_deref()) {
+            Some(title) => format!("is live: {title}"),
+            None => "is live".to_string(),
+        };
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::WentLive { title },
+            action,
+        )
+    }
+
+    /// Someone showed up to watch: "bob is watching mat's stream". The
+    /// event is attributed to the viewer, and `streamer` needs no
+    /// `feed_safe_title` pass: usernames cannot contain `@` (DB constraint),
+    /// so the #lounge body stays mention-free.
+    pub fn watching_stream(viewer_id: Uuid, viewer: impl Into<String>, streamer: String) -> Self {
+        let action = format!("is watching {streamer}'s stream");
+        Self::new(
+            Some(viewer_id),
+            viewer,
+            ActivityKind::WatchingStream { streamer },
             action,
         )
     }
@@ -500,5 +545,21 @@ impl ActivityEvent {
 
     pub fn category(&self) -> ActivityCategory {
         self.kind.category()
+    }
+}
+
+/// Free-text titles (a `/golive` title, a cyberspace entry title) that end up
+/// in an action string, made safe for the #lounge feed. Lounge lines become
+/// persisted chat messages and the send path runs the mention pipeline on
+/// every body (`chat/svc.rs`), so a title containing `@alice` would mint a
+/// real mention notification from a system-authored line; `@` is stripped
+/// here. `None` when nothing printable is left.
+fn feed_safe_title(title: Option<&str>) -> Option<String> {
+    let cleaned = title?.replace('@', "");
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.to_string())
     }
 }

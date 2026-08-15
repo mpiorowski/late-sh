@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 17;
+const SCHEMA_VERSION: u32 = 18;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -55,6 +55,8 @@ pub struct SavedCharacterInit {
     pub craft_skills: Vec<(String, i64)>,
     pub taming_xp: i64,
     pub rpg_mode: bool,
+    /// Lifetime adventurers slain in the Wildbound Waste's pvp rooms.
+    pub pvp_kills: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,6 +163,10 @@ pub struct SavedCharacter {
     /// field come back with the map enabled.
     #[serde(default = "enabled")]
     pub rpg_mode: bool,
+    /// Lifetime adventurers slain in the Wildbound Waste's pvp rooms; 0 for
+    /// pre-Wildbound-Waste (schema < 18) saves.
+    #[serde(default)]
+    pub pvp_kills: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -249,6 +255,7 @@ impl SavedCharacter {
             craft_skills: init.craft_skills,
             taming_xp: init.taming_xp,
             rpg_mode: init.rpg_mode,
+            pvp_kills: init.pvp_kills,
         }
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use late_core::models::account_link;
 use late_core::models::bonsai::{BonsaiV2Tree, Tree};
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
@@ -74,12 +74,6 @@ pub enum ProfileEvent {
         user_id: Uuid,
         message: String,
     },
-    /// Connect-time summary of friends whose birthday is today or within the
-    /// next week. Surfaced as an in-app banner.
-    BirthdayAlert {
-        user_id: Uuid,
-        message: String,
-    },
     /// Current IRC token status for the settings Account tab. `status` is
     /// `None` when no token is minted. See devdocs/FRD-IRCD.md §5.
     IrcTokenStatus {
@@ -114,41 +108,6 @@ impl From<&IrcToken> for IrcTokenStatus {
     }
 }
 
-/// Build a one-line alert from tracked `(username, MM-DD)` pairs: anyone whose
-/// birthday is today, then anyone within the next 7 days. `None` if nobody
-/// qualifies. Pure — `today` is injected so it is unit-testable.
-pub(crate) fn build_birthday_alert(
-    birthdays: &[(String, String)],
-    today: NaiveDate,
-) -> Option<String> {
-    use late_core::models::birthday::{days_until, is_today};
-    let mut today_names = Vec::new();
-    let mut soon = Vec::new();
-    for (name, mmdd) in birthdays {
-        if is_today(mmdd, today) {
-            today_names.push(name.clone());
-        } else if let Some(d) = days_until(mmdd, today)
-            && (1..=7).contains(&d)
-        {
-            soon.push((d, name.clone()));
-        }
-    }
-    let mut parts = Vec::new();
-    if !today_names.is_empty() {
-        parts.push(format!("{} — birthday today!", today_names.join(", ")));
-    }
-    soon.sort();
-    for (d, name) in soon {
-        let when = if d == 1 {
-            "tomorrow".to_string()
-        } else {
-            format!("in {d} days")
-        };
-        parts.push(format!("{name}'s birthday {when}"));
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
-}
-
 /// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
 /// blank, or unparseable) means "no local zone" — callers fall back to UTC.
 pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
@@ -156,13 +115,6 @@ pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(|value| value.parse::<chrono_tz::Tz>().ok())
-}
-
-fn date_for_timezone(now: DateTime<Utc>, timezone: Option<&str>) -> NaiveDate {
-    match parse_account_tz(timezone) {
-        Some(tz) => now.with_timezone(&tz).date_naive(),
-        None => now.date_naive(),
-    }
 }
 
 impl ProfileService {
@@ -278,36 +230,6 @@ impl ProfileService {
                 profile_awards,
             },
         )?;
-        Ok(())
-    }
-
-    /// Fire-and-forget: on connect, surface a single banner for friends whose
-    /// birthday is today or within the next week.
-    pub fn check_birthdays_task(&self, user_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                if let Err(e) = service.do_check_birthdays(user_id).await {
-                    late_core::error_span!(
-                        "birthday_alert_failed",
-                        error = ?e,
-                        user_id = %user_id,
-                        "failed to compute birthday alert"
-                    );
-                }
-            }
-            .instrument(info_span!("profile.check_birthdays", user_id = %user_id)),
-        );
-    }
-
-    async fn do_check_birthdays(&self, user_id: Uuid) -> Result<()> {
-        let client = self.db.get().await?;
-        let profile = Profile::load(&client, user_id).await?;
-        let birthdays = User::friend_birthdays(&client, user_id).await?;
-        let today = date_for_timezone(Utc::now(), profile.timezone.as_deref());
-        if let Some(message) = build_birthday_alert(&birthdays, today) {
-            self.publish_event(ProfileEvent::BirthdayAlert { user_id, message });
-        }
         Ok(())
     }
 

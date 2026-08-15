@@ -165,6 +165,9 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
+    /// This account's character slots, for the character-select landing.
+    lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    lateania_slot_cursor: usize,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -246,6 +249,7 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
+    stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -514,6 +518,7 @@ impl App {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             rows_cache: &mut self.dashboard_chat_rows_cache,
@@ -529,6 +534,7 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             message_reactions,
             unread_marker: shell_active_room
                 .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
@@ -669,12 +675,14 @@ impl App {
             chat_ctx_epoch: self.chat.context_epoch(),
             app_ctx_epoch: self.chat_ctx_epoch,
             chat_rooms: self.chat.rooms.as_slice(),
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             ignored_user_ids: self.chat.ignored_user_ids(),
             sticky_unread_dm: self.chat.sticky_unread_dm,
             message_reactions,
@@ -757,6 +765,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -819,6 +828,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -988,6 +998,8 @@ impl App {
                         codekeep_enabled: self.codekeep_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
+                        lateania_slots: self.lateania_service.character_slots(self.user_id),
+                        lateania_slot_cursor: self.lateania_slot_cursor,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1065,6 +1077,7 @@ impl App {
                         } else {
                             None
                         },
+                        stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1349,6 +1362,8 @@ impl App {
                         dopewars_enabled: ctx.dopewars_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
+                        lateania_slots: ctx.lateania_slots.clone(),
+                        lateania_slot_cursor: ctx.lateania_slot_cursor,
                         nethack_live: ctx
                             .nethack_state
                             .as_deref()
@@ -1376,6 +1391,8 @@ impl App {
                         state: ctx.lateania_state,
                         usernames: ctx.usernames,
                         online: ctx.lateania_online,
+                        slots: &ctx.lateania_slots,
+                        slot_cursor: ctx.lateania_slot_cursor,
                     },
                     terminal_images,
                 );
@@ -1776,6 +1793,31 @@ impl App {
         {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
+
+        // Stream handoff modal (publisher URL from `/golive`, watch URL
+        // from `/watch`, OBS details from `/golive obs`): topmost, since it
+        // was just explicitly requested.
+        match ctx.stream_modal {
+            Some(crate::app::state::StreamModal::Qr(modal)) => {
+                crate::app::common::qr::draw_qr_overlay(
+                    frame,
+                    inner,
+                    &modal.url,
+                    &modal.title,
+                    &modal.subtitle,
+                );
+            }
+            Some(crate::app::state::StreamModal::Obs(modal)) => {
+                crate::app::stream::ui::draw_obs_overlay(
+                    frame,
+                    inner,
+                    &modal.whip_url,
+                    &modal.stream_key,
+                    &modal.watch_url,
+                );
+            }
+            None => {}
+        }
     }
 }
 
@@ -1790,6 +1832,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
+        || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()

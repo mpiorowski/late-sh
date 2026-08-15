@@ -208,6 +208,80 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Permanent per-streamer chat room for "watch me" streams: `kind='game'`
+    /// (hidden from the Home rail and IRC, joinable by anyone through the
+    /// public game-room join path), `game_kind='stream'`, slug
+    /// `{username}-live`. Same seeded shape as the house-table rooms; chat
+    /// history persists between streams. `owner` is recorded as `created_by`
+    /// on first creation and is the only user allowed to publish into the
+    /// room's stream.
+    pub async fn get_or_create_stream_room(
+        client: &Client,
+        username: &str,
+        owner: Uuid,
+    ) -> Result<Self> {
+        // The room follows the account, not the name: the owner lookup comes
+        // first, so a freed-and-reclaimed username never lands a new streamer
+        // in the original owner's room (and its chat history). A renamed
+        // streamer keeps their room under the old slug.
+        let existing = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'game' AND game_kind = 'stream' AND created_by = $1
+                 ORDER BY id LIMIT 1",
+                &[&owner],
+            )
+            .await?;
+        if let Some(row) = existing {
+            return Ok(Self::from(row));
+        }
+        let slug = normalize_game_slug(&format!("{username}-live"))?;
+        let row = client
+            .query_opt(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, created_by)
+                 VALUES ('game', 'public', false, $1, 'stream', $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO NOTHING
+                 RETURNING *",
+                &[&slug, &owner],
+            )
+            .await?;
+        if let Some(row) = row {
+            return Ok(Self::from(row));
+        }
+        // The insert lost: either a concurrent go_live for this same owner
+        // just created the room (re-check by owner), or the plain slug
+        // belongs to another account (its owner was renamed and this
+        // username reclaimed).
+        let raced = client
+            .query_opt(
+                "SELECT * FROM chat_rooms
+                 WHERE kind = 'game' AND game_kind = 'stream' AND created_by = $1
+                 ORDER BY id LIMIT 1",
+                &[&owner],
+            )
+            .await?;
+        if let Some(row) = raced {
+            return Ok(Self::from(row));
+        }
+        // Squatted slug: suffix with random id bits so each account still
+        // gets exactly one room of its own.
+        let owner_simple = owner.simple().to_string();
+        let suffix = &owner_simple[owner_simple.len() - 8..];
+        let slug = normalize_game_slug(&format!("{username}-live-{suffix}"))?;
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind, created_by)
+                 VALUES ('game', 'public', false, $1, 'stream', $2)
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug, &owner],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     /// Private two-player chat room for a claimed daily match, plus both
     /// memberships, in one statement. `kind = 'game'` (hidden from the Home
     /// rail, no Mentions, no IRC) but `visibility = 'private'`: only the two

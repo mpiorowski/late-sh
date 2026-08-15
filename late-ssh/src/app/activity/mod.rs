@@ -5,4 +5,6 @@ pub mod lounge;
 pub mod publisher;
 
 #[cfg(test)]
+mod event_test;
+#[cfg(test)]
 mod filter_test;

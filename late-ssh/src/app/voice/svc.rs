@@ -10,7 +10,7 @@ use late_core::{
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
     collections::{HashMap, HashSet},
@@ -25,7 +25,14 @@ type HmacSha256 = Hmac<Sha256>;
 #[derive(Clone)]
 pub struct VoiceConfig {
     pub enabled: bool,
+    /// Client-facing LiveKit URL, handed to browsers in join grants. In dev
+    /// this is `ws://localhost:7880`, which only resolves from the host.
     pub livekit_url: Option<String>,
+    /// Server-to-server base for Twirp API calls (RemoveParticipant, the
+    /// Ingress API). Split from `livekit_url` because the two audiences
+    /// differ: in dev the browser needs `localhost` while this process runs
+    /// in a container where `localhost` is itself, not LiveKit.
+    pub livekit_api_url: Option<String>,
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
     /// Base name for LiveKit rooms. Each voice channel gets its own LiveKit
@@ -38,6 +45,7 @@ impl VoiceConfig {
         Self {
             enabled: false,
             livekit_url: None,
+            livekit_api_url: None,
             api_key: None,
             api_secret: None,
             room_name: "late-voice".to_string(),
@@ -46,25 +54,30 @@ impl VoiceConfig {
 
     pub fn enabled(
         livekit_url: String,
+        livekit_api_url: String,
         api_key: String,
         api_secret: String,
         room_name: String,
     ) -> anyhow::Result<Self> {
         if livekit_url.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_URL must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit url must not be empty");
+        }
+        if livekit_api_url.trim().is_empty() {
+            anyhow::bail!("voice livekit api url must not be empty");
         }
         if api_key.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_API_KEY must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit api key must not be empty");
         }
         if api_secret.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_API_SECRET must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit api secret must not be empty");
         }
         if room_name.trim().is_empty() {
-            anyhow::bail!("LATE_VOICE_ROOM must not be empty when voice is enabled");
+            anyhow::bail!("voice room name must not be empty");
         }
         Ok(Self {
             enabled: true,
             livekit_url: Some(livekit_url),
+            livekit_api_url: Some(livekit_api_url),
             api_key: Some(api_key),
             api_secret: Some(api_secret),
             room_name,
@@ -77,6 +90,7 @@ impl fmt::Debug for VoiceConfig {
         f.debug_struct("VoiceConfig")
             .field("enabled", &self.enabled)
             .field("livekit_url", &self.livekit_url)
+            .field("livekit_api_url", &self.livekit_api_url)
             .field("api_key_present", &self.api_key.is_some())
             .field("api_secret_present", &self.api_secret.is_some())
             .field("room_name", &self.room_name)
@@ -150,6 +164,28 @@ pub struct VoiceJoinTicket {
     pub deafened: bool,
 }
 
+/// LiveKit connection details for a stream-room media page (the streamer's
+/// go-live console or an anonymous watch page). Pure media plumbing: no
+/// muted/deafened seed like [`VoiceJoinTicket`], because these pages are not
+/// voice participants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamMediaTicket {
+    pub room: String,
+    pub url: String,
+    pub token: String,
+}
+
+/// A WHIP ingress minted for an OBS stream: OBS pushes WebRTC to `url` with
+/// `stream_key` as the bearer token, and the LiveKit ingress service
+/// republishes it into the stream room. `url` comes from the server's
+/// `ingress.whip_base_url` config.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhipIngress {
+    pub ingress_id: String,
+    pub url: String,
+    pub stream_key: String,
+}
+
 /// Outcome of a moderator `kick`. `changed` is whether anything actually changed
 /// (newly blocked or removed). `livekit_room` is the LiveKit room the user was
 /// in, if any, so the caller can force-disconnect them via `remove_participant`.
@@ -216,8 +252,20 @@ impl VoiceService {
             db: None,
             inner: Arc::new(Mutex::new(VoiceInner::default())),
             tx,
-            http: reqwest::Client::new(),
+            // Everything through this client is a server-to-server Twirp
+            // call, and one of them runs inline in the stream sweep loop:
+            // without a timeout a wedged LiveKit connection would stall
+            // every stream TTL in the app for as long as the OS lets the
+            // socket hang.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("building reqwest client"),
         }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled
     }
 
     pub fn with_db(mut self, db: Db) -> Self {
@@ -533,22 +581,39 @@ impl VoiceService {
         }
     }
 
+    /// Force-disconnect the streamer's go-live console from a stream room's
+    /// LiveKit channel. The console connects as `stream-{user_id}` (distinct
+    /// from the CLI voice identity), so a plain participant removal by user
+    /// id never finds it; this is the kill switch behind `/golive stop`,
+    /// grace teardown, and a moderation voice kick.
+    pub async fn remove_stream_publisher(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let room = self.livekit_room_name(room_id);
+        self.remove_participant(&room, &format!("stream-{user_id}"))
+            .await
+    }
+
     /// Force-disconnect a participant from a LiveKit room via the server API.
     /// This is what actually ends an in-progress session on `kick`; the block
     /// set only prevents rejoining. No-op when voice is not configured.
+    /// `identity` is the LiveKit identity: `{user_id}` for CLI voice,
+    /// `stream-{user_id}` for a go-live console.
     pub async fn remove_participant(
         &self,
         livekit_room: &str,
-        user_id: Uuid,
+        identity: &str,
     ) -> anyhow::Result<()> {
         if !self.config.enabled {
             return Ok(());
         }
         let url = self
             .config
-            .livekit_url
+            .livekit_api_url
             .as_deref()
-            .context("voice enabled without LiveKit URL")?;
+            .context("voice enabled without LiveKit API URL")?;
         let http_base = livekit_http_base(url)?;
         let token = self.mint_livekit_token_with_grants(
             &Uuid::new_v4().to_string(),
@@ -557,9 +622,12 @@ impl VoiceService {
             LiveKitTokenGrants {
                 room_admin: true,
                 room_create: false,
+                ingress_admin: false,
                 can_publish: false,
+                can_publish_sources: None,
                 can_subscribe: false,
                 can_publish_data: false,
+                hidden: false,
             },
         )?;
         let endpoint = format!("{http_base}/twirp/livekit.RoomService/RemoveParticipant");
@@ -569,7 +637,7 @@ impl VoiceService {
             .bearer_auth(token)
             .json(&RemoveParticipantRequest {
                 room: livekit_room,
-                identity: &user_id.to_string(),
+                identity,
             })
             .send()
             .await
@@ -580,6 +648,223 @@ impl VoiceService {
             anyhow::bail!("LiveKit RemoveParticipant failed: {status} {body}");
         }
         Ok(())
+    }
+
+    /// Create a WHIP ingress for an OBS stream into a stream room's LiveKit
+    /// channel. The ingress participant identity is `stream-{user_id}`, the
+    /// same identity the go-live console uses, so every existing teardown
+    /// path (`remove_stream_publisher`, moderation) finds it. Transcoding is
+    /// off: OBS already encodes WebRTC-compatible media (h264+opus) and the
+    /// ingress service forwards it as-is, so the server never re-encodes.
+    pub async fn create_whip_ingress(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+        username: &str,
+    ) -> anyhow::Result<WhipIngress> {
+        let room = self.livekit_room_name(room_id);
+        let info: IngressInfo = self
+            .ingress_api_call(
+                "CreateIngress",
+                &CreateIngressRequest {
+                    input_type: "WHIP_INPUT",
+                    name: &format!("obs-{user_id}"),
+                    room_name: &room,
+                    participant_identity: &format!("stream-{user_id}"),
+                    participant_name: username,
+                    enable_transcoding: false,
+                    // Label the mix as program audio. Advisory only: the
+                    // label is not guaranteed to survive the
+                    // `enable_transcoding: false` passthrough, so both
+                    // consumers (CLI runtime, watch page) classify program
+                    // audio by the `stream-*` identity, not by this label.
+                    audio: IngressAudioOptions {
+                        source: "SCREEN_SHARE_AUDIO",
+                    },
+                },
+            )
+            .await?;
+        if info.url.is_empty() {
+            anyhow::bail!(
+                "LiveKit returned an ingress without a WHIP URL; is ingress.whip_base_url configured on the server?"
+            );
+        }
+        if info.stream_key.is_empty() {
+            anyhow::bail!("LiveKit returned an ingress without a stream key");
+        }
+        Ok(WhipIngress {
+            ingress_id: info.ingress_id,
+            url: info.url,
+            stream_key: info.stream_key,
+        })
+    }
+
+    /// Delete an ingress. This is what actually stops OBS from reconnecting:
+    /// removing the participant alone leaves the stream key valid and OBS
+    /// auto-reconnects through it.
+    pub async fn delete_ingress(&self, ingress_id: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self
+            .ingress_api_call("DeleteIngress", &DeleteIngressRequest { ingress_id })
+            .await?;
+        Ok(())
+    }
+
+    /// Every ingress id LiveKit currently holds, publishing or not. An empty
+    /// filter lists them all: the boot reconciliation pass uses this to find
+    /// stream keys left valid by a previous process.
+    pub async fn list_ingress_ids(&self) -> anyhow::Result<Vec<String>> {
+        let resp: ListIngressResponse = self
+            .ingress_api_call("ListIngress", &ListIngressRequest { ingress_id: "" })
+            .await?;
+        Ok(resp.items.into_iter().map(|item| item.ingress_id).collect())
+    }
+
+    /// Whether an ingress is currently receiving and publishing media.
+    /// `Ok(false)` covers every non-publishing state, including an ingress
+    /// that no longer exists (deleted out of band).
+    pub async fn ingress_publishing(&self, ingress_id: &str) -> anyhow::Result<bool> {
+        let resp: ListIngressResponse = self
+            .ingress_api_call("ListIngress", &ListIngressRequest { ingress_id })
+            .await?;
+        let publishing = resp.items.iter().any(|item| {
+            item.ingress_id == ingress_id
+                && item
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.status == "ENDPOINT_PUBLISHING")
+        });
+        Ok(publishing)
+    }
+
+    /// One Twirp call against the LiveKit Ingress API, authorized with a
+    /// short-lived `ingressAdmin` token. Server-to-server only.
+    async fn ingress_api_call<Req: Serialize, Resp: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        request: &Req,
+    ) -> anyhow::Result<Resp> {
+        if !self.config.enabled {
+            anyhow::bail!("voice is not configured");
+        }
+        let url = self
+            .config
+            .livekit_api_url
+            .as_deref()
+            .context("voice enabled without LiveKit API URL")?;
+        let http_base = livekit_http_base(url)?;
+        let token = self.mint_livekit_token_with_grants(
+            &Uuid::new_v4().to_string(),
+            "late-ingress",
+            "",
+            LiveKitTokenGrants {
+                room_admin: false,
+                room_create: false,
+                ingress_admin: true,
+                can_publish: false,
+                can_publish_sources: None,
+                can_subscribe: false,
+                can_publish_data: false,
+                hidden: false,
+            },
+        )?;
+        let endpoint = format!("{http_base}/twirp/livekit.Ingress/{method}");
+        let resp = self
+            .http
+            .post(endpoint)
+            .bearer_auth(token)
+            .json(request)
+            .send()
+            .await
+            .with_context(|| format!("failed to call LiveKit {method}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("LiveKit {method} failed: {status} {body}");
+        }
+        resp.json()
+            .await
+            .with_context(|| format!("failed to decode LiveKit {method} response"))
+    }
+
+    /// Publisher ticket for the streamer's go-live console page. Publishing
+    /// is restricted at the SFU grant level to screen share only: no
+    /// browser mic exists anywhere in the system, so voice stays CLI-only
+    /// with zero exceptions (a streamer talks through CLI voice like
+    /// everyone else). Subscribe is allowed: a non-CLI streamer hears
+    /// co-hosts through this page. The identity is `stream-{user_id}`,
+    /// distinct from the user's CLI voice identity so a CLI streamer in
+    /// voice is not kicked out of LiveKit by their own console connecting.
+    pub fn stream_publish_ticket(
+        &self,
+        room_id: Uuid,
+        user_id: Uuid,
+        username: &str,
+    ) -> anyhow::Result<StreamMediaTicket> {
+        if !self.config.enabled {
+            anyhow::bail!("voice is not configured");
+        }
+        if self.is_blocked(user_id) {
+            anyhow::bail!("you have been removed from voice by a moderator");
+        }
+        let room = self.livekit_room_name(room_id);
+        let url = self
+            .config
+            .livekit_url
+            .clone()
+            .context("voice enabled without LiveKit URL")?;
+        let token = self.mint_livekit_token_with_grants(
+            &format!("stream-{user_id}"),
+            username,
+            &room,
+            LiveKitTokenGrants {
+                room_admin: false,
+                room_create: false,
+                ingress_admin: false,
+                can_publish: true,
+                can_publish_sources: Some(&["screen_share", "screen_share_audio"]),
+                can_subscribe: true,
+                can_publish_data: false,
+                hidden: false,
+            },
+        )?;
+        Ok(StreamMediaTicket { room, url, token })
+    }
+
+    /// Subscribe-only ticket for an anonymous watch page. `canPublish=false`
+    /// is enforced at the SFU grant level: a tampered watch page still
+    /// cannot open a mic. `hidden` keeps the anonymous viewer out of LiveKit
+    /// participant rosters; the watcher count is served by heartbeats, not
+    /// by room presence.
+    pub fn stream_watch_ticket(
+        &self,
+        room_id: Uuid,
+        identity: &str,
+    ) -> anyhow::Result<StreamMediaTicket> {
+        if !self.config.enabled {
+            anyhow::bail!("voice is not configured");
+        }
+        let room = self.livekit_room_name(room_id);
+        let url = self
+            .config
+            .livekit_url
+            .clone()
+            .context("voice enabled without LiveKit URL")?;
+        let token = self.mint_livekit_token_with_grants(
+            identity,
+            "viewer",
+            &room,
+            LiveKitTokenGrants {
+                room_admin: false,
+                room_create: false,
+                ingress_admin: false,
+                can_publish: false,
+                can_publish_sources: None,
+                can_subscribe: true,
+                can_publish_data: false,
+                hidden: true,
+            },
+        )?;
+        Ok(StreamMediaTicket { room, url, token })
     }
 
     fn mint_livekit_token(
@@ -595,9 +880,12 @@ impl VoiceService {
             LiveKitTokenGrants {
                 room_admin: false,
                 room_create: false,
+                ingress_admin: false,
                 can_publish: true,
+                can_publish_sources: None,
                 can_subscribe: true,
                 can_publish_data: true,
+                hidden: false,
             },
         )
     }
@@ -628,12 +916,15 @@ impl VoiceService {
             exp: now + 60 * 60,
             video: LiveKitVideoGrant {
                 room,
-                room_join: !grants.room_admin,
+                room_join: !(grants.room_admin || grants.ingress_admin),
                 room_admin: grants.room_admin,
+                ingress_admin: grants.ingress_admin,
                 room_create: grants.room_create,
                 can_publish: grants.can_publish,
+                can_publish_sources: grants.can_publish_sources,
                 can_subscribe: grants.can_subscribe,
                 can_publish_data: grants.can_publish_data,
+                hidden: grants.hidden,
             },
         };
 
@@ -712,15 +1003,84 @@ async fn ensure_user_can_join_voice(
 struct LiveKitTokenGrants {
     room_admin: bool,
     room_create: bool,
+    /// Grants the LiveKit Ingress API (create/list/delete). Admin-only
+    /// tokens minted for server-to-server calls, never handed to a client.
+    ingress_admin: bool,
     can_publish: bool,
+    /// LiveKit publish-source restriction (`canPublishSources`). `None`
+    /// means the grant does not restrict sources.
+    can_publish_sources: Option<&'static [&'static str]>,
     can_subscribe: bool,
     can_publish_data: bool,
+    /// Hidden participants can subscribe but never appear in rosters. Used
+    /// for anonymous watch-page viewers.
+    hidden: bool,
 }
 
 #[derive(Serialize)]
 struct RemoveParticipantRequest<'a> {
     room: &'a str,
     identity: &'a str,
+}
+
+// LiveKit's Twirp endpoints speak proto field names on the wire (snake_case:
+// `ingress_id`, `stream_key`), not protojson camelCase. Requests are parsed
+// leniently (either form works) but responses are emitted snake_case only, so
+// these structs keep the raw Rust field names with no renames.
+#[derive(Serialize)]
+struct CreateIngressRequest<'a> {
+    input_type: &'a str,
+    name: &'a str,
+    room_name: &'a str,
+    participant_identity: &'a str,
+    participant_name: &'a str,
+    enable_transcoding: bool,
+    audio: IngressAudioOptions<'a>,
+}
+
+/// Track-source label for the ingress's published audio. The OBS mix is
+/// program audio, not a voice: the CLI voice runtime and the watch page both
+/// discriminate on this label (mic = voice, everything else = program), so
+/// `SCREEN_SHARE_AUDIO` here is load-bearing, not cosmetic.
+#[derive(Serialize)]
+struct IngressAudioOptions<'a> {
+    source: &'a str,
+}
+
+#[derive(Serialize)]
+struct DeleteIngressRequest<'a> {
+    ingress_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct ListIngressRequest<'a> {
+    ingress_id: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ListIngressResponse {
+    #[serde(default)]
+    items: Vec<IngressInfo>,
+}
+
+#[derive(Deserialize)]
+struct IngressInfo {
+    #[serde(default)]
+    ingress_id: String,
+    #[serde(default)]
+    stream_key: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    state: Option<IngressState>,
+}
+
+#[derive(Deserialize)]
+struct IngressState {
+    /// Proto enum as its JSON string name; `ENDPOINT_PUBLISHING` is the only
+    /// state that counts as media flowing.
+    #[serde(default)]
+    status: String,
 }
 
 #[derive(Serialize)]
@@ -746,14 +1106,20 @@ struct LiveKitVideoGrant<'a> {
     room_join: bool,
     #[serde(rename = "roomAdmin")]
     room_admin: bool,
+    #[serde(rename = "ingressAdmin", skip_serializing_if = "std::ops::Not::not")]
+    ingress_admin: bool,
     #[serde(rename = "roomCreate")]
     room_create: bool,
     #[serde(rename = "canPublish")]
     can_publish: bool,
+    #[serde(rename = "canPublishSources", skip_serializing_if = "Option::is_none")]
+    can_publish_sources: Option<&'static [&'static str]>,
     #[serde(rename = "canSubscribe")]
     can_subscribe: bool,
     #[serde(rename = "canPublishData")]
     can_publish_data: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
 }
 
 #[cfg(test)]

@@ -18,11 +18,22 @@ use crate::app::{
 /// leave.
 pub const VOICE_STRIP_HEIGHT: u16 = 1;
 
+/// ON AIR context for a stream room's voice strip: while the room's stream
+/// is live, everyone in voice is audible to anonymous watch-page listeners,
+/// and the strip must say so loudly. Voice is CLI-only with no exceptions
+/// (no browser mic exists), so `VoiceService`'s CLI roster is the complete
+/// speaker list and the strip needs nothing beyond the live flag.
+pub struct OnAirView {
+    pub live: bool,
+}
+
 pub struct VoiceRoomView<'a> {
     pub snapshot: &'a VoiceSnapshot,
     pub room_id: Uuid,
     pub current_user_id: Uuid,
     pub paired_cli_supports_voice: bool,
+    /// Present only for rooms with a registered stream.
+    pub on_air: Option<OnAirView>,
 }
 
 impl VoiceRoomView<'_> {
@@ -68,13 +79,23 @@ fn voice_roster_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
             Style::default().fg(theme::TEXT_DIM()),
         )];
     }
+    let mut spans = Vec::new();
+    // The ON AIR marker leads the row: joining voice here is broadcasting.
+    if view.on_air.as_ref().is_some_and(|on_air| on_air.live) {
+        spans.push(Span::styled(
+            "⦿ ON AIR ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if view.participants().is_empty() {
-        return vec![Span::styled(
+        spans.push(Span::styled(
             "No one is in voice yet.",
             Style::default().fg(theme::TEXT_DIM()),
-        )];
+        ));
+        return spans;
     }
-    let mut spans = Vec::new();
     for participant in view.participants() {
         if !spans.is_empty() {
             spans.push(Span::styled("  ", Style::default().fg(theme::TEXT_DIM())));

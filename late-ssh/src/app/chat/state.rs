@@ -226,6 +226,48 @@ pub(crate) enum VoiceCommand {
     Mute,
 }
 
+/// A stream control requested from the composer. `App` owns the stream
+/// service, so the composer just records the intent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GoLiveCommand {
+    /// `/golive [title]`: register (or re-surface) this user's stream and
+    /// show the publisher URL modal.
+    Start { title: Option<String> },
+    /// `/golive obs [title]`: register the stream with OBS as the
+    /// publisher and show the WHIP connection details modal.
+    StartObs { title: Option<String> },
+    /// `/golive stop`: tear the stream down now.
+    Stop,
+}
+
+/// `/golive` with an optional title, or the `stop` / `obs [title]`
+/// subcommands. `None` means the body is not a golive command at all.
+fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
+    let trimmed = body.trim();
+    let rest = trimmed.strip_prefix("/golive")?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    // Free text that ends up in the rail, the stream header, and the
+    // #lounge announcement; clamp it at the parse boundary so no downstream
+    // surface needs its own cap.
+    let clamp = |title: &str| Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect());
+    Some(match rest.trim() {
+        "" => GoLiveCommand::Start { title: None },
+        "stop" => GoLiveCommand::Stop,
+        "obs" => GoLiveCommand::StartObs { title: None },
+        text => match text.strip_prefix("obs ") {
+            Some(title) => GoLiveCommand::StartObs {
+                title: clamp(title.trim()),
+            },
+            None => GoLiveCommand::Start { title: clamp(text) },
+        },
+    })
+}
+
+/// Longest `/golive` title kept; the rest is cut at the parse boundary.
+const GOLIVE_TITLE_MAX_CHARS: usize = 80;
+
 /// An aquarium control requested from the composer (`/aquarium`,
 /// `/aquarium feed`). `App` owns the tray state and entitlements, so the
 /// composer just records the intent and `App` carries it out.
@@ -304,6 +346,9 @@ pub(crate) enum RoomSlot {
 pub enum RoomSection {
     Favorites,
     Core,
+    /// Registered "watch me" streams: one row per stream while any exists.
+    /// The whole section disappears when nobody is streaming.
+    Stream,
     /// Only rendered for a linked account: the cyberspace pane plus the chat
     /// rooms this user pinned.
     Cyberspace,
@@ -315,9 +360,10 @@ impl RoomSection {
     /// Every section. Key maps and tests iterate this rather than repeating a
     /// hand-written list: a copy of the roster somewhere else silently misses
     /// a new section, which is how `z`-folding lost the cyberspace header.
-    pub(crate) const ALL: [RoomSection; 5] = [
+    pub(crate) const ALL: [RoomSection; 6] = [
         RoomSection::Favorites,
         RoomSection::Core,
+        RoomSection::Stream,
         RoomSection::Cyberspace,
         RoomSection::Channels,
         RoomSection::Dms,
@@ -329,6 +375,7 @@ impl RoomSection {
         match self {
             RoomSection::Favorites => "favorites",
             RoomSection::Core => "core",
+            RoomSection::Stream => "stream",
             RoomSection::Cyberspace => "cyberspace",
             RoomSection::Channels => "channels",
             RoomSection::Dms => "dms",
@@ -339,6 +386,7 @@ impl RoomSection {
         match self {
             RoomSection::Favorites => b'f',
             RoomSection::Core => b'o',
+            RoomSection::Stream => b's',
             RoomSection::Cyberspace => b'y',
             RoomSection::Channels => b'c',
             RoomSection::Dms => b'd',
@@ -350,6 +398,7 @@ impl RoomSection {
         match label {
             "favorites" => Some(RoomSection::Favorites),
             "core" => Some(RoomSection::Core),
+            "stream" => Some(RoomSection::Stream),
             "cyberspace" => Some(RoomSection::Cyberspace),
             "channels" => Some(RoomSection::Channels),
             "dms" => Some(RoomSection::Dms),
@@ -483,6 +532,8 @@ pub struct ChatState {
     is_admin: bool,
     is_moderator: bool,
     active_users: Option<ActiveUsers>,
+    /// S3/R2 upload storage; `None` means every upload feature is disabled.
+    files: Option<crate::config::FilesConfig>,
     /// Process-global ghost-bot cooldown ladders, peeked at submit time for
     /// the "bot is cooling down" banner. The ghost loops own stepping it.
     mention_ladders: MentionLadders,
@@ -670,6 +721,14 @@ pub struct ChatState {
     /// Set by /voice or /mute in a voice-enabled room; consumed by `App`
     /// (which owns the paired-CLI voice controls).
     requested_voice_command: Option<VoiceCommand>,
+    /// Set by /golive; consumed by `App` (which owns the stream service).
+    requested_golive: Option<GoLiveCommand>,
+    /// Set by /watch @user; consumed by `App`.
+    requested_watch: Option<String>,
+    /// A stream room this session just opened; consumed by `App`, which
+    /// tells the stream service a named viewer showed up. Recorded here
+    /// rather than acted on inline because `App` owns the stream service.
+    opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
     requested_aquarium_command: Option<AquariumCommand>,
     /// Set by /pet, /pet feed, /pet water; consumed by `App` (which owns the pet).
@@ -684,6 +743,16 @@ pub struct ChatState {
     /// Room-list sections the user has collapsed. Empty = all expanded
     /// (the default). Session-only — resets on reconnect.
     pub(crate) collapsed_sections: HashSet<RoomSection>,
+
+    /// Registered "watch me" streams, copied from the stream registry watch
+    /// in `App::tick` (~1/s) so render paths read local memory only. Drives
+    /// the rail's `stream` section, the LIVE author tag (live entries only),
+    /// and the stream header block above a live room's chat.
+    pub(crate) live_streams: Vec<crate::app::stream::registry::LiveStreamView>,
+    /// Users whose stream is actually on air right now (`live` only, never
+    /// pending): the LIVE author tag reads this. Derived in
+    /// `set_live_streams`.
+    pub(crate) live_user_ids: HashSet<Uuid>,
 
     // image upload
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
@@ -748,6 +817,7 @@ impl ChatState {
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
         mention_ladders: MentionLadders,
+        files: Option<crate::config::FilesConfig>,
     ) -> Self {
         let ChatServices {
             chat: service,
@@ -775,6 +845,7 @@ impl ChatState {
             is_admin: permissions.is_admin(),
             is_moderator: permissions.is_moderator(),
             active_users,
+            files,
             mention_ladders,
             snapshot_rx,
             targeted_event_rx,
@@ -881,6 +952,9 @@ impl ChatState {
             requested_open_sheet: None,
             requested_quit: false,
             requested_voice_command: None,
+            requested_golive: None,
+            requested_watch: None,
+            opened_stream_room: None,
             requested_aquarium_command: None,
             requested_pet_command: None,
             requested_audio_url: None,
@@ -891,6 +965,8 @@ impl ChatState {
             sent_regular_message: false,
             pending_mod_outputs: VecDeque::new(),
             collapsed_sections: HashSet::new(),
+            live_streams: Vec::new(),
+            live_user_ids: HashSet::new(),
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
@@ -985,13 +1061,20 @@ impl ChatState {
             return;
         }
 
-        if let Some(selected_id) = self.selected_room_id
-            && self
+        if let Some(selected_id) = self.selected_room_id {
+            // A selected stream room survives snapshot refreshes even
+            // though it is `kind='game'` (not a chat-list room), and even
+            // before its lazy membership lands in `rooms`.
+            if self.stream_for_room(selected_id).is_some() {
+                return;
+            }
+            if self
                 .rooms
                 .iter()
                 .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-        {
-            return;
+            {
+                return;
+            }
         }
 
         self.selected_room_id = self
@@ -1423,6 +1506,47 @@ impl ChatState {
 
     pub(crate) fn take_requested_voice_command(&mut self) -> Option<VoiceCommand> {
         self.requested_voice_command.take()
+    }
+
+    pub(crate) fn take_requested_golive(&mut self) -> Option<GoLiveCommand> {
+        self.requested_golive.take()
+    }
+
+    pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
+        self.requested_watch.take()
+    }
+
+    pub(crate) fn take_opened_stream_room(&mut self) -> Option<Uuid> {
+        self.opened_stream_room.take()
+    }
+
+    /// Replace the live-stream copy. Returns true when it changed (the
+    /// caller bumps the row-cache epoch so LIVE tags and rail rows repaint).
+    pub(crate) fn set_live_streams(
+        &mut self,
+        streams: Vec<crate::app::stream::registry::LiveStreamView>,
+    ) -> bool {
+        if self.live_streams == streams {
+            return false;
+        }
+        self.live_streams = streams;
+        self.live_user_ids = self
+            .live_streams
+            .iter()
+            .filter(|stream| stream.live)
+            .map(|stream| stream.user_id)
+            .collect();
+        true
+    }
+
+    /// The registered stream owning `room_id`, if any.
+    pub(crate) fn stream_for_room(
+        &self,
+        room_id: Uuid,
+    ) -> Option<&crate::app::stream::registry::LiveStreamView> {
+        self.live_streams
+            .iter()
+            .find(|stream| stream.room_id == room_id)
     }
 
     pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
@@ -2149,6 +2273,7 @@ impl ChatState {
             collapsed_sections: &self.collapsed_sections,
             ignored_user_ids: &self.ignored_user_ids,
             sticky_unread_dm: self.sticky_unread_dm,
+            live_streams: &self.live_streams,
         })
     }
 
@@ -2215,12 +2340,20 @@ impl ChatState {
                 changed
             }
             RoomSlot::Room(next_id) => {
-                if !self
-                    .rooms
-                    .iter()
-                    .any(|(room, _)| room.id == next_id && is_chat_list_room(room))
-                {
-                    return false;
+                let is_stream_room = self.stream_for_room(next_id).is_some();
+                let in_list = self.rooms.iter().any(|(room, _)| {
+                    room.id == next_id
+                        && (is_chat_list_room(room) || (is_stream_room && room.kind == "game"))
+                });
+                if !in_list {
+                    // A stream room the user has never joined: select it
+                    // anyway and join lazily (public game-room join path);
+                    // the tail request rides the `GameRoomJoined` event.
+                    if is_stream_room {
+                        self.join_game_room_chat(next_id);
+                    } else {
+                        return false;
+                    }
                 }
                 let changed = self.feeds_selected
                     || self.news_selected
@@ -2238,6 +2371,15 @@ impl ChatState {
                 self.selected_room_id = Some(next_id);
                 if !changed {
                     self.mark_room_read(next_id);
+                }
+                if changed && is_stream_room {
+                    // Walking into someone's stream room is one of the two
+                    // identified ways into a stream (`/watch @user` is the
+                    // other). `App` turns this into the "is watching" line
+                    // and the streamer's notification; the once-per-viewer
+                    // dedupe lives in the stream registry, so re-opening the
+                    // room is free.
+                    self.opened_stream_room = Some(next_id);
                 }
                 changed
             }
@@ -2586,6 +2728,25 @@ impl ChatState {
             }
         }
 
+        if let Some(parsed) = parse_golive_command(&body) {
+            self.clear_composer_after_submit();
+            self.requested_golive = Some(parsed);
+            return None;
+        }
+
+        if let Some(target) = parse_user_command(&body, "/watch") {
+            self.clear_composer_after_submit();
+            match target {
+                Some(name) => {
+                    self.requested_watch = Some(name.to_string());
+                    return None;
+                }
+                None => {
+                    return Some(Banner::error("Usage: /watch @user"));
+                }
+            }
+        }
+
         if let Some(parsed) = parse_pomodoro_command(&body) {
             self.clear_composer_after_submit();
             match parsed {
@@ -2734,7 +2895,7 @@ impl ChatState {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Some(Banner::error("/upload: URL must start with http(s)://"));
             }
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             let room_id = self.upload_target_room_id();
@@ -2744,7 +2905,7 @@ impl ChatState {
         }
 
         if body.trim() == "/paste-image" {
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             self.clear_expired_pending_clipboard_image_upload();
@@ -3378,9 +3539,9 @@ impl ChatState {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
         };
-        if !crate::app::files::image_upload::is_file_upload_configured() {
+        let Some(files) = self.files.clone() else {
             return Some(Banner::error("File uploads are disabled"));
-        }
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         if let Some(banner) = self.begin_image_upload(room_id, rx) {
@@ -3389,13 +3550,19 @@ impl ChatState {
         let mime = mime.to_string();
 
         tokio::spawn(async move {
-            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+            let result = crate::app::files::image_upload::upload_image_bytes(&files, bytes, &mime)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
 
         None
+    }
+
+    /// Upload storage for features outside chat state (URL uploads in input
+    /// handling); `None` means uploads are disabled in this environment.
+    pub(crate) fn files_config(&self) -> Option<&crate::config::FilesConfig> {
+        self.files.as_ref()
     }
 
     pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
@@ -4161,6 +4328,28 @@ impl ChatState {
         self.note_username(user_id, username.to_string());
         self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
+    /// A friend's stream reported its first media (the `WentLive` edge, not
+    /// `/golive` time), so the banner never points at a black screen.
+    /// `title` is the raw `/golive` title, already clamped at the composer
+    /// boundary; unlike a #lounge body it may keep its `@`, since nothing
+    /// here runs the mention pipeline.
+    pub fn note_friend_went_live(
+        &mut self,
+        user_id: Uuid,
+        username: &str,
+        title: Option<&str>,
+    ) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.note_username(user_id, username.to_string());
+        self.notifier
+            .push(Notification::friend_live(username, title));
+        Some(Banner::success(&format!(
+            "@{username} is live. /watch @{username} to open it."
+        )))
     }
 
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
@@ -5510,6 +5699,9 @@ pub(crate) struct RoomVisualOrderInput<'a, U: UsernameResolver + ?Sized> {
     pub collapsed_sections: &'a HashSet<RoomSection>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
     pub sticky_unread_dm: Option<Uuid>,
+    /// Registered "watch me" streams, in registry order. Each contributes a
+    /// `stream` section row whether or not this user joined its room yet.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
 }
 
 pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
@@ -5528,6 +5720,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         collapsed_sections,
         ignored_user_ids,
         sticky_unread_dm,
+        live_streams,
     } = input;
 
     let mut order = Vec::new();
@@ -5583,6 +5776,16 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     if !core_collapsed {
         // Discover ("browse rooms") lives at the bottom of Core.
         order.push(RoomSlot::Discover);
+    }
+
+    // Stream: one row per registered "watch me" stream, directly under Core.
+    // The section exists only while somebody is streaming. Stream rooms are
+    // `kind='game'` so they can never leak into Channels/DMs below.
+    let stream_collapsed = collapsed_sections.contains(&RoomSection::Stream);
+    for stream in live_streams {
+        if pushed_rooms.insert(stream.room_id) && !stream_collapsed {
+            order.push(RoomSlot::Room(stream.room_id));
+        }
     }
 
     // Cyberspace: the feeds pane plus the chat rooms this user pinned, under

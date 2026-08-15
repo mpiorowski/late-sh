@@ -123,7 +123,6 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             auto_translate: false,
             translate_mine_to_en: true,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         },
     )
     .await
@@ -740,7 +739,6 @@ async fn room_tail_task_loads_favorite_room_history() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: vec![favorite_room.id],
-            birthday: None,
         },
     )
     .await
@@ -1835,7 +1833,6 @@ async fn mod_rename_user_command_updates_username_active_user_and_audits() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: Vec::new(),
             connection_count: 1,
@@ -1946,7 +1943,6 @@ async fn mod_server_kick_command_terminates_active_sessions_and_audits() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: Some(peer_ip),
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -2031,7 +2027,6 @@ async fn mod_server_ban_command_bans_and_terminates_active_sessions() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: Some(peer_ip),
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -2153,7 +2148,6 @@ async fn mod_artboard_ban_command_notifies_active_sessions() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -2673,6 +2667,111 @@ async fn mod_bans_command_lists_active_bans() {
     );
 }
 
+/// `ban stream` is the persistent half of the stream kill switch: it must end
+/// the broadcast in flight, not just refuse the next one. The registry entry
+/// going away is what kills the watch and publisher URLs.
+#[tokio::test]
+async fn mod_stream_ban_ends_the_live_stream_and_persists_the_block() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let voice = crate::app::voice::svc::VoiceService::new(
+        crate::app::voice::svc::VoiceConfig::enabled(
+            "wss://rtc.test".to_string(),
+            "http://livekit-sv.test".to_string(),
+            "test-key".to_string(),
+            "test-secret".to_string(),
+            "late-voice".to_string(),
+        )
+        .expect("voice config"),
+    );
+    let (activity_tx, _activity_rx) = tokio::sync::broadcast::channel(16);
+    let stream = crate::app::stream::svc::StreamService::new(
+        test_db.db.clone(),
+        voice,
+        crate::app::activity::publisher::ActivityPublisher::new(test_db.db.clone(), activity_tx),
+        "https://late.test".to_string(),
+    );
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    )
+    .with_moderation_infra(ModerationInfra::default().with_stream(stream.clone()));
+    let mut events = service.subscribe_events();
+
+    let actor = create_test_user(&test_db.db, "stream_mod_actor").await;
+    let target = create_test_user(&test_db.db, "stream_mod_target").await;
+
+    let mut stream_events = stream.subscribe_events();
+    stream.go_live_task(target.id, target.username.clone(), Some("demo".to_string()));
+    timeout(Duration::from_secs(5), stream_events.recv())
+        .await
+        .expect("go live event timeout")
+        .expect("go live event");
+    assert!(
+        stream.snapshot().for_user(target.id).is_some(),
+        "target should be registered as streaming before the ban"
+    );
+
+    let request_id = Uuid::now_v7();
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        request_id,
+        "ban stream @stream_mod_target 1h nsfw".to_string(),
+    );
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput {
+            request_id: got_request,
+            lines,
+            success,
+            ..
+        } => {
+            assert_eq!(got_request, request_id);
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["stream-banned @stream_mod_target"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+
+    assert!(
+        stream.snapshot().for_user(target.id).is_none(),
+        "the ban must tear the live stream out of the registry"
+    );
+    let ban = late_core::models::stream_ban::StreamBan::find_active_for_user(&client, target.id)
+        .await
+        .expect("stream ban lookup")
+        .expect("stream ban is active");
+    assert!(ban.expires_at.is_some(), "1h ban should carry an expiry");
+    assert_eq!(ban.reason, "nsfw");
+
+    service.run_mod_command_task(
+        actor.id,
+        Permissions::new(false, true),
+        Uuid::now_v7(),
+        "unban stream @stream_mod_target".to_string(),
+    );
+    let event = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event");
+    match event {
+        ChatEvent::ModCommandOutput { lines, success, .. } => {
+            assert!(success, "unexpected mod command failure: {lines:?}");
+            assert_eq!(lines, vec!["removed stream ban for @stream_mod_target"]);
+        }
+        other => panic!("expected ModCommandOutput, got {other:?}"),
+    }
+    assert!(
+        !late_core::models::stream_ban::StreamBan::is_active_for_user(&client, target.id)
+            .await
+            .expect("stream ban lookup")
+    );
+}
+
 #[tokio::test]
 async fn mod_audit_command_lists_recent_audit_entries() {
     let test_db = new_test_db().await;
@@ -2754,7 +2853,6 @@ async fn mod_room_ban_command_notifies_target_sessions_to_drop_room() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -2832,7 +2930,6 @@ async fn mod_slow_command_creates_row_audits_and_notifies_target_session() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -2934,7 +3031,6 @@ async fn mod_server_slow_command_creates_server_row_and_notifies_target_session(
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -3027,7 +3123,6 @@ async fn grant_mod_command_updates_active_session_permissions() {
         ActiveUser {
             username: target.username.clone(),
             fingerprint: Some(target.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token: session_token.clone(),
@@ -3101,7 +3196,6 @@ async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() 
             ActiveUser {
                 username: actor.username.clone(),
                 fingerprint: Some(actor.fingerprint.clone()),
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::default(),
                 sessions: vec![ActiveSession {
                     token: actor_token.clone(),
@@ -3118,7 +3212,6 @@ async fn admin_ultimate_cast_command_broadcasts_to_active_sessions_and_audits() 
             ActiveUser {
                 username: target.username.clone(),
                 fingerprint: Some(target.fingerprint.clone()),
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::default(),
                 sessions: vec![ActiveSession {
                     token: target_token.clone(),

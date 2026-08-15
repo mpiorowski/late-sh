@@ -1,2 +1,10 @@
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[env]
+# libtest runs each test on a spawned thread, which gets std's 2 MiB default
+# rather than the main thread's 8 MiB. Unoptimized test builds keep every
+# intermediate alive, so a test driving two full `App` sessions (the scratchpad
+# pairing tests) overflows that. 8 MiB matches the main thread; stack pages are
+# committed on use, so the headroom costs nothing.
+RUST_MIN_STACK = "8388608"

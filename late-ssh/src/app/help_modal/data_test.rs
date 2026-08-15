@@ -200,6 +200,42 @@ fn chat_guide_collapses_compose_section_when_keep_composer_focused() {
     assert!(!on.contains("<<COMPOSE_SEND_LINES>>"));
 }
 
+/// OBS setup questions land on @bot, so the Streaming tab has to carry the
+/// full WHIP recipe: service fields, the Opus requirement, and the encoder
+/// reset trap that OBS springs when the service switches to WHIP.
+#[test]
+fn streaming_guide_covers_golive_and_obs_setup() {
+    assert!(
+        HelpTopic::ALL
+            .iter()
+            .any(|topic| topic.title() == "Streaming")
+    );
+    assert!(bot_app_context().contains("## Streaming\n"));
+    let streaming = lines_for(HelpTopic::Streaming, false, "").join("\n");
+    for expected in [
+        "/golive [title]",
+        "/golive obs",
+        "/golive stop",
+        "/watch @user",
+        "Service           WHIP",
+        "Bearer Token",
+        "Opus, required: WHIP cannot carry AAC",
+        "Same as stream",
+        "Restart OBS",
+        "minted per stream and die with it",
+        "born silent",
+        "ON AIR",
+    ] {
+        assert!(
+            streaming.contains(expected),
+            "streaming guide missing {expected}"
+        );
+    }
+    // The chat commands list stays an index and defers the details here.
+    let chat = chat_help_lines(false).join("\n");
+    assert!(chat.contains("the Streaming tab"));
+}
+
 #[test]
 fn bot_context_does_not_leak_restricted_commands() {
     let context = bot_app_context();

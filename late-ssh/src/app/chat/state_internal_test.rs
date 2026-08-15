@@ -243,7 +243,6 @@ fn online_username_set_lowercases_active_usernames() {
         ActiveUser {
             username: "Alice".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 1,
@@ -255,7 +254,6 @@ fn online_username_set_lowercases_active_usernames() {
         ActiveUser {
             username: "BOB".to_string(),
             fingerprint: None,
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::Icecast,
             sessions: Vec::new(),
             connection_count: 2,
@@ -701,6 +699,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         }),
         vec![
             RoomSlot::Room(lounge),
@@ -772,6 +771,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         })
     };
 
@@ -851,6 +851,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
     let dm_order: Vec<_> = order
         .into_iter()
@@ -891,6 +892,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert!(order.contains(&RoomSlot::Room(dm_alice.id)));
@@ -912,6 +914,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
         sticky_unread_dm: None,
+        live_streams: &[],
     });
     assert!(!favorited.contains(&RoomSlot::Room(dm_bob.id)));
 }
@@ -956,6 +959,7 @@ fn visual_order_promotes_unread_dms_above_channels() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert_eq!(
@@ -1003,6 +1007,7 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: sticky,
+            live_streams: &[],
         })
     };
 
@@ -1054,6 +1059,7 @@ fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
         collapsed_sections: &HashSet::from([RoomSection::Dms]),
         ignored_user_ids: &HashSet::new(),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     // Collapsing DMs folds away the read ones only; an unread DM lives in its
@@ -1141,6 +1147,7 @@ fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::from([bob]),
         sticky_unread_dm: None,
+        live_streams: &[],
     });
 
     assert!(!order.contains(&RoomSlot::Room(dm_bob.id)));
@@ -1685,7 +1692,6 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "zoe".to_string(),
                 fingerprint: None,
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 2,
@@ -1697,7 +1703,6 @@ fn format_active_user_lines_sorts_and_shows_session_counts() {
             ActiveUser {
                 username: "alice".to_string(),
                 fingerprint: None,
-                peer_ip: None,
                 audio_source: late_core::models::user::AudioSource::Icecast,
                 sessions: Vec::new(),
                 connection_count: 1,
@@ -2182,6 +2187,7 @@ fn chat_state_with_cyberspace(
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     (state, cyberspace)
 }
@@ -2290,6 +2296,53 @@ async fn drain_events_until(
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     }
     panic!("timed out waiting for condition: {label}");
+}
+
+/// Regression: `sync_selection` runs on every snapshot apply and used to
+/// reset any selection that was not a chat-list room — which bounced a
+/// freshly opened stream room (`kind='game'`) straight back to the lounge.
+#[tokio::test]
+async fn sync_selection_keeps_a_selected_stream_room() {
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "stream_viewer").await;
+    let streamer = late_core::test_utils::create_test_user(&test_db.db, "stream_owner").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let stream_room = ChatRoom::get_or_create_stream_room(&client, "stream_owner", streamer.id)
+        .await
+        .expect("stream room");
+
+    let mut state = counter_test_state(&test_db, user.id);
+    state.rooms = vec![
+        (lounge.clone(), Vec::new()),
+        (stream_room.clone(), Vec::new()),
+    ];
+    state.live_streams = vec![crate::app::stream::registry::LiveStreamView {
+        user_id: streamer.id,
+        username: "stream_owner".to_string(),
+        title: "show".to_string(),
+        room_id: stream_room.id,
+        voice_channel_id: Uuid::now_v7(),
+        stream_id: "stream-id".to_string(),
+        live: true,
+        watching: 0,
+        watch_url: String::new(),
+    }];
+
+    // Selected stream room survives a selection sync, member or not.
+    state.selected_room_id = Some(stream_room.id);
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(stream_room.id));
+    state.rooms = vec![(lounge.clone(), Vec::new())];
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(stream_room.id));
+
+    // Once the stream is gone the selection falls back to a list room.
+    state.live_streams.clear();
+    state.sync_selection();
+    assert_eq!(state.selected_room_id, Some(lounge.id));
 }
 
 #[tokio::test]
@@ -2902,6 +2955,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, seed.id).await;
     state.set_visible_room_id(Some(lounge.id));
@@ -3060,6 +3114,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, own.id).await;
 
@@ -3220,6 +3275,7 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
             sticky_unread_dm: None,
+            live_streams: &[],
         })
     };
 
@@ -3261,4 +3317,46 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             RoomSlot::Discover,
         ]
     );
+}
+
+#[test]
+fn parse_golive_routes_console_obs_and_stop() {
+    assert_eq!(
+        parse_golive_command("/golive"),
+        Some(GoLiveCommand::Start { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive fixing the render loop"),
+        Some(GoLiveCommand::Start {
+            title: Some("fixing the render loop".to_string())
+        })
+    );
+    assert_eq!(
+        parse_golive_command("/golive stop"),
+        Some(GoLiveCommand::Stop)
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs"),
+        Some(GoLiveCommand::StartObs { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs speedrun night"),
+        Some(GoLiveCommand::StartObs {
+            title: Some("speedrun night".to_string())
+        })
+    );
+    // Not the command at all: no space boundary after /golive.
+    assert_eq!(parse_golive_command("/golivenow"), None);
+    assert_eq!(parse_golive_command("hello"), None);
+}
+
+#[test]
+fn parse_golive_clamps_titles_at_the_boundary() {
+    let long = "x".repeat(GOLIVE_TITLE_MAX_CHARS + 20);
+    match parse_golive_command(&format!("/golive obs {long}")) {
+        Some(GoLiveCommand::StartObs { title: Some(title) }) => {
+            assert_eq!(title.chars().count(), GOLIVE_TITLE_MAX_CHARS);
+        }
+        other => panic!("expected clamped obs title, got {other:?}"),
+    }
 }

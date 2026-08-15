@@ -801,6 +801,25 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // Stream URL + QR modal: any key or click closes it. It sits above
+    // everything except the announcements: the URL it shows was just
+    // requested, so nothing else should swallow the dismissal.
+    if app.stream_modal.is_some() {
+        if matches!(
+            event,
+            ParsedInput::Byte(_)
+                | ParsedInput::Char(_)
+                | ParsedInput::Arrow(_)
+                | ParsedInput::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down,
+                    ..
+                })
+        ) {
+            app.stream_modal = None;
+        }
+        return;
+    }
+
     // The forced first-visit tour outranks even the reserved chords: a
     // newcomer mid-route cannot open settings or the lobby, only follow the
     // named key or quit. The quit-confirm modal stays above it so `y`/`n`
@@ -1346,7 +1365,11 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                         ));
                     }
                     // Only the native saved-character doors offer a reset; the
-                    // proxied ones own their own saves upstream.
+                    // proxied ones own their own saves upstream. Lateania is
+                    // multi-slot now and no longer arms this confirm from the
+                    // hub at all (see the guard above) - its own landing is
+                    // the only place that can reach this arm, and it never
+                    // will, but the match still has to be exhaustive.
                     HubGame::Lateania
                     | HubGame::Rebels
                     | HubGame::Nethack
@@ -1354,13 +1377,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     | HubGame::Brogue
                     | HubGame::Usurper
                     | HubGame::Dopewars
-                    | HubGame::Codekeep => {
-                        app.leave_lateania();
-                        app.lateania_service.delete_character_task(app.user_id);
-                        app.banner = Some(crate::app::common::primitives::Banner::success(
-                            "Lateania character reset. Enter the world to start over.",
-                        ));
-                    }
+                    | HubGame::Codekeep => {}
                 }
                 true
             }
@@ -1394,11 +1411,12 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
             app.games_hub_state.select_prev();
             true
         }
+        // Lateania has multiple character slots now, so its own landing (with
+        // a slot cursor to say *which* character) is the only safe place to
+        // confirm a delete; this hub shortcut still covers the single-save
+        // games.
         ParsedInput::Byte(b'd' | b'D') | ParsedInput::Char('d' | 'D')
-            if matches!(
-                selected,
-                HubGame::Lateania | HubGame::GreenDragon | HubGame::Darkroom
-            ) =>
+            if matches!(selected, HubGame::GreenDragon | HubGame::Darkroom) =>
         {
             app.door_delete_confirm = true;
             true
@@ -1439,8 +1457,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
     app.door_delete_confirm = false;
     match game {
         HubGame::Lateania => {
+            // Lands on the character-select landing rather than jumping
+            // straight into the world, since which of the account's saved
+            // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
-            app.enter_lateania();
         }
         HubGame::Rebels => {
             if !app.rebels_enabled {
@@ -2012,6 +2032,14 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
+    // A lone Esc never reaches the any-key gate in `handle_parsed_input`
+    // (it dispatches here via the pending-escape flush instead), so the
+    // stream URL modal needs its own arm, first, mirroring its position
+    // above everything else in that gate.
+    if app.stream_modal.is_some() {
+        app.stream_modal = None;
+        return;
+    }
     if app.show_quit_confirm {
         quit_confirm::input::handle_escape(app);
         return;
@@ -2207,6 +2235,21 @@ fn dispatch_escape(app: &mut App) {
     // Esc from a Lateania world (or its reset prompt) returns to the Games hub
     // that launched it, not to a standalone landing page.
     if ctx.screen == Screen::Lateania {
+        // ...but while a world is live, Esc is the door's key, not this
+        // dispatcher's. The door cancels a chat line being composed, and
+        // otherwise requires a confirming second press before it will give up
+        // a player's place in a persistent world. This runs before screen
+        // dispatch, so leaving here unconditionally skipped both rules - the
+        // same interception that was removed from `lateania::screen` still
+        // lived one layer up here. Forward it and let the door decide; only a
+        // leave it actually performed should reach the hub.
+        if app.lateania_state.is_some() {
+            crate::app::door::lateania::screen::GAME.handle_key(app, 0x1B);
+            if app.lateania_state.is_none() {
+                app.set_screen(Screen::Games);
+            }
+            return;
+        }
         app.door_delete_confirm = false;
         app.leave_lateania();
         app.set_screen(Screen::Games);
@@ -2330,13 +2373,13 @@ fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
 }
 
 pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Option<uuid::Uuid>) {
-    use crate::app::files::image_upload::{download_and_reupload_url, is_file_upload_configured};
-    if !is_file_upload_configured() {
+    use crate::app::files::image_upload::download_and_reupload_url;
+    let Some(files) = app.chat.files_config().cloned() else {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "File uploads are disabled",
         ));
         return;
-    }
+    };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     if let Some(banner) = app.chat.begin_image_upload(room_id, rx) {
@@ -2344,7 +2387,7 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
         return;
     }
     tokio::spawn(async move {
-        let result = download_and_reupload_url(url)
+        let result = download_and_reupload_url(&files, url)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(result);
@@ -2459,6 +2502,7 @@ fn chat_room_list_view<'a>(
 ) -> crate::app::chat::ui::ChatRoomListView<'a> {
     crate::app::chat::ui::ChatRoomListView {
         chat_rooms: &app.chat.rooms,
+        live_streams: &app.chat.live_streams,
         usernames,
         unread_counts: &app.chat.unread_counts,
         room_last_message_at: &app.chat.room_last_message_at,

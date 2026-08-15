@@ -33,35 +33,6 @@ impl Default for DbConfig {
     }
 }
 
-impl DbConfig {
-    /// Load configuration from environment variables.
-    ///
-    /// Environment variables:
-    /// - `LATE_DB_HOST` (default: localhost)
-    /// - `LATE_DB_PORT` (default: 5432)
-    /// - `LATE_DB_USER` (default: postgres)
-    /// - `LATE_DB_PASSWORD` (default: postgres)
-    /// - `LATE_DB_NAME` (default: postgres)
-    /// - `LATE_DB_POOL_SIZE` (default: 16)
-    pub fn from_env() -> Self {
-        let defaults = Self::default();
-        Self {
-            host: std::env::var("LATE_DB_HOST").unwrap_or(defaults.host),
-            port: std::env::var("LATE_DB_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(defaults.port),
-            user: std::env::var("LATE_DB_USER").unwrap_or(defaults.user),
-            password: std::env::var("LATE_DB_PASSWORD").unwrap_or(defaults.password),
-            dbname: std::env::var("LATE_DB_NAME").unwrap_or(defaults.dbname),
-            max_pool_size: std::env::var("LATE_DB_POOL_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(defaults.max_pool_size),
-        }
-    }
-}
-
 /// Create a connection pool from configuration.
 ///
 /// Uses `RecyclingMethod::Verified` for reliable connection health checks.
@@ -99,11 +70,6 @@ impl Db {
             pool,
             config: cfg.clone(),
         })
-    }
-
-    /// Create from environment variables.
-    pub fn from_env() -> Result<Self> {
-        Self::new(&DbConfig::from_env())
     }
 
     /// Get a connection from the pool.

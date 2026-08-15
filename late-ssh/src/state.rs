@@ -57,7 +57,6 @@ pub struct ActiveSession {
 pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
-    pub peer_ip: Option<IpAddr>,
     pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
@@ -111,6 +110,7 @@ pub struct State {
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
+    pub stream_service: crate::app::stream::svc::StreamService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,

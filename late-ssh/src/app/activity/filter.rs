@@ -110,6 +110,14 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
         ActivityKind::CyberspacePosted { .. } => true,
+        // Going live is the archetypal invitation: the whole point of the
+        // line is pulling people into the stream room.
+        ActivityKind::WentLive { .. } => true,
+        // The other half of the invitation: an audience gathering is the
+        // signal that pulls the next person in. Once per viewer per stream,
+        // and only in-app viewers exist here, so this cannot become a
+        // per-heartbeat drip.
+        ActivityKind::WatchingStream { .. } => true,
         // Quest-only grind signals, never surfaced anywhere public.
         ActivityKind::GameScored { .. } => false,
         // The bonsai is a private ritual: neither the daily watering nor the

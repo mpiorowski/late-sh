@@ -77,6 +77,12 @@ pub enum PairControlMessage {
     VoiceSetDeafened {
         deafened: bool,
     },
+    /// Ask a capable CLI to open a URL in the user's default browser. Sent
+    /// for `/watch @user` and `/golive` so the stream page lands where the
+    /// browser already is; raw SSH sessions get a QR modal instead.
+    OpenUrl {
+        url: String,
+    },
 }
 
 /// Capacity of each paired client's outbound control queue. Control messages
@@ -206,6 +212,13 @@ impl PairedClientRegistry {
     /// voice support. The webview helper and older CLIs are skipped.
     pub fn send_control_to_voice_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_voice) > 0
+    }
+
+    /// Deliver to the first paired CLI advertising the `open_url`
+    /// capability. Returns whether anyone got it, so callers can fall back
+    /// to a QR modal for raw SSH sessions.
+    pub fn send_control_to_open_url_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_open_url) > 0
     }
 
     /// Re-send each paired entry's cached playback source for `token`.

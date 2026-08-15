@@ -52,10 +52,8 @@ On a normal upstream exit, the host closes the SSH channel. On client disconnect
 ## Configuration
 
 Client (`late-ssh`):
-- `LATE_CODEKEEP_ENABLED` (default false)
-- `LATE_CODEKEEP_HOST` (default `127.0.0.1`; Compose `service-codekeep`; prod `late-codekeep-sv`)
-- `LATE_CODEKEEP_PORT` (default 2328)
-- `LATE_CODEKEEP_SECRET` (required when enabled)
+- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-codekeep`, prod `late-codekeep-sv`, port 2328)
+- `LATE_CODEKEEP_SECRET` (the only env the client reads; must equal the host's)
 
 Host (`late-codekeep`):
 - `LATE_CODEKEEP_BIN` (default `/usr/local/bin/codekeep`)

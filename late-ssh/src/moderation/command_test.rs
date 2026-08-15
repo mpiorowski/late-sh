@@ -49,11 +49,9 @@ fn command_help_explains_audit_arguments() {
 fn command_help_explains_ban_arguments() {
     let lines = mod_help_lines(Some("ban"));
 
-    assert!(
-        lines
-            .iter()
-            .any(|line| line == "ban <server|#room|artboard|audio> @name [duration] [reason...]")
-    );
+    assert!(lines.iter().any(
+        |line| line == "ban <server|#room|artboard|audio|stream> @name [duration] [reason...]"
+    ));
     assert!(
         lines.iter().any(|line| line.contains("s/m/h/d")),
         "ban help should explain duration syntax: {lines:?}"
@@ -77,10 +75,8 @@ fn command_help_uses_limited_grouped_surface() {
         "top-level help should show rename-user command: {lines:?}"
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line
-                == "ban    <server|#room|artboard|audio> @name [duration] [reason...]"),
+        lines.iter().any(|line| line
+            == "ban    <server|#room|artboard|audio|stream> @name [duration] [reason...]"),
         "top-level help should show verb-primary ban form: {lines:?}"
     );
 }
@@ -488,6 +484,59 @@ fn parses_voice_moderation_commands() {
 }
 
 #[test]
+fn parses_stream_moderation_commands() {
+    // A kick is the one-shot: end this broadcast, block nothing.
+    assert_eq!(
+        parse_mod_command("kick stream @streamer wrong window").unwrap(),
+        ModCommand::Stream {
+            action: StreamAction::Kick,
+            username: "streamer".to_string(),
+            duration: None,
+            reason: "wrong window".to_string(),
+        }
+    );
+    // A ban takes the same optional duration as every other ban scope.
+    assert_eq!(
+        parse_mod_command("ban stream @streamer 7d nsfw").unwrap(),
+        ModCommand::Stream {
+            action: StreamAction::Ban,
+            username: "streamer".to_string(),
+            duration: Some(chrono::Duration::days(7)),
+            reason: "nsfw".to_string(),
+        }
+    );
+    // No duration means permanent, and the whole tail is the reason.
+    assert_eq!(
+        parse_mod_command("ban stream @streamer repeat offender").unwrap(),
+        ModCommand::Stream {
+            action: StreamAction::Ban,
+            username: "streamer".to_string(),
+            duration: None,
+            reason: "repeat offender".to_string(),
+        }
+    );
+    assert_eq!(
+        parse_mod_command("unban stream @streamer").unwrap(),
+        ModCommand::Stream {
+            action: StreamAction::Unban,
+            username: "streamer".to_string(),
+            duration: None,
+            reason: String::new(),
+        }
+    );
+    assert_eq!(
+        parse_mod_command("view bans stream 2").unwrap(),
+        ModCommand::Bans {
+            scope: BanListScope::Stream,
+            page: 2,
+        }
+    );
+    // A target user is required.
+    assert!(parse_mod_command("ban stream").is_err());
+    assert!(parse_mod_command("kick stream").is_err());
+}
+
+#[test]
 fn parses_room_voice_commands() {
     assert_eq!(
         parse_mod_command("room-voice #general on").unwrap(),
@@ -519,6 +568,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::Artboard { username, .. }
         | ModCommand::Audio { username, .. }
         | ModCommand::Voice { username, .. }
+        | ModCommand::Stream { username, .. }
         | ModCommand::Role { username, .. } => username,
         ModCommand::Help { .. }
         | ModCommand::AdminUltimateCast { .. }

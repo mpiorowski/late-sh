@@ -49,6 +49,9 @@ bitflags! {
         const KICK_FROM_VOICE = 1 << 22;
         const UNBLOCK_VOICE = 1 << 23;
         const SET_ROOM_VOICE = 1 << 24;
+        const KICK_STREAM = 1 << 25;
+        const BAN_FROM_STREAM = 1 << 26;
+        const UNBAN_FROM_STREAM = 1 << 27;
     }
 }
 
@@ -78,7 +81,10 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::DELETE_AUDIO_TRACK)
     .union(Caps::KICK_FROM_VOICE)
     .union(Caps::UNBLOCK_VOICE)
-    .union(Caps::SET_ROOM_VOICE);
+    .union(Caps::SET_ROOM_VOICE)
+    .union(Caps::KICK_STREAM)
+    .union(Caps::BAN_FROM_STREAM)
+    .union(Caps::UNBAN_FROM_STREAM);
 
 const ADMIN: Caps = Caps::all();
 

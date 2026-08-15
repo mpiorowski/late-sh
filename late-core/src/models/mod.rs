@@ -14,9 +14,6 @@ mod article_feed_read_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
-pub mod birthday;
-#[cfg(test)]
-mod birthday_test;
 pub mod blackjack;
 pub mod bonsai;
 pub mod bonsai_decay_protection;
@@ -114,6 +111,7 @@ pub mod showcase;
 pub mod showcase_feed_read;
 pub mod snake;
 pub mod solitaire;
+pub mod stream_ban;
 pub mod sudoku;
 pub mod tetris;
 pub mod traffic;

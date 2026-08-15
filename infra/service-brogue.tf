@@ -13,8 +13,8 @@
 # hands the mount to the `late` user.
 #
 # replicas MUST stay 1: one RWO volume holds every player's save (see
-# brogue.tf). The host pod is always deployed (like service-ssh/dcss); the
-# door's enable flag only gates the CLIENT (service-ssh's LATE_BROGUE_ENABLED).
+# brogue.tf). The host pod is always deployed (like service-ssh/dcss); whether
+# the door shows up in the TUI is a late-ssh config.rs profile literal.
 # Keeping the host unconditional means its image always exists in-cluster, so
 # the deploy workflows can read it with a plain `kubectl get` (no bootstrap
 # fallback) just like the other images.
