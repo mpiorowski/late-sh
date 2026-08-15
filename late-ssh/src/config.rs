@@ -172,6 +172,39 @@ fn optional(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// The production R2 bucket. Prod always carries it; dev opts in by setting
+/// both R2 credentials, so local uploads land in the same bucket prod serves.
+fn prod_files(access_key_id: String, secret_access_key: String) -> FilesConfig {
+    FilesConfig {
+        endpoint: "https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com".to_string(),
+        bucket: "late-sh-r-files".to_string(),
+        public_base_url: "https://files.late.sh".to_string(),
+        region: "auto".to_string(),
+        access_key_id,
+        secret_access_key,
+    }
+}
+
+/// Dev opt-in for uploads: both credentials present enables the prod bucket,
+/// both absent disables uploads, a half-set pair is a startup error.
+pub(crate) fn dev_files(
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+) -> anyhow::Result<Option<FilesConfig>> {
+    match (access_key_id, secret_access_key) {
+        (Some(access_key_id), Some(secret_access_key)) => {
+            Ok(Some(prod_files(access_key_id, secret_access_key)))
+        }
+        (None, None) => Ok(None),
+        (Some(_), None) => {
+            anyhow::bail!("LATE_FILES_S3_ACCESS_KEY_ID is set without LATE_FILES_S3_SECRET_ACCESS_KEY")
+        }
+        (None, Some(_)) => {
+            anyhow::bail!("LATE_FILES_S3_SECRET_ACCESS_KEY is set without LATE_FILES_S3_ACCESS_KEY_ID")
+        }
+    }
+}
+
 fn parse_cidrs(label: &str, value: &str) -> anyhow::Result<Vec<IpNet>> {
     value
         .split(',')
@@ -287,8 +320,13 @@ impl Config {
                 max_auth_failures_per_ip: 20,
                 auth_failure_window_secs: 300,
             },
-            // No upload storage in dev; upload features report "disabled".
-            files: None,
+            // Personal opt-in: setting both R2 credentials in .env.local
+            // points uploads at the prod bucket; without them, upload
+            // features report "disabled".
+            files: dev_files(
+                optional("LATE_FILES_S3_ACCESS_KEY_ID"),
+                optional("LATE_FILES_S3_SECRET_ACCESS_KEY"),
+            )?,
             rebels_enabled: true,
             rebels_host: "frittura.org".to_string(),
             rebels_port: 3788,
@@ -387,15 +425,10 @@ impl Config {
                 max_auth_failures_per_ip: 20,
                 auth_failure_window_secs: 300,
             },
-            files: Some(FilesConfig {
-                endpoint: "https://8ecfba101ed3834cf19fd86e68fc325b.r2.cloudflarestorage.com"
-                    .to_string(),
-                bucket: "late-sh-r-files".to_string(),
-                public_base_url: "https://files.late.sh".to_string(),
-                region: "auto".to_string(),
-                access_key_id: required("LATE_FILES_S3_ACCESS_KEY_ID")?,
-                secret_access_key: required("LATE_FILES_S3_SECRET_ACCESS_KEY")?,
-            }),
+            files: Some(prod_files(
+                required("LATE_FILES_S3_ACCESS_KEY_ID")?,
+                required("LATE_FILES_S3_SECRET_ACCESS_KEY")?,
+            )),
             rebels_enabled: true,
             rebels_host: "frittura.org".to_string(),
             rebels_port: 3788,

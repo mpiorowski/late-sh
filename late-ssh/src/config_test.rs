@@ -65,3 +65,34 @@ fn enabled_door_game_without_secret_is_rejected() {
     let error = config.validate().expect_err("must reject");
     assert!(error.to_string().contains("nethack"));
 }
+
+#[test]
+fn dev_files_with_both_credentials_uses_the_prod_bucket() {
+    let files = crate::config::dev_files(Some("key".to_string()), Some("secret".to_string()))
+        .expect("must accept")
+        .expect("must be configured");
+    assert_eq!(files.bucket, "late-sh-r-files");
+    assert_eq!(files.public_base_url, "https://files.late.sh");
+    assert_eq!(files.access_key_id, "key");
+    assert_eq!(files.secret_access_key, "secret");
+}
+
+#[test]
+fn dev_files_without_credentials_disables_uploads() {
+    let files = crate::config::dev_files(None, None).expect("must accept");
+    assert!(files.is_none());
+}
+
+#[test]
+fn dev_files_with_only_access_key_is_rejected() {
+    let error =
+        crate::config::dev_files(Some("key".to_string()), None).expect_err("must reject");
+    assert!(error.to_string().contains("LATE_FILES_S3_ACCESS_KEY_ID is set without"));
+}
+
+#[test]
+fn dev_files_with_only_secret_key_is_rejected() {
+    let error =
+        crate::config::dev_files(None, Some("secret".to_string())).expect_err("must reject");
+    assert!(error.to_string().contains("LATE_FILES_S3_SECRET_ACCESS_KEY is set without"));
+}
