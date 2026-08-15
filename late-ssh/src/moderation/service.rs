@@ -60,12 +60,12 @@ struct ArtboardRestoreHandles {
     provenance: SharedArtboardProvenance,
 }
 
-struct RoomModRequest {
-    action: RoomModAction,
-    slug: String,
-    username: String,
-    duration: Option<chrono::Duration>,
-    reason: String,
+pub(crate) struct RoomModRequest {
+    pub action: RoomModAction,
+    pub slug: String,
+    pub username: String,
+    pub duration: Option<chrono::Duration>,
+    pub reason: String,
 }
 
 struct SlowModeRequest {
@@ -746,28 +746,16 @@ impl ModerationService {
         )])
     }
 
-    /// Kick a user out of one room, from the `/kick` chat command. Same path,
-    /// same authorization and same audit trail as the mod surface's room kick;
-    /// only the way it was asked for differs.
-    pub(crate) async fn kick_from_room(
+    /// Run a room moderation action asked for from chat (`/kick`, `/ban`,
+    /// `/unban`) rather than the mod surface. Same path, same authorization and
+    /// same audit trail; only the way it was asked for differs.
+    pub(crate) async fn room_command(
         &self,
         actor_user_id: Uuid,
         permissions: Permissions,
-        slug: String,
-        username: String,
+        request: RoomModRequest,
     ) -> Result<Vec<String>> {
-        self.room_action(
-            actor_user_id,
-            permissions,
-            RoomModRequest {
-                action: RoomModAction::Kick,
-                slug,
-                username,
-                duration: None,
-                reason: String::new(),
-            },
-        )
-        .await
+        self.room_action(actor_user_id, permissions, request).await
     }
 
     async fn room_action(
@@ -786,19 +774,11 @@ impl ModerationService {
             RoomModAction::Ban => Caps::BAN_FROM_ROOM,
             RoomModAction::Unban => Caps::UNBAN_FROM_ROOM,
         };
-        // A private room's owner keeps its door. Resolved here, the one place
-        // room actions are authorized, so `/kick` from chat and the mod surface
+        // An owner keeps their own room's door. Resolved here, the one place
+        // room actions are authorized, so the chat commands and the mod surface
         // answer to exactly the same rule.
-        let permissions = match ChatRoom::owner_id(&client, room.id).await? {
-            Some(owner)
-                if owner == actor_user_id
-                    && room.kind == "topic"
-                    && room.visibility == "private" =>
-            {
-                permissions.as_room_owner()
-            }
-            _ => permissions,
-        };
+        let permissions =
+            resolve_room_ownership(&client, &room, actor_user_id, permissions).await?;
         ensure_can(permissions, cap, target_tier)?;
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let affected_voice_channel =
@@ -1713,6 +1693,36 @@ impl ModerationService {
             if notified_sessions == 1 { "" } else { "s" }
         )])
     }
+}
+
+/// Grant the actor whatever their ownership of *this* room is worth, for this
+/// one action. Two kinds of owner, deliberately different: a private room's
+/// owner keeps the door (kick), while a streamer needs the lock too, because
+/// their room is public and a kicked viewer just walks back in from the rail.
+async fn resolve_room_ownership(
+    client: &tokio_postgres::Client,
+    room: &ChatRoom,
+    actor_user_id: Uuid,
+    permissions: Permissions,
+) -> Result<Permissions> {
+    if room.kind == "game" {
+        // Stream rooms only. Other game rooms (house tables, daily match
+        // chats) have no owner-moderator: a daily match's `created_by` is the
+        // challenger, who must not get powers over their opponent.
+        let owner = ChatRoom::stream_room_owner(client, room.id).await?;
+        return Ok(match owner {
+            Some(owner) if owner == actor_user_id => permissions.as_stream_owner(),
+            _ => permissions,
+        });
+    }
+    if room.kind == "topic" && room.visibility == "private" {
+        let owner = ChatRoom::owner_id(client, room.id).await?;
+        return Ok(match owner {
+            Some(owner) if owner == actor_user_id => permissions.as_room_owner(),
+            _ => permissions,
+        });
+    }
+    Ok(permissions)
 }
 
 pub(crate) fn ensure_mod_surface(permissions: Permissions) -> Result<()> {

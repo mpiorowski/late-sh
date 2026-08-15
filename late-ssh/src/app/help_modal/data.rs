@@ -472,6 +472,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
         "  /kick @user        remove a user from your private room (or a mod)",
+        "  /ban @user         ban from your stream room; add 7d and a reason",
+        "  /unban @user       lift a ban you set on your stream room",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",

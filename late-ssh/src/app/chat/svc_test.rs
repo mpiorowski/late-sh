@@ -3,9 +3,9 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::{ChatEvent, ChatReactionAction, ChatService};
 use crate::authz::Permissions;
 use crate::dartboard;
-use crate::moderation::command::ServerUserAction;
+use crate::moderation::command::{RoomModAction, ServerUserAction};
 use crate::moderation::event::ModerationEvent;
-use crate::moderation::service::ModerationInfra;
+use crate::moderation::service::{ModerationInfra, RoomModRequest};
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::{ActiveSession, ActiveUser};
 use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
@@ -16,6 +16,7 @@ use late_core::models::{
     chat_room::{ChatRoom, ChatRoomParams},
     chat_room_member::ChatRoomMember,
     chat_slow_mode::ChatSlowMode,
+    game_room::GameKind,
     moderation_audit_log::ModerationAuditLog,
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
@@ -4048,6 +4049,17 @@ async fn wait_for_message_containing(
     panic!("no message containing {needle:?} landed in the room");
 }
 
+/// A permanent, reasonless room action against `username` in `slug`.
+fn room_request(action: RoomModAction, slug: &str, username: &str) -> RoomModRequest {
+    RoomModRequest {
+        action,
+        slug: slug.to_string(),
+        username: username.to_string(),
+        duration: None,
+        reason: String::new(),
+    }
+}
+
 /// `/kick` in a private room: its owner may remove a regular member, a plain
 /// member may not, and staff are out of reach. The work happens through the
 /// moderation service, so membership, audit trail and session effects are the
@@ -4081,76 +4093,259 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     let mut events = service.subscribe_events();
 
     // A member who does not own the room cannot throw anyone out.
-    service.kick_from_room_task(
+    service.room_mod_task(
         guest.id,
         regular,
-        "study".to_string(),
-        "kick_owner".to_string(),
+        room_request(RoomModAction::Kick, "study", "kick_owner"),
     );
-    expect_kick_failed(&mut events, guest.id).await;
+    expect_room_mod_failed(&mut events, guest.id).await;
     assert!(
         is_member(&test_db.db, room.id, owner.id).await,
         "a non-owner must not be able to kick"
     );
 
     // The owner cannot reach staff either: ownership carries no rank.
-    service.kick_from_room_task(
+    service.room_mod_task(
         owner.id,
         regular,
-        "study".to_string(),
-        "kick_staff".to_string(),
+        room_request(RoomModAction::Kick, "study", "kick_staff"),
     );
-    expect_kick_failed(&mut events, owner.id).await;
+    expect_room_mod_failed(&mut events, owner.id).await;
     assert!(
         is_member(&test_db.db, room.id, staff.id).await,
         "an owner must not be able to kick a moderator"
     );
 
     // But the owner does keep the door.
-    service.kick_from_room_task(
+    service.room_mod_task(
         owner.id,
         regular,
-        "study".to_string(),
-        "kick_guest".to_string(),
+        room_request(RoomModAction::Kick, "study", "kick_guest"),
     );
-    expect_kick_succeeded(&mut events, owner.id).await;
+    expect_room_mod_succeeded(&mut events, owner.id).await;
     assert!(
         !is_member(&test_db.db, room.id, guest.id).await,
         "the owner may remove a regular member"
     );
+
+    // A private room's owner keeps the door only. Banning is a stream-room
+    // power: an invite-only room cannot be walked back into, so its owner has
+    // no need of the lock and does not get it.
+    service.room_mod_task(
+        owner.id,
+        regular,
+        room_request(RoomModAction::Ban, "study", "kick_guest"),
+    );
+    expect_room_mod_failed(&mut events, owner.id).await;
 }
 
-/// Await the kick refusal for `actor`. The event is what makes the
-/// "still a member" assertion below it deterministic.
-async fn expect_kick_failed(events: &mut tokio::sync::broadcast::Receiver<ChatEvent>, actor: Uuid) {
-    loop {
-        let event = timeout(Duration::from_secs(2), events.recv())
+/// `/ban` in a stream room: the streamer may ban a regular and lift it again,
+/// staff stay out of reach, and a viewer holds no power in someone else's
+/// room. The ban is what a streamer actually needs, since a kicked viewer
+/// walks straight back into a public room from the rail.
+#[tokio::test]
+async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let streamer = create_test_user(&test_db.db, "ban_streamer").await;
+    let heckler = create_test_user(&test_db.db, "ban_heckler").await;
+    let staff = create_test_user(&test_db.db, "ban_staff").await;
+    User::set_moderator(&client, staff.id, true)
+        .await
+        .expect("promote staff");
+
+    let room = ChatRoom::get_or_create_stream_room(&client, &streamer.username, streamer.id)
+        .await
+        .expect("create stream room");
+    let slug = room.slug.clone().expect("stream room slug");
+    for member in [streamer.id, heckler.id, staff.id] {
+        ChatRoomMember::join(&client, room.id, member)
             .await
-            .expect("kick failure event timeout")
-            .expect("event");
-        match event {
-            ChatEvent::KickFailed { user_id, .. } if user_id == actor => return,
-            ChatEvent::KickSucceeded { user_id, .. } if user_id == actor => {
-                panic!("expected the kick to be refused")
-            }
-            _ => {}
-        }
+            .expect("join room");
     }
+
+    let regular = Permissions::new(false, false);
+    let mut events = service.subscribe_events();
+
+    // A viewer holds nothing in a room that is not theirs.
+    service.room_mod_task(
+        heckler.id,
+        regular,
+        room_request(RoomModAction::Ban, &slug, "ban_streamer"),
+    );
+    expect_room_mod_failed(&mut events, heckler.id).await;
+
+    // Ownership carries no rank, so staff are untouchable in it.
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        room_request(RoomModAction::Ban, &slug, "ban_staff"),
+    );
+    expect_room_mod_failed(&mut events, streamer.id).await;
+
+    // The streamer bans a regular: membership drops and the row is written.
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        RoomModRequest {
+            reason: "shouting".to_string(),
+            ..room_request(RoomModAction::Ban, &slug, "ban_heckler")
+        },
+    );
+    expect_room_mod_succeeded(&mut events, streamer.id).await;
+    assert!(
+        !is_member(&test_db.db, room.id, heckler.id).await,
+        "a banned viewer must lose room membership"
+    );
+    assert!(
+        RoomBan::is_active_for_room_and_user(&client, room.id, heckler.id)
+            .await
+            .expect("ban lookup"),
+        "the ban must persist as a row, not just a membership drop"
+    );
+
+    // And can lift it again.
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        room_request(RoomModAction::Unban, &slug, "ban_heckler"),
+    );
+    expect_room_mod_succeeded(&mut events, streamer.id).await;
+    assert!(
+        !RoomBan::is_active_for_room_and_user(&client, room.id, heckler.id)
+            .await
+            .expect("ban lookup"),
+        "unban must clear the row"
+    );
 }
 
-async fn expect_kick_succeeded(
+/// Ownership powers are scoped to *stream* rooms, not to game rooms at large.
+/// Other game rooms (house tables, daily match chats) also carry a
+/// `created_by`, and without the `game_kind` check that user would inherit a
+/// streamer's powers over everyone sitting there.
+#[tokio::test]
+async fn a_non_stream_game_room_has_no_owner_moderator() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let creator = create_test_user(&test_db.db, "table_creator").await;
+    let player = create_test_user(&test_db.db, "table_player").await;
+
+    let room = ChatRoom::get_or_create_game_room(&client, GameKind::Poker, "poker-owner-test")
+        .await
+        .expect("create game room");
+    ChatRoom::set_creator(&client, room.id, creator.id)
+        .await
+        .expect("set creator");
+    for member in [creator.id, player.id] {
+        ChatRoomMember::join(&client, room.id, member)
+            .await
+            .expect("join room");
+    }
+
+    let mut events = service.subscribe_events();
+    service.room_mod_task(
+        creator.id,
+        Permissions::new(false, false),
+        room_request(RoomModAction::Ban, "poker-owner-test", "table_player"),
+    );
+    expect_room_mod_failed(&mut events, creator.id).await;
+    assert!(
+        is_member(&test_db.db, room.id, player.id).await,
+        "a game room that is not a stream room has no owner-moderator"
+    );
+}
+
+/// What makes a ban mean anything in a public room: the rail's join path must
+/// refuse a banned user, or they are back in the room the moment they click
+/// it. Enforced down in `ChatRoomMember::join` so every join path inherits it;
+/// pinned here because a streamer's ban is worthless without it.
+#[tokio::test]
+async fn banned_user_cannot_rejoin_a_public_game_room() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let streamer = create_test_user(&test_db.db, "rejoin_streamer").await;
+    let heckler = create_test_user(&test_db.db, "rejoin_heckler").await;
+    let room = ChatRoom::get_or_create_stream_room(&client, &streamer.username, streamer.id)
+        .await
+        .expect("create stream room");
+
+    // Anyone may walk into a stream room from the rail.
+    service
+        .join_game_room(heckler.id, room.id)
+        .await
+        .expect("first join");
+    assert!(is_member(&test_db.db, room.id, heckler.id).await);
+
+    RoomBan::activate(&client, room.id, heckler.id, streamer.id, "shouting", None)
+        .await
+        .expect("ban");
+    ChatRoomMember::leave(&client, room.id, heckler.id)
+        .await
+        .expect("leave");
+
+    let error = service
+        .join_game_room(heckler.id, room.id)
+        .await
+        .expect_err("a banned user must not rejoin");
+    assert!(
+        error.to_string().contains("banned"),
+        "expected a ban refusal, got: {error}"
+    );
+    assert!(
+        !is_member(&test_db.db, room.id, heckler.id).await,
+        "a refused join must not restore membership"
+    );
+}
+
+/// Await the refusal for `actor`. The event is what makes the assertion
+/// below it deterministic.
+async fn expect_room_mod_failed(
     events: &mut tokio::sync::broadcast::Receiver<ChatEvent>,
     actor: Uuid,
 ) {
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
-            .expect("kick success event timeout")
+            .expect("room mod failure event timeout")
             .expect("event");
         match event {
-            ChatEvent::KickSucceeded { user_id, .. } if user_id == actor => return,
-            ChatEvent::KickFailed { user_id, message } if user_id == actor => {
-                panic!("expected the kick to be allowed, got: {message}")
+            ChatEvent::RoomModFailed { user_id, .. } if user_id == actor => return,
+            ChatEvent::RoomModSucceeded { user_id, .. } if user_id == actor => {
+                panic!("expected the room action to be refused")
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn expect_room_mod_succeeded(
+    events: &mut tokio::sync::broadcast::Receiver<ChatEvent>,
+    actor: Uuid,
+) {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("room mod success event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::RoomModSucceeded { user_id, .. } if user_id == actor => return,
+            ChatEvent::RoomModFailed { user_id, message } if user_id == actor => {
+                panic!("expected the room action to be allowed, got: {message}")
             }
             _ => {}
         }

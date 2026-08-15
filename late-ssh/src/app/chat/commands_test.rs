@@ -30,7 +30,7 @@ fn rank_command_matches_lists_user_commands_for_empty_query() {
     let ranked_names = names(&ranked);
     assert_eq!(
         ranked_names.iter().copied().take(4).collect::<Vec<_>>(),
-        vec!["active", "aquarium", "binds", "brb"]
+        vec!["active", "aquarium", "ban", "binds"]
     );
     let mut sorted = ranked_names.clone();
     sorted.sort_unstable();

@@ -7,6 +7,7 @@ use late_core::{
     db::Db,
     models::{
         chat_room_member::ChatRoomMember,
+        room_ban::RoomBan,
         voice_channel::{TARGET_CHAT_ROOM, VoiceChannel},
     },
 };
@@ -994,6 +995,13 @@ async fn ensure_user_can_join_voice(
 
     if !ChatRoomMember::is_member(client, chat_room_id, user_id).await? {
         anyhow::bail!("you are not a member of this voice room");
+    }
+
+    // A room ban takes the microphone too. Membership alone is not enough:
+    // banning drops membership, but public rooms can be re-entered freely, so
+    // without this check a banned user rejoins the room and is back on the mic.
+    if RoomBan::is_active_for_room_and_user(client, chat_room_id, user_id).await? {
+        anyhow::bail!("you are banned from this voice room");
     }
 
     Ok(())

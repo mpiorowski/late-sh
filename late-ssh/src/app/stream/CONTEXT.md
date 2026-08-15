@@ -3,24 +3,13 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-14 (Watch-page reconnect: the viewer's LiveKit
-  identity is now `viewer-{watcher_id}` from the page's stable id instead of
-  a fresh random per grant fetch, connect failures back off instead of
-  retrying every 10s forever, a failed `Room` is disposed instead of
-  abandoned, and a dropped connection reconnects in place instead of
-  dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
-  path per sound: the CLI voice runtime
-  now plays human microphones only — program audio (the OBS ingress mix,
-  the console's screen-share audio) and every `stream-*` publisher are
-  unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
-  users eating the game mix. Both consumers classify program audio by the
-  `stream-*` identity; the `SCREEN_SHARE_AUDIO` label set at CreateIngress
-  is advisory only, since it may not survive transcoding-off passthrough.
-  The watch page defaults audio ON (autoplay permitting), grows a separate
-  voices on/off toggle for CLI viewers, a volume slider, and fullscreen.
-  The go-live console's browser mic and its whole `mic_live`/on-air
-  pipeline were removed — macOS CLI voice landed, so voice is CLI-only
-  with zero exceptions. See §4)
+- Last updated: 2026-08-15 (Stream owners moderate their own room: `/ban
+  @user [duration] [reason]` and `/unban @user` in the stream room run the
+  same `ModerationService` room action as staff, authorized by a narrow
+  `STREAM_OWNER` cap set resolved from `game_kind='stream'` +
+  `created_by`. Ban rather than kick, because a public room is re-enterable.
+  A room ban now also refuses a voice ticket, so it takes the microphone and
+  not just the chat. See §6)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -308,6 +297,15 @@ Cross-domain touchpoints:
 - `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`
   — `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.
+- Stream-owner moderation (§6): `policy_test.rs` pins the `STREAM_OWNER`
+  caps and that ownership never widens a moderator's reach;
+  `chat/svc_test.rs` covers the streamer banning and unbanning a regular,
+  a viewer holding nothing in someone else's room, staff being out of
+  reach, a private room's owner *not* gaining the ban, a non-stream game
+  room having no owner-moderator, and a banned user failing to rejoin;
+  `voice/svc_test.rs::a_room_banned_user_is_refused_a_voice_ticket` pins
+  the microphone half; `chat/state_internal_test.rs` covers the
+  `/ban @user [duration] [reason]` parse (duration slot vs reason).
 - `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow` — the
   whole HTTP flow end to end against a real registry + DB, including the
   404s for dead capability ids and the watch grant's identity contract:
@@ -356,6 +354,40 @@ user id). `ModerationInfra` carries the `StreamService` for all of it.
 - `/mod` room tools (ban, kick-from-room, slow mode) work on the stream
   chat room like any other room, but they do not touch the media: the
   publisher's grant comes from the per-stream token, not room membership.
+
+### The streamer's own tools
+
+A streamer moderates their own room without staff. `/ban @user [duration]
+[reason]` and `/unban @user`, typed in the stream room, run the same
+`ModerationService` room action as the mod surface: same audit log, same
+voice revoke, same live-session notify. Authorization is resolved in
+`resolve_room_ownership` (`moderation/service.rs`), the one place room
+actions are authorized, which grants `STREAM_OWNER` caps (kick + ban +
+unban, `moderation/policy.rs`) when the room is `game_kind='stream'` and
+`created_by` is the actor. Two deliberate narrowings there:
+
+- **Ban, not just kick.** A stream room is public, so a kicked viewer walks
+  back in from the rail. The ban is the only thing that holds; `/kick` is
+  kept for the "settle down" case.
+- **`created_by`, never the derived `ChatRoom::owner_id`.** That helper
+  succeeds to the earliest remaining member, which on a public room would
+  hand a passing viewer the streamer's powers. The check is also scoped to
+  `game_kind='stream'` so a daily match's challenger does not inherit
+  powers over their own opponent.
+
+Ownership carries no rank (`Permissions::can` still compares tiers), so a
+streamer cannot touch staff, and the grant is per-action, never standing.
+
+A room ban takes the microphone too: `ensure_user_can_join_voice`
+(`voice/svc.rs`) refuses a banned user a voice ticket. Membership alone
+could not carry this, since banning drops membership but a public room is
+re-enterable. `ChatRoomMember::join` refuses banned users for every join
+path, so the room door needs nothing extra.
+
+Out of reach by design: anonymous `/live/{id}` watch pages carry no identity
+to ban. They also cannot speak (`canPublish=false`), so a banned viewer can
+lurk on the page but not make noise. Ending the stream is the only lever
+against the anonymous audience.
 - A minted LiveKit token stays valid for an hour; the force-disconnect plus
   the refusal on the next `/golive` is what makes any of these bite now.
 

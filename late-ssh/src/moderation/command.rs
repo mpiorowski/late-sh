@@ -818,7 +818,10 @@ fn parse_role_mod_command(mod_action: RoleAction, parts: &[&str]) -> Result<ModC
     })
 }
 
-fn parse_optional_duration(
+/// Read a duration out of the token at `duration_index`, if that token is one.
+/// Returns the index the reason starts at, so a caller can tell
+/// `/ban @user 7d spam` from `/ban @user spamming`.
+pub(crate) fn parse_optional_duration(
     value: Option<&str>,
     duration_index: usize,
 ) -> Result<(Option<chrono::Duration>, usize)> {

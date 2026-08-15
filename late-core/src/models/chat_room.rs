@@ -389,6 +389,23 @@ impl ChatRoom {
             .collect())
     }
 
+    /// The streamer whose room this is, or `None` when the room is not a
+    /// stream room. Deliberately not the derived `owner_id`: that one succeeds
+    /// to the earliest remaining member, which on a *public* room would hand a
+    /// passing viewer the streamer's moderation powers. A stream room's owner
+    /// is the recorded `created_by` and nobody else, for as long as the room
+    /// exists.
+    pub async fn stream_room_owner(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
+        let row = client
+            .query_opt(
+                "SELECT created_by FROM chat_rooms
+                 WHERE id = $1 AND kind = 'game' AND game_kind = 'stream'",
+                &[&room_id],
+            )
+            .await?;
+        Ok(row.and_then(|row| row.get("created_by")))
+    }
+
     /// The owner of one room. Same derivation as `owner_ids_for_rooms`.
     pub async fn owner_id(client: &Client, room_id: Uuid) -> Result<Option<Uuid>> {
         Ok(Self::owner_ids_for_rooms(client, &[room_id])
