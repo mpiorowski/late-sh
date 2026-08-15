@@ -231,6 +231,13 @@
                 try { next.disconnect(); } catch (e) { }
                 throw err;
             }
+            // The stream can end while the connect is in flight: endStream
+            // saw room === null then, so this side owns the cleanup, or the
+            // ended page keeps a live media connection to the room.
+            if (ended) {
+                try { next.disconnect(); } catch (e) { }
+                return;
+            }
             room = next;
             next.remoteParticipants.forEach(function (participant) {
                 participant.trackPublications.forEach(function (publication) {

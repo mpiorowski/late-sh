@@ -106,7 +106,7 @@ async fn watch_state_handler(
 /// The page's stable watcher id rides through to late-ssh, which turns it
 /// into the viewer's LiveKit identity so retries reuse one participant. It
 /// is validated here too, since it is interpolated into the internal query
-/// string: same hex/dash shape as a capability id.
+/// string: same alnum/dash shape as a capability id.
 async fn watch_grant_handler(
     Path(id): Path<String>,
     Query(params): Query<WatchGrantParams>,
