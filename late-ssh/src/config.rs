@@ -220,7 +220,7 @@ fn parse_cidrs(label: &str, value: &str) -> anyhow::Result<Vec<IpNet>> {
 
 /// Ports that differ between the two local compose instances; everything else
 /// in the dev profile is identical. The compose-side half (host port mapping)
-/// lives in the root Makefile's INSTANCE2_OVERRIDES and must stay in sync.
+/// lives in the root .env.dev / .env.dev2 templates and must stay in sync.
 struct DevInstance {
     ssh_port: u16,
     api_port: u16,
@@ -261,9 +261,9 @@ impl Config {
         Ok(config)
     }
 
-    /// Local docker compose stack. Secrets come from the Makefile-generated
-    /// `.env` (shared with the door-game and LiveKit containers) or from a
-    /// personal `.env.local`.
+    /// Local docker compose stack. Secrets come from `.env`, copied from the
+    /// committed `.env.dev` / `.env.dev2` templates (shared with the
+    /// door-game and LiveKit containers), or from a personal `.env.local`.
     fn dev(env: Env, instance: DevInstance) -> anyhow::Result<Self> {
         Ok(Self {
             env,
