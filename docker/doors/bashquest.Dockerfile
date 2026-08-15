@@ -22,7 +22,7 @@ FROM debian:${DEBIAN_VERSION}-slim AS bashquest-build
 # moving branch ref, so the build is reproducible and a checksum mismatch
 # means the pin is stale, not that upstream silently changed underneath us.
 ARG BASHQUEST_COMMIT=c72dcbbf8f3ba8a58df8095cec2df039341b9aba
-ARG BASHQUEST_URL=https://raw.githubusercontent.com/hardlygospel/bashquest/c72dcbbf8f3ba8a58df8095cec2df039341b9aba/bashquest.sh
+ARG BASHQUEST_URL=https://raw.githubusercontent.com/hardlygospel/bashquest/ede5a0060b7d47e327fe1ed6237b562e717ef41f/bashquest.sh
 ARG BASHQUEST_SHA256=e6f3aa11686cb3f0d35ccfbfea28d18a16d0d04d296eb7e7ec12e813df214b45
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
