@@ -54,7 +54,9 @@ mod inner {
         match game {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
+            ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
+            ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",
             ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",

@@ -172,9 +172,13 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert!(body.contains("demo show"));
     // No subscribe grant while pending: nobody listens to the room's voice
     // channel before media has actually flowed.
-    let (status, _) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
-        .await
-        .expect("pending watch grant");
+    let (status, _) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("pending watch grant");
     assert_eq!(status, 404);
 
     // The publisher page fetches its grant; the first fetch claims the

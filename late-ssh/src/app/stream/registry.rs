@@ -45,9 +45,7 @@ pub const WATCHER_ID_MAX_LEN: usize = 64;
 pub fn valid_watcher_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= WATCHER_ID_MAX_LEN
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// Lifecycle of one registered stream. `Pending` is the window between

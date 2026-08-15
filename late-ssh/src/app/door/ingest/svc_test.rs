@@ -10,7 +10,7 @@ use crate::test_helpers::{new_test_db, wait_until};
 
 const HANDLE: &str = "Wormsong";
 
-async fn ingest_service(db: &late_core::db::Db) -> DoorIngestService {
+fn ingest_service(db: &late_core::db::Db) -> DoorIngestService {
     let (activity_tx, _rx) = crate::app::activity::channel::new(64);
     let activity = ActivityPublisher::new(db.clone(), activity_tx);
     DoorIngestService::new(db.clone(), ChipService::new(db.clone()), activity)
@@ -121,7 +121,7 @@ async fn replayed_run_lines_land_one_row() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-replay").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     let frame = death_frame(500);
     svc.handle_dcss_frame(&frame).await.expect("first ingest");
@@ -151,7 +151,7 @@ async fn reserved_and_unknown_names_advance_the_cursor_without_rows() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-skip").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     // A legacy derived playname (reserved shape) and a name nobody claimed.
     for (offset, name) in [(100, "late_a1b2c3"), (200, "NeverClaimed")] {
@@ -179,7 +179,7 @@ async fn orb_milestone_lands_and_pays_once_per_lifetime() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-orb").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     svc.handle_dcss_frame(&orb_frame(300))
         .await
@@ -234,7 +234,7 @@ async fn a_lost_badge_heals_on_the_next_sighting() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-heal").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     svc.handle_dcss_frame(&orb_frame(300))
         .await
@@ -281,7 +281,7 @@ async fn a_win_grants_both_badges() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-win").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     svc.handle_dcss_frame(&win_frame(900))
         .await
@@ -340,7 +340,7 @@ async fn replayed_nethack_run_lands_one_row_and_backfills_the_amulet() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-replay").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     let frame = nethack_death_frame(500);
     svc.handle_nethack_frame(&frame)
@@ -385,7 +385,7 @@ async fn cheat_mode_nethack_runs_advance_the_cursor_without_attribution() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-cheat").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     // An explore-mode ascension: flagged non-scoring, must land nothing.
     svc.handle_nethack_frame(&StatsFrame {
@@ -415,7 +415,7 @@ async fn a_nethack_ascension_grants_both_badges() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-win").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     svc.handle_nethack_frame(&StatsFrame {
         file: "xlogfile".to_string(),
@@ -468,7 +468,7 @@ async fn amulet_livelog_milestone_lands_and_pays_once_per_lifetime() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-amulet").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     let amulet_frame = |offset: i64| StatsFrame {
         file: "livelog".to_string(),
@@ -553,7 +553,7 @@ async fn replayed_brogue_run_lands_one_row() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "br-replay").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     let frame = brogue_death_frame(500);
     svc.handle_brogue_frame(&frame).await.expect("first ingest");
@@ -587,7 +587,7 @@ async fn brogue_endings_grant_only_their_own_badge() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "br-win").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     // An escape pays the 10k tier and nothing else (no back-grant: Brogue's
     // endings are alternatives, not stages).
@@ -659,7 +659,7 @@ async fn brogue_reset_markers_and_foreign_files_only_advance_the_cursor() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "br-reset").await;
     claim_handle(&test_db.db, user.id).await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     // The stats-reset marker: expected shape, nothing persisted.
     svc.handle_brogue_frame(&StatsFrame {
@@ -698,7 +698,7 @@ async fn brogue_reset_markers_and_foreign_files_only_advance_the_cursor() {
 async fn unparseable_and_untracked_lines_only_advance_the_cursor() {
     let test_db = new_test_db().await;
     let _user = create_test_user(&test_db.db, "dcss-junk").await;
-    let svc = ingest_service(&test_db.db).await;
+    let svc = ingest_service(&test_db.db);
 
     // Truncated logfile line.
     svc.handle_dcss_frame(&StatsFrame {
