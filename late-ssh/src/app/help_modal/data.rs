@@ -1227,9 +1227,6 @@ fn settings_help_lines() -> Vec<String> {
         "  Compose".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
-        "  Music".to_string(),
-        "    Start app with music muted    mutes the first paired audio client on each new session so music doesn't auto-play"
-            .to_string(),
         "  Display".to_string(),
         "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
@@ -1357,6 +1354,8 @@ fn streaming_help_lines() -> Vec<String> {
         "  The two kinds do not mix: to switch, /golive stop first, then start the other.",
         "  Rerunning /golive obs while set up shows the same credentials again.",
         "  /golive stop       end your stream (either kind)",
+        "  Either handoff box stays up until you press Esc, so a stray key cannot",
+        "  take the URL or the token off your screen while you copy it.",
         "",
         "Watching",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",

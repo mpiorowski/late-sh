@@ -1,7 +1,7 @@
 //! Stream overlays. The OBS handoff modal shows the WHIP connection
 //! details from `/golive obs`; the values are hand-copied into OBS
 //! (Settings -> Stream -> Service: WHIP), so every value gets its own
-//! full-width row and nothing is ever clipped.
+//! full-width row, nothing is ever clipped, and only Esc closes it.
 
 use ratatui::{
     Frame,
@@ -44,7 +44,7 @@ pub fn draw_obs_overlay(
             dim,
         )),
         Line::from(""),
-        Line::from(Span::styled("  Press any key to close.", dim)),
+        Line::from(Span::styled("  Press Esc to close.", dim)),
         Line::from(""),
     ];
 

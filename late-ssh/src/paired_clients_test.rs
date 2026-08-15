@@ -473,6 +473,53 @@ fn paired_client_register_rejects_past_per_token_cap() {
         .expect("other tokens still register");
 }
 
+#[test]
+fn stored_device_audio_is_applied_once_per_session_and_retired_with_it() {
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
+
+    assert!(registry.audio_alignment_pending("tok1"));
+    registry.note_alignment_applied("tok1");
+
+    // A pair-WS reconnect mid-session must not be re-aligned: the session
+    // already runs with whatever mute and volume the user set.
+    assert!(!registry.audio_alignment_pending("tok1"));
+    assert!(registry.audio_alignment_pending("tok2"));
+
+    // The next SSH session is a new CLI process, so it aligns again.
+    registry.forget_session("tok1");
+    assert!(registry.audio_alignment_pending("tok1"));
+}
+
+#[test]
+fn only_a_changed_device_audio_claims_a_write() {
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
+    let playing = KeyAudio {
+        muted: false,
+        volume_percent: 30,
+    };
+    let muted = KeyAudio {
+        muted: true,
+        volume_percent: 30,
+    };
+
+    // Seeded from the connect-time read, so the value just loaded out of the
+    // DB is never written straight back.
+    registry.note_persisted_audio("tok1", Some(playing));
+    assert!(!registry.claim_audio_write("tok1", playing));
+
+    // The CLI re-reports its state on every heartbeat; only a real change may
+    // cost a write, and only the first report of that change.
+    assert!(registry.claim_audio_write("tok1", muted));
+    assert!(!registry.claim_audio_write("tok1", muted));
+
+    // A failed write clears the claim so the next report retries.
+    registry.note_persisted_audio("tok1", None);
+    assert!(registry.claim_audio_write("tok1", muted));
+
+    // A device that has never stored anything writes its first report.
+    assert!(registry.claim_audio_write("tok2", playing));
+}
+
 /// Wire contract with both paired clients: `late-cli` and `late-webview`
 /// deserialize these exact event names when the server fans a desktop media
 /// command back out.

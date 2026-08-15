@@ -3,24 +3,11 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-14 (Watch-page reconnect: the viewer's LiveKit
-  identity is now `viewer-{watcher_id}` from the page's stable id instead of
-  a fresh random per grant fetch, connect failures back off instead of
-  retrying every 10s forever, a failed `Room` is disposed instead of
-  abandoned, and a dropped connection reconnects in place instead of
-  dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
-  path per sound: the CLI voice runtime
-  now plays human microphones only — program audio (the OBS ingress mix,
-  the console's screen-share audio) and every `stream-*` publisher are
-  unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
-  users eating the game mix. Both consumers classify program audio by the
-  `stream-*` identity; the `SCREEN_SHARE_AUDIO` label set at CreateIngress
-  is advisory only, since it may not survive transcoding-off passthrough.
-  The watch page defaults audio ON (autoplay permitting), grows a separate
-  voices on/off toggle for CLI viewers, a volume slider, and fullscreen.
-  The go-live console's browser mic and its whole `mic_live`/on-air
-  pipeline were removed — macOS CLI voice landed, so voice is CLI-only
-  with zero exceptions. See §4)
+- Last updated: 2026-08-15 (Both handoff modals now close on Esc alone
+  instead of any key, so a stray keystroke cannot take a hand-copied WHIP
+  token or watch URL off the screen; and the chat header's watch URL keeps
+  a trailing space so terminal link detection stops at the URL instead of
+  swallowing the pane border `│` or the `────` rule below it. See §2 and §5)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -49,7 +36,11 @@ Owned by this domain:
   `WentLive` announcement, the event channel back to sessions, the ingress
   status poll, the sweeper.
 - `ui.rs` — the OBS handoff overlay (`/golive obs`: WHIP server URL +
-  bearer token + watch link, hand-copied into OBS, dismissed by any key).
+  bearer token + watch link, hand-copied into OBS). **Esc is the only way
+  out**, for it and for the `/golive`/`/watch` QR modal alike: the values
+  are read off the screen and typed elsewhere, so a stray keystroke must not
+  take them away. Every other event is swallowed while either is up
+  (`app/input.rs`, the gate above everything but the announcements).
 - The `/golive [title|stop]`, `/golive obs [title]`, and `/watch @user`
   composer commands (parsed in `chat/state.rs`, drained by
   `App::tick_stream` in `app/state.rs`).
@@ -133,8 +124,11 @@ Cross-domain touchpoints:
   change), the rail's `RoomSection::Stream` (under Core, above
   Cyberspace/Channels, visible from `/golive` on), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
-  room's chat (title, watcher count, watch-URL nudge), and the stream-room
-  arm in `select_room_slot` (lazy join on first open).
+  room's chat (title, watcher count, watch-URL nudge; the URL carries a
+  trailing space so it never lands in the last column, where terminal link
+  detection swallows the pane border `│` or the `────` rule below it and
+  hands the clicker a 404), and the stream-room arm in `select_room_slot`
+  (lazy join on first open).
 - `app/voice/ui.rs::OnAirView` — the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
@@ -293,6 +287,10 @@ Cross-domain touchpoints:
   announcement.
 - `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
   and survives a tiny terminal.
+- `input_flow_test.rs::only_esc_closes_the_stream_modal`: keys, Enter, and
+  a left click all leave the handoff modal up; Esc closes it.
+- `chat/ui_test.rs::stream_header_never_lets_the_watch_url_touch_the_right_edge`:
+  the header row's watch URL always ends one column short of the edge.
 - `chat/state_internal_test.rs` — `/golive` parse routing (console vs `obs`
   vs `stop`) and the title clamp.
 - `activity/filter_test.rs` — the `is watching` line ships to #lounge and

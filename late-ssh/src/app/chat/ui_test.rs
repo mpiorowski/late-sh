@@ -68,6 +68,49 @@ fn author_badge_suffix_keeps_badges_compact() {
     assert_eq!(format_author_badge_suffix(&[], None, None), "");
 }
 
+fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStreamView {
+    crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking on late".to_string(),
+        room_id: Uuid::from_u128(8),
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc123".to_string(),
+        live: true,
+        watching: 3,
+        watch_url: watch_url.to_string(),
+    }
+}
+
+#[test]
+fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
+    let url = "https://late.sh/live/abc123";
+    let width = 80;
+    let line = stream_header_line(&live_stream_view(url), width);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    // Terminals detect links over the cell grid, so a URL flush against the
+    // last column absorbs the pane border `│` and the `────` rule below it.
+    assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+    assert!(text.ends_with(&format!("{url} ")), "got {text:?}");
+}
+
+#[test]
+fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
+    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 30);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    assert!(!text.contains("watch:"), "got {text:?}");
+}
+
 #[test]
 fn chat_composer_layout_keeps_one_blank_row_gap() {
     let area = Rect::new(0, 0, 80, 20);

@@ -801,22 +801,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Stream URL + QR modal: any key or click closes it. It sits above
-    // everything except the announcements: the URL it shows was just
-    // requested, so nothing else should swallow the dismissal.
+    // Stream URL + QR modal: Esc closes it and nothing else does. The modal
+    // carries hand-copied capability values (the watch link, the WHIP server
+    // and bearer token), so a stray keystroke while reading them must not
+    // take the values off the screen. Esc lands in `dispatch_escape`; every
+    // other event is swallowed here. It sits above everything except the
+    // announcements, so nothing else steals the keys either.
     if app.stream_modal.is_some() {
-        if matches!(
-            event,
-            ParsedInput::Byte(_)
-                | ParsedInput::Char(_)
-                | ParsedInput::Arrow(_)
-                | ParsedInput::Mouse(MouseEvent {
-                    kind: MouseEventKind::Down,
-                    ..
-                })
-        ) {
-            app.stream_modal = None;
-        }
         return;
     }
 
@@ -2032,10 +2023,10 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
-    // A lone Esc never reaches the any-key gate in `handle_parsed_input`
-    // (it dispatches here via the pending-escape flush instead), so the
-    // stream URL modal needs its own arm, first, mirroring its position
-    // above everything else in that gate.
+    // A lone Esc never reaches the swallow-everything gate in
+    // `handle_parsed_input` (it dispatches here via the pending-escape flush
+    // instead), so this arm is the stream URL modal's only way out and comes
+    // first, mirroring its position above everything else in that gate.
     if app.stream_modal.is_some() {
         app.stream_modal = None;
         return;

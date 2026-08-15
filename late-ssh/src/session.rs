@@ -69,6 +69,11 @@ pub enum SessionMessage {
 struct SessionEntry {
     tx: Sender<SessionMessage>,
     user_id: Uuid,
+    /// Fingerprint of the SSH key this session authenticated with, which is
+    /// the only device identity late.sh has. The pair WS needs it to read and
+    /// write this device's stored mute/volume, and the WS only ever knows a
+    /// session token, so the session is where it has to hang.
+    fingerprint: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -89,10 +94,23 @@ impl SessionRegistry {
         Self::default()
     }
 
-    pub async fn register(&self, token: String, tx: Sender<SessionMessage>, user_id: Uuid) {
+    pub async fn register(
+        &self,
+        token: String,
+        tx: Sender<SessionMessage>,
+        user_id: Uuid,
+        fingerprint: Option<String>,
+    ) {
         tracing::info!(token_hint = %token_hint(&token), "registered cli session token");
         let mut sessions = self.sessions.write().await;
-        sessions.insert(token, SessionEntry { tx, user_id });
+        sessions.insert(
+            token,
+            SessionEntry {
+                tx,
+                user_id,
+                fingerprint,
+            },
+        );
     }
 
     pub async fn unregister(&self, token: &str) {
@@ -112,6 +130,16 @@ impl SessionRegistry {
     pub async fn user_for(&self, token: &str) -> Option<Uuid> {
         let sessions = self.sessions.read().await;
         sessions.get(token).map(|entry| entry.user_id)
+    }
+
+    /// The device (SSH key fingerprint) this session authenticated with, if
+    /// any. `None` for a session whose key is unknown, which is also the
+    /// signal that this session's audio cannot be stored per device.
+    pub async fn fingerprint_for(&self, token: &str) -> Option<String> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .get(token)
+            .and_then(|entry| entry.fingerprint.clone())
     }
 
     pub async fn send_message(&self, token: &str, msg: SessionMessage) -> bool {

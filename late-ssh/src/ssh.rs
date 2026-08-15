@@ -387,6 +387,9 @@ impl Drop for ClientHandler {
         if self.app.is_none()
             && let Some(token) = self.session_token.clone()
         {
+            // No App was ever built, so `Drop for App` will not run: retire
+            // the paired registry's token-scoped state from here instead.
+            self.state.paired_client_registry.forget_session(&token);
             let registry = self.state.session_registry.clone();
             tokio::spawn(async move {
                 registry.unregister(&token).await;
@@ -457,7 +460,12 @@ impl ClientHandler {
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.state
             .session_registry
-            .register(session_token.clone(), session_tx, user_id)
+            .register(
+                session_token.clone(),
+                session_tx,
+                user_id,
+                self.auth_fingerprint.clone(),
+            )
             .await;
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);

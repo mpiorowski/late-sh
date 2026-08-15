@@ -370,6 +370,148 @@ fn effective_client_ip_falls_back_when_header_missing() {
     );
 }
 
+fn audio(muted: bool, volume_percent: u8) -> KeyAudio {
+    KeyAudio {
+        muted,
+        volume_percent,
+    }
+}
+
+#[test]
+fn a_freshly_booted_cli_is_aligned_to_its_stored_device_audio() {
+    // The CLI boots silent at 30%, so a stored (unmuted, 30%) has to unmute it
+    // or the session opens with no sound at all.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 30),
+            None,
+            true,
+            audio(false, 30)
+        ),
+        AudioAlignment {
+            volume_percent: None,
+            toggle_mute: true,
+        }
+    );
+    // Stored (muted, 30%) already matches the boot state, so nothing is sent.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 30),
+            None,
+            true,
+            audio(true, 30)
+        ),
+        AudioAlignment::default()
+    );
+}
+
+#[test]
+fn a_stored_mute_survives_the_volume_write_that_would_clear_it() {
+    // A non-zero SetVolume also clears mute on the client, so restoring
+    // (muted, 60%) must decide the mute half against the state *after* the
+    // volume write or the session comes back audible.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 30),
+            None,
+            true,
+            audio(true, 60)
+        ),
+        AudioAlignment {
+            volume_percent: Some(60),
+            toggle_mute: true,
+        }
+    );
+    // Restoring (unmuted, 60%) needs no toggle: the volume write unmutes.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 30),
+            None,
+            true,
+            audio(false, 60)
+        ),
+        AudioAlignment {
+            volume_percent: Some(60),
+            toggle_mute: false,
+        }
+    );
+    // A zero volume does not clear mute, so an unmuted target still toggles.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 30),
+            None,
+            true,
+            audio(false, 0)
+        ),
+        AudioAlignment {
+            volume_percent: Some(0),
+            toggle_mute: true,
+        }
+    );
+}
+
+#[test]
+fn a_reconnecting_cli_keeps_the_state_the_user_set() {
+    // Same session, second pair-WS connection (network change, ingress
+    // restart): the alignment is spent, so the client's own reported state is
+    // the target and nothing is sent, whatever is stored.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(true, 75),
+            Some(true),
+            false,
+            audio(false, 30)
+        ),
+        AudioAlignment::default()
+    );
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Cli,
+            audio(false, 20),
+            Some(false),
+            false,
+            audio(true, 90)
+        ),
+        AudioAlignment::default()
+    );
+}
+
+#[test]
+fn a_webview_helper_follows_the_live_cli_mute() {
+    // Helper respawn while the session is muted: follow the CLI, not the
+    // stored value and not the helper's own boot default.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Webview,
+            audio(false, 30),
+            Some(true),
+            false,
+            audio(false, 30)
+        ),
+        AudioAlignment {
+            volume_percent: None,
+            toggle_mute: true,
+        }
+    );
+    // No CLI entry and the alignment already spent: keep its own state.
+    assert_eq!(
+        align_paired_audio(
+            ClientKind::Webview,
+            audio(true, 30),
+            None,
+            false,
+            audio(false, 30)
+        ),
+        AudioAlignment::default()
+    );
+}
+
 fn test_trusted_cidrs(cidr_strings: Vec<&str>) -> Vec<IpNet> {
     cidr_strings
         .into_iter()

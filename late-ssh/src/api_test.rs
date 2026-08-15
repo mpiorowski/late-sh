@@ -16,12 +16,22 @@ async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {
     let (session_tx_one, _rx_one) = tokio::sync::mpsc::channel(1);
     state
         .session_registry
-        .register("tok-one".to_string(), session_tx_one, uuid::Uuid::now_v7())
+        .register(
+            "tok-one".to_string(),
+            session_tx_one,
+            uuid::Uuid::now_v7(),
+            None,
+        )
         .await;
     let (session_tx_two, _rx_two) = tokio::sync::mpsc::channel(1);
     state
         .session_registry
-        .register("tok-two".to_string(), session_tx_two, uuid::Uuid::now_v7())
+        .register(
+            "tok-two".to_string(),
+            session_tx_two,
+            uuid::Uuid::now_v7(),
+            None,
+        )
         .await;
 
     let listener = TcpListener::bind("127.0.0.1:0")
