@@ -1,4 +1,16 @@
-use super::{frame_lines, parse_cursors, valid_playname_dir};
+use super::{append_cursors, frame_lines, parse_cursors, valid_playname_dir};
+
+#[test]
+fn append_cursors_merges_split_requests() {
+    let merged = append_cursors(None, "players/mat/BrogueRunHistory.txt:123");
+    let merged = append_cursors(Some(merged), "players/zed_2/BrogueRunHistory.txt:456");
+    let cursors = parse_cursors(&merged);
+    assert_eq!(cursors.get("players/mat/BrogueRunHistory.txt"), Some(&123));
+    assert_eq!(
+        cursors.get("players/zed_2/BrogueRunHistory.txt"),
+        Some(&456)
+    );
+}
 
 #[test]
 fn parse_cursors_reads_path_shaped_ids() {

@@ -139,6 +139,7 @@ impl DoorIngestService {
                 match self.run_session(kind, &target).await {
                     Ok(()) => tracing::info!(?kind, "door stats stream ended; reconnecting"),
                     Err(error) => {
+                        crate::metrics::record_door_ingest_session_failure(kind.game());
                         tracing::warn!(?kind, ?error, "door stats session failed; reconnecting")
                     }
                 }
@@ -177,13 +178,16 @@ impl DoorIngestService {
                 DoorKind::Nethack => self.handle_nethack_frame(&frame).await,
                 DoorKind::Brogue => self.handle_brogue_frame(&frame).await,
             };
-            if let Err(error) = handled {
-                // Do not advance past this line: drop the stream and let the
-                // retry loop resume from the last committed cursor.
-                result = Err(error).with_context(|| {
-                    format!("handling {game} frame {}@{}", frame.file, frame.next_offset)
-                });
-                break;
+            match handled {
+                Ok(()) => crate::metrics::record_door_ingest_line(kind.game()),
+                Err(error) => {
+                    // Do not advance past this line: drop the stream and let
+                    // the retry loop resume from the last committed cursor.
+                    result = Err(error).with_context(|| {
+                        format!("handling {game} frame {}@{}", frame.file, frame.next_offset)
+                    });
+                    break;
+                }
             }
         }
         drop(rx);

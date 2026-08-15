@@ -211,7 +211,11 @@ impl Handler for ClientHandler {
                 Err(reason) => tracing::warn!(reason, "ignoring pushed rc"),
             }
         } else if variable_name == stats::CURSORS_ENV_VAR {
-            self.stats_cursors = Some(variable_value.to_string());
+            // A large cursor set arrives split across several requests.
+            self.stats_cursors = Some(stats::append_cursors(
+                self.stats_cursors.take(),
+                variable_value,
+            ));
         }
         Ok(())
     }

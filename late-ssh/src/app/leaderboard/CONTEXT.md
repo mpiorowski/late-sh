@@ -83,8 +83,10 @@ that the migrations and a few source comments still point at.
 - **Transport: a stats SSH session on the door host.** Each host reserves one
   SSH username, `late_stats` (inside the already-reserved `late_*` handle
   namespace, so no player can claim it). Instead of a game child it opens a log
-  stream: the client pushes its per-file byte offsets in one env request
-  (`LATE_DOOR_STATS_CURSORS`, `logfile:123,milestones:456`), the host streams
+  stream: the client pushes its per-file byte offsets in env requests
+  (`LATE_DOOR_STATS_CURSORS`, `logfile:123,milestones:456`; a large cursor set,
+  e.g. Brogue's one-file-per-player history, is split across several requests
+  the host concatenates), the host streams
   one `<file-id>\t<next-offset>\t<line>` frame per complete line with tail -f
   semantics, and stays **stateless**: no cursor storage, no parsing, no DB. All
   parsing lives in late-ssh, so a parser fix never needs a door redeploy, and
@@ -95,6 +97,10 @@ that the migrations and a few source comments still point at.
   door's `LATE_*_ENABLED`), `stream.rs` the stats SSH client, `dcss.rs` /
   `nethack.rs` / `brogue.rs` pure parsers, `award.rs` the shared
   `DoorAwards`/`DoorBadge` sink. Cursors persist in `door_log_cursors`.
+  Observability: `late_ssh_door_ingest_lines_total` and
+  `late_ssh_door_ingest_session_failures_total` (both labeled by game), so a
+  dead stats session or a poisoned frame is visible in monitoring, not just a
+  30s-retry warn log.
 - **Idempotency.** Unique `(game, source_file, source_offset)` on both fact
   tables, with the fact insert and the cursor advance committing in one
   transaction. Files are append-only and hosts single-replica, so offsets are

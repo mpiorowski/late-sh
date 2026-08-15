@@ -1,4 +1,13 @@
-use super::{frame_lines, parse_cursors};
+use super::{append_cursors, frame_lines, parse_cursors};
+
+#[test]
+fn append_cursors_merges_split_requests() {
+    let merged = append_cursors(None, "xlogfile:123");
+    let merged = append_cursors(Some(merged), "livelog:456");
+    let cursors = parse_cursors(&merged);
+    assert_eq!(cursors.get("xlogfile"), Some(&123));
+    assert_eq!(cursors.get("livelog"), Some(&456));
+}
 
 #[test]
 fn parse_cursors_reads_both_files() {

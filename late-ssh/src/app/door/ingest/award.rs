@@ -5,6 +5,9 @@
 //! Same dedup story as NetHack's: once per account for life, enforced twice
 //! over — the lifetime reward template claim and the `NOT EXISTS` profile
 //! award insert — so replays (cursor resets, backfill, re-wins) are no-ops.
+//! The two guards are independent: each grant half runs on every sighting, so
+//! a crash or DB error after one half committed heals on the next sighting of
+//! the same line instead of losing the other half forever.
 //! Backfilled historical wins DO grant (owner decision): it is the same
 //! achievement, and the idempotence makes it safe.
 //!
@@ -133,11 +136,11 @@ impl DoorAwards {
                     return;
                 }
             };
-            // Already claimed on a prior line/session — nothing more to do.
-            if !grant.credited {
-                return;
-            }
-
+            // The badge insert runs on every sighting, credited or not: it is
+            // NOT EXISTS-idempotent on its own, and gating it on the chip
+            // claim being fresh would lose the badge forever if the process
+            // died between the claim commit and this insert (`credited` never
+            // comes back true for the same account).
             let code = award_badge(badge.award_category(), 1);
             match db.get().await {
                 Ok(client) => {

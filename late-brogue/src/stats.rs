@@ -20,10 +20,11 @@
 // 2026-08-08), so those files are deliberately never opened.
 //
 // Protocol, deliberately dumb (identical to the nethack/dcss hosts):
-// - The client sends its per-file byte offsets in one env request before the
-//   shell ([`CURSORS_ENV_VAR`], value `<file-id>:<offset>,...`; a missing
-//   file starts at 0, so a fresh cursor ingests the whole history already on
-//   the PVC).
+// - The client sends its per-file byte offsets in env requests before the
+//   shell ([`CURSORS_ENV_VAR`], value `<file-id>:<offset>,...`; the set
+//   grows with the player count, so it arrives split across several
+//   requests, concatenated by [`append_cursors`]; a missing file starts at
+//   0, so a fresh cursor ingests the whole history already on the PVC).
 // - The host streams one frame per complete log line,
 //   `<file-id>\t<offset>\t<line>\n`, where `<offset>` is the byte offset
 //   AFTER the line in the source file — exactly the next cursor, so the
@@ -85,6 +86,21 @@ pub(crate) fn parse_cursors(value: &str) -> HashMap<String, u64> {
             Some((id.trim().to_string(), offset.trim().parse().ok()?))
         })
         .collect()
+}
+
+/// Merge one cursor env request into the accumulated value. The client splits
+/// a large cursor set across several requests (entries never split across a
+/// boundary); the values concatenate with the same `,` the entry list already
+/// uses, so [`parse_cursors`] reads the merged whole.
+pub(crate) fn append_cursors(current: Option<String>, value: &str) -> String {
+    match current {
+        Some(mut merged) if !merged.is_empty() => {
+            merged.push(',');
+            merged.push_str(value);
+            merged
+        }
+        _ => value.to_string(),
+    }
 }
 
 /// Whether a directory name is a playname this host could have created

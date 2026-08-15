@@ -288,6 +288,28 @@ async fn door_boards_rank_wins_depth_and_score() {
         .expect("insert milestone")
     );
 
+    // A milestone with a malformed depth and one with none at all: neither
+    // may rank, and neither may error the whole pass (the query casts the
+    // raw string to int only after a numeric guard).
+    for (raw, offset) in [(json!({"absdepth": "garbage"}), 310), (json!({}), 320)] {
+        assert!(
+            DoorMilestone::insert_ignore(
+                &client,
+                &NewDoorMilestone {
+                    game: DoorGame::Dcss.key(),
+                    user_id: winner.id,
+                    kind: DoorMilestoneKind::Rune,
+                    occurred_at: now,
+                    raw,
+                    source_file: "milestones".to_string(),
+                    source_offset: offset,
+                },
+            )
+            .await
+            .expect("insert hostile milestone")
+        );
+    }
+
     // Diver: deep death this month, no win; quits never count as wins.
     for new_run in [
         &run(diver.id, DoorRunResult::Death, 90_000, 24, 400),

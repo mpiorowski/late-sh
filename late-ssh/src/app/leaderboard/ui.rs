@@ -2,7 +2,7 @@
 //! monthly and all-time standings on the right. One renderer serves every
 //! board; per-board facts (title, hint, windows) come from `state::Board`.
 
-use late_core::models::leaderboard::{LeaderboardData, RankedEntry};
+use late_core::models::leaderboard::{DoorGame, LeaderboardData, RankedEntry};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -378,7 +378,9 @@ fn empty_copy(board: Board) -> &'static str {
     match board {
         Board::LateaniaAdventurers => "no adventurers yet, roll a character in the Games hub",
         Board::LateaniaFrontier => "no one has braved the Frontier yet",
-        Board::DoorWins(_) => "no wins yet, the Orb awaits",
+        Board::DoorWins(DoorGame::Dcss) => "no wins yet, the Orb awaits",
+        Board::DoorWins(DoorGame::Nethack) => "no ascensions yet, the Amulet awaits",
+        Board::DoorWins(DoorGame::Brogue) => "no escapes yet, depth 26 awaits",
         Board::DoorDepth(_) => "no dives recorded yet",
         Board::DoorScore(_) => "no scored runs yet",
         Board::TopChips => "no chip earnings yet this month",

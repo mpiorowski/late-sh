@@ -402,7 +402,11 @@ struct DoorWindowBoards {
 /// one-query-per-window shape. Wins count [`DoorRunResult::WINS`] results,
 /// all-time only. The dive family unions end-of-run depths with the depth
 /// snapshot on every tracked milestone line (see [`DoorBoards::depth`] for
-/// why runs alone would rank a clean winner at the surface).
+/// why runs alone would rank a clean winner at the surface). The milestone
+/// arm only reads `absdepth` values that are purely numeric: `raw` stores the
+/// log line's fields as uninterpreted strings, and an unguarded cast would
+/// let one malformed value error this query and take every board down with
+/// it.
 async fn fetch_door_boards(
     client: &Client,
     window: DoorWindow,
@@ -446,7 +450,8 @@ async fn fetch_door_boards(
                     UNION ALL
                     SELECT game, user_id, (raw->>'absdepth')::int AS depth
                     FROM door_milestones
-                    WHERE game IN ({keys}) AND raw ? 'absdepth' {milestones_filter}
+                    WHERE game IN ({keys})
+                      AND raw->>'absdepth' ~ '^[0-9]+$' {milestones_filter}
                 ),
                 families AS (
                     {wins_arm}

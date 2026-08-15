@@ -52,7 +52,7 @@ fn orb_frame(offset: i64) -> StatsFrame {
         file: "milestones".to_string(),
         next_offset: offset,
         line: format!(
-            "v=0.34.1:name={HANDLE}:xl=25:place=Zot::5:time=20260006215500S:type=orb:milestone=found the Orb of Zot!"
+            "v=0.34.1:name={HANDLE}:xl=25:place=Zot::5:absdepth=27:time=20260006215500S:type=orb:milestone=found the Orb of Zot!"
         ),
     }
 }
@@ -101,6 +101,19 @@ async fn award_chip_total_for(db: &late_core::db::Db, user_id: Uuid, game: &str)
         .await
         .expect("claim total")
         .get("total")
+}
+
+async fn badge_count(db: &late_core::db::Db, user_id: Uuid, category: &str) -> i64 {
+    let client = db.get().await.expect("db client");
+    client
+        .query_one(
+            "SELECT COUNT(*)::bigint AS n FROM profile_awards
+             WHERE user_id = $1 AND category = $2",
+            &[&user_id, &category],
+        )
+        .await
+        .expect("badge count")
+        .get("n")
 }
 
 #[tokio::test]
@@ -214,6 +227,53 @@ async fn orb_milestone_lands_and_pays_once_per_lifetime() {
         .expect("badge row")
         .get("n");
     assert_eq!(badge, 1);
+}
+
+#[tokio::test]
+async fn a_lost_badge_heals_on_the_next_sighting() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "dcss-heal").await;
+    claim_handle(&test_db.db, user.id).await;
+    let svc = ingest_service(&test_db.db).await;
+
+    svc.handle_dcss_frame(&orb_frame(300))
+        .await
+        .expect("orb ingest");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { badge_count(&db, user.id, "dcss_orb").await == 1 }
+        },
+        "orb badge granted",
+    )
+    .await;
+
+    // Simulate a crash between the chip claim and the badge insert: the
+    // lifetime claim is committed, the badge row never landed.
+    let client = test_db.db.get().await.expect("db client");
+    client
+        .execute(
+            "DELETE FROM profile_awards WHERE user_id = $1 AND category = 'dcss_orb'",
+            &[&user.id],
+        )
+        .await
+        .expect("drop badge row");
+
+    // Replaying the same line pays no further chips but restores the badge.
+    svc.handle_dcss_frame(&orb_frame(300))
+        .await
+        .expect("replay");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { badge_count(&db, user.id, "dcss_orb").await == 1 }
+        },
+        "orb badge healed",
+    )
+    .await;
+    assert_eq!(award_chip_total(&test_db.db, user.id).await, 10_000);
 }
 
 #[tokio::test]

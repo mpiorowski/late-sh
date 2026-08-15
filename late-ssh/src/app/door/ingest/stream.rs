@@ -1,9 +1,16 @@
 // The stats-session SSH client: connects to a door host as the reserved
-// `late_stats` username, pushes the per-file cursors as one env request, and
+// `late_stats` username, pushes the per-file cursors as env requests, and
 // turns the host's framed line stream into typed [`StatsFrame`]s. The
 // username, env var, and frame shape mirror the host side
 // (`late-dcss/src/stats.rs`), the same cross-crate contract style as the rc
 // push and the identity derivation; keep the copies in sync.
+//
+// The cursor set is split across as many env requests as it needs: Brogue
+// keys one cursor per player who ever finished a game, so the set grows
+// without bound while SSH caps each request packet. The hosts concatenate the
+// values in arrival order (`stats::append_cursors`); an older host that only
+// keeps the last request degrades safely, since a missing cursor just means
+// that file re-ingests from 0 into idempotent inserts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,8 +26,16 @@ use tokio::time::timeout;
 /// The reserved SSH username that opens a stats session instead of a game.
 pub const STATS_USERNAME: &str = "late_stats";
 
-/// Env request carrying the per-file byte offsets (`logfile:123,milestones:456`).
+/// Env request carrying per-file byte offsets (`logfile:123,milestones:456`).
+/// Sent as many times as the cursor set needs (see [`cursors_env_values`]);
+/// the host concatenates the values.
 pub const CURSORS_ENV_VAR: &str = "LATE_DOOR_STATS_CURSORS";
+
+/// Max bytes of cursor entries per env request. SSH transports cap request
+/// packets (32 KiB is the common floor, minus framing), so one request per
+/// this many bytes keeps any cursor set deliverable; entries never split
+/// across requests.
+const CURSORS_ENV_CHUNK_MAX: usize = 16 * 1024;
 
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -74,12 +89,26 @@ pub(crate) fn parse_frame(raw: &str) -> Option<StatsFrame> {
     })
 }
 
-fn cursors_env_value(cursors: &HashMap<String, i64>) -> String {
-    cursors
-        .iter()
-        .map(|(file, offset)| format!("{file}:{offset}"))
-        .collect::<Vec<_>>()
-        .join(",")
+/// Pack the cursor set into env request values, each at most
+/// [`CURSORS_ENV_CHUNK_MAX`] bytes. Empty when there are no cursors (a fresh
+/// pipe): the host defaults every file to offset 0.
+fn cursors_env_values(cursors: &HashMap<String, i64>) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current = String::new();
+    for (file, offset) in cursors {
+        let entry = format!("{file}:{offset}");
+        if !current.is_empty() && current.len() + 1 + entry.len() > CURSORS_ENV_CHUNK_MAX {
+            values.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(',');
+        }
+        current.push_str(&entry);
+    }
+    if !current.is_empty() {
+        values.push(current);
+    }
+    values
 }
 
 /// Connect and stream frames into `tx` until the connection ends (host
@@ -117,13 +146,15 @@ pub async fn run_stats_stream(cfg: StreamConfig, tx: mpsc::Sender<StatsFrame>) -
         .await
         .context("stats channel_open_session timed out")?
         .context("stats channel_open_session failed")?;
-    timeout(
-        SETUP_TIMEOUT,
-        channel.set_env(false, CURSORS_ENV_VAR, cursors_env_value(&cfg.cursors)),
-    )
-    .await
-    .context("stats set_env timed out")?
-    .context("stats set_env failed")?;
+    for value in cursors_env_values(&cfg.cursors) {
+        timeout(
+            SETUP_TIMEOUT,
+            channel.set_env(false, CURSORS_ENV_VAR, value),
+        )
+        .await
+        .context("stats set_env timed out")?
+        .context("stats set_env failed")?;
+    }
     timeout(SETUP_TIMEOUT, channel.request_shell(true))
         .await
         .context("stats request_shell timed out")?
@@ -190,6 +221,36 @@ mod tests {
     fn line_keeps_embedded_tabs() {
         let frame = parse_frame("milestones\t9\ta\tb").expect("parses");
         assert_eq!(frame.line, "a\tb");
+    }
+
+    #[test]
+    fn cursor_env_values_chunk_without_splitting_entries() {
+        use std::collections::HashMap;
+
+        // Brogue-shaped worst case: one cursor per player who ever played.
+        let mut cursors = HashMap::new();
+        for i in 0..2000 {
+            cursors.insert(
+                format!("players/handle_{i:04}/BrogueRunHistory.txt"),
+                i as i64,
+            );
+        }
+        let values = super::cursors_env_values(&cursors);
+        assert!(values.len() > 1, "a large set spans several requests");
+
+        // Every request stays under the cap, and reassembling them (the
+        // host-side concatenation) recovers the exact cursor set.
+        let mut seen = HashMap::new();
+        for value in &values {
+            assert!(value.len() <= super::CURSORS_ENV_CHUNK_MAX);
+            for entry in value.split(',') {
+                let (file, offset) = entry.split_once(':').expect("entry shape");
+                seen.insert(file.to_string(), offset.parse::<i64>().expect("offset"));
+            }
+        }
+        assert_eq!(seen, cursors);
+
+        assert!(super::cursors_env_values(&HashMap::new()).is_empty());
     }
 
     #[test]

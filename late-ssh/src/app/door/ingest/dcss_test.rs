@@ -81,7 +81,10 @@ fn rejects_lines_missing_the_core_fields() {
 
 #[test]
 fn parses_the_orb_milestone() {
-    let line = "v=0.34.1:name=Wormsong:race=Spriggan:cls=Enchanter:xl=25:place=Zot::5:oplace=Zot::5:time=20260706215500S:type=orb:milestone=found the Orb of Zot!";
+    // Shaped like a real 0.34.1 milestone line: mark_milestone writes the
+    // same base xlog fields as the logfile (including absdepth) plus the
+    // milestone trio.
+    let line = "v=0.34.1:name=Wormsong:race=Spriggan:cls=Enchanter:xl=25:place=Zot::5:br=Zot:lvl=5:absdepth=27:oplace=Zot::5:time=20260706215500S:type=orb:milestone=found the Orb of Zot!";
     let milestone = parse_milestone_line(line).expect("orb line parses");
     assert_eq!(milestone.name, "Wormsong");
     assert_eq!(milestone.kind, Some(DoorMilestoneKind::Orb));
@@ -90,6 +93,10 @@ fn parses_the_orb_milestone() {
         milestone.occurred_at,
         Utc.with_ymd_and_hms(2026, 8, 6, 21, 55, 0).unwrap()
     );
+    // The Deepest Dive board unions `raw->>'absdepth'` from milestone rows
+    // (a winner's logfile line ends at the surface), so the parser carrying
+    // this field through into `raw` is load-bearing, not decoration.
+    assert_eq!(milestone.raw["absdepth"], "27");
 }
 
 #[test]
