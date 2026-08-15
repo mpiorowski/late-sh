@@ -197,10 +197,14 @@ pub(crate) fn dev_files(
         }
         (None, None) => Ok(None),
         (Some(_), None) => {
-            anyhow::bail!("LATE_FILES_S3_ACCESS_KEY_ID is set without LATE_FILES_S3_SECRET_ACCESS_KEY")
+            anyhow::bail!(
+                "LATE_FILES_S3_ACCESS_KEY_ID is set without LATE_FILES_S3_SECRET_ACCESS_KEY"
+            )
         }
         (None, Some(_)) => {
-            anyhow::bail!("LATE_FILES_S3_SECRET_ACCESS_KEY is set without LATE_FILES_S3_ACCESS_KEY_ID")
+            anyhow::bail!(
+                "LATE_FILES_S3_SECRET_ACCESS_KEY is set without LATE_FILES_S3_ACCESS_KEY_ID"
+            )
         }
     }
 }

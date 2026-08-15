@@ -85,14 +85,21 @@ fn dev_files_without_credentials_disables_uploads() {
 
 #[test]
 fn dev_files_with_only_access_key_is_rejected() {
-    let error =
-        crate::config::dev_files(Some("key".to_string()), None).expect_err("must reject");
-    assert!(error.to_string().contains("LATE_FILES_S3_ACCESS_KEY_ID is set without"));
+    let error = crate::config::dev_files(Some("key".to_string()), None).expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_FILES_S3_ACCESS_KEY_ID is set without")
+    );
 }
 
 #[test]
 fn dev_files_with_only_secret_key_is_rejected() {
     let error =
         crate::config::dev_files(None, Some("secret".to_string())).expect_err("must reject");
-    assert!(error.to_string().contains("LATE_FILES_S3_SECRET_ACCESS_KEY is set without"));
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_FILES_S3_SECRET_ACCESS_KEY is set without")
+    );
 }
