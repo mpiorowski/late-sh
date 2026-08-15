@@ -48,7 +48,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard opting out.
 - `late-ssh/src/app/chat/ui.rs` — chat and game surfaces embed `draw_voice_strip` when a voice channel is present.
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, and CLI capability.
-- `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
+- `late-ssh/src/config.rs` / `main.rs` — `VoiceConfig` profile literals plus `LATE_LIVEKIT_API_KEY`/`LATE_LIVEKIT_API_SECRET` env secrets, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
 - `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s and on speaking-state changes.
 - `late-cli/src/main.rs::run_ws_pairing` — creates one `VoiceRuntimeState` before its pair-WS retry loop and passes it into each `run_viz_ws` attempt, so pair-WS reconnects do not implicitly leave LiveKit.
@@ -63,7 +63,7 @@ Keep `mod.rs` declaration-only.
 `VoiceService` is an in-memory control/status service. It does not carry media and does not talk to LiveKit at runtime except by minting JWTs.
 
 Main types:
-- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{LATE_VOICE_ROOM}-{voice_channel_id}`.
+- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{room_name}-{voice_channel_id}` (base name `late-voice` in every profile).
 - `VoiceSnapshot` — `{ enabled, livekit_url, rooms }`, delivered via `watch`. `rooms` is keyed by `voice_channels.id`.
 - `VoiceParticipant` — `{ user_id, username, muted, deafened, speaking, updated_at }`.
 - `VoiceClientState` — inbound CLI state shape `{ joined, room, muted, deafened, speaking }`.
@@ -275,18 +275,9 @@ ingresses lives entirely in `../stream` — this service only speaks the API.
 
 ## 8. Config, Infra, and Background Tasks
 
-Config env vars (`late-ssh/src/config.rs`):
-- `LATE_VOICE_ENABLED` — defaults false in config parsing.
-- `LATE_LIVEKIT_URL` — required when voice is enabled. Client-facing URL,
-  handed to browsers in join grants.
-- `LATE_LIVEKIT_API_URL` — required when voice is enabled. Server-to-server
-  Twirp base (RemoveParticipant, Ingress API). Split from the client URL:
-  in dev the browser needs `ws://localhost:7880` while late-ssh runs in a
-  container where `localhost` is itself, so it uses `http://livekit:7880`;
-  in prod it points at the cluster-internal `http://livekit-sv`.
-- `LATE_LIVEKIT_API_KEY` — required when voice is enabled.
-- `LATE_LIVEKIT_API_SECRET` — required when voice is enabled.
-- `LATE_VOICE_ROOM` — optional; default `late-voice`.
+Config (`late-ssh/src/config.rs`):
+- Voice enabled-ness, the client-facing LiveKit URL (`ws://localhost:7880` dev, `wss://rtc.late.sh` prod), the server-to-server Twirp base (`http://livekit:7880` dev, `http://livekit-sv` prod), and the room base name are profile literals in `late-ssh/src/config.rs`; every current profile enables voice. The two URLs are split because their audiences differ: browsers and the CLI reach LiveKit from the host or the public edge, while late-ssh reaches it from inside the container network.
+- `LATE_LIVEKIT_API_KEY` / `LATE_LIVEKIT_API_SECRET` — env secrets, required at startup.
 
 Production infra:
 - `infra/livekit.tf` manages the LiveKit deployment.

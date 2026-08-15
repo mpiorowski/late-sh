@@ -37,7 +37,8 @@ resource "kubernetes_deployment_v1" "service_ssh" {
 
         # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
         # which owns the nethack-save PVC + seed init_container. service-ssh only
-        # needs network reach to it (LATE_NETHACK_HOST below).
+        # needs network reach to it; the host address is a late-ssh config.rs
+        # prod-profile literal (late-nethack-sv).
 
         container {
           image = var.SSH_IMAGE_TAG
@@ -127,24 +128,13 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name  = "OTEL_RESOURCE_ATTRIBUTES"
             value = "service.instance.id=$(POD_NAME)"
           }
+          # Selects the config.rs profile; every non-secret value lives there.
           env {
-            name  = "LATE_SSH_PORT"
-            value = "2222"
-          }
-          env {
-            name  = "LATE_API_PORT"
-            value = "4000"
+            name  = "LATE_ENV"
+            value = "prod"
           }
 
-          # --- Database (CloudNativePG) ---
-          env {
-            name  = "LATE_DB_HOST"
-            value = "postgres-rw"
-          }
-          env {
-            name  = "LATE_DB_PORT"
-            value = "5432"
-          }
+          # --- Database (CloudNativePG operator-generated credentials) ---
           env {
             name = "LATE_DB_NAME"
             value_from {
@@ -173,31 +163,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Audio ---
-          env {
-            name  = "LATE_ICECAST_URL"
-            value = "http://icecast-sv:8000"
-          }
-
-          # --- Web / CORS ---
-          env {
-            name  = "LATE_WEB_URL"
-            value = "https://${var.DOMAIN}"
-          }
-
-          # --- Door games ---
-          env {
-            name  = "LATE_REBELS_ENABLED"
-            value = local.rebels_enabled
-          }
-          env {
-            name  = "LATE_REBELS_HOST"
-            value = local.rebels_host
-          }
-          env {
-            name  = "LATE_REBELS_PORT"
-            value = local.rebels_port
-          }
+          # --- Door games (shared identity secrets; targets live in config.rs) ---
           env {
             name = "LATE_REBELS_SECRET"
             value_from {
@@ -208,21 +174,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # NetHack is served by the late-nethack host pod (service-nethack.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_NETHACK_ENABLED"
-            value = local.nethack_enabled
-          }
-          env {
-            name  = "LATE_NETHACK_HOST"
-            value = local.nethack_service_host
-          }
-          env {
-            name  = "LATE_NETHACK_PORT"
-            value = local.nethack_port
-          }
           env {
             name = "LATE_NETHACK_SECRET"
             value_from {
@@ -233,21 +184,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # dopewars is served by the late-dopewars host pod (service-dopewars.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_DOPEWARS_ENABLED"
-            value = local.dopewars_enabled
-          }
-          env {
-            name  = "LATE_DOPEWARS_HOST"
-            value = local.dopewars_service_host
-          }
-          env {
-            name  = "LATE_DOPEWARS_PORT"
-            value = local.dopewars_port
-          }
           env {
             name = "LATE_DOPEWARS_SECRET"
             value_from {
@@ -258,20 +194,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # CodeKeep runs in the isolated late-codekeep host. The shared secret
-          # authorizes late-ssh; the SSH username is the stable account save key.
-          env {
-            name  = "LATE_CODEKEEP_ENABLED"
-            value = local.codekeep_enabled
-          }
-          env {
-            name  = "LATE_CODEKEEP_HOST"
-            value = local.codekeep_service_host
-          }
-          env {
-            name  = "LATE_CODEKEEP_PORT"
-            value = local.codekeep_port
-          }
           env {
             name = "LATE_CODEKEEP_SECRET"
             value_from {
@@ -282,21 +204,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # DCSS is served by the late-dcss host pod (service-dcss.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_DCSS_ENABLED"
-            value = local.dcss_enabled
-          }
-          env {
-            name  = "LATE_DCSS_HOST"
-            value = local.dcss_service_host
-          }
-          env {
-            name  = "LATE_DCSS_PORT"
-            value = local.dcss_port
-          }
           env {
             name = "LATE_DCSS_SECRET"
             value_from {
@@ -307,21 +214,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # Brogue is served by the late-brogue host pod (service-brogue.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_BROGUE_ENABLED"
-            value = local.brogue_enabled
-          }
-          env {
-            name  = "LATE_BROGUE_HOST"
-            value = local.brogue_service_host
-          }
-          env {
-            name  = "LATE_BROGUE_PORT"
-            value = local.brogue_port
-          }
           env {
             name = "LATE_BROGUE_SECRET"
             value_from {
@@ -332,21 +224,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # Usurper is served by the late-usurper host pod (service-usurper.tf);
-          # late-ssh connects to it over SSH. HOST/PORT target that Service and
-          # SECRET (shared with the host) authorizes the connection.
-          env {
-            name  = "LATE_USURPER_ENABLED"
-            value = local.usurper_enabled
-          }
-          env {
-            name  = "LATE_USURPER_HOST"
-            value = local.usurper_service_host
-          }
-          env {
-            name  = "LATE_USURPER_PORT"
-            value = local.usurper_port
-          }
           env {
             name = "LATE_USURPER_SECRET"
             value_from {
@@ -357,23 +234,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Files / uploads ---
-          env {
-            name  = "LATE_FILES_S3_ENDPOINT"
-            value = var.S3_ENDPOINT
-          }
-          env {
-            name  = "LATE_FILES_S3_BUCKET"
-            value = var.FILES_BUCKET
-          }
-          env {
-            name  = "LATE_FILES_PUBLIC_BASE_URL"
-            value = var.FILES_PUBLIC_BASE_URL
-          }
-          env {
-            name  = "LATE_FILES_S3_REGION"
-            value = var.FILES_S3_REGION
-          }
+          # --- Files / uploads (R2 credentials; endpoint and bucket live in config.rs) ---
           env {
             name = "LATE_FILES_S3_ACCESS_KEY_ID"
             value_from {
@@ -393,114 +254,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- SSH ---
-          env {
-            name  = "LATE_SSH_KEY_PATH"
-            value = "/app/keys/server_key"
-          }
-          env {
-            name  = "LATE_SSH_OPEN"
-            value = var.SSH_OPEN
-          }
-          env {
-            name  = "LATE_FORCE_ADMIN"
-            value = "0"
-          }
-          env {
-            name  = "LATE_MAX_CONNS_GLOBAL"
-            value = "1000"
-          }
-          env {
-            name  = "LATE_MAX_CONNS_PER_IP"
-            value = var.MAX_CONNS_PER_IP
-          }
-          env {
-            name  = "LATE_SSH_IDLE_TIMEOUT"
-            value = var.SSH_IDLE_TIMEOUT
-          }
-          env {
-            name  = "LATE_FRAME_DROP_LOG_EVERY"
-            value = var.FRAME_DROP_LOG_EVERY
-          }
-          env {
-            name  = "LATE_SSH_MAX_ATTEMPTS_PER_IP"
-            value = var.SSH_MAX_ATTEMPTS_PER_IP
-          }
-          env {
-            name  = "LATE_SSH_RATE_LIMIT_WINDOW_SECS"
-            value = var.SSH_RATE_LIMIT_WINDOW_SECS
-          }
-          env {
-            name  = "LATE_SSH_PROXY_PROTOCOL"
-            value = var.SSH_PROXY_PROTOCOL
-          }
-          env {
-            name  = "LATE_SSH_PROXY_TRUSTED_CIDRS"
-            value = var.SSH_PROXY_TRUSTED_CIDRS
-          }
-          env {
-            name  = "LATE_WS_PAIR_MAX_ATTEMPTS_PER_IP"
-            value = var.WS_PAIR_MAX_ATTEMPTS_PER_IP
-          }
-          env {
-            name  = "LATE_WS_PAIR_RATE_LIMIT_WINDOW_SECS"
-            value = var.WS_PAIR_RATE_LIMIT_WINDOW_SECS
-          }
-          env {
-            name  = "LATE_DB_POOL_SIZE"
-            value = var.DB_POOL_SIZE
-          }
-
-          # --- IRC ---
-          env {
-            name  = "LATE_IRC_ENABLED"
-            value = local.irc_enabled
-          }
-          env {
-            name  = "LATE_IRC_PORT"
-            value = tostring(local.irc_port)
-          }
-          env {
-            name  = "LATE_IRC_MAX_CONNS_GLOBAL"
-            value = local.irc_max_conns_global
-          }
-          env {
-            name  = "LATE_IRC_MAX_CONNS_PER_USER"
-            value = local.irc_max_conns_per_user
-          }
-          env {
-            name  = "LATE_IRC_MAX_AUTH_FAILURES_PER_IP"
-            value = local.irc_max_auth_failures_per_ip
-          }
-          env {
-            name  = "LATE_IRC_AUTH_FAILURE_WINDOW_SECS"
-            value = local.irc_auth_failure_window_secs
-          }
-          env {
-            name  = "LATE_IRC_PROXY_PROTOCOL"
-            value = local.irc_proxy_accept
-          }
-          env {
-            name  = "LATE_IRC_PROXY_TRUSTED_CIDRS"
-            value = var.SSH_PROXY_TRUSTED_CIDRS
-          }
-          dynamic "env" {
-            for_each = local.irc_enabled_bool ? {
-              LATE_IRC_TLS_CERT = "${local.irc_tls_mount_path}/tls.crt"
-              LATE_IRC_TLS_KEY  = "${local.irc_tls_mount_path}/tls.key"
-            } : {}
-
-            content {
-              name  = env.key
-              value = env.value
-            }
-          }
-
           # --- AI ---
-          env {
-            name  = "LATE_AI_ENABLED"
-            value = var.AI_ENABLED
-          }
           env {
             name = "LATE_AI_API_KEY"
             value_from {
@@ -521,21 +275,9 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             }
           }
 
-          # --- Voice / LiveKit ---
-          env {
-            name  = "LATE_VOICE_ENABLED"
-            value = local.voice_enabled
-          }
-          env {
-            name  = "LATE_LIVEKIT_URL"
-            value = local.livekit_url
-          }
-          env {
-            # Server-to-server Twirp API calls go to the cluster-internal
-            # service instead of looping out through the public ingress.
-            name  = "LATE_LIVEKIT_API_URL"
-            value = "http://${kubernetes_service_v1.livekit.metadata[0].name}"
-          }
+          # --- Voice / LiveKit (credentials only; both URLs and the room name
+          # are prod-profile literals in late-ssh/src/config.rs, including the
+          # cluster-internal Twirp base http://livekit-sv) ---
           env {
             name = "LATE_LIVEKIT_API_KEY"
             value_from {
@@ -553,10 +295,6 @@ resource "kubernetes_deployment_v1" "service_ssh" {
                 key  = "api_secret"
               }
             }
-          }
-          env {
-            name  = "LATE_VOICE_ROOM"
-            value = local.voice_room
           }
 
           # --- SSH host key volume ---

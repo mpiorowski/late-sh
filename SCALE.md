@@ -22,11 +22,11 @@ Application deployments:
   - Ports: 2222 SSH, 4000 API
   - Current Terraform/live CPU limit: 8 CPU
   - Current Terraform/live memory limit: 8 GiB, request 2 GiB (raised from 4 GiB / 512 MiB during the 2026-07-22 OOM incident)
-  - Current Terraform/live `LATE_MAX_CONNS_GLOBAL`: 1000
+  - Current live `max_conns_global` (prod profile, late-ssh/src/config.rs): 1000
   - `termination_grace_period_seconds`: 21600, so old pods can linger for up to 6 hours while sessions drain
 - `service-web`: 1 replica
   - Web pages and `/stream` proxy
-  - Current Terraform/live `LATE_AUDIO_URL`: `http://icecast-sv:8000`
+  - Current live `audio_base_url` (prod profile, late-web/src/config.rs): `http://icecast-sv:8000`
   - Public browser users still reach `/stream` through `https://late.sh/stream`; only the web pod's upstream fetch is internal
 - `icecast`: 1 replica
   - Current Terraform/live client limit: 300
@@ -56,7 +56,7 @@ Internal endpoints:
 Applied in Terraform and live Kubernetes:
 
 - Raised `service-ssh` CPU limit from `4000m` to `8000m`
-- Set `LATE_MAX_CONNS_GLOBAL` to `1000`
+- Set `max_conns_global` to `1000` in the prod profile (late-ssh/src/config.rs)
 - Changed `late-web` audio upstream from public `https://audio.late.sh` to internal `http://icecast-sv:8000`
 - Raised Postgres memory limit from `2Gi` to `4Gi`
 - Raised Icecast client cap from `100` to `300`
@@ -151,7 +151,7 @@ Separate open bug, seen 2026-07-24: the `service-web -> icecast-sv:8000` upstrea
 
 ### 5. Postgres connections are bounded but not pooled externally
 
-App pools are currently per process through deadpool, with `LATE_DB_POOL_SIZE=16` for both `service-ssh` and `service-web`.
+App pools are currently per process through deadpool, with `max_pool_size: 16` in both prod profiles (`late-ssh/src/config.rs`, `late-web/src/config.rs`).
 
 Postgres `max_connections=100`. This is acceptable while replicas are low, but scaling app replicas will multiply pools. PgBouncer should be introduced before many app replicas.
 

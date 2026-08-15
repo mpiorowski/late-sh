@@ -2187,6 +2187,7 @@ fn chat_state_with_cyberspace(
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     (state, cyberspace)
 }
@@ -2954,6 +2955,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, seed.id).await;
     state.set_visible_room_id(Some(lounge.id));
@@ -3112,6 +3114,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, own.id).await;
 

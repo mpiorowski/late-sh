@@ -120,8 +120,41 @@ fn test_house_registry(db: Db) -> crate::app::lobby::house::registry::HouseTable
     )
 }
 
+/// Inert IRC factory defaults for tests; production profiles spell their
+/// IrcConfig out in `config.rs` and there is no `Default` impl to lean on.
+pub fn test_irc_config() -> crate::config::IrcConfig {
+    crate::config::IrcConfig {
+        enabled: false,
+        port: 6667,
+        tls_cert_path: None,
+        tls_key_path: None,
+        proxy_protocol: false,
+        proxy_trusted_cidrs: Vec::new(),
+        max_conns_global: 200,
+        max_conns_per_user: 3,
+        max_auth_failures_per_ip: 20,
+        auth_failure_window_secs: 300,
+    }
+}
+
+/// Session-scoped `StreamService` for app tests. Every session has one, in
+/// tests as in production; what tests lack is LiveKit, so `/golive` here fails
+/// the voice check inside `prepare_go_live` rather than the service missing.
+fn test_stream_service(
+    db: Db,
+    activity_tx: broadcast::Sender<ActivityEvent>,
+) -> crate::app::stream::svc::StreamService {
+    crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        VoiceService::new(VoiceConfig::disabled()),
+        ActivityPublisher::new(db, activity_tx),
+        "http://localhost:3000".to_string(),
+    )
+}
+
 pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     Config {
+        env: crate::config::Env::Dev,
         ssh_port: 0,
         api_port: 0,
         icecast_url: "http://localhost:8000".to_string(),
@@ -146,11 +179,12 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
-        irc: crate::config::IrcConfig::default(),
+        irc: test_irc_config(),
+        files: None,
         rebels_enabled: true,
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
-        rebels_secret: String::new(),
+        rebels_secret: "test-secret".to_string(),
         nethack_enabled: false,
         nethack_host: String::new(),
         nethack_port: 2323,
@@ -420,7 +454,7 @@ fn make_app_with_chat_service_and_permissions(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        stream_service: None,
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: chat_service.clone(),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),
@@ -560,6 +594,7 @@ fn make_app_with_chat_service_and_permissions(
         active_users: world.active_users,
         clubhouse_lobby: None,
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
         scratchpad_registry: world.scratchpad_registry,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
@@ -624,7 +659,7 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
-        stream_service: None,
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),
@@ -764,6 +799,7 @@ pub fn make_app_with_paired_client(
         active_users: None,
         clubhouse_lobby: None,
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
         scratchpad_registry: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,

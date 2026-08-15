@@ -7,9 +7,11 @@ use tokio::sync::oneshot;
 // stand-in here (see the test-layout rules in the root CONTEXT.md).
 fn test_state(ssh_internal_url: String) -> AppState {
     let config = Config {
+        env: crate::config::Env::Dev,
         port: 0,
         ssh_internal_url,
         audio_base_url: "http://127.0.0.1:9".to_string(),
+        db: DbConfig::default(),
     };
     AppState {
         config,

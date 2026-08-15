@@ -1,17 +1,9 @@
 # Optional CI variables arrive as empty strings when the GitHub variable is
 # unset. Normalize them here so Terraform remains the single source of defaults.
+# App configuration does NOT live here: late-ssh reads one env (LATE_ENV=prod)
+# plus secrets, and everything else is compiled into its prod profile
+# (late-ssh/src/config.rs). These locals configure only infrastructure.
 locals {
-  rebels_enabled = trimspace(var.REBELS_ENABLED) != "" ? trimspace(var.REBELS_ENABLED) : "1"
-  rebels_host    = trimspace(var.REBELS_HOST) != "" ? trimspace(var.REBELS_HOST) : "frittura.org"
-  rebels_port    = trimspace(var.REBELS_PORT) != "" ? trimspace(var.REBELS_PORT) : "3788"
-
-  # DOPEWARS_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on. Like nethack this now gates only the CLIENT door
-  # (service-ssh's LATE_DOPEWARS_ENABLED); the late-dopewars host pod is always
-  # deployed. Host/port/PVC locals live in dopewars.tf.
-  dopewars_enabled = trimspace(var.DOPEWARS_ENABLED) != "" ? trimspace(var.DOPEWARS_ENABLED) : "1"
-  codekeep_enabled = trimspace(var.CODEKEEP_ENABLED) != "" ? trimspace(var.CODEKEEP_ENABLED) : "1"
-
   # One resource spec for every door-game host pod (nethack, dcss, brogue,
   # dopewars, usurper, codekeep). They all have the same shape: an idle SSH
   # listener that forks one short-lived child per player.
@@ -26,10 +18,12 @@ locals {
   door_cpu_limit      = "1000m"
   door_memory_limit   = "1Gi"
 
-  voice_enabled = trimspace(var.VOICE_ENABLED) != "" ? trimspace(var.VOICE_ENABLED) : "1"
-  voice_room    = trimspace(var.VOICE_ROOM) != "" ? trimspace(var.VOICE_ROOM) : "late-voice"
+  # The root domain and public subdomains are code, not variables: changing a
+  # hostname must land as a reviewed diff here and in the late-ssh/late-web
+  # prod profiles together (they hardcode late.sh / rtc.late.sh).
+  domain = "late.sh"
 
-  livekit_subdomain           = trimspace(var.LIVEKIT_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_SUBDOMAIN) : "rtc"
+  livekit_subdomain           = "rtc"
   livekit_image               = trimspace(var.LIVEKIT_IMAGE) != "" ? trimspace(var.LIVEKIT_IMAGE) : "livekit/livekit-server:v1.9.12"
   livekit_log_level           = trimspace(var.LIVEKIT_LOG_LEVEL) != "" ? trimspace(var.LIVEKIT_LOG_LEVEL) : "info"
   livekit_api_key             = trimspace(var.LIVEKIT_API_KEY) != "" ? trimspace(var.LIVEKIT_API_KEY) : "late-voice"
@@ -41,21 +35,18 @@ locals {
   livekit_turn_tls_port       = tonumber(trimspace(var.LIVEKIT_TURN_TLS_PORT) != "" ? trimspace(var.LIVEKIT_TURN_TLS_PORT) : "5349")
 
   livekit_ingress_image     = trimspace(var.LIVEKIT_INGRESS_IMAGE) != "" ? trimspace(var.LIVEKIT_INGRESS_IMAGE) : "livekit/ingress:v1.4.3"
-  livekit_whip_subdomain    = trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) != "" ? trimspace(var.LIVEKIT_WHIP_SUBDOMAIN) : "whip"
+  livekit_whip_subdomain    = "whip"
   livekit_ingress_whip_port = tonumber(trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) != "" ? trimspace(var.LIVEKIT_INGRESS_WHIP_PORT) : "7888")
 
-  irc_enabled                  = trimspace(var.IRC_ENABLED) != "" ? trimspace(var.IRC_ENABLED) : "0"
-  irc_enabled_bool             = contains(["1", "true", "yes", "on"], lower(local.irc_enabled))
-  irc_proxy_accept             = trimspace(var.IRC_PROXY_ACCEPT) != "" ? trimspace(var.IRC_PROXY_ACCEPT) : "1"
-  irc_proxy_accept_bool        = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_accept))
-  irc_proxy_emit               = trimspace(var.IRC_PROXY_EMIT) != "" ? trimspace(var.IRC_PROXY_EMIT) : "0"
-  irc_proxy_emit_bool          = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_emit))
-  irc_host                     = trimspace(var.IRC_HOST) != "" ? trimspace(var.IRC_HOST) : "irc.${var.DOMAIN}"
-  irc_port                     = tonumber(trimspace(var.IRC_PORT) != "" ? trimspace(var.IRC_PORT) : "6697")
-  irc_max_conns_global         = trimspace(var.IRC_MAX_CONNS_GLOBAL) != "" ? trimspace(var.IRC_MAX_CONNS_GLOBAL) : "200"
-  irc_max_conns_per_user       = trimspace(var.IRC_MAX_CONNS_PER_USER) != "" ? trimspace(var.IRC_MAX_CONNS_PER_USER) : "3"
-  irc_max_auth_failures_per_ip = trimspace(var.IRC_MAX_AUTH_FAILURES_PER_IP) != "" ? trimspace(var.IRC_MAX_AUTH_FAILURES_PER_IP) : "20"
-  irc_auth_failure_window_secs = trimspace(var.IRC_AUTH_FAILURE_WINDOW_SECS) != "" ? trimspace(var.IRC_AUTH_FAILURE_WINDOW_SECS) : "300"
-  irc_tls_secret_name          = "irc-tls"
-  irc_tls_mount_path           = "/etc/irc-tls"
+  # IRC edge (ingress TCP passthrough, IPv6 HAProxy, certificate). The app
+  # side is compiled into late-ssh's prod profile and always listens; these
+  # gate only what the edge exposes. IRC_PROXY_EMIT stays a variable because
+  # flipping edge emission is a deploy-time rollout step.
+  irc_enabled_bool    = true
+  irc_proxy_emit      = trimspace(var.IRC_PROXY_EMIT) != "" ? trimspace(var.IRC_PROXY_EMIT) : "0"
+  irc_proxy_emit_bool = contains(["1", "true", "yes", "on"], lower(local.irc_proxy_emit))
+  irc_host            = "irc.${local.domain}"
+  irc_port            = 6697
+  irc_tls_secret_name = "irc-tls"
+  irc_tls_mount_path  = "/etc/irc-tls"
 }

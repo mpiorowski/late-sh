@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-14 (Stream audio: one path per sound, and voice is CLI-only with zero exceptions. CLI voice plays human mics only — program audio and your own `stream-{id}` publisher are unsubscribed in `late-cli`, fixing the streamer's OBS echo and CLI users hearing the game mix through voice. The go-live console's browser mic and the whole `mic_live`/on-air pipeline were removed (macOS CLI voice landed). The watch page defaults audio ON with a separate voices toggle, volume slider, and fullscreen. Details in `late-ssh/src/app/stream/CONTEXT.md` §4 and `late-ssh/src/app/voice/CONTEXT.md` §6/§7)
+- Last updated: 2026-08-14 (Config is compiled, not environed: `late-ssh/src/config.rs` and `late-web/src/config.rs` each hold a `dev`/`dev2`/`prod` profile, and the only process-env reads are `LATE_ENV` plus secrets (DB, AI, YouTube, LiveKit, door shared secrets, S3). That covers the streaming stack too: both LiveKit URLs (client-facing `ws://localhost:7880`/`wss://rtc.late.sh` and the server-to-server Twirp base `http://livekit:7880`/`http://livekit-sv`) are profile literals. Terraform keeps infrastructure locals only; changing app behavior means editing a profile and deploying)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -153,7 +153,7 @@ make check
 - **Tool bootstrap:** The repo now includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Prefer `mise install` before local development so the expected toolchain and test runner are available.
 - **Cargo environment setup:** For local host development, use Cargo's normal defaults, including the standard repo-local `target/` directory. Docker/dev containers still use `/app/target` via container configuration. `CARGO_HOME=$HOME/.cargo` remains a valid override when an environment needs it, but it is not a repo-wide requirement.
 - **Test thread stack:** `.cargo/config.toml` sets `RUST_MIN_STACK=8388608`. libtest runs each test on a spawned thread, which takes std's 2 MiB default instead of the main thread's 8 MiB, and an unoptimized test build driving two full `App` sessions (the scratchpad pairing tests) overflows that and aborts with SIGABRT. Nextest's own config cannot carry this: `.config/nextest.toml` has no `[env]` key and silently ignores one. If a test dies with "has overflowed its stack", check this value before suspecting recursion.
-- **`LATE_FORCE_ADMIN=1`** — dev-only escape hatch: OR'd with `users.is_admin` at session init (`late-ssh/src/ssh.rs`), so every SSH session lands as admin. Must stay `0` in prod — enforced by `required_bool` and hardcoded to `"0"` in `infra/service-ssh.tf`.
+- **`force_admin`** — dev-only escape hatch: OR'd with `users.is_admin` at session init (`late-ssh/src/ssh.rs`), so every SSH session lands as admin. It is a profile literal in `late-ssh/src/config.rs`: `true` in the dev profiles, `false` in prod, no env override.
 
 ---
 
@@ -600,7 +600,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 - `subscribe_events() → broadcast::Receiver<...Event>` - transient events/notices
 
 **Embedded IRC server (late-ssh, local-dev plaintext port 6667; TLS default 6697):**
-- The root `Makefile` enables the embedded server for local dev via `LATE_IRC_ENABLED=1` and `LATE_IRC_PORT=6667` in generated `.env`; when env vars are absent, the Rust config default remains disabled. `late-ssh/src/ircd/serve.rs` starts only when enabled. When both `LATE_IRC_TLS_CERT` and `LATE_IRC_TLS_KEY` are set, the listener accepts rustls TLS and defaults to port 6697 if `LATE_IRC_PORT` is unset.
+- IRC settings are profile literals in `late-ssh/src/config.rs`: the dev profiles run plaintext on 6667 (6668 for dev2), prod runs rustls TLS on 6697 with cert/key paths pointing at the mounted `irc-tls` secret. `late-ssh/src/ircd/serve.rs` starts only when the profile enables it (all current profiles do).
 - Users mint, reset, and revoke IRC tokens from `Ctrl+O` Settings > Account. Tokens are shown once, stored hashed only in `irc_tokens`, and are supplied as the IRC `PASS`. The IRC nick is locked to the late.sh username after authentication.
 - `#lounge` is force-joined and cannot be permanently parted from IRC. Public rooms project as channels; DMs bridge through IRC query/private-message semantics. Channel messages route through `ChatService`, so IRC clients share the same DB writes, broadcasts, permissions, ignores, and notifications as the TUI.
 - IRC moderation uses the existing moderation service path: channel ops map `KICK`, `MODE +b/-b`, and ban list requests to room moderation; admins can use `KILL` for server kicks. TUI/server kicks, bans, token resets, and token revokes call `IrcRegistry::disconnect_user` so live IRC clients close immediately with an IRC `ERROR`.
@@ -609,7 +609,7 @@ Pair WS also carries audio-source arbitration, clipboard-image transfer, YouTube
 ### 4.2 Auth and scope model
 
 - **Identity:** First unknown SSH key creates a user instantly. `user_ssh_keys` maps many fingerprints to one user. The key a session actually authenticated with (`ClientHandler::auth_fingerprint`, not `users.fingerprint`, which is only the account's first key) is the closest thing to a device identity and is what per-device settings scope to. Settings > Account supports destructive account linking by moving the losing account's SSH keys to the chosen main account; no user data is merged.
-- **Open access:** `LATE_SSH_OPEN=true` enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
+- **Open access:** `Config.open_access` (a config.rs profile literal, `true` in every current profile) enables auth, but only public-key auth is accepted; password and keyboard-interactive are always rejected
 - **SSH auth banner:** The russh server sends a short pre-auth public-key setup hint so plain `ssh late.sh` users who hit `Permission denied (publickey)` see the companion CLI curl installer plus manual OpenSSH-default key-generation guidance. Native `late-cli` suppresses this generic server hint because it owns richer local key generation and auth-failure messaging.
 - **User scoping:** User-owned records are scoped to `user_id` (FK to `users.id`)
 - **Chat scoping:** Rooms visible via membership (`ChatRoom::list_for_user`, `ChatRoomMember`)
@@ -724,7 +724,7 @@ overwrite its own layout on every reconnect.
 - **Grafana provisioning invariant:** The metrics datasource uses the stable UID `victoriametrics`; provisioned dashboards must reference that UID instead of Grafana-generated datasource IDs.
 - **Console Output:** Local dev uses `tracing_subscriber::fmt` with `RUST_LOG=info,late_web=debug,late_ssh=debug,late_core=debug`.
 - **DB health:** `GET /api/health` endpoint, `Db::health()` method
-- **Connection counts:** Per-IP tracking in `State.conn_counts`, global via semaphore. When `LATE_SSH_PROXY_PROTOCOL=true`, SSH per-IP limits use the client IP from PROXY protocol.
+- **Connection counts:** Per-IP tracking in `State.conn_counts`, global via semaphore. When the profile enables `ssh_proxy_protocol` (prod only), SSH per-IP limits use the client IP from PROXY protocol.
 - **Presence/listener count source:** TUI sidebar online/users and `/api/now-playing.listeners_count` both use `State.active_users`.
 - **Username display source:** `State.username_directory` is the app-wide `Uuid -> username` map for plain display labels. It is loaded from `users` at startup, refreshed from DB every 30 minutes, and updated on SSH/web login, profile save, mod rename, and account delete. Render paths merge chat-known names with this directory and let the directory win, so room-game seats and Home recent joins must not depend on a user having spoken in chat.
 
@@ -909,7 +909,7 @@ Chat send/edit/delete, ignore, roster/help overlays, replies, Home room favorite
 
 ```rust
 // === Database ===
-let db = Db::from_env().await?;
+let db = Db::new(&config.db)?;
 let client = db.get().await?;
 db.migrate().await?;
 
@@ -945,13 +945,11 @@ let tracks = late_core::icecast::fetch_tracks(&icecast_url)?;  // blocking; moun
 ```bash
 # Start full dev stack
 docker compose up -d
-
-# Or run services individually:
-# Postgres + Icecast + Liquidsoap via docker, Rust services via cargo
-docker compose up -d postgres icecast liquidsoap
-cargo run -p late-ssh   # Needs LATE_* env vars
-cargo run -p late-web   # Needs LATE_WEB_* env vars
 ```
+
+There is no bare-cargo path: the dev profiles pin compose-internal hostnames
+(`postgres`, `icecast`) and container paths (`/app/server_key`), so late-ssh
+and late-web only run inside the compose network.
 
 ### 10.2 Database
 
@@ -1066,8 +1064,8 @@ The human owner may use narrower crate-specific `cargo test` / `cargo nextest ru
 
 ### 10.4 Debugging checklist
 
-1. SSH won't connect → Check `LATE_SSH_OPEN`, connection limits/rate limits, SSH key path
-2. No audio → Check Icecast container, Liquidsoap container, `LATE_AUDIO_URL`. If streams are down, verify fallback music exists on the PVC (see below)
+1. SSH won't connect → Check `open_access` and the limits in the active config.rs profile, SSH key path
+2. No audio → Check Icecast container, Liquidsoap container, the `audio_base_url`/`icecast_url` profile values. If streams are down, verify fallback music exists on the PVC (see below)
 3. Paired controls not reaching the client → Check the pair WS connection, token mismatch, SessionRegistry
 4. Audio source not switching → Check pair WebSocket connectivity and the persisted user `audio_source`/stream settings
 5. Chat not syncing → Check DB connectivity, 10s refresh cadence, snapshot/event channels
@@ -1090,7 +1088,7 @@ Entry template: symptom → evidence → verdict → fixes shipped → what to c
 - **Evidence:** affected users had unrelated public addresses, while the active server-ban list contained `10.42.0.123`, a Kubernetes-internal ingress address. A raw TLS registration exposed the `465` that clients summarized as generic authentication failure. IPv4 ingress-nginx and the IPv6 HAProxy path did not send PROXY metadata for IRC, and `ircd::serve` passed the TCP transport peer into IP-ban auth and active-session state. A username ban of an IRC-connected account therefore captured the shared ingress address; established connections survived until restart, then all reconnects matched it before token lookup.
 - **Verdict:** proven. IRC confused its proxy transport peer with the client IP.
 - **Fix prepared:** the poisoned live ban was replaced without an IP. IRC now parses trusted PROXY v1 metadata before rustls, carries the verified client IP as optional state, and never substitutes the transport address for ban matching or persistence. Terraform keeps parser acceptance separate from ingress emission: deploy the parser-capable image with acceptance enabled and emission disabled, then enable emission in a subsequent infrastructure apply. Optional no-header parsing protects only the new-parser/old-ingress direction; it does not protect an old parser after ingress starts emitting PROXY. Rollback disables emission before rolling back below the parser-capable image.
-- **If it repeats:** run `/mod view bans server` and look for pod/node addresses, confirm the ingress TCP mapping ends in `::PROXY`, confirm IPv6 HAProxy uses `send-proxy`, and inspect startup config/logs for `LATE_IRC_PROXY_PROTOCOL`, trusted CIDRs, missing headers, or proxy-parse failures.
+- **If it repeats:** run `/mod view bans server` and look for pod/node addresses, confirm the ingress TCP mapping ends in `::PROXY`, confirm IPv6 HAProxy uses `send-proxy`, and inspect startup config/logs for the profile's `irc.proxy_protocol`/trusted CIDRs, missing headers, or proxy-parse failures.
 
 #### 2026-08-06: news AI summaries dead after the 3.6-flash switch (feature outage, no crash)
 

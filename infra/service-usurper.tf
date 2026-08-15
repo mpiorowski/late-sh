@@ -13,9 +13,9 @@
 # only hands the mount to the `late` user.
 #
 # replicas MUST stay 1: one RWO volume holds the single shared world (see
-# usurper.tf). The host pod is always deployed (like the other door hosts); the
-# door's enable flag only gates the CLIENT (service-ssh's
-# LATE_USURPER_ENABLED). Keeping the host unconditional means its image always
+# usurper.tf). The host pod is always deployed (like the other door hosts);
+# whether the door shows up in the TUI is a late-ssh config.rs profile
+# literal. Keeping the host unconditional means its image always
 # exists in-cluster, so the deploy workflows can read it with a plain
 # `kubectl get` (no bootstrap fallback) just like the other images.
 

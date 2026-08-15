@@ -16,9 +16,8 @@
 # file during updates, so concurrent sessions writing it are safe.
 
 locals {
-  # DOPEWARS_ENABLED is normalized in defaults.tf; it gates only the CLIENT door
-  # (service-ssh's LATE_DOPEWARS_ENABLED). The late-dopewars host pod is always
-  # deployed (see service-dopewars.tf).
+  # Whether the dopewars door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-dopewars host pod is always deployed.
 
   # Directory mounted from the PVC; holds the single shared high-score file. MUST
   # match LATE_DOPEWARS_SCORE_FILE's parent baked into the host (see the

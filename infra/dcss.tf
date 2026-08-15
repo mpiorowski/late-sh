@@ -17,10 +17,8 @@
 # locking guards a same-account double launch.
 
 locals {
-  # DCSS_ENABLED arrives as an empty string from CI when the GitHub variable is
-  # unset; default it on. This gates only the CLIENT door (service-ssh's
-  # LATE_DCSS_ENABLED); the late-dcss host pod is always deployed.
-  dcss_enabled = trimspace(var.DCSS_ENABLED) != "" ? trimspace(var.DCSS_ENABLED) : "1"
+  # Whether the dcss door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-dcss host pod is always deployed.
 
   # The child HOME on the PVC; crawl writes everything under $HOME/.crawl. MUST
   # match LATE_DCSS_DATA_DIR's default baked into the host (see the runtime-dcss

@@ -39,7 +39,7 @@ Core shape:
 - **Per-account init.txt (2026-08-05).** Same contract as NetHack's rc push (see the nethack CONTEXT §1 for the full story): the account's rc lives in Postgres (`door_rcs`, `late-core/src/models/door_rc.rs`), authored via the Games hub paste box (`c` on the DCSS card or landing, paste replaces, `x` clears; `app/door/rc.rs` + `app/door/hub/ui.rs`). At launch the client sends it base64-encoded as the `LATE_DOOR_RC_B64` env request before `request_pty`; the host decodes (`late-dcss/src/rc.rs`), writes `<data_dir>/rc/<playname>.rc` (`host.rs::materialize_rc`), and passes `-rc <path>` so crawl reads it instead of the shared `$HOME/.crawl/init.txt`. The `-extra-opt-last` display defaults above still apply on top of the player's rc. Empty push deletes the file, no push (old client) leaves disk as-is, filesystem errors fail soft.
 - **No milestones, chips, or awards in v1.** There is no screen scraping and no late.sh-side persistence. crawl's own `~/.crawl/logfile` + `milestones` files on the host are machine-readable (unlike nethack's vt100-scrape situation), so a future award pipe should read those host-side rather than scraping — deferred (see §9).
 
-The door is gated behind `LATE_DCSS_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
+The door is gated by the `dcss_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
 ---
 
@@ -74,7 +74,7 @@ Cross-module wiring (client side, outside this folder) mirrors nethack exactly: 
 ## 3. Config And Deploy [VOLATILE]
 
 ### Client (env → `Config` → `SessionConfig` → `App`)
-- `LATE_DCSS_ENABLED` (default `false`), `LATE_DCSS_HOST` (default `127.0.0.1`; compose `service-dcss`, prod `late-dcss-sv`), `LATE_DCSS_PORT` (default `2325`), `LATE_DCSS_SECRET` (must equal the host's; required when enabled).
+- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-dcss`, prod `late-dcss-sv`, port 2325); `LATE_DCSS_SECRET` is the only env the client reads (must equal the host's).
 
 ### Host (`late-dcss` env)
 - `LATE_DCSS_SECRET` (required), `LATE_DCSS_BIN` (default `/usr/games/crawl`), `LATE_DCSS_DATA_DIR` (default `/var/lib/late-dcss`; the child `HOME` = the PVC in prod), `LATE_DCSS_LISTEN_ADDR`, `LATE_DCSS_PORT` (default `2325`), `LATE_DCSS_IDLE_TIMEOUT`.

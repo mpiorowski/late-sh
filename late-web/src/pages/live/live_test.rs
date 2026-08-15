@@ -20,9 +20,11 @@ async fn proxies_forward_upstream_404_instead_of_500() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
@@ -116,9 +118,11 @@ async fn golive_grant_proxy_exchanges_the_claim_cookie() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),

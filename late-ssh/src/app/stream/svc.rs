@@ -109,8 +109,8 @@ pub struct StreamService {
     db: Db,
     voice: VoiceService,
     activity: ActivityPublisher,
-    /// Public late-web base URL (`LATE_WEB_URL`); publisher and watch URLs
-    /// hang off it.
+    /// Public late-web base URL (`Config::web_url`); publisher and watch
+    /// URLs hang off it.
     web_url: String,
     evt_tx: broadcast::Sender<StreamEvent>,
 }

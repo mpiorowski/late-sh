@@ -60,19 +60,19 @@ impl VoiceConfig {
         room_name: String,
     ) -> anyhow::Result<Self> {
         if livekit_url.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_URL must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit url must not be empty");
         }
         if livekit_api_url.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_API_URL must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit api url must not be empty");
         }
         if api_key.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_API_KEY must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit api key must not be empty");
         }
         if api_secret.trim().is_empty() {
-            anyhow::bail!("LATE_LIVEKIT_API_SECRET must not be empty when voice is enabled");
+            anyhow::bail!("voice livekit api secret must not be empty");
         }
         if room_name.trim().is_empty() {
-            anyhow::bail!("LATE_VOICE_ROOM must not be empty when voice is enabled");
+            anyhow::bail!("voice room name must not be empty");
         }
         Ok(Self {
             enabled: true,

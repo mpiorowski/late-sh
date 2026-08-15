@@ -1,6 +1,9 @@
 # =============================================================================
 # Core Infrastructure Variables
 # =============================================================================
+# App configuration is NOT declared here. late-ssh reads LATE_ENV plus secrets;
+# every other app value is compiled into late-ssh/src/config.rs. Variables in
+# this file exist only for infrastructure shape, images, and secrets.
 
 variable "KUBE_CONFIG_PATH" {
   description = "Path to the kubeconfig file"
@@ -15,11 +18,6 @@ variable "DOCKER_CONFIG_JSON" {
 
 variable "LOG_LEVEL" {
   description = "Rust log level (RUST_LOG)."
-  type        = string
-}
-
-variable "DOMAIN" {
-  description = "The root domain (e.g., late.sh)."
   type        = string
 }
 
@@ -83,57 +81,6 @@ variable "SSH_HOST_KEY" {
 }
 
 # =============================================================================
-# SSH / Rate Limits
-# =============================================================================
-
-variable "SSH_OPEN" {
-  description = "Allow open SSH access (no auth required)."
-  type        = string
-}
-
-variable "MAX_CONNS_GLOBAL" {
-  description = "Max total concurrent SSH connections."
-  type        = string
-}
-
-variable "MAX_CONNS_PER_IP" {
-  description = "Max concurrent SSH connections per IP."
-  type        = string
-}
-
-variable "SSH_IDLE_TIMEOUT" {
-  description = "SSH idle timeout in seconds."
-  type        = string
-}
-
-variable "FRAME_DROP_LOG_EVERY" {
-  description = "Log every Nth frame drop."
-  type        = string
-}
-
-variable "SSH_MAX_ATTEMPTS_PER_IP" {
-  description = "Max SSH connection attempts per IP in rate limit window."
-  type        = string
-}
-
-variable "SSH_RATE_LIMIT_WINDOW_SECS" {
-  description = "SSH rate limit window in seconds."
-  type        = string
-}
-
-variable "SSH_PROXY_PROTOCOL" {
-  description = "Enable PROXY protocol parsing in late-ssh."
-  type        = string
-  default     = "1"
-}
-
-variable "SSH_PROXY_TRUSTED_CIDRS" {
-  description = "Comma-separated CIDRs trusted to send PROXY protocol headers."
-  type        = string
-  default     = "10.42.0.0/16,46.62.210.86/32"
-}
-
-# =============================================================================
 # IPv6 edge proxy
 # =============================================================================
 
@@ -155,111 +102,8 @@ variable "IPV6_PROXY_IMAGE" {
   default     = "haproxy:2.9-alpine"
 }
 
-variable "WS_PAIR_MAX_ATTEMPTS_PER_IP" {
-  description = "Max WebSocket pair attempts per IP in rate limit window."
-  type        = string
-}
-
-variable "WS_PAIR_RATE_LIMIT_WINDOW_SECS" {
-  description = "WebSocket pair rate limit window in seconds."
-  type        = string
-}
-
-variable "DB_POOL_SIZE" {
-  description = "Database connection pool size."
-  type        = string
-}
-
 # =============================================================================
-# Door Games
-# =============================================================================
-
-variable "REBELS_ENABLED" {
-  description = "Enable the Rebels in the Sky SSH door game."
-  type        = string
-  default     = ""
-}
-
-variable "REBELS_HOST" {
-  description = "Rebels in the Sky SSH server hostname."
-  type        = string
-  default     = ""
-}
-
-variable "REBELS_PORT" {
-  description = "Rebels in the Sky SSH server port."
-  type        = string
-  default     = ""
-}
-
-variable "NETHACK_ENABLED" {
-  description = "Enable the NetHack SSH door game (real upstream binary on a PTY). Empty defaults to on; the nethack-save PVC is provisioned regardless. See infra/nethack.tf."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.NETHACK_ENABLED)))
-    error_message = "NETHACK_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "DOPEWARS_ENABLED" {
-  description = "Enable the dopewars door game CLIENT (service-ssh reaches the late-dopewars host over SSH; the host pod is always deployed). Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DOPEWARS_ENABLED)))
-    error_message = "DOPEWARS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "CODEKEEP_ENABLED" {
-  description = "Enable the CodeKeep door game client. Empty defaults to on; the dedicated host remains deployed."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.CODEKEEP_ENABLED)))
-    error_message = "CODEKEEP_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "DCSS_ENABLED" {
-  description = "Enable the DCSS door game CLIENT (service-ssh reaches the late-dcss host over SSH; the host pod is always deployed). Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.DCSS_ENABLED)))
-    error_message = "DCSS_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "BROGUE_ENABLED" {
-  description = "Enable the Brogue door game CLIENT (service-ssh reaches the late-brogue host over SSH; the host pod is always deployed). Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.BROGUE_ENABLED)))
-    error_message = "BROGUE_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "USURPER_ENABLED" {
-  description = "Enable the Usurper door game CLIENT (service-ssh reaches the late-usurper host over SSH; the host pod is always deployed). Empty defaults to on."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.USURPER_ENABLED)))
-    error_message = "USURPER_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-# =============================================================================
-# AI (Gemini)
+# Secrets injected into late-ssh
 # =============================================================================
 
 variable "AI_API_KEY" {
@@ -267,15 +111,6 @@ variable "AI_API_KEY" {
   type        = string
   sensitive   = true
 }
-
-variable "AI_ENABLED" {
-  description = "Enable AI features."
-  type        = string
-}
-
-# =============================================================================
-# YouTube Data API
-# =============================================================================
 
 variable "YOUTUBE_API_KEY" {
   description = "YouTube Data API key for queue submit validation."
@@ -286,24 +121,6 @@ variable "YOUTUBE_API_KEY" {
 # =============================================================================
 # Voice / LiveKit
 # =============================================================================
-
-variable "VOICE_ENABLED" {
-  description = "Enable late voice rooms in late-ssh."
-  type        = string
-  default     = ""
-}
-
-variable "VOICE_ROOM" {
-  description = "Default LiveKit room used by the late voice room MVP."
-  type        = string
-  default     = ""
-}
-
-variable "LIVEKIT_SUBDOMAIN" {
-  description = "Subdomain used for the public LiveKit endpoint under DOMAIN."
-  type        = string
-  default     = ""
-}
 
 variable "LIVEKIT_IMAGE" {
   description = "LiveKit server image."
@@ -325,12 +142,6 @@ variable "LIVEKIT_API_KEY" {
 
 variable "LIVEKIT_INGRESS_IMAGE" {
   description = "LiveKit ingress service image (WHIP ingest for OBS streams)."
-  type        = string
-  default     = ""
-}
-
-variable "LIVEKIT_WHIP_SUBDOMAIN" {
-  description = "Subdomain used for the public WHIP ingest endpoint under DOMAIN."
   type        = string
   default     = ""
 }
@@ -381,28 +192,6 @@ variable "LIVEKIT_TURN_TLS_PORT" {
 # IRC
 # =============================================================================
 
-variable "IRC_ENABLED" {
-  description = "Enable the embedded IRC listener in late-ssh. Production should use TLS."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_ENABLED)))
-    error_message = "IRC_ENABLED must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
-variable "IRC_PROXY_ACCEPT" {
-  description = "Enable optional PROXY protocol parsing for IRC in late-ssh."
-  type        = string
-  default     = ""
-
-  validation {
-    condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_PROXY_ACCEPT)))
-    error_message = "IRC_PROXY_ACCEPT must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
-  }
-}
-
 variable "IRC_PROXY_EMIT" {
   description = "Make the IRC ingress proxies emit PROXY protocol headers. Enable only after the parser-capable image is deployed."
   type        = string
@@ -412,42 +201,6 @@ variable "IRC_PROXY_EMIT" {
     condition     = contains(["", "0", "1", "true", "false", "yes", "no", "on", "off"], lower(trimspace(var.IRC_PROXY_EMIT)))
     error_message = "IRC_PROXY_EMIT must be a boolean-like string: 1/0, true/false, yes/no, or on/off."
   }
-}
-
-variable "IRC_HOST" {
-  description = "Public IRC hostname used for the TLS certificate."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_PORT" {
-  description = "Public and container IRC TLS port."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_CONNS_GLOBAL" {
-  description = "Max total concurrent IRC connections."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_CONNS_PER_USER" {
-  description = "Max concurrent IRC connections per late.sh user."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_MAX_AUTH_FAILURES_PER_IP" {
-  description = "Max failed IRC auth attempts per IP in the auth failure window."
-  type        = string
-  default     = ""
-}
-
-variable "IRC_AUTH_FAILURE_WINDOW_SECS" {
-  description = "IRC auth failure rate-limit window in seconds."
-  type        = string
-  default     = ""
 }
 
 # S3-Compatible Storage (for DB backups)
@@ -473,20 +226,4 @@ variable "S3_ENDPOINT" {
 variable "DB_BACKUPS_BUCKET" {
   description = "S3 bucket name for CloudNativePG backups."
   type        = string
-}
-
-variable "FILES_BUCKET" {
-  description = "S3/R2 bucket name for public uploaded files."
-  type        = string
-}
-
-variable "FILES_PUBLIC_BASE_URL" {
-  description = "Public base URL for uploaded files."
-  type        = string
-}
-
-variable "FILES_S3_REGION" {
-  description = "S3/R2 signing region for uploaded files. Cloudflare R2 uses auto."
-  type        = string
-  default     = "auto"
 }

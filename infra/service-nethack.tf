@@ -15,9 +15,9 @@
 #
 # replicas MUST stay 1: one RWO volume holds the shared bones + per-player saves
 # (see nethack.tf for the single-node / lock-file reasoning, which carries over).
-# The host pod is always deployed (like service-ssh/web); the door's enable flag
-# only gates the CLIENT (service-ssh's LATE_NETHACK_ENABLED, which shows the door
-# available/unavailable to users). Keeping the host unconditional means its image
+# The host pod is always deployed (like service-ssh/web); whether the door shows
+# up as available to users in the TUI is a late-ssh config.rs profile literal.
+# Keeping the host unconditional means its image
 # always exists in-cluster, so the deploy workflows can read it with a plain
 # `kubectl get` (no bootstrap fallback) just like the ssh/web images.
 

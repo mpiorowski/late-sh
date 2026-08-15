@@ -15,12 +15,12 @@ resource "kubernetes_ingress_v1" "service_web" {
 
   spec {
     tls {
-      hosts       = [var.DOMAIN]
+      hosts       = [local.domain]
       secret_name = "service-web-tls"
     }
 
     rule {
-      host = var.DOMAIN
+      host = local.domain
       http {
         path {
           path      = "/"
@@ -55,7 +55,7 @@ resource "kubernetes_ingress_v1" "service_ssh_api" {
 
   spec {
     rule {
-      host = "api.${var.DOMAIN}"
+      host = "api.${local.domain}"
       http {
         path {
           path      = "/"
@@ -90,12 +90,12 @@ resource "kubernetes_ingress_v1" "icecast" {
 
   spec {
     tls {
-      hosts       = ["audio.${var.DOMAIN}"]
+      hosts       = ["audio.${local.domain}"]
       secret_name = "icecast-tls"
     }
 
     rule {
-      host = "audio.${var.DOMAIN}"
+      host = "audio.${local.domain}"
       http {
         path {
           path      = "/"

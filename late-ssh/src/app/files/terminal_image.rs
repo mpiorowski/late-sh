@@ -298,7 +298,7 @@ pub(crate) async fn fetch_terminal_image(
     let bytes = crate::app::files::image_upload::download_url_bytes(
         &url,
         std::time::Duration::from_secs(15),
-        crate::app::files::image_upload::max_upload_bytes(),
+        crate::config::MAX_IMAGE_BYTES,
     )
     .await?;
 

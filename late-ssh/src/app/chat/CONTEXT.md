@@ -359,7 +359,7 @@ Autocomplete:
 - Pressing `/` while not composing on Home starts command compose for the active room, except on News where `/` is a synthetic-entry filter toggle. Directory Profiles/Projects use `/` as the mine-only filter inside page 7.
 
 Image uploads and inline rendering:
-- File-upload storage is optional. It is enabled only when `LATE_FILES_S3_ENDPOINT`/`S3_ENDPOINT`, `LATE_FILES_S3_BUCKET`, `LATE_FILES_PUBLIC_BASE_URL`, and S3 credentials are present. Infra variable details live in `infra/README.md`.
+- File-upload storage is optional per profile: `Config.files` is `Some(FilesConfig)` in prod (endpoint/bucket/URL literals plus `LATE_FILES_S3_ACCESS_KEY_ID`/`LATE_FILES_S3_SECRET_ACCESS_KEY` env secrets). Dev is `None` unless both R2 credentials are set in `.env.local`, which opts uploads into the prod bucket; a half-set pair is a startup error.
 - Pasting raw PNG/JPEG/GIF/WebP bytes into the chat composer starts an upload because there is no stable URL to preview until the bytes are hosted.
 - Pasting an image URL does not upload or rehost it. It is inserted as normal composer text; after send, inline rendering previews that URL best-effort.
 - `/upload <url>` is the explicit URL upload path: it downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send and preview.

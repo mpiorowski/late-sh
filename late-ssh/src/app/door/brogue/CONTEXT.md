@@ -46,7 +46,7 @@ Core shape (all inherited from the DCSS door; its CONTEXT §1 applies):
 - **No milestones, chips, or awards in v1** (like dopewars/DCSS v1). brogue keeps a per-player machine-readable run history file in each player dir; a future award pipe should read those host-side rather than scraping vt100 (see §9).
 - Brogue draws a fixed 100x34 cell UI; on smaller terminals ncurses clips the right/bottom edge (playable but cropped, no in-game warning). The launcher copy says "roomiest at 100x34". No late.sh-side size gate.
 
-The door is gated behind `LATE_BROGUE_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
+The door is gated by the `brogue_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
 ---
 
@@ -80,7 +80,7 @@ Cross-module wiring (client side, outside this folder) mirrors DCSS exactly: `ap
 ## 3. Config And Deploy [VOLATILE]
 
 ### Client (env → `Config` → `SessionConfig` → `App`)
-- `LATE_BROGUE_ENABLED` (default `false`), `LATE_BROGUE_HOST` (default `127.0.0.1`; compose `service-brogue`, prod `late-brogue-sv`), `LATE_BROGUE_PORT` (default `2327`), `LATE_BROGUE_SECRET` (must equal the host's; required when enabled).
+- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-brogue`, prod `late-brogue-sv`, port 2327); `LATE_BROGUE_SECRET` is the only env the client reads (must equal the host's).
 
 ### Host (`late-brogue` env)
 - `LATE_BROGUE_SECRET` (required), `LATE_BROGUE_BIN` (default `/usr/games/brogue`), `LATE_BROGUE_DATA_DIR` (default `/var/lib/late-brogue`; the playground root = the PVC in prod), `LATE_BROGUE_LISTEN_ADDR`, `LATE_BROGUE_PORT` (default `2327`), `LATE_BROGUE_IDLE_TIMEOUT`.

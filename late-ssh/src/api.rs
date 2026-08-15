@@ -1064,7 +1064,7 @@ async fn send_json_ws<T: serde::Serialize>(
 }
 
 fn decode_clipboard_image_message(data_base64: String) -> SessionMessage {
-    let max_bytes = crate::app::files::image_upload::max_upload_bytes();
+    let max_bytes = crate::config::MAX_IMAGE_BYTES;
     decode_clipboard_image_message_with_max(data_base64, max_bytes)
 }
 

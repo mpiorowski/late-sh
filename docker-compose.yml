@@ -223,8 +223,13 @@ services:
       - "${LATE_LIVEKIT_RTC_TCP_PORT}:7881"
       - "${LATE_LIVEKIT_RTC_UDP_PORT}:7882/udp"
 
-  # WHIP ingest for `/golive obs`. Ports are fixed (not env vars) because
-  # they must match the two dev-config.yaml files exactly.
+  # WHIP ingest for `/golive obs`. The container-side ports are fixed because
+  # they must match the two dev-config.yaml files exactly; only the host side
+  # varies so a second instance can bind its own.
+  # Instance 2 caveat: the WHIP base URL handed to the streamer is baked into
+  # infra/livekit/dev-config.yaml as http://localhost:7888/w, so `/golive obs`
+  # only works against instance 1. Everything else about streaming (`/golive`
+  # screen share, watch pages) works on both.
   livekit-ingress:
     image: livekit/ingress:v1.4.3
     container_name: ${INSTANCE}-livekit-ingress
@@ -236,8 +241,8 @@ services:
     volumes:
       - ./infra/livekit-ingress/dev-config.yaml:/etc/livekit-ingress/config.yaml:ro
     ports:
-      - "7888:7888" # WHIP HTTP: OBS Server URL is http://localhost:7888/w
-      - "7890:7890/udp" # WHIP ICE/UDP media
+      - "${LATE_LIVEKIT_WHIP_HOST_PORT}:7888" # WHIP HTTP: OBS Server URL is http://localhost:7888/w
+      - "${LATE_LIVEKIT_WHIP_UDP_HOST_PORT}:7890/udp" # WHIP ICE/UDP media
 
 volumes:
   cargo-registry:

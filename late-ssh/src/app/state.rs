@@ -181,9 +181,8 @@ pub struct SessionConfig {
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
-    /// Process-global "watch me" stream registry/orchestration. `None` on
-    /// headless/test paths, which disables `/golive` and `/watch`.
-    pub stream_service: Option<crate::app::stream::svc::StreamService>,
+    /// Process-global "watch me" stream registry/orchestration.
+    pub stream_service: crate::app::stream::svc::StreamService,
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub notification_service: NotificationService,
@@ -317,6 +316,8 @@ pub struct SessionConfig {
     /// Process-global ghost-bot mention cooldown ladders, peeked at composer
     /// submit for the cooldown banner. Tests pass a fresh instance.
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
+    /// S3/R2 upload storage from `Config.files`; `None` disables uploads.
+    pub files: Option<crate::config::FilesConfig>,
     /// Process-global `/pair` intents and shared scratchpad buffers. `None`
     /// on headless/test paths, which disables `/pair`.
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
@@ -431,7 +432,7 @@ pub struct App {
     pub(super) shared: SharedBuffer,
 
     /// Session / connection
-    /// Public site base (`LATE_WEB_URL`), no trailing slash. Profile links and
+    /// Public site base (`Config::web_url`), no trailing slash. Profile links and
     /// the listen-page URL in the guide are built from it.
     pub(super) web_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
@@ -507,14 +508,14 @@ pub struct App {
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     voice_join_tx: mpsc::UnboundedSender<VoiceJoinTaskResult>,
     voice_join_rx: mpsc::UnboundedReceiver<VoiceJoinTaskResult>,
-    /// Process-global stream service; `None` disables `/golive`/`/watch`.
-    pub(crate) stream_service: Option<crate::app::stream::svc::StreamService>,
-    /// Go-live results for this session, drained in tick.
+    /// Process-global stream service backing `/golive` and `/watch`.
+    pub(crate) stream_service: crate::app::stream::svc::StreamService,
+    /// Go-live results for this session, drained in tick. `None` once the
+    /// broadcast channel closes, which only happens at shutdown.
     stream_events_rx: Option<broadcast::Receiver<crate::app::stream::svc::StreamEvent>>,
     /// Live-stream snapshot watch; polled ~1/s in tick into `chat`'s copy so
     /// render paths read local memory only.
-    stream_snapshot_rx:
-        Option<tokio::sync::watch::Receiver<crate::app::stream::registry::StreamSnapshot>>,
+    stream_snapshot_rx: tokio::sync::watch::Receiver<crate::app::stream::registry::StreamSnapshot>,
     /// Set when the user pressed Ctrl+V in an on-air stream room and still
     /// has to confirm they will be audible to anonymous watchers. Holds the
     /// voice channel the confirm is for; a second Ctrl+V within the window
@@ -1294,12 +1295,9 @@ impl App {
             voice_service,
             voice_join_tx,
             voice_join_rx,
-            stream_events_rx: config
-                .stream_service
-                .as_ref()
-                .map(|service| service.subscribe_events()),
-            stream_snapshot_rx: config.stream_service.as_ref().map(|service| {
-                let mut rx = service.subscribe();
+            stream_events_rx: Some(config.stream_service.subscribe_events()),
+            stream_snapshot_rx: {
+                let mut rx = config.stream_service.subscribe();
                 // `watch::Sender::subscribe` marks the current value as seen
                 // (same trap as the leaderboard channel below): without this
                 // a session connecting mid-stream shows no rail row or LIVE
@@ -1308,7 +1306,7 @@ impl App {
                 // the first `tick_stream` apply the snapshot sitting there.
                 rx.mark_changed();
                 rx
-            }),
+            },
             stream_service: config.stream_service,
             pending_on_air_voice_confirm: None,
             stream_modal: None,
@@ -1334,6 +1332,7 @@ impl App {
                 active_users.clone(),
                 notifier.clone(),
                 config.mention_ladders.clone(),
+                config.files.clone(),
             ),
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -2714,65 +2713,63 @@ impl App {
 
         if let Some(command) = self.chat.take_requested_golive() {
             changed = true;
-            match (&self.stream_service, command) {
-                (None, _) => {
-                    self.banner = Some(Banner::error("Streaming is not available on this server."));
-                }
-                (Some(service), crate::app::chat::state::GoLiveCommand::Start { title }) => {
-                    service.go_live_task(self.user_id, self.username.clone(), title);
+            match command {
+                crate::app::chat::state::GoLiveCommand::Start { title } => {
+                    self.stream_service
+                        .go_live_task(self.user_id, self.username.clone(), title);
                     self.banner = Some(Banner::success("Setting up your stream..."));
                 }
-                (Some(service), crate::app::chat::state::GoLiveCommand::StartObs { title }) => {
-                    service.go_live_obs_task(self.user_id, self.username.clone(), title);
+                crate::app::chat::state::GoLiveCommand::StartObs { title } => {
+                    self.stream_service.go_live_obs_task(
+                        self.user_id,
+                        self.username.clone(),
+                        title,
+                    );
                     self.banner = Some(Banner::success("Setting up your OBS stream..."));
                 }
-                (Some(service), crate::app::chat::state::GoLiveCommand::Stop) => {
-                    self.banner = Some(
-                        if service.stop(
-                            self.user_id,
-                            crate::app::stream::registry::EndReason::Command,
-                        ) {
-                            Banner::success("Stream ended.")
-                        } else {
-                            Banner::error("You are not streaming.")
-                        },
+                crate::app::chat::state::GoLiveCommand::Stop => {
+                    let stopped = self.stream_service.stop(
+                        self.user_id,
+                        crate::app::stream::registry::EndReason::Command,
                     );
+                    self.banner = Some(if stopped {
+                        Banner::success("Stream ended.")
+                    } else {
+                        Banner::error("You are not streaming.")
+                    });
                 }
             }
         }
 
         if let Some(username) = self.chat.take_requested_watch() {
             changed = true;
-            match &self.stream_service {
-                None => {
-                    self.banner = Some(Banner::error("Streaming is not available on this server."));
+            match self.stream_service.watch_url_for_username(&username) {
+                Some(url) => {
+                    self.stream_service.note_viewer_of_username(
+                        &username,
+                        self.user_id,
+                        &self.username,
+                    );
+                    self.open_stream_url(
+                        url,
+                        "Watch Stream".to_string(),
+                        format!("@{username} is live. Open on any device or scan:"),
+                        true,
+                    );
                 }
-                Some(service) => match service.watch_url_for_username(&username) {
-                    Some(url) => {
-                        service.note_viewer_of_username(&username, self.user_id, &self.username);
-                        let streamer = username.clone();
-                        self.open_stream_url(
-                            url,
-                            "Watch Stream".to_string(),
-                            format!("@{streamer} is live. Open on any device or scan:"),
-                            true,
-                        );
-                    }
-                    None => {
-                        self.banner = Some(Banner::error(&format!(
-                            "@{username} is not live right now."
-                        )));
-                    }
-                },
+                None => {
+                    self.banner = Some(Banner::error(&format!(
+                        "@{username} is not live right now."
+                    )));
+                }
             }
         }
 
         // Walking into a stream room counts as arriving at the stream. No
         // banner for the viewer: they can see where they are.
-        if let Some(room_id) = self.chat.take_opened_stream_room()
-            && let Some(service) = &self.stream_service
-        {
-            service.note_viewer_in_room(room_id, self.user_id, &self.username);
+        if let Some(room_id) = self.chat.take_opened_stream_room() {
+            self.stream_service
+                .note_viewer_in_room(room_id, self.user_id, &self.username);
         }
 
         let mut events = Vec::new();
@@ -2792,14 +2789,10 @@ impl App {
         // The snapshot applies before the events: a `GoLiveReady` selects
         // the fresh stream room, and `select_room_slot` only special-cases
         // rooms it can see in `live_streams`.
-        if let Some(rx) = &mut self.stream_snapshot_rx
-            && rx.has_changed().unwrap_or(false)
-        {
-            let mut snapshot = rx.borrow_and_update().clone();
-            if let Some(service) = &self.stream_service {
-                for stream in &mut snapshot.streams {
-                    stream.watch_url = service.watch_url(&stream.stream_id);
-                }
+        if self.stream_snapshot_rx.has_changed().unwrap_or(false) {
+            let mut snapshot = self.stream_snapshot_rx.borrow_and_update().clone();
+            for stream in &mut snapshot.streams {
+                stream.watch_url = self.stream_service.watch_url(&stream.stream_id);
             }
             // Pending -> Live edges for someone else's stream: the co-host
             // case. The channel persists between streams, so a co-host can

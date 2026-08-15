@@ -39,7 +39,7 @@ use crate::terminal_size::clamp_terminal_size;
 use crate::usernames;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
+use crate::config::PROXY_HEADER_TIMEOUT;
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
@@ -840,7 +840,7 @@ impl russh::server::Handler for ClientHandler {
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
             voice_service: self.state.voice_service.clone(),
-            stream_service: Some(self.state.stream_service.clone()),
+            stream_service: self.state.stream_service.clone(),
             chat_service,
             translation_service: self.state.translation_service.clone(),
             notification_service: self.state.notification_service.clone(),
@@ -955,6 +955,7 @@ impl russh::server::Handler for ClientHandler {
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
             mention_ladders: self.state.mention_ladders.clone(),
+            files: self.state.config.files.clone(),
             scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,

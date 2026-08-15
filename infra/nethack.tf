@@ -22,10 +22,8 @@
 # StatefulSet (out of scope).
 
 locals {
-  # NETHACK_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on. This now gates only the CLIENT door (service-ssh's
-  # LATE_NETHACK_ENABLED); the late-nethack host pod is always deployed.
-  nethack_enabled = trimspace(var.NETHACK_ENABLED) != "" ? trimspace(var.NETHACK_ENABLED) : "1"
+  # Whether the nethack door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-nethack host pod is always deployed.
 
   # MUST equal NETHACK_VAR_PLAYGROUND baked into the binary (Dockerfile).
   nethack_var_path = "/var/games/nethack-var"
