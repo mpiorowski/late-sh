@@ -392,6 +392,11 @@ pub struct MobView {
 #[derive(Clone, Debug)]
 pub struct QuestView {
     pub name: String,
+    /// What the quest actually asks for, so it's still readable long after
+    /// the one-time accept-time log line has scrolled off - a board bounty's
+    /// blurb plus its mechanical objective, or a Frontier quest's plain
+    /// "slay X" restated here for the same reason.
+    pub desc: String,
     pub done: bool,
     pub reward: String,
     pub frontier: bool,
@@ -652,6 +657,8 @@ pub struct InvView {
     /// The collapsible category this item groups under (Weapons / Armor /
     /// Consumables / Valuables).
     pub category: &'static str,
+    /// The item's flavor/description text.
+    pub desc: &'static str,
 }
 
 /// A batch-sell request at a merchant. Consumables and equipped gear are never
@@ -683,15 +690,23 @@ pub struct ShopEntryView {
     /// The collapsible category this item groups under (Weapons / Armor /
     /// Consumables / Valuables).
     pub category: &'static str,
+    /// The item's flavor/description text.
+    pub desc: &'static str,
 }
 
-/// The collapsible-panel category an item belongs to.
+/// The collapsible-panel category an item belongs to. Split from a single
+/// "Consumables" bucket so a batch-sell of loose gear/valuables never risks
+/// a buff item that happened to be lumped in with them: "Heals" is anything
+/// that actually restores HP/resource, "Consumables" is everything else you
+/// use from the pack (poisons and future non-heal effect items) - a player
+/// can bulk-sell Valuables without checking every item for a hidden buff.
 pub(super) fn item_category(kind: &super::items::ItemKind) -> &'static str {
     use super::items::{ItemKind, Slot};
     match kind {
         ItemKind::Equipment(Slot::Weapon) => "Weapons",
         ItemKind::Equipment(_) => "Armor",
-        ItemKind::Consumable { .. } => "Consumables",
+        ItemKind::Consumable { heal, restore } if *heal > 0 || *restore > 0 => "Heals",
+        ItemKind::Consumable { .. } | ItemKind::Utility => "Consumables",
         ItemKind::Valuable => "Valuables",
     }
 }
@@ -791,6 +806,29 @@ pub struct PortalView {
     /// Each destination: `(label, room id, is_here, is_sealed)`. Sealed gates
     /// (a continent whose title the player lacks) render dimmed and refuse.
     pub entries: Vec<(String, RoomId, bool, bool)>,
+}
+
+/// A quest board's postings, present whenever the player stands where a
+/// board feature is. Replaces the old "examine auto-assigns the next bounty"
+/// flow: every ready-to-claim and still-open bounty for this board is listed
+/// so taking one is an explicit choice, not the luck of whatever was first in
+/// the static list - that's what let a low-level player get handed a bounty
+/// for a foe they'd never even seen yet.
+#[derive(Clone, Debug)]
+pub struct BoardView {
+    pub entries: Vec<BoardEntryView>,
+}
+
+/// One posting on a board: either a finished counter-bounty ready to turn in
+/// (`ready`), or one still open to accept.
+#[derive(Clone, Debug)]
+pub struct BoardEntryView {
+    pub quest_id: u32,
+    pub title: String,
+    pub blurb: String,
+    pub objective: String,
+    pub reward: String,
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -898,6 +936,8 @@ pub struct PlayerView {
     pub crafting: Option<CraftView>,
     /// The waystone fast-travel menu, present when standing on a portal.
     pub portal: Option<PortalView>,
+    /// The quest board's postings, present when standing where a board is.
+    pub board: Option<BoardView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
@@ -1007,6 +1047,7 @@ impl PlayerView {
             housing: None,
             crafting: None,
             portal: None,
+            board: None,
             bio: String::new(),
             appearance: Vec::new(),
             appearance_idx: Vec::new(),
@@ -1859,6 +1900,16 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.travel(user_id, dest));
     }
 
+    /// Turn in a finished counter-bounty chosen from the board's picker.
+    pub fn claim_board_task(&self, user_id: Uuid, quest_id: u32) {
+        self.mutate(user_id, move |s| s.claim_board_quest(user_id, quest_id));
+    }
+
+    /// Accept a bounty chosen from the board's picker.
+    pub fn accept_board_task(&self, user_id: Uuid, quest_id: u32) {
+        self.mutate(user_id, move |s| s.accept_board_quest(user_id, quest_id));
+    }
+
     /// Delete one character slot. Only kicks a live session out (and clears
     /// its sessions/in-memory player) when that slot is the one actually
     /// being played right now - deleting an idle slot from the landing must
@@ -2662,6 +2713,25 @@ const BOARD_QUESTS: &[BoardQuest] = &[
 
 fn board_quest(id: u32) -> Option<&'static BoardQuest> {
     BOARD_QUESTS.iter().find(|q| q.id == id)
+}
+
+/// One board posting's picker-menu row, for a `BoardView`.
+fn board_entry(q: &BoardQuest, ready: bool) -> BoardEntryView {
+    BoardEntryView {
+        quest_id: q.id,
+        title: q.title.to_string(),
+        blurb: q.blurb.to_string(),
+        objective: q.objective.describe(),
+        reward: format!(
+            "{} gold{}",
+            q.reward_gold,
+            match q.reward_title {
+                Some(t) => format!(" + title: {t}"),
+                None => String::new(),
+            }
+        ),
+        ready,
+    }
 }
 
 struct MobInstance {
@@ -4616,11 +4686,11 @@ impl WorldState {
             return;
         };
         if feat.kind == FeatureKind::Villager {
-            self.log_to(
-                user_id,
-                LogKind::Normal,
-                format!("You ask {} for a moment.", feat.name),
-            );
+            // No "you ask X for a moment" preamble: that phrasing implied an
+            // exchange was starting when the line *is* the whole interaction,
+            // which read as "...and? that's it?" A villager's dialogue is the
+            // payoff, not a placeholder for one - present it directly, same
+            // as the "look at" default below does for its own `desc`.
             self.log_to(
                 user_id,
                 LogKind::Room,
@@ -4656,8 +4726,6 @@ impl WorldState {
             if safe {
                 self.use_bank(user_id);
             }
-        } else if feat.kind == FeatureKind::Board {
-            self.use_board(user_id, room_id);
         } else if feat.kind == FeatureKind::Housing {
             self.log_to(
                 user_id,
@@ -4764,59 +4832,84 @@ impl WorldState {
         }
     }
 
-    /// Examine a quest board: claim a finished bounty if one is ready here,
-    /// otherwise take up the next available posting for this capital's region.
-    fn use_board(&mut self, user_id: Uuid, board_room: RoomId) {
-        let (progress, level) = match self.players.get(&user_id) {
-            Some(p) => (p.board_progress.clone(), p.level),
-            None => return,
+    /// Every posting for a board in the player's room: ready-to-claim
+    /// counter-bounties first, then bounties still open to accept. Backs the
+    /// picker menu (`Panel::Board`) - the player chooses, rather than
+    /// `examine` silently auto-assigning whatever came first in the static
+    /// list (which is how a fresh adventurer could get handed a bounty for a
+    /// foe several zones above them with no way to preview or decline it).
+    fn board_entries(&self, user_id: Uuid, board_room: RoomId) -> Vec<BoardEntryView> {
+        let Some(p) = self.players.get(&user_id) else {
+            return Vec::new();
         };
-        // 1) A finished counter-bounty for this board takes priority - claim it.
-        let claimable = progress.iter().find_map(|(id, prog)| {
-            board_quest(*id).filter(|q| q.board == board_room && *prog >= q.objective.target())
+        let mut entries: Vec<BoardEntryView> = p
+            .board_progress
+            .iter()
+            .filter_map(|(id, prog)| {
+                let q = board_quest(*id)?;
+                (q.board == board_room && *prog >= q.objective.target())
+                    .then(|| board_entry(q, true))
+            })
+            .collect();
+        entries.extend(
+            BOARD_QUESTS
+                .iter()
+                .filter(|q| q.board == board_room && self.board_quest_available(p, q))
+                .map(|q| board_entry(q, false)),
+        );
+        entries
+    }
+
+    /// Turn in a finished counter-bounty chosen from the board's picker. A
+    /// stale selection (already claimed elsewhere, or not actually ready) is
+    /// silently a no-op rather than an error the player has to parse.
+    fn claim_board_quest(&mut self, user_id: Uuid, quest_id: u32) {
+        let Some(q) = board_quest(quest_id) else {
+            return;
+        };
+        let ready = self.players.get(&user_id).is_some_and(|p| {
+            p.board_progress
+                .iter()
+                .any(|(id, prog)| *id == quest_id && *prog >= q.objective.target())
         });
-        if let Some(q) = claimable {
-            if let Some(p) = self.players.get_mut(&user_id) {
-                p.board_progress.retain(|(qid, _)| *qid != q.id);
-                p.gold += q.reward_gold;
-                // Repeatable bounties go on cooldown; one-offs are done for good.
-                if q.repeat == Repeat::Once {
-                    p.board_done.push(q.id);
-                } else {
-                    p.quest_cooldowns.retain(|(id, _)| *id != q.id);
-                    p.quest_cooldowns.push((q.id, now_unix_secs()));
-                }
-            }
-            self.log_to(
-                user_id,
-                LogKind::Loot,
-                format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
-            );
-            if let Some(title) = q.reward_title {
-                self.award_title(user_id, title.to_string(), level);
-            }
-            self.dirty = true;
+        if !ready {
             return;
         }
-        // 2) Otherwise post the next available bounty for this board.
-        let next = match self.players.get(&user_id) {
-            Some(p) => BOARD_QUESTS
-                .iter()
-                .find(|q| q.board == board_room && self.board_quest_available(p, q)),
-            None => None,
-        };
-        let Some(q) = next else {
-            let pending = progress
-                .iter()
-                .any(|(id, _)| board_quest(*id).is_some_and(|qq| qq.board == board_room));
-            let msg = if pending {
-                "Every bounty here is already in your hands - go and finish them."
+        let level = self.players[&user_id].level;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.board_progress.retain(|(id, _)| *id != quest_id);
+            p.gold += q.reward_gold;
+            // Repeatable bounties go on cooldown; one-offs are done for good.
+            if q.repeat == Repeat::Once {
+                p.board_done.push(q.id);
             } else {
-                "The board has no new bounties for you. Come back when more are posted."
-            };
-            self.log_to(user_id, LogKind::Normal, msg.to_string());
+                p.quest_cooldowns.retain(|(id, _)| *id != q.id);
+                p.quest_cooldowns.push((q.id, now_unix_secs()));
+            }
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
+        );
+        if let Some(title) = q.reward_title {
+            self.award_title(user_id, title.to_string(), level);
+        }
+        self.dirty = true;
+    }
+
+    /// Accept a bounty explicitly chosen from the board's picker.
+    fn accept_board_quest(&mut self, user_id: Uuid, quest_id: u32) {
+        let Some(q) = board_quest(quest_id) else {
             return;
         };
+        let available = self
+            .players
+            .get(&user_id)
+            .is_some_and(|p| self.board_quest_available(p, q));
+        if !available {
+            return;
+        }
         if let Objective::Escort { npc, dest_zone } = q.objective {
             if self
                 .players
@@ -6364,6 +6457,7 @@ impl WorldState {
                 let Some(it) = item(*id) else { return false };
                 match it.kind {
                     ItemKind::Consumable { .. } => false, // never dump potions
+                    ItemKind::Utility => false,           // never dump poisons/buff items either
                     ItemKind::Valuable => true,           // pure sell-fodder, always goes
                     ItemKind::Equipment(_) => match kind {
                         SellBatch::All => true,
@@ -8567,6 +8661,7 @@ impl WorldState {
                     compare: compare_to_worn(&player.equipped, it),
                     compare_pct: player.compare_gear(it),
                     category: item_category(&it.kind),
+                    desc: it.desc,
                 })
                 .chain(
                     player
@@ -8584,6 +8679,7 @@ impl WorldState {
                             compare: String::new(),
                             compare_pct: None,
                             category: item_category(&it.kind),
+                            desc: it.desc,
                         }),
                 )
                 .collect();
@@ -8606,6 +8702,7 @@ impl WorldState {
                         compare: compare_to_worn(&player.equipped, it),
                         compare_pct: player.compare_gear(it),
                         category: item_category(&it.kind),
+                        desc: it.desc,
                     })
                     .collect(),
             });
@@ -8756,6 +8853,13 @@ impl WorldState {
                         .collect(),
                 });
 
+            let board = features_at(player.room)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Board)
+                .then(|| BoardView {
+                    entries: self.board_entries(*user_id, player.room),
+                });
+
             let xp_into = player.xp - xp_for_level(player.level);
             let xp_next = if player.level >= Class::MAX_LEVEL {
                 0
@@ -8779,6 +8883,7 @@ impl WorldState {
                 .filter_map(|z| {
                     super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
                         name: format!("{zname} - slay {boss}"),
+                        desc: format!("Hunt down and slay {boss}, {zname}'s zone boss."),
                         done: player.completed_quests.contains(&z),
                         reward: format!("title: Champion of the {zname}"),
                         frontier: true,
@@ -8796,6 +8901,7 @@ impl WorldState {
                         } else {
                             format!("{} ({}/{})", q.title, prog, need)
                         },
+                        desc: format!("{} ({})", q.blurb, q.objective.describe()),
                         done: ready,
                         reward: format!(
                             "{} gold{}",
@@ -8872,6 +8978,7 @@ impl WorldState {
                     housing,
                     crafting,
                     portal,
+                    board,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {

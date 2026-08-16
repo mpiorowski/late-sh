@@ -874,7 +874,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 **Paired client control + visualizer:**
 1. Trigger: SSH PTY request creates a session token plus the inbound `SessionRegistry` route.
 2. Processing: The CLI or its webview helper connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
-3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
+3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`, persists the reported mute/volume to this device's `user_ssh_keys.settings` row (the one source of truth for both), and, on the session's *first* paired client only, aligns that client to the stored value (the CLI boots silent and needs it to start playing). The alignment is claimed per session token, not per WebSocket: re-applying it on a mid-session pair-WS reconnect is what used to unmute a muted session. See `late-ssh/src/app/audio/CONTEXT.md`, "Mute and volume: one source of truth, stored per device".
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
 5. Failure: If the paired client disconnects, paired state disappears. If the CLI viz source disconnects or goes silent, visualizer bars decay (rms * 0.96 per tick). If SSH disconnects, the session token unregisters on drop.
 
@@ -1245,7 +1245,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `4` | Global | Jump to Artboard |
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
-| `m` | Global | Toggle mute on paired client |
+| `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
 | `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |

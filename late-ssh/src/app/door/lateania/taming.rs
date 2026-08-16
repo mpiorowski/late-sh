@@ -983,16 +983,20 @@ const AELUNOR_HOUND_SKILLS: &[PetSkill] = &[
 ];
 
 /// The five tameable companions of Aelunor, ordered easy to hard. Stats climb
-/// with `tame_level` (same "no beast Pareto-dominated by an easier one" rule
-/// as the classic fifty - same-tier beasts may trade attack for hp, nothing
-/// higher may lose on both axes to something cheaper).
+/// with `tame_level` under the same "no beast Pareto-dominated by an easier
+/// one" rule as the classic fifty: same-tier beasts may trade attack for hp,
+/// but nothing higher may lose on both axes to something cheaper. The rule
+/// spans both pools, since a player grinds one Animal Taming level and takes
+/// the best beast it opens wherever it roams - `taming_test`'s
+/// `no_beast_is_out_classed_by_an_easier_one` walks the combined list, so a
+/// stat edit here is checked against every Broceliande beast too.
 pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
     beast_with_skills(
         "ae_faerie",
         "Moonlit Faerie",
         "\u{1F9DA}",
         8,
-        50,
+        58,
         9,
         "a small fae creature trailing cold moonlight, quick to heal what it loves",
         AELUNOR_FAERIE_SKILLS,
@@ -1022,8 +1026,8 @@ pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
         "Druid's Fox",
         "\u{1F98A}",
         34,
-        100,
-        18,
+        110,
+        21,
         "a russet fox that runs at a druid's heel and fights with the wood's own cunning",
         AELUNOR_FOX_SKILLS,
     ),
@@ -1032,8 +1036,8 @@ pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
         "Wild Hunt Hound",
         "\u{1F415}",
         44,
-        180,
-        26,
+        200,
+        28,
         "a spectral hound of the Wild Hunt, the rarest and deadliest companion Aelunor offers",
         AELUNOR_HOUND_SKILLS,
     ),

@@ -1925,6 +1925,128 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
 }
 
 #[test]
+fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
+    // Aelunor is a lottery, not a shortcut past the Frontier. Two rules make
+    // that true, and both live in `extend_aelunor`/`aelunor_loot`:
+    //
+    //   1. A Legendary spawn stays a genuinely rare roll at every depth. The
+    //      affix roll used to climb linearly with the zone, so every spawn
+    //      past zone 8 was Legendary - "rarity" was really just depth.
+    //   2. A plain spawn's table stays in the catalog's lower half. Only the
+    //      rare affixes reach the top bands, so the wood's ~660hp mobs can't
+    //      hand out what the Frontier's ~3280hp mobs guard behind four Bane
+    //      titles, on a walk in from the Amber Savanna with no gate at all.
+    use super::super::items::{Rarity, item};
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    assert!(
+        wood.len() > 100,
+        "the wood should be populated, got {} spawns",
+        wood.len()
+    );
+
+    let legendary = |s: &MobSpawn| s.name.starts_with("Legendary ");
+    let share = |pool: &[&MobSpawn]| match pool.len() {
+        0 => 0,
+        n => pool.iter().filter(|s| legendary(s)).count() * 100 / n,
+    };
+    assert!(
+        share(&wood) < 15,
+        "a Legendary should be a lucky find across the wood, got {}% of spawns",
+        share(&wood)
+    );
+    let deepest: Vec<&MobSpawn> = wood
+        .iter()
+        .copied()
+        .filter(|s| {
+            (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1
+        })
+        .collect();
+    assert!(
+        share(&deepest) < 25,
+        "even the Deep Heart keeps Legendaries a minority, got {}%",
+        share(&deepest)
+    );
+    assert!(
+        wood.iter().any(|s| legendary(s)),
+        "but the tail is real - some spawns do roll Legendary"
+    );
+
+    // A plain, unaffixed spawn never carries endgame gear, however deep it is.
+    for s in wood.iter().filter(|s| AELUNOR_CREATURES.contains(&s.name)) {
+        for id in s.loot {
+            let it = item(*id).unwrap_or_else(|| panic!("{} drops unknown item {id}", s.name));
+            assert!(
+                !matches!(it.rarity, Rarity::Epic | Rarity::Legendary),
+                "{} is a plain spawn but drops {} ({})",
+                s.name,
+                it.name,
+                it.rarity.label()
+            );
+        }
+    }
+    // The jackpot is real, though: the rare rolls do reach the top bands.
+    assert!(
+        wood.iter().any(|s| s
+            .loot
+            .iter()
+            .any(|id| item(*id).is_some_and(|it| it.rarity == Rarity::Legendary))),
+        "a Legendary spawn should be worth the walk"
+    );
+}
+
+#[test]
+fn a_legendary_aelunor_spawn_is_an_elite_that_guards_its_prize() {
+    // The affix jumps the drop table twelve tiers wherever it lands, so what
+    // carries it has to stand as far above the local floor as the prize does.
+    // Otherwise the lottery is only a shortcut: a first-glade Legendary would
+    // hand a wanderer Epic-band gear off an ordinary fight. The premium is
+    // quadratic in the affix and flat across zones for exactly that reason -
+    // the prize doesn't get smaller near the eaves, so neither does the guard.
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    let zone_of = |s: &MobSpawn| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE;
+    let mut checked = 0;
+    for legend in wood.iter().filter(|s| s.name.starts_with("Legendary ")) {
+        // The toughest ordinary spawn in the same glade, deepest cell included.
+        let Some(plain) = wood
+            .iter()
+            .filter(|s| zone_of(s) == zone_of(legend) && AELUNOR_CREATURES.contains(&s.name))
+            .max_by_key(|s| s.max_hp)
+        else {
+            continue;
+        };
+        assert!(
+            legend.max_hp * 10 >= plain.max_hp * 16,
+            "{} ({} hp) barely outweighs the glade's toughest common {} ({} hp) - \
+             a Legendary should read as a mini-boss",
+            legend.name,
+            legend.max_hp,
+            plain.name,
+            plain.max_hp,
+        );
+        assert!(
+            legend.damage > plain.damage,
+            "{} ({} dmg) hits no harder than the common {} ({} dmg)",
+            legend.name,
+            legend.damage,
+            plain.name,
+            plain.damage,
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "some glade should hold a Legendary to check");
+}
+
+#[test]
 fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
     let world = seed_world();
     // All five rooms exist, and every one but the training yard is safe -
@@ -2016,3 +2138,5 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
         );
     }
 }
+
+

@@ -956,3 +956,24 @@ fn a_scattered_links_stub_follows_the_exit_not_the_coordinate_delta() {
         "and nothing suggests a path west, because there is no way west"
     );
 }
+
+// The map's gather marker used to carry only a skill name, with no way to
+// scout whether a node was even worth the walk before physically standing in
+// its room - the level gate was only ever shown as an in-room refusal reason
+// after arriving under-levelled. It must be visible on the map itself now.
+#[test]
+fn gather_poi_carries_the_nodes_real_level_requirement() {
+    use crate::app::door::lateania::world::NODES;
+
+    let node = NODES
+        .iter()
+        .find(|n| n.level_req > 0)
+        .expect("at least one gather node has a real level gate");
+    let poi = super::poi(node.home).expect("the node's room is indexed");
+    let gather = poi.gather.expect("a gather node room carries a GatherPoi");
+    assert_eq!(gather.skill, node.skill.key());
+    assert_eq!(
+        gather.level_req, node.level_req,
+        "the map's level requirement must match the real gate, not a placeholder"
+    );
+}

@@ -46,8 +46,15 @@ fn no_beast_is_out_classed_by_an_easier_one() {
     // The ten Wildbound mounts used to open at attack 22 / hp 420 against the
     // tame-50 Green Wyrm's 38 / 560, leaving taming 51..=79 as pure dead grind -
     // twenty-five levels that downgraded your pet.
-    for b in TAMEABLE {
-        if let Some(better) = TAMEABLE.iter().find(|c| {
+    //
+    // Both pools are one ladder as far as a player is concerned: they grind a
+    // single Animal Taming level and pick the best beast it opens, wherever it
+    // roams. So the rule spans `TAMEABLE` and `AELUNOR_TAMEABLE` together, in
+    // both directions - Aelunor's five used to escape it entirely by sitting
+    // in their own const, and three of them lost outright to easier classics.
+    let pool: Vec<&PetSpecies> = TAMEABLE.iter().chain(AELUNOR_TAMEABLE).collect();
+    for b in &pool {
+        if let Some(better) = pool.iter().find(|c| {
             c.tame_level < b.tame_level
                 && c.base_attack >= b.base_attack
                 && c.base_hp >= b.base_hp

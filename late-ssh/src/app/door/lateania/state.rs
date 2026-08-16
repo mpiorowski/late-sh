@@ -78,6 +78,12 @@ pub enum Panel {
     /// with `!` (not `?`, which late.sh reserves globally for a cross-door
     /// help overlay).
     Leaderboard,
+    /// A quest board's postings: ready-to-claim counter-bounties and bounties
+    /// still open to accept, in one explicit picker. Opened by choosing the
+    /// board feature in the Examine panel (there's no key left to spare for
+    /// a dedicated binding - every letter and the sensible symbols are
+    /// already taken).
+    Board,
 }
 
 /// A combat action a player can trigger by clicking its on-screen chip, mapping
@@ -499,6 +505,7 @@ impl State {
             Panel::Taming => self.view().taming.map(|t| t.entries.len()).unwrap_or(0),
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
+            Panel::Board => self.view().board.map(|b| b.entries.len()).unwrap_or(0),
             Panel::Appearance => self.view().appearance.len(),
             // These panels' cursors walk headers + visible items, not the raw list.
             Panel::Inventory | Panel::Shop | Panel::Crafting => self.active_rows().len(),
@@ -888,7 +895,33 @@ impl State {
                     None => {}
                 }
             }
-            Panel::Examine => self.svc.interact_task(self.user_id, self.cursor),
+            Panel::Examine => {
+                // Every feature reveals its description when looked at, boards
+                // included - that's the "look at things" rule. A board then
+                // also opens its picker on top, because choosing what to accept
+                // or claim must be an explicit decision rather than a blind
+                // draw (the same shape as the Portal's look + fast-travel menu).
+                let is_board = self
+                    .view()
+                    .features
+                    .get(self.cursor)
+                    .is_some_and(|f| f.kind == "board");
+                self.svc.interact_task(self.user_id, self.cursor);
+                if is_board {
+                    self.set_panel(Panel::Board);
+                }
+            }
+            Panel::Board => {
+                if let Some(board) = self.view().board
+                    && let Some(entry) = board.entries.get(self.cursor)
+                {
+                    if entry.ready {
+                        self.svc.claim_board_task(self.user_id, entry.quest_id);
+                    } else {
+                        self.svc.accept_board_task(self.user_id, entry.quest_id);
+                    }
+                }
+            }
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             Panel::Follow => self.follow_selected(),
             Panel::Stable => {

@@ -61,6 +61,31 @@ const REGULAR: Caps = Caps::empty();
 /// narrow: an owner keeps the door, staff keep everything else.
 const ROOM_OWNER: Caps = Caps::KICK_FROM_ROOM;
 
+/// What a streamer may do inside their own stream room. A kick alone is
+/// useless there: the room is public, so anyone kicked walks back in from the
+/// rail. The ban is the lock, and the streamer needs the key to it as well.
+const STREAM_OWNER: Caps = Caps::KICK_FROM_ROOM
+    .union(Caps::BAN_FROM_ROOM)
+    .union(Caps::UNBAN_FROM_ROOM);
+
+/// Which room the actor owns, for the single action being authorized. Never
+/// part of a session's standing permissions, which is why it is not derived
+/// from the user flags.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Ownership {
+    PrivateRoom,
+    StreamRoom,
+}
+
+impl Ownership {
+    const fn caps(self) -> Caps {
+        match self {
+            Self::PrivateRoom => ROOM_OWNER,
+            Self::StreamRoom => STREAM_OWNER,
+        }
+    }
+}
+
 const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::DELETE_OTHER_MESSAGE)
     .union(Caps::KICK_FROM_ROOM)
@@ -91,27 +116,33 @@ const ADMIN: Caps = Caps::all();
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Permissions {
     tier: Tier,
-    /// Granted for a single action against a single room the actor owns. Never
-    /// part of a session's standing permissions, which is why it is not derived
-    /// from the user flags.
-    owns_room: bool,
+    owns: Option<Ownership>,
 }
 
 impl Permissions {
     pub const fn new(is_admin: bool, is_moderator: bool) -> Self {
         Self {
             tier: Tier::from_user_flags(is_admin, is_moderator),
-            owns_room: false,
+            owns: None,
         }
     }
 
-    /// Add the caps a room owner holds, for one action inside the room they
-    /// own. The tier is untouched on purpose: ownership outranks nobody, so the
-    /// rank compare in `can` still refuses staff targets.
+    /// Add the caps a private room's owner holds, for one action inside the
+    /// room they own. The tier is untouched on purpose: ownership outranks
+    /// nobody, so the rank compare in `can` still refuses staff targets.
     pub const fn as_room_owner(self) -> Self {
         Self {
             tier: self.tier,
-            owns_room: true,
+            owns: Some(Ownership::PrivateRoom),
+        }
+    }
+
+    /// Add the caps a streamer holds inside their own stream room. Same rules
+    /// as `as_room_owner`, wider caps: see [`STREAM_OWNER`].
+    pub const fn as_stream_owner(self) -> Self {
+        Self {
+            tier: self.tier,
+            owns: Some(Ownership::StreamRoom),
         }
     }
 
@@ -169,10 +200,9 @@ impl Permissions {
             Tier::Moderator => MODERATOR,
             Tier::Admin => ADMIN,
         };
-        if self.owns_room {
-            tier.union(ROOM_OWNER)
-        } else {
-            tier
+        match self.owns {
+            Some(owns) => tier.union(owns.caps()),
+            None => tier,
         }
     }
 
@@ -184,16 +214,21 @@ impl Permissions {
         if !self.has(action) {
             return false;
         }
+        if self.tier > target {
+            return true;
+        }
         // Staff act by rank. An owner holds no rank, so they may only act on
         // regulars, and only with the caps ownership itself grants.
-        self.tier > target
-            || (self.owns_room && matches!(target, Tier::Regular) && ROOM_OWNER.contains(action))
+        match self.owns {
+            Some(owns) => matches!(target, Tier::Regular) && owns.caps().contains(action),
+            None => false,
+        }
     }
 
     /// Owner actions are logged like staff actions: someone was removed from a
     /// room and the record should say who did it.
     pub const fn should_audit(self, target_is_self: bool) -> bool {
-        !target_is_self && (self.can_moderate() || self.owns_room)
+        !target_is_self && (self.can_moderate() || self.owns.is_some())
     }
 }
 

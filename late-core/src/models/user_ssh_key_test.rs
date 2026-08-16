@@ -1,5 +1,7 @@
 use crate::models::user::{RightSidebarMode, RoomListMode};
-use crate::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
+use crate::models::user_ssh_key::{
+    KeyAudio, KeyLayout, UserSshKey, extract_key_audio, extract_key_layout,
+};
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
 
@@ -8,6 +10,106 @@ fn phone_layout() -> KeyLayout {
         room_list_mode: RoomListMode::Off,
         right_sidebar_mode: RightSidebarMode::Auto,
     }
+}
+
+fn muted_at_sixty() -> KeyAudio {
+    KeyAudio {
+        muted: true,
+        volume_percent: 60,
+    }
+}
+
+#[test]
+fn stored_audio_round_trips_and_partial_blobs_fall_back() {
+    let audio = muted_at_sixty();
+    assert_eq!(extract_key_audio(&audio.to_value()), Some(audio));
+
+    // Nothing stored, or only half a pair, means "use the caller's default".
+    assert_eq!(extract_key_audio(&json!({})), None);
+    assert_eq!(extract_key_audio(&json!({"audio_muted": true})), None);
+    assert_eq!(
+        extract_key_audio(&json!({"audio_volume_percent": 60})),
+        None
+    );
+    // A volume outside the 0-100 range is a mangled blob, not a clamp target.
+    assert_eq!(
+        extract_key_audio(&json!({"audio_muted": true, "audio_volume_percent": 140})),
+        None
+    );
+}
+
+#[tokio::test]
+async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = create_test_user(&test_db.db, "audioowner").await;
+
+    UserSshKey::ensure(&client, owner.id, "SHA256:laptop")
+        .await
+        .expect("laptop key");
+    UserSshKey::ensure(&client, owner.id, "SHA256:desktop")
+        .await
+        .expect("desktop key");
+
+    // A device that has never reported audio has none stored, so the caller
+    // falls back rather than assuming "unmuted".
+    assert_eq!(
+        UserSshKey::audio_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop audio"),
+        None
+    );
+
+    UserSshKey::set_layout(&client, owner.id, "SHA256:laptop", phone_layout())
+        .await
+        .expect("store laptop layout");
+    UserSshKey::set_audio(&client, owner.id, "SHA256:laptop", muted_at_sixty())
+        .await
+        .expect("store laptop audio");
+
+    assert_eq!(
+        UserSshKey::audio_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop audio"),
+        Some(muted_at_sixty())
+    );
+    // Muting the laptop must not silence the desktop.
+    assert_eq!(
+        UserSshKey::audio_for(&client, owner.id, "SHA256:desktop")
+            .await
+            .expect("desktop audio"),
+        None
+    );
+    // Audio and layout share one settings blob, so writing either must merge
+    // rather than replace.
+    assert_eq!(
+        UserSshKey::layout_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop layout"),
+        Some(phone_layout())
+    );
+
+    // Another account cannot write onto this key even holding its fingerprint.
+    let stranger = create_test_user(&test_db.db, "audiostranger").await;
+    assert!(
+        UserSshKey::set_audio(
+            &client,
+            stranger.id,
+            "SHA256:laptop",
+            KeyAudio {
+                muted: false,
+                volume_percent: 5,
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        UserSshKey::audio_for(&client, owner.id, "SHA256:laptop")
+            .await
+            .expect("laptop audio"),
+        Some(muted_at_sixty())
+    );
 }
 
 #[test]

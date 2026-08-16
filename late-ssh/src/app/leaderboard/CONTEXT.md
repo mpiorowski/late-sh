@@ -25,7 +25,7 @@ to the doors.
 
 ## Source Map
 
-- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, then the game boards, the per-door triples then the two Lateania snapshot boards, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, and the daily `profile_awards` snapshot loop.
@@ -161,8 +161,8 @@ that the migrations and a few source comments still point at.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Chips, Arcade Wins), then the Games group (each door's board triple,
-then the Lateania boards), Daily Wins, and High Scores, in roster order.
+(Top Chips, Arcade Wins), then the Games group (the Lateania boards, then
+each door's board triple), Daily Wins, and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). There is no scrolling inside a

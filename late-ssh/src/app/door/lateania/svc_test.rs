@@ -21,13 +21,32 @@ fn item_category_maps_kinds_to_panel_sections() {
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Weapon)), "Weapons");
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Chest)), "Armor");
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Ring)), "Armor");
+    // An actual heal/restore consumable groups under "Heals"...
     assert_eq!(
         item_category(&ItemKind::Consumable {
             heal: 30,
             restore: 0
         }),
+        "Heals"
+    );
+    assert_eq!(
+        item_category(&ItemKind::Consumable {
+            heal: 0,
+            restore: 20
+        }),
+        "Heals"
+    );
+    // ...while a non-heal consumable (a zero-heal Consumable, or a Utility
+    // item like a poison) groups under the more general "Consumables",
+    // separate from pure sell-fodder "Valuables".
+    assert_eq!(
+        item_category(&ItemKind::Consumable {
+            heal: 0,
+            restore: 0
+        }),
         "Consumables"
     );
+    assert_eq!(item_category(&ItemKind::Utility), "Consumables");
     assert_eq!(item_category(&ItemKind::Valuable), "Valuables");
 }
 
@@ -560,27 +579,39 @@ fn world_boss_rises_on_schedule_and_is_announced() {
 
 #[test]
 fn board_bounty_accepts_then_pays_out_on_claim() {
-    use super::super::world::{TASMANIA_SQUARE, features_at};
+    use super::super::world::TASMANIA_SQUARE;
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = TASMANIA_SQUARE;
-    let board = features_at(TASMANIA_SQUARE)
-        .iter()
-        .position(|f| f.kind == FeatureKind::Board)
-        .expect("a board stands in the Tasmania square");
 
-    // First examine accepts the next bounty (id 1).
-    s.interact(uid(1), board);
+    // The board's picker lists bounty 1 as available before it's taken.
+    let entries = s.board_entries(uid(1), TASMANIA_SQUARE);
+    let posting = entries
+        .iter()
+        .find(|e| e.quest_id == 1)
+        .expect("bounty 1 is posted and available");
+    assert!(!posting.ready, "not accepted yet, so not claimable");
+    assert!(!posting.blurb.is_empty(), "the picker shows the blurb");
+    assert!(!posting.objective.is_empty(), "and the objective");
+
+    s.accept_board_quest(uid(1), 1);
     assert!(
         s.players[&uid(1)]
             .board_progress
             .iter()
             .any(|(id, _)| *id == 1),
-        "examining the board accepts the next bounty"
+        "accepting from the picker takes the bounty"
+    );
+    // Once accepted, the picker no longer offers it again as a fresh posting.
+    assert!(
+        !s.board_entries(uid(1), TASMANIA_SQUARE)
+            .iter()
+            .any(|e| e.quest_id == 1 && !e.ready),
+        "an already-accepted bounty isn't offered again"
     );
 
-    // Force it complete, then claim on the next examine.
+    // Force it complete: the picker now shows it as ready to claim.
     for e in s
         .players
         .get_mut(&uid(1))
@@ -592,8 +623,15 @@ fn board_bounty_accepts_then_pays_out_on_claim() {
             e.1 = 99;
         }
     }
+    let ready = s
+        .board_entries(uid(1), TASMANIA_SQUARE)
+        .into_iter()
+        .find(|e| e.quest_id == 1)
+        .expect("the finished bounty is still listed");
+    assert!(ready.ready, "a finished bounty shows as ready to claim");
+
     let gold_before = s.players[&uid(1)].gold;
-    s.interact(uid(1), board);
+    s.claim_board_quest(uid(1), 1);
     // Quest 1 is a Daily, so a claim records a cooldown rather than a
     // permanent done-flag.
     assert!(
@@ -614,6 +652,76 @@ fn board_bounty_accepts_then_pays_out_on_claim() {
             .iter()
             .any(|(id, _)| *id == 1),
         "a claimed bounty leaves the active list"
+    );
+}
+
+#[test]
+fn accepting_a_bounty_not_offered_by_the_picker_is_a_no_op() {
+    // A stale or tampered quest_id (already accepted elsewhere, on cooldown,
+    // or simply never offered) must not be acceptable out of band - only
+    // what the picker actually lists.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players
+        .get_mut(&uid(1))
+        .unwrap()
+        .board_progress
+        .push((1, 0));
+    let before = s.players[&uid(1)].board_progress.clone();
+
+    s.accept_board_quest(uid(1), 1); // already in progress
+    assert_eq!(
+        s.players[&uid(1)].board_progress,
+        before,
+        "accepting an already-active bounty changes nothing"
+    );
+
+    s.claim_board_quest(uid(1), 1); // not yet ready
+    assert_eq!(
+        s.players[&uid(1)].board_progress,
+        before,
+        "claiming an unfinished bounty changes nothing"
+    );
+}
+
+#[test]
+fn quest_journal_rows_carry_a_real_description() {
+    // The bug: a quest's name alone doesn't say what it actually asks for -
+    // players couldn't remember what a bounty was after the one-time
+    // accept-time log line scrolled off. Every row must now say so directly.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players
+        .get_mut(&uid(1))
+        .unwrap()
+        .board_progress
+        .push((1, 0));
+
+    let quests = s.snapshot().players[&uid(1)].quests.clone();
+    let bounty = quests
+        .iter()
+        .find(|q| q.name.starts_with("Still the Restless Dead"))
+        .expect("the accepted bounty appears in the journal");
+    assert!(
+        bounty.desc.contains("Skeletons walk the crypt"),
+        "the bounty's blurb should be in its description: {:?}",
+        bounty.desc
+    );
+    assert!(
+        bounty.desc.contains("slay 5 of Skeleton-kind"),
+        "the mechanical objective should be in its description too: {:?}",
+        bounty.desc
+    );
+
+    let frontier = quests
+        .iter()
+        .find(|q| q.frontier)
+        .expect("at least one Frontier quest is always listed");
+    assert!(
+        !frontier.desc.is_empty(),
+        "Frontier quests get a description too, not just board bounties"
     );
 }
 
@@ -698,17 +806,13 @@ fn daily_bounty_goes_on_cooldown_then_returns_after_a_day() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
-    let board = super::super::world::features_at(super::super::world::TASMANIA_SQUARE)
-        .iter()
-        .position(|f| f.kind == FeatureKind::Board)
-        .expect("board in the square");
     // Take and finish the daily bounty (id 1), then claim it.
     s.players
         .get_mut(&uid(1))
         .unwrap()
         .board_progress
         .push((1, 99));
-    s.interact(uid(1), board);
+    s.claim_board_quest(uid(1), 1);
     assert!(
         s.players[&uid(1)]
             .quest_cooldowns
@@ -1457,6 +1561,36 @@ fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
 }
 
 #[test]
+fn poisons_survive_every_batch_sell_mode_and_group_under_consumables() {
+    // The bug: poisons were classified `Valuable`, so any of the three
+    // batch-sell hotkeys (not just "sell all") could wipe them out right
+    // alongside pure sell-fodder gems and raw materials, and they showed up
+    // grouped with junk in the "Valuables" category instead of with the
+    // other pack items you actually use.
+    let poison = super::super::items::poison_id(1);
+    assert_eq!(
+        item_category(&item(poison).unwrap().kind),
+        "Consumables",
+        "a poison should not be grouped with pure sell-fodder valuables"
+    );
+
+    for kind in [SellBatch::All, SellBatch::Common, SellBatch::NonUpgrades] {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = 1;
+        s.move_player(uid(1), Dir::East); // the smithy (room 3), a merchant
+        s.players.get_mut(&uid(1)).unwrap().inventory = vec![poison];
+
+        s.sell_batch(uid(1), kind);
+        assert!(
+            s.players[&uid(1)].inventory.contains(&poison),
+            "{kind:?} must never dump a poison"
+        );
+    }
+}
+
+#[test]
 fn buying_a_companion_costs_gold_and_sets_a_pet() {
     let mut s = world();
     s.join(uid(1));
@@ -1969,6 +2103,41 @@ fn worn_gear_cannot_be_sold_out_from_under_you() {
         "and the refusal says why: {:?}",
         p.log.iter().map(|l| &l.text).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn inventory_and_shop_rows_carry_the_items_own_description() {
+    // Item.desc existed but was never plumbed into any view - inventory and
+    // shop rows showed stats with no flavor/description text at all.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3; // Embergate's merchant
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let expected = item(1006).unwrap().desc;
+    assert!(!expected.is_empty(), "the fixture item has real desc text");
+
+    let view = s.snapshot().players[&uid(1)].clone();
+    let inv_row = view
+        .inventory
+        .iter()
+        .find(|it| it.item_id == 1006)
+        .expect("the item appears in the inventory view");
+    assert_eq!(inv_row.desc, expected);
+
+    let shop_row = view
+        .shop
+        .expect("a merchant stands here")
+        .entries
+        .iter()
+        .find(|e| e.item_id == 1006)
+        .map(|e| e.desc);
+    if let Some(shop_desc) = shop_row {
+        assert_eq!(
+            shop_desc, expected,
+            "the shop row should carry the same desc"
+        );
+    }
 }
 
 #[test]
@@ -2508,6 +2677,12 @@ fn talking_to_a_villager_speaks_their_line_and_the_room_announces_them() {
         log.iter()
             .any(|l| l.text.contains(name) && l.text.contains("says:")),
         "talking to a villager should speak their line"
+    );
+    assert!(
+        !log.iter().any(|l| l.text.contains("for a moment")),
+        "the vague 'you ask X for a moment' preamble reads as an unfulfilled \
+         action ('...and? that's it?') and should be gone - the dialogue \
+         line above is the whole interaction, not a placeholder for one"
     );
 
     // The room description announces them up front, not hidden in a menu.

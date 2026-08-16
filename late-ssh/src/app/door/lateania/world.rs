@@ -625,7 +625,8 @@ pub enum FeatureKind {
     Bank,
     Plaque,
     Vista,
-    /// A quest board: examine it to accept the next bounty or claim a finished one.
+    /// A quest board: examine it to read it and open its picker, where you
+    /// accept an open bounty or claim a finished one.
     Board,
     /// A beast stable/menagerie: examine it to open the companion vendor.
     Stable,
@@ -10021,18 +10022,30 @@ const AELUNOR_PLACES: [&str; 10] = [
 ];
 
 /// Aelunor's regular-spawn loot: borrows the Frontier catalog exactly like
-/// `broceliande_loot`, but the effective tier also climbs with rolled
-/// rarity - a Legendary Hollow-Elf Raider in zone 0 drops from roughly the
-/// same table as a Common one four zones deeper. This is the literal
-/// mechanism behind "different rarity, different drops".
+/// `broceliande_loot`. Depth is a **shallow** ladder (half a tier per zone,
+/// the same slope Broceliande walks), and the rolled rarity is where the
+/// reward actually lives - each affix step is worth three zones of depth, so
+/// a Legendary spawn drops from a table a continent above its neighbours'.
+/// This is the literal mechanism behind "different rarity, different drops",
+/// and it is what makes the wood a lottery rather than a shortcut: the
+/// jackpot is real (a Deep Heart Legendary reaches the catalog's Legendary
+/// band) but you cannot farm it, because the affix is a rare roll at every
+/// depth (see the rarity roll in `extend_aelunor`).
+///
+/// It must stay that way. Aelunor is entered by a plain walk off the Amber
+/// Savanna with no title gate, and its mobs keep the gentle overworld
+/// multipliers, so a *reliable* high tier here would hand out at ~660hp what
+/// the Frontier guards at ~3280hp behind four Bane titles.
 fn aelunor_loot(zone: usize, rarity: usize) -> &'static [u32] {
-    let tier = (zone * 2 + rarity).min(super::items::FRONTIER_TIERS - 1);
+    let tier = (zone / 2 + rarity * 3).min(super::items::FRONTIER_TIERS - 1);
     super::items::frontier_loot(tier)
 }
 
+/// A named zone boss always drops, so it pays as though it were an Epic
+/// spawn: the best table the wood offers reliably, still one affix step below
+/// the Legendary roll that only luck produces.
 fn aelunor_notable_loot(zone: usize) -> &'static [u32] {
-    let tier = (zone * 2 + 4).min(super::items::FRONTIER_TIERS - 1);
-    super::items::frontier_loot(tier)
+    aelunor_loot(zone, 3)
 }
 
 /// Carve zone `z`'s glade floor. A pure function of the zone index (same
@@ -10212,10 +10225,22 @@ fn extend_aelunor(
                 continue;
             }
             let base = AELUNOR_CREATURES[native[rng.below(3)]];
-            // Rarity climbs with zone depth, with real spread throughout - an
-            // early Legendary is a rare, exciting find, not a guarantee.
-            let roll = rng.below(20) as i32 + tier * 3;
-            let rarity = ((roll / 6).max(0) as usize).min(4);
+            // A lottery, not a depth ladder. The affix bands are fixed and
+            // depth only nudges the roll, so a Legendary stays a rare find
+            // wherever you are: ~1% at the eaves, ~5% in the Deep Heart.
+            // A roll that climbed with depth instead (`below(20) + tier * 3`)
+            // made the affix a second name for "how deep am I" - past zone 8
+            // *every* spawn came up Legendary, and since the rarity picks the
+            // drop table (`aelunor_loot`), that pointed a whole region of
+            // ~660hp mobs at the Frontier catalog's top tier.
+            let roll = rng.below(1000) as i32 + tier * 4;
+            let rarity: usize = match roll {
+                0..=549 => 0,
+                550..=799 => 1,
+                800..=929 => 2,
+                930..=989 => 3,
+                _ => 4,
+            };
             let affix = AELUNOR_RARITY[rarity];
             let mob_name: &'static str = if affix.is_empty() {
                 base
@@ -10227,15 +10252,24 @@ fn extend_aelunor(
                 1 => MobBehavior::Skirmisher,
                 _ => MobBehavior::Patroller,
             };
-            let power = rarity as i32;
+            // Now that the affix is a rare roll rather than a depth stamp, it
+            // can buy a real fight instead of a slightly fatter common: the
+            // premium is **quadratic** in the affix, so a Legendary spawn
+            // lands at roughly twice its glade-mates' hp and reads as the
+            // mini-boss it is. Deliberately flat across zones - the affix
+            // jumps the drop table twelve tiers wherever it lands
+            // (`aelunor_loot`), so the guard has to stand as far above the
+            // local floor as the prize does, or a first-glade Legendary hands
+            // a wanderer Epic-band gear off an ordinary fight.
+            let elite = (rarity * rarity) as i32;
             let profile = DamageProfile::new(DamageType::Physical, None, None);
             spawns.push(MobSpawn {
                 id: spawn_id,
                 name: mob_name,
                 home: id,
-                max_hp: 190 + tier * 28 + depth * 4 + power * 40,
-                damage: 14 + tier + depth / 2 + power * 3,
-                xp: 32 + tier * 8 + depth * 2 + power * 10,
+                max_hp: 190 + tier * 28 + depth * 4 + elite * 40,
+                damage: 14 + tier + depth / 2 + elite * 3 / 2,
+                xp: 32 + tier * 8 + depth * 2 + elite * 10,
                 respawn_secs: 60,
                 loot: aelunor_loot(z, rarity),
                 boss: false,

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-14 (CLI voice is mic-only on the subscribe side: `late-cli` unsubscribes non-microphone remote audio and every `stream-*` publisher, whatever source label it carries. The `SCREEN_SHARE_AUDIO` label set at CreateIngress is advisory; consumers classify program audio by the `stream-*` identity since the label may not survive transcoding-off passthrough; see §6/§7 and `../stream/CONTEXT.md`)
+- Last updated: 2026-08-15 (A room ban now refuses a voice ticket: `checked_join_ticket` checks `RoomBan` alongside membership, so a ban takes the microphone and not just the chat. This is what makes a stream owner's `/ban` bite, since a public room can be re-entered from the rail; see §3/§5 and `../stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -72,7 +72,7 @@ Main types:
 Public API:
 - `new(config)` — initializes an empty snapshot.
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
-- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat-room membership before minting a CLI ticket.
+- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel, target chat-room membership, and the absence of an active room ban before minting a CLI ticket. The ban check is not redundant with membership: banning drops membership, but a public room (a streamer's above all) can be re-entered from the rail, so without it a banned user walks back in and is handed a `canPublish` ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
 - `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` is missing/unrecognized or lacks the configured base-name plus UUID suffix, or if the parsed voice channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
@@ -173,7 +173,8 @@ Current UX gaps worth addressing:
 
 Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
-- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones).
+- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones). A *ban* additionally refuses future tickets for that channel (see `checked_join_ticket` in §3); a kick does not, so a kicked user may rejoin and speak again.
+- A stream room's owner can reach this without staff, through `/ban` in their own room. See `../stream/CONTEXT.md` §6.
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
 - `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.

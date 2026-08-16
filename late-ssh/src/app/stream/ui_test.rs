@@ -40,7 +40,7 @@ fn obs_overlay_shows_every_hand_copied_value() {
     );
     assert!(text.contains("Service: WHIP"), "obs instructions:\n{text}");
     assert!(
-        text.contains("Press any key to close."),
+        text.contains("Press Esc to close."),
         "dismiss hint:\n{text}"
     );
 }

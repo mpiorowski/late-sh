@@ -38,7 +38,11 @@ use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
-use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
+use crate::moderation::{
+    command::{RoomModAction, ServerUserAction, parse_optional_duration},
+    event::ModerationEvent,
+    service::{RoomModRequest, RoomRef},
+};
 use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
@@ -3165,16 +3169,82 @@ impl ChatState {
             let Some(target) = target else {
                 return Some(Banner::error("Usage: /kick @user"));
             };
-            let Some(slug) = self.room_slug(room_id) else {
+            // A slug-less room is a DM: nothing to moderate there. The room
+            // itself travels as its id, since slugs are not globally unique.
+            if self.room_slug(room_id).is_none() {
                 return Some(Banner::error("This room has no members to kick"));
-            };
-            self.service.kick_from_room_task(
+            }
+            self.service.room_mod_task(
                 self.user_id,
                 self.permissions,
-                slug,
-                target.to_string(),
+                RoomModRequest {
+                    action: RoomModAction::Kick,
+                    room: RoomRef::Id(room_id),
+                    username: target.to_string(),
+                    duration: None,
+                    reason: String::new(),
+                },
             );
             return Some(Banner::success(&format!("Kicking @{target}...")));
+        }
+
+        // Banning is the same authorization path as kicking, and the one that
+        // actually holds: a public room (a streamer's, above all) can be
+        // re-entered from the rail the moment a kick lands.
+        if let Some(request) = parse_room_ban_command(&body, "/ban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(usage) => return Some(Banner::error(usage)),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no members to ban"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Ban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: request.duration,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Banning @{target}...")));
+        }
+
+        if let Some(request) = parse_room_ban_command(&body, "/unban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(_) => return Some(Banner::error("Usage: /unban @user")),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no bans to lift"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Unban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: None,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Unbanning @{target}...")));
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -5131,17 +5201,20 @@ impl ChatState {
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
-                ChatEvent::KickSucceeded {
+                ChatEvent::RoomModSucceeded {
                     user_id,
                     room_slug,
                     username,
+                    action,
                 } if self.user_id == user_id => {
                     self.request_list();
-                    banner = Some(Banner::success(&format!(
-                        "Kicked @{username} from #{room_slug}"
-                    )));
+                    banner = Some(Banner::success(&match action {
+                        RoomModAction::Kick => format!("Kicked @{username} from #{room_slug}"),
+                        RoomModAction::Ban => format!("Banned @{username} from #{room_slug}"),
+                        RoomModAction::Unban => format!("Unbanned @{username} in #{room_slug}"),
+                    }));
                 }
-                ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
+                ChatEvent::RoomModFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 // Not filtered to the editor: every session sitting in the room
@@ -6929,6 +7002,49 @@ fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a st
     }
     let username = rest.strip_prefix('@').unwrap_or(rest).trim();
     Some((!username.is_empty()).then_some(username))
+}
+
+pub(crate) struct RoomBanRequest<'a> {
+    pub username: &'a str,
+    pub duration: Option<chrono::Duration>,
+    pub reason: String,
+}
+
+/// `/ban @user [duration] [reason...]`, and `/unban @user [reason...]`. The
+/// duration is only read from the slot right after the username and uses the
+/// same `s/m/h/d` syntax the mod surface takes, so there is one place to look
+/// for what a duration means. A word there that is not a duration starts the
+/// reason instead. Returns `None` when the body is not this command at all,
+/// and `Err(usage)` when it is but the arguments are unusable.
+fn parse_room_ban_command<'a>(
+    input: &'a str,
+    command: &str,
+) -> Option<Result<RoomBanRequest<'a>, &'static str>> {
+    let usage = "Usage: /ban @user [duration] [reason]";
+    let rest = input.strip_prefix(command)?;
+    let rest = match rest.chars().next() {
+        None => "",
+        Some(c) if c.is_whitespace() => rest.trim(),
+        Some(_) => return None,
+    };
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(Err(usage));
+    };
+    let username = username.strip_prefix('@').unwrap_or(username);
+    if username.is_empty() {
+        return Some(Err(usage));
+    }
+    let rest: Vec<&str> = parts.collect();
+    let (duration, reason_from) = match parse_optional_duration(rest.first().copied(), 0) {
+        Ok(parsed) => parsed,
+        Err(_) => return Some(Err("Duration must be positive, like 30m or 7d")),
+    };
+    Some(Ok(RoomBanRequest {
+        username,
+        duration,
+        reason: rest[reason_from..].join(" "),
+    }))
 }
 
 fn short_user_id(user_id: Uuid) -> String {

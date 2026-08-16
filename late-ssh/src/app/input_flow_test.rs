@@ -1734,7 +1734,7 @@ async fn forced_tour_gates_input_until_each_named_key() {
 }
 
 #[tokio::test]
-async fn esc_closes_the_stream_modal_like_any_other_key() {
+async fn only_esc_closes_the_stream_modal() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "stream-qr-esc").await;
     let mut app = make_app(test_db.db.clone(), user.id, "stream-qr-esc-it");
@@ -1748,8 +1748,19 @@ async fn esc_closes_the_stream_modal_like_any_other_key() {
         },
     ));
 
+    // The modal holds a hand-copied capability URL: ordinary keys, Enter, and
+    // a left click all leave it up rather than taking the URL off the screen.
+    app.handle_input(b"x");
+    app.handle_input(b"\r");
+    app.handle_input(b" ");
+    app.handle_input(b"\x1b[<0;10;10M");
+    assert!(
+        app.stream_modal.is_some(),
+        "only esc should close the stream qr modal"
+    );
+
     // A lone Esc dispatches via the pending-escape flush on a later tick,
-    // not through the any-key gate the other keys hit.
+    // not through the swallow-everything gate the other keys hit.
     app.handle_input(b"\x1b");
     wait_for_esc_effect(
         &mut app,

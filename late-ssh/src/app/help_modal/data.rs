@@ -473,6 +473,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
         "  /kick @user        remove a user from your private room (or a mod)",
+        "  /ban @user         ban from your stream room; add 7d and a reason",
+        "  /unban @user       lift a ban you set on your stream room",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
@@ -1228,9 +1230,6 @@ fn settings_help_lines() -> Vec<String> {
         "  Compose".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
-        "  Music".to_string(),
-        "    Start app with music muted    mutes the first paired audio client on each new session so music doesn't auto-play"
-            .to_string(),
         "  Display".to_string(),
         "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
@@ -1358,6 +1357,8 @@ fn streaming_help_lines() -> Vec<String> {
         "  The two kinds do not mix: to switch, /golive stop first, then start the other.",
         "  Rerunning /golive obs while set up shows the same credentials again.",
         "  /golive stop       end your stream (either kind)",
+        "  Either handoff box stays up until you press Esc, so a stray key cannot",
+        "  take the URL or the token off your screen while you copy it.",
         "",
         "Watching",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
