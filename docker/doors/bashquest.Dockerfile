@@ -21,9 +21,9 @@ FROM debian:${DEBIAN_VERSION}-slim AS bashquest-build
 # Pinned to a specific commit on hardlygospel/bashquest's main branch, not a
 # moving branch ref, so the build is reproducible and a checksum mismatch
 # means the pin is stale, not that upstream silently changed underneath us.
-ARG BASHQUEST_COMMIT=70581a4239e0abd960a1b5ca41bfe09f26f6a7a4
-ARG BASHQUEST_URL=https://raw.githubusercontent.com/hardlygospel/bashquest/70581a4239e0abd960a1b5ca41bfe09f26f6a7a4/bashquest.sh
-ARG BASHQUEST_SHA256=1dfe3c48f9c735d531304879e4388ede83e92fb126e2d0271994c6676afff210
+ARG BASHQUEST_COMMIT=896c8850117b883b84681d0a81d011f61f9fde64
+ARG BASHQUEST_URL=https://raw.githubusercontent.com/hardlygospel/bashquest/896c8850117b883b84681d0a81d011f61f9fde64/bashquest.sh
+ARG BASHQUEST_SHA256=39227863687c4eb0de1207fdd8020061d887d43b2298df428aaa21b0c8364c6a
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
