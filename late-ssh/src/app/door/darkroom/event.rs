@@ -1035,7 +1035,7 @@ fn roll_loot(table: &'static [Loot], rng: &mut impl Rng) -> Vec<LootRow> {
 }
 
 /// The weapons the pack can actually swing, fists last if there is nothing
-/// else (upstream falls back to punching).
+/// else or if no damaging weapons have ammunition (upstream falls back to punching).
 pub fn available_weapons(look: &Look<'_>) -> Vec<Weapon> {
     let mut weapons: Vec<Weapon> = Weapon::ALL
         .into_iter()
@@ -1045,7 +1045,12 @@ pub fn available_weapons(look: &Look<'_>) -> Vec<Weapon> {
             None => false,
         })
         .collect();
-    if weapons.is_empty() {
+    // Upstream adds fists if numWeapons (usable damaging weapons) is 0.
+    let usable_damaging = weapons.iter().any(|&w| match w.damage() {
+        Damage::Hits(h) if h > 0 => weapon_loaded(w, look),
+        _ => false,
+    });
+    if !usable_damaging && !weapons.contains(&Weapon::Fists) {
         weapons.push(Weapon::Fists);
     }
     weapons

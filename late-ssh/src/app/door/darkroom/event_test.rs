@@ -414,3 +414,42 @@ fn cancel_drop_restores_spoils_phase_without_changes() {
     assert_eq!(trip.carrying(Resource::IronSword), 0);
     assert_eq!(active.loot[0].left, 1);
 }
+
+#[test]
+fn unusable_ranged_weapon_without_ammo_falls_back_to_fists() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 10,
+        water: 10,
+        ..Expedition::default()
+    };
+    trip.add(Resource::Rifle, 1);
+    assert_eq!(trip.carrying(Resource::Bullets), 0);
+
+    let beast = find(&super::scenes_encounters::ENCOUNTERS, "snarling beast");
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+
+    let weapons = event::available_weapons(&ctx.look());
+    assert!(weapons.contains(&Weapon::Rifle));
+    assert!(weapons.contains(&Weapon::Fists));
+
+    let mut active = Active::start(beast, &mut ctx, &mut rng, &mut out);
+    assert!(matches!(active.phase, Phase::Fighting(_)));
+    assert!(!active.row_ready(Row::Attack(Weapon::Rifle), &ctx.look()));
+    assert!(active.row_ready(Row::Attack(Weapon::Fists), &ctx.look()));
+
+    active.press(Row::Attack(Weapon::Fists), &mut ctx, &mut rng, &mut out);
+    assert_eq!(
+        active
+            .fight()
+            .and_then(|fight| fight.weapon_cooldown.get(&Weapon::Fists).copied()),
+        Some(2.0)
+    );
+}
