@@ -533,7 +533,9 @@ impl State {
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Board => self.view().board.map(|b| b.entries.len()).unwrap_or(0),
-            Panel::Quests => self.view().quests.len(),
+            // The journal cursor walks the active quests and then the Long
+            // Road's milestones, so the panel's long tail stays reachable.
+            Panel::Quests => self.view().quests.len() + self.view().road.len(),
             Panel::Appearance => self.view().appearance.len(),
             // These panels' cursors walk headers + visible items, not the raw list.
             Panel::Inventory | Panel::Shop | Panel::Crafting => self.active_rows().len(),
@@ -952,10 +954,20 @@ impl State {
             }
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
             Panel::Quests => {
-                // Track the highlighted quest on the compass/map (or untrack
-                // it if it is already the marked destination). Rows without a
-                // single meaningful place stay inert.
-                if let Some(target) = self.view().quests.get(self.cursor).and_then(|q| q.target) {
+                // Track the highlighted quest - or Long Road crown - on the
+                // compass/map (or untrack it if it is already the marked
+                // destination). Rows without a single meaningful place stay
+                // inert.
+                let target = {
+                    let view = self.view();
+                    let quests = view.quests.len();
+                    if self.cursor < quests {
+                        view.quests.get(self.cursor).and_then(|q| q.target)
+                    } else {
+                        view.road.get(self.cursor - quests).and_then(|s| s.target)
+                    }
+                };
+                if let Some(target) = target {
                     self.toggle_quest_track(target);
                 }
             }

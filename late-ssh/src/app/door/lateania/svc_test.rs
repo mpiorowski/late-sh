@@ -3881,12 +3881,12 @@ fn starter_chain_walks_a_new_player_to_the_first_gate() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // Fresh characters start on stage 0 (reach Embergate), and the room panel
-    // always has a next-step line to show.
+    // Fresh characters start on stage 0 (reach Embergate), and the join log
+    // always has a next-step line to announce.
     assert_eq!(s.players[&uid(1)].starter_stage, 0);
     let view = s.snapshot().players[&uid(1)].clone();
     assert!(
-        view.next_step.is_some(),
+        next_step_for(s.players[&uid(1)].starter_stage, &s.players[&uid(1)].titles).is_some(),
         "a fresh character always has a next step"
     );
     assert!(
@@ -3940,15 +3940,16 @@ fn starter_chain_walks_a_new_player_to_the_first_gate() {
         "descending into Duskhollow completes the chain"
     );
 
-    // With the chain done the journal drops the starter row and the next-step
-    // line hands over to the Long Road (the Treant is down; the Archdemon is
-    // the current milestone).
+    // With the chain done the journal drops the starter row and the join-log
+    // next step hands over to the Long Road (the Treant is down; the Archdemon
+    // is the current milestone).
     let view = s.snapshot().players[&uid(1)].clone();
     assert!(
         !view.quests.iter().any(|q| q.kind == QuestKind::Starter),
         "no starter row once the chain is complete"
     );
-    let next = view.next_step.expect("the Long Road takes over");
+    let p = &s.players[&uid(1)];
+    let next = next_step_for(p.starter_stage, &p.titles).expect("the Long Road takes over");
     assert!(
         next.contains("Archdemon"),
         "next step names the Archdemon: {next}"
@@ -4061,7 +4062,9 @@ fn the_long_road_matches_the_real_gates_and_tracks_titles() {
             "the Long Road is missing the gate title {gate}"
         );
     }
-    // Every milestone boss is a real spawn, so the road can actually be walked.
+    // Every milestone boss is a real spawn, so the road can actually be walked
+    // - and every milestone resolves a lair room, so Enter in the journal can
+    // track it on the compass/map.
     let w = seed_world();
     for m in LONG_ROAD {
         assert!(
@@ -4070,13 +4073,17 @@ fn the_long_road_matches_the_real_gates_and_tracks_titles() {
             m.boss
         );
     }
+    let targets = road_targets(&w);
+    for (m, t) in LONG_ROAD.iter().zip(&targets) {
+        assert!(t.is_some(), "no lair room resolved for {}", m.boss);
+    }
     // Fresh titles: nothing done, exactly the first milestone current.
-    let road = road_view(&[]);
+    let road = road_view(&[], &targets);
     assert!(road.iter().all(|s| !s.done));
     assert!(road[0].current);
     assert_eq!(road.iter().filter(|s| s.current).count(), 1);
     // The Treant down: it checks off and the Archdemon becomes current.
-    let road = road_view(&[FIRST_DUNGEON_GATE_TITLE.to_string()]);
+    let road = road_view(&[FIRST_DUNGEON_GATE_TITLE.to_string()], &targets);
     assert!(road[0].done);
     assert!(road[1].current);
 }

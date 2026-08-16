@@ -402,6 +402,22 @@ fn room_panel_makes_each_foe_a_clickable_row() {
         line_text(&lines[ogre_row]).contains('\u{00bb}'),
         "the targeted foe is marked with »"
     );
+    // In the field layout the side panel swaps to the battle frame while a
+    // foe is locked: the target's full nature and wide meter, and the other
+    // foes still clickable for switching the lock.
+    let (blines, bhits, _bplayer_hits) = super::battle_side_panel(&view, &usernames, 30);
+    let all: String = blines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(all.contains("Battle"), "the battle section renders: {all}");
+    assert!(
+        all.contains("strikes with"),
+        "the targeted foe shows its attack school: {all}"
+    );
+    assert!(all.contains("Ogre"), "the locked foe is named: {all}");
+    assert!(
+        all.contains("Also here") && all.contains("Goblin"),
+        "the other foe stays visible for switching: {all}"
+    );
+    assert_eq!(bhits.len(), 2, "both foes stay clickable mid-fight");
 }
 
 #[test]
@@ -633,10 +649,15 @@ fn journal_seals_the_frontier_until_its_titles_are_held() {
         unlocks: "the descent into Duskhollow",
         done: false,
         current: true,
+        target: Some(28),
     }];
     view.frontier_open = false;
     let (lines, _sel) = super::quests_panel(&view, 0, None);
     let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(
+        all.contains("Enter track"),
+        "the keys are named at the top of the panel: {all}"
+    );
     assert!(all.contains("The Long Road"), "the roadmap section renders");
     assert!(all.contains("the Elder Treant"), "milestones are named");
     assert!(
@@ -656,4 +677,18 @@ fn journal_seals_the_frontier_until_its_titles_are_held() {
     let (lines, _sel) = super::quests_panel(&view, 0, Some(1));
     let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
     assert!(all.contains("tracked"), "the tracked row is flagged: {all}");
+
+    // The cursor continues past the quests onto the Long Road, so w/s can
+    // walk (and scroll) the whole journal; a road row highlights and its
+    // tracked lair carries the flag too.
+    let (lines, sel) = super::quests_panel(&view, 1, Some(28));
+    let sel = sel.expect("a road row can hold the cursor");
+    assert!(
+        line_text(&lines[sel]).contains("the Elder Treant"),
+        "cursor row 1 is the first road milestone"
+    );
+    assert!(
+        line_text(&lines[sel]).contains("tracked"),
+        "a tracked crown is flagged"
+    );
 }

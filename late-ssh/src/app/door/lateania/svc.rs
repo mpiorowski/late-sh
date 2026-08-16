@@ -440,6 +440,9 @@ pub struct RoadStepView {
     pub done: bool,
     /// The first undone milestone - the one the player walks toward now.
     pub current: bool,
+    /// The boss's lair, for tracking the crown on the compass/map (Enter in
+    /// the journal). Resolved from the spawn table at world build.
+    pub target: Option<RoomId>,
 }
 
 /// One wild creature in the room, for the Wildlife list.
@@ -1024,10 +1027,6 @@ pub struct PlayerView {
     /// True once the player holds every title the Frontier stair demands (the
     /// journal shows the 20 zone quests only then; sealed reads as one line).
     pub frontier_open: bool,
-    /// The one line that always answers "where do I go now": the current
-    /// starter step, else the Long Road's current milestone. None only once
-    /// the realm is fully conquered.
-    pub next_step: Option<String>,
     /// Veteran in-place resurrections remaining / total this adventure.
     pub resurrections_left: u8,
     pub resurrection_cap: u8,
@@ -1133,7 +1132,6 @@ impl PlayerView {
             quests: Vec::new(),
             road: Vec::new(),
             frontier_open: false,
-            next_step: None,
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
@@ -3034,12 +3032,14 @@ fn next_step_for(starter_stage: u8, titles: &[String]) -> Option<String> {
 }
 
 /// The Long Road rows for a set of earned titles: each milestone checked off
-/// by its boss title, the first undone one flagged as current.
-fn road_view(titles: &[String]) -> Vec<RoadStepView> {
+/// by its boss title, the first undone one flagged as current. `targets` is
+/// the per-milestone lair room (see `road_targets`), parallel to `LONG_ROAD`.
+fn road_view(titles: &[String], targets: &[Option<RoomId>]) -> Vec<RoadStepView> {
     let mut current_found = false;
     LONG_ROAD
         .iter()
-        .map(|m| {
+        .zip(targets.iter().copied().chain(std::iter::repeat(None)))
+        .map(|(m, target)| {
             let title = title_for(m.boss, true);
             let done = titles.iter().any(|t| *t == title);
             let current = !done && !current_found;
@@ -3052,7 +3052,24 @@ fn road_view(titles: &[String]) -> Vec<RoadStepView> {
                 unlocks: m.unlocks,
                 done,
                 current,
+                target,
             }
+        })
+        .collect()
+}
+
+/// Each Long Road milestone's lair: the home room of the spawn whose name the
+/// milestone carries. Computed once at world build; the drift test pins every
+/// milestone to a real spawn, so a `None` here means the table rotted.
+fn road_targets(world: &World) -> Vec<Option<RoomId>> {
+    LONG_ROAD
+        .iter()
+        .map(|m| {
+            world
+                .spawns
+                .iter()
+                .find(|s| s.name == m.boss)
+                .map(|s| s.home)
         })
         .collect()
 }
@@ -3110,6 +3127,9 @@ struct MobInstance {
 struct WorldState {
     room_id: Uuid,
     world: World,
+    /// Each Long Road milestone's lair room, parallel to `LONG_ROAD` (see
+    /// `road_targets`). Computed once here so snapshots never scan the spawns.
+    road_targets: Vec<Option<RoomId>>,
     players: HashMap<Uuid, PlayerState>,
     mobs: HashMap<u32, MobInstance>,
     /// mob id -> stun ticks remaining.
@@ -3200,9 +3220,11 @@ impl WorldState {
                 )
             })
             .collect();
+        let road_targets = road_targets(&world);
         Self {
             room_id,
             world,
+            road_targets,
             players: HashMap::new(),
             mobs,
             mob_stuns: HashMap::new(),
@@ -9494,8 +9516,7 @@ impl WorldState {
                     })
                 }));
             }
-            let road = road_view(&player.titles);
-            let next_step = next_step_for(player.starter_stage, &player.titles);
+            let road = road_view(&player.titles, &self.road_targets);
 
             players.insert(
                 *user_id,
@@ -9586,7 +9607,6 @@ impl WorldState {
                     quests,
                     road,
                     frontier_open,
-                    next_step,
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,

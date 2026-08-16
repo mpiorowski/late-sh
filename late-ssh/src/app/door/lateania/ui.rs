@@ -20,7 +20,7 @@ use super::{
     appearance,
     classes::Class,
     state::{ClickAction, Heading, Panel, State},
-    svc::{LeaderboardEntry, LogKind, PlayerView, QuestKind, SectionRow},
+    svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, SectionRow},
     world::{Dir, MapCell, MiniMap, RoomId},
 };
 
@@ -1689,8 +1689,16 @@ fn draw_room_side(
         rows[0]
     };
 
-    let (lines, foe_hits, player_hits) =
-        room_panel(view, usernames, panel_area.width as usize, state.heading());
+    // Mid-fight the field layout's side panel becomes the battle frame - the
+    // classic layout keeps the room summary here, since its main column
+    // already swaps to `battle_context`.
+    let fighting =
+        view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted);
+    let (lines, foe_hits, player_hits) = if !with_minimap && fighting {
+        battle_side_panel(view, usernames, panel_area.width as usize)
+    } else {
+        room_panel(view, usernames, panel_area.width as usize, state.heading())
+    };
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -1779,6 +1787,9 @@ fn quests_panel(
     tracked: Option<RoomId>,
 ) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Quest Journal")];
+    // Keys up top where they can't scroll away - the Long Road below makes
+    // this the longest panel in the game.
+    lines.push(hint("w/s", "move  Enter track on map  j close"));
     let mut sel_line = None;
     lines.push(section("In progress"));
     if view.quests.is_empty() {
@@ -1832,8 +1843,14 @@ fn quests_panel(
         "  every crown between you and the realm's end",
         Style::default().fg(theme::TEXT_DIM()),
     )));
-    for step in &view.road {
-        let (mark, style) = if step.done {
+    // The road rows continue the cursor list after the quests, so w/s can
+    // walk (and scroll) the whole panel and Enter can track a crown's lair.
+    for (ri, step) in view.road.iter().enumerate() {
+        let selected = view.quests.len() + ri == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let (mark, mut style) = if step.done {
             ("[x]", Style::default().fg(theme::SUCCESS()))
         } else if step.current {
             (
@@ -1845,10 +1862,18 @@ fn quests_panel(
         } else {
             ("[ ]", Style::default().fg(theme::TEXT_DIM()))
         };
-        lines.push(Line::from(Span::styled(
-            format!("{mark} {}", step.boss),
-            style,
-        )));
+        if selected {
+            style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { ">" } else { " " };
+        let mut spans = vec![Span::styled(format!("{marker}{mark} {}", step.boss), style)];
+        if step.target.is_some() && step.target == tracked {
+            spans.push(Span::styled(
+                " \u{2691} tracked".to_string(),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        lines.push(Line::from(spans));
         let mut detail = format!("    {}", step.place);
         if !step.unlocks.is_empty() {
             detail.push_str(&format!(" - opens {}", step.unlocks));
@@ -1887,9 +1912,6 @@ fn quests_panel(
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    lines.push(Line::raw(""));
-    lines.push(hint("Enter", "track quest on compass/map"));
-    lines.push(hint("j", "close"));
     (lines, sel_line)
 }
 
@@ -2181,12 +2203,6 @@ fn room_panel(
         };
         lines.extend(side_kv_wrap("compass", &text, color, width));
     }
-    // The standing answer to "where do I go now": the starter step, then the
-    // Long Road's current milestone. Always present, because a scrolled-off
-    // log line is how new players got lost in the first place.
-    if let Some(next) = &view.next_step {
-        lines.extend(side_kv_wrap("next", next, theme::AMBER_GLOW(), width));
-    }
     // A merchant standing here: called out on its own line, not buried in "Of
     // note", so a shop room can't be walked past without noticing it.
     if let Some(shop) = &view.shop {
@@ -2262,6 +2278,12 @@ fn room_panel(
                     Style::default().fg(hp_color(mob.hp, mob.max_hp)),
                 ),
             ];
+            if mob.dot_stacks > 0 {
+                meter_spans.push(Span::styled(
+                    format!(" bleed x{}", mob.dot_stacks),
+                    Style::default().fg(theme::SUCCESS()),
+                ));
+            }
             if mob.stunned {
                 meter_spans.push(Span::styled(
                     " stunned".to_string(),
@@ -2402,6 +2424,175 @@ fn room_panel(
     }
     lines.push(Line::raw(""));
     lines.extend(footer_hints(view));
+    (lines, foe_hits, player_hits)
+}
+
+/// The side panel while a fight is on, in the field layout: the room summary
+/// gives way to a battle frame - your vitals, the locked foe's full name,
+/// nature, and wide meter, your battle effects, and the room's other foes for
+/// switching targets. The classic layout keeps the room summary, since its
+/// main column already carries `battle_context`.
+#[allow(clippy::type_complexity)]
+fn battle_side_panel(
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
+    let mut foe_hits: Vec<(usize, u32)> = Vec::new();
+    let player_hits: Vec<(usize, Uuid)> = Vec::new();
+    let mut lines = vitals(view);
+    lines.push(Line::raw(""));
+    lines.push(section("Battle"));
+    let meter_w = width.saturating_sub(12).clamp(8, 22);
+    let wrap_w = width.saturating_sub(4).max(6);
+    if let Some(mob) = view.mobs.iter().find(|m| m.targeted) {
+        let name_style = Style::default()
+            .fg(rarity_color(&mob.rank))
+            .add_modifier(Modifier::BOLD);
+        let marker = if mob.boss { "\u{2021} " } else { "\u{00bb} " };
+        foe_hits.push((lines.len(), mob.id));
+        for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = if i == 0 { marker } else { "    " };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{part}"),
+                name_style,
+            )));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("  HP ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!(
+                    "{} {}/{}",
+                    meter(mob.hp, mob.max_hp, meter_w),
+                    mob.hp,
+                    mob.max_hp
+                ),
+                Style::default().fg(hp_color(mob.hp, mob.max_hp)),
+            ),
+        ]));
+        let mut traits: Vec<String> = vec![mob.rank.clone()];
+        traits.push(format!("strikes with {}", mob.school));
+        if let Some(weak) = mob.weak {
+            traits.push(format!("weak to {weak}"));
+        }
+        if let Some(resist) = mob.resist {
+            traits.push(format!("shrugs off {resist}"));
+        }
+        lines.extend(side_text_wrap(
+            &format!("  {}", traits.join(" \u{00b7} ")),
+            theme::TEXT_DIM(),
+            width,
+        ));
+        let mut afflicted: Vec<String> = Vec::new();
+        if mob.dot_stacks > 0 {
+            afflicted.push(format!("bleeding x{}", mob.dot_stacks));
+        }
+        if mob.stunned {
+            afflicted.push("stunned".to_string());
+        }
+        if !afflicted.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  afflicted: {}", afflicted.join(" \u{00b7} ")),
+                Style::default().fg(theme::SUCCESS()),
+            )));
+        }
+    } else if let Some(occ) = view.occupants.iter().find(|o| o.targeted) {
+        let name = usernames
+            .get(&occ.user_id)
+            .cloned()
+            .unwrap_or_else(|| "your rival".to_string());
+        lines.push(Line::from(Span::styled(
+            format!("\u{00bb} Lv{} {name}", occ.level),
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled("  HP ", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!(
+                    "{} {}/{}",
+                    meter(occ.hp, occ.max_hp, meter_w),
+                    occ.hp,
+                    occ.max_hp
+                ),
+                Style::default().fg(hp_color(occ.hp, occ.max_hp)),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "  duel",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    // Your own battle state, when there is any to show.
+    let mut effects: Vec<String> = Vec::new();
+    if view.shield > 0 {
+        effects.push(format!("shield {}", view.shield));
+    }
+    if view.empower > 0 {
+        effects.push(format!("empowered +{}", view.empower));
+    }
+    if view.stunned {
+        effects.push("stunned".to_string());
+    }
+    if !effects.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  you: {}", effects.join(" \u{00b7} ")),
+            Style::default().fg(theme::AMBER_GLOW()),
+        )));
+    }
+    // Your companion fighting alongside.
+    if let Some(pet) = &view.pet {
+        let (text, color) = if pet.downed {
+            (
+                format!("  {} {} downed", pet.glyph, pet.name),
+                theme::ERROR(),
+            )
+        } else {
+            (
+                format!("  {} {} {}/{}", pet.glyph, pet.name, pet.hp, pet.max_hp),
+                hp_color(pet.hp, pet.max_hp),
+            )
+        };
+        lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+    }
+    // The room's other foes, so a click can switch the lock mid-fight.
+    let others: Vec<&MobView> = view.mobs.iter().filter(|m| !m.targeted).collect();
+    if !others.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Also here"));
+        for mob in others {
+            let marker = if mob.boss { "\u{2021} " } else { "  " };
+            let name_style = Style::default().fg(rarity_color(&mob.rank));
+            foe_hits.push((lines.len(), mob.id));
+            for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
+                .into_iter()
+                .enumerate()
+            {
+                let prefix = if i == 0 { marker } else { "    " };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{part}"),
+                    name_style,
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "    {} {}/{}",
+                    meter(mob.hp, mob.max_hp, 10),
+                    mob.hp,
+                    mob.max_hp
+                ),
+                Style::default().fg(hp_color(mob.hp, mob.max_hp)),
+            )));
+        }
+        lines.push(hint("click", "switch target"));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("space/x", "strike  1-9 0 abilities"));
+    lines.push(hint("z", "flee  Q quaff"));
     (lines, foe_hits, player_hits)
 }
 
