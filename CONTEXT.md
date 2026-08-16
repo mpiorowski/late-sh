@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-15 (Lateania joins the backtick workspace cycle: backtick in the active world detaches with a full autosaved leave and arms a 5-minute recency window that keeps the door a cycle stop for a one-key rejoin of the same character slot; details in `late-ssh/src/app/lobby/CONTEXT.md` and the Lateania context §3)
+- Last updated: 2026-08-15 (URL-bearing text keeps a blank cell against adjacent chrome so terminals stop linkifying border glyphs: `primitives::EDGE_GAP` / `horizontal_inset`, `Padding::horizontal` on list item blocks, and a uniform 2-cell chat message gutter; details in §11 "Text never touches chrome" and `late-ssh/src/app/chat/CONTEXT.md`)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1211,6 +1211,15 @@ WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 ```
 
 Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. The settings overlay renders on top of the toast.
+
+### Text never touches chrome [STABLE]
+
+Any surface that can print a URL keeps at least one blank cell between the text and the chrome beside it — the frame border, a pane divider, the sidebar separator, an overlay's own border. Terminals that linkify by scanning a row (kitty and friends) otherwise swallow the neighbouring `│` or `─` into the link, so clicking a message link opens a URL with a box-drawing glyph glued to its end. The frame itself carries no `Padding`, so panes still receive its `inner` rect edge to edge; the gap is the caller's job.
+
+- `primitives::EDGE_GAP` is the one-cell reservation. `primitives::row_with_hint` bakes it into the right-flushed hint, and `primitives::horizontal_inset(rect, pad)` narrows a rect for content drawn straight into a pane.
+- Item lists inside a bordered pane use `Padding::horizontal(EDGE_GAP)` on the item `Block`, so the bottom rule and the selection wash keep full width while only the text is inset.
+- Chat message rows spend a fixed 2-cell gutter: `ui_text::MENTION_BAR` (`"│ "`) when the message mentions or replies to you, `ui_text::BLANK_GUTTER` (`"  "`) otherwise, and `ui_text::SELECTED_GUTTER` (`"▸ "`) swapped over either one on the selected row. All three are the same width on purpose — a mixed gutter would jitter the left text edge by a column as mentions arrive, and the author-header hit test bases its columns on `ui_text::MESSAGE_GUTTER`.
+- Titles drawn over a border (the ko-fi sponsor line) carry their own blank cell on each side of the link, since a title has no inner rect to inset.
 
 ### Global guide (`?`) [STABLE]
 

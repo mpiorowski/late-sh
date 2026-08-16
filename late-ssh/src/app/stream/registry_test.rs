@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use uuid::Uuid;
 
 use super::{
@@ -32,6 +33,31 @@ fn example_ingress(id: &str) -> ObsIngress {
         whip_url: format!("https://whip.example/w/{id}"),
         stream_key: format!("key-{id}"),
     }
+}
+
+/// The whole access model for a stream is that its URL is unguessable, so the
+/// switch from 32-char hex to 22-char base64url must not have cost any of the
+/// 122 bits a v4 UUID carries. The alphabet also has to stay inside what
+/// `late-web`'s `valid_capability_id` accepts, or the shortened link 404s.
+#[test]
+fn capability_ids_are_full_entropy_base64url() {
+    let registry = StreamRegistry::new();
+    let (user, room, channel) = ids();
+    let handles = begin_ok(&registry, user, "mat", "title", room, channel);
+
+    for id in [&handles.stream_id, &handles.publish_token] {
+        assert_eq!(id.len(), 22, "16 bytes, base64url, unpadded: {id}");
+        assert!(
+            id.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "outside the url-safe alphabet: {id}"
+        );
+        let bytes = URL_SAFE_NO_PAD
+            .decode(id)
+            .unwrap_or_else(|err| panic!("{id} does not decode: {err}"));
+        assert_eq!(bytes.len(), 16, "128 bits round-trip: {id}");
+    }
+    assert_ne!(handles.stream_id, handles.publish_token);
 }
 
 #[test]

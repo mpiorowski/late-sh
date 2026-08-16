@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use crate::app::common::primitives::{EDGE_GAP, horizontal_inset};
 use crate::app::common::theme;
 
 pub fn draw_obs_overlay(
@@ -49,17 +50,19 @@ pub fn draw_obs_overlay(
     ];
 
     // Wide enough for the longest value plus indent; hand-copied values must
-    // never clip. When the terminal is narrower, rows wrap instead.
+    // never clip. When the terminal is narrower, rows wrap instead — the
+    // paragraph is inset by a cell so a wrapped URL still never lands on the
+    // border.
     let longest = whip_url
         .len()
         .max(stream_key.len())
         .max(watch_url.len())
         .max(58) as u16;
     let w = longest
-        .saturating_add(6)
+        .saturating_add(6 + 2 * EDGE_GAP as u16)
         .min(area.width.saturating_sub(4))
         .max(20);
-    let inner_w = w.saturating_sub(2).max(1);
+    let inner_w = w.saturating_sub(2 + 2 * EDGE_GAP as u16).max(1);
     let wrapped_rows: u16 = [whip_url.len(), stream_key.len(), watch_url.len()]
         .iter()
         .map(|len| (*len as u16 + 2).div_ceil(inner_w).saturating_sub(1))
@@ -87,7 +90,10 @@ pub fn draw_obs_overlay(
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        horizontal_inset(inner, EDGE_GAP as u16),
+    );
 }
 
 #[cfg(test)]

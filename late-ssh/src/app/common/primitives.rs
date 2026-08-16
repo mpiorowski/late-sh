@@ -7,7 +7,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Paragraph,
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::theme;
 #[derive(Debug, Clone)]
@@ -148,22 +147,45 @@ impl Screen {
 /// header rows that pair live status with the keys that act on it. The right
 /// side is a hint, so a row too tight to hold both keeps the left side and
 /// drops the hint rather than wrapping or colliding.
+///
+/// The hint stops one cell short of `width`: a hint that ends in a URL (the
+/// room header's `watch: …` nudge) would otherwise sit flush against the
+/// frame border, and terminals that linkify by scanning the row swallow the
+/// border glyph into the link.
 pub fn row_with_hint(
     left: Vec<Span<'static>>,
     right: Vec<Span<'static>>,
     width: usize,
 ) -> Line<'static> {
-    let span_width =
-        |spans: &[Span<'static>]| -> usize { spans.iter().map(|s| s.content.width()).sum() };
+    let span_width = |spans: &[Span<'static>]| -> usize { spans.iter().map(Span::width).sum() };
     let left_width = span_width(&left);
     let right_width = span_width(&right);
-    if right_width == 0 || left_width + right_width + 2 > width {
+    if right_width == 0 || left_width + right_width + 2 + EDGE_GAP > width {
         return Line::from(left);
     }
     let mut spans = left;
-    spans.push(Span::raw(" ".repeat(width - left_width - right_width)));
+    spans.push(Span::raw(
+        " ".repeat(width - left_width - right_width - EDGE_GAP),
+    ));
     spans.extend(right);
     Line::from(spans)
+}
+
+/// Cells kept clear between text and the chrome beside it — a frame border, a
+/// pane divider, the sidebar separator. One blank cell is enough to keep a
+/// terminal's URL detection from gluing the neighbouring glyph onto a link.
+pub(crate) const EDGE_GAP: usize = 1;
+
+/// `rect` narrowed by `pad` cells on each side, for content that must not run
+/// flush into the chrome around it. Never narrows past empty.
+pub(crate) fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
+    let pad = pad.min(rect.width / 2);
+    Rect {
+        x: rect.x + pad,
+        y: rect.y,
+        width: rect.width.saturating_sub(pad * 2),
+        height: rect.height,
+    }
 }
 
 pub fn format_duration_mmss(duration: Duration) -> String {

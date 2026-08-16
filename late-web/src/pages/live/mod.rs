@@ -51,10 +51,17 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/golive/{token}/state", post(golive_state_handler))
 }
 
-/// Capability ids are hex/dash tokens minted by late-ssh. Anything else is
-/// rejected before it can be interpolated into an internal API path.
+/// Capability ids are base64url tokens minted by late-ssh (`registry.rs`'s
+/// `capability_id`), so the alphabet is `[A-Za-z0-9_-]`. Anything else is
+/// rejected before it can be interpolated into an internal API path. The
+/// watcher id the watch page mints for itself is a browser `randomUUID`, which
+/// is a subset of the same set.
 fn valid_capability_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[derive(Template)]

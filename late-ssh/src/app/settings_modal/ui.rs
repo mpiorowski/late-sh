@@ -8,7 +8,7 @@ use ratatui::{
 
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
-use crate::app::common::{markdown::render_body_to_lines, theme};
+use crate::app::common::{markdown::render_body_to_lines, primitives::EDGE_GAP, theme};
 
 use super::{
     data::country_label,
@@ -1151,24 +1151,52 @@ fn feed_row_line(
         Style::default()
     };
 
-    let prefix = format!(" {marker} ");
-    let title_text = format!("{title:<28}  ");
-    let status_text = error
-        .map(|err| format!("  error: {err}"))
-        .unwrap_or_default();
-    let used = prefix.chars().count()
-        + title_text.chars().count()
-        + url.chars().count()
-        + status_text.chars().count();
-    let padding = width.saturating_sub(used.min(width));
+    let prefix = Span::styled(format!(" {marker} "), prefix_style);
+    let title = Span::styled(format!("{title:<28}  "), title_style);
+    let status = Span::styled(
+        error
+            .map(|err| format!("  error: {err}"))
+            .unwrap_or_default(),
+        error_style,
+    );
+    // A feed URL long enough to reach the modal border would be clipped flush
+    // against it; trim it to leave a blank cell there instead.
+    let url_budget =
+        width.saturating_sub(prefix.width() + title.width() + status.width() + EDGE_GAP);
+    let url = Span::styled(truncate_to_width(url, url_budget), url_style);
+
+    let used = prefix.width() + title.width() + url.width() + status.width();
+    let padding = width.saturating_sub(used);
 
     Line::from(vec![
-        Span::styled(prefix, prefix_style),
-        Span::styled(title_text, title_style),
-        Span::styled(url.to_string(), url_style),
-        Span::styled(status_text, error_style),
+        prefix,
+        title,
+        url,
+        status,
         Span::styled(" ".repeat(padding), trailing_style),
     ])
+}
+
+/// `text` cut to `budget` display cells, ellipsized when it does not fit, so a
+/// wide glyph costs the two cells it actually paints.
+fn truncate_to_width(text: &str, budget: usize) -> String {
+    if Span::raw(text).width() <= budget {
+        return text.to_string();
+    }
+    if budget <= 1 {
+        return "…".to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars() {
+        out.push(ch);
+        // Leave room for the ellipsis that replaces whatever is dropped.
+        if Span::raw(out.as_str()).width() + 1 > budget {
+            out.pop();
+            break;
+        }
+    }
+    out.push('…');
+    out
 }
 
 fn feed_add_line(

@@ -1,4 +1,7 @@
-use crate::app::common::{primitives::format_relative_time, theme};
+use crate::app::common::{
+    primitives::{EDGE_GAP, format_relative_time},
+    theme,
+};
 use chrono::{DateTime, Utc};
 use late_core::models::notification::NotificationView;
 use ratatui::{
@@ -6,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
 pub struct NotificationListView<'a> {
@@ -46,9 +49,13 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
         let idx = start_index + row;
         let item = &view.items[idx];
 
+        // The rule and the selection wash keep the full width; only the
+        // text is inset, so a link in the message preview never runs into
+        // the frame border.
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
+            .padding(Padding::horizontal(EDGE_GAP as u16))
             .style(theme::row_style(idx == selected_index));
 
         let content_area = item_block.inner(item_area);

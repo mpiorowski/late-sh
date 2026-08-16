@@ -1,4 +1,4 @@
-use crate::app::common::primitives::format_relative_time;
+use crate::app::common::primitives::{EDGE_GAP, format_relative_time};
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
 use late_core::models::rss_entry::RssEntryView;
@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -51,9 +51,12 @@ pub fn draw_feed_list(frame: &mut Frame, area: Rect, view: &FeedListView<'_>) {
         let idx = start + row;
         let item = &view.entries[idx];
         let selected = idx == selected_index;
+        // The rule and the selection wash keep the full width; only the text
+        // is inset, so an entry URL never runs into the frame border.
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
+            .padding(Padding::horizontal(EDGE_GAP as u16))
             .style(theme::row_style(selected));
         let content = item_block.inner(area);
         frame.render_widget(item_block, area);

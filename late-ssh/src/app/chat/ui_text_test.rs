@@ -63,7 +63,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         None,
     );
     let lines = lines_to_strings(&wrapped.lines);
-    assert_eq!(lines[0], " mat filed a bug [now]");
+    assert_eq!(lines[0], "  mat filed a bug [now]");
     assert!(lines[1].contains('─'), "{lines:?}");
     assert!(lines[2].contains("🐛 the door ate my hat"), "{lines:?}");
     assert!(lines.last().unwrap().contains('─'), "{lines:?}");
@@ -88,7 +88,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         &[],
         None,
     );
-    assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
+    assert_eq!(lines_to_strings(&wrapped.lines), vec!["  * mat waves"]);
     assert_eq!(wrapped.header_line_index, None);
 }
 
@@ -287,8 +287,8 @@ fn wrap_message_has_left_padding() {
         false,
     );
     let strings = lines_to_strings(&lines);
-    assert!(strings[0].starts_with(" alice"));
-    assert!(strings[1].starts_with(" hello"));
+    assert!(strings[0].starts_with("  alice"));
+    assert!(strings[1].starts_with("  hello"));
 }
 
 #[test]
@@ -483,4 +483,68 @@ fn composer_rows_soft_wrap_words() {
     let rows = build_composer_rows("hello wide world", 8);
     let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
     assert_eq!(texts, vec!["hello", "wide", "world"]);
+}
+
+/// A body row is `[gutter][text]` and must leave the far column blank, so a
+/// pasted link never ends against the frame border or the sidebar separator.
+fn row_widths(lines: &[Line]) -> Vec<usize> {
+    lines.iter().map(Line::width).collect()
+}
+
+fn wrap_body(body: &str, width: usize, mentions_us: bool) -> Vec<Line<'static>> {
+    wrap_chat_entry_to_lines(
+        body,
+        "[now]",
+        "mat",
+        width,
+        Style::default(),
+        None,
+        Style::default(),
+        mentions_us,
+        false,
+        None,
+        None,
+        &[],
+        None,
+    )
+    .lines
+}
+
+#[test]
+fn a_wrapped_link_stops_a_cell_short_of_the_right_edge() {
+    const WIDTH: usize = 40;
+    let lines = wrap_body(
+        "look: https://late.sh/live/2d4f5c19b54248dbb3331f3684bb6eac and again \
+         https://late.sh/live/2d4f5c19b54248dbb3331f3684bb6eac",
+        WIDTH,
+        false,
+    );
+    // More than one row, or the wrap under test never happened.
+    assert!(lines.len() > 2, "{:?}", lines_to_strings(&lines));
+    for (row, used) in row_widths(&lines).into_iter().enumerate() {
+        assert!(
+            used < WIDTH,
+            "row {row} fills the column: {:?}",
+            lines_to_strings(&lines)
+        );
+    }
+}
+
+#[test]
+fn a_mentioned_link_keeps_a_blank_cell_after_the_mention_bar() {
+    let lines = wrap_body("https://late.sh/live/abc", 40, true);
+    let body = lines_to_strings(&lines);
+    let link_row = body
+        .iter()
+        .find(|row| row.contains("https://"))
+        .unwrap_or_else(|| panic!("no link row in {body:?}"));
+    assert!(link_row.starts_with("│ https://"), "{body:?}");
+}
+
+#[test]
+fn an_unmentioned_body_lands_in_the_same_column_as_a_mentioned_one() {
+    let plain = lines_to_strings(&wrap_body("hello", 40, false));
+    let mentioned = lines_to_strings(&wrap_body("hello", 40, true));
+    assert_eq!(plain[1], "  hello");
+    assert_eq!(mentioned[1], "│ hello");
 }

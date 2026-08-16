@@ -3,11 +3,15 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-14 (Watch-page reconnect: the viewer's LiveKit
-  identity is now `viewer-{watcher_id}` from the page's stable id instead of
-  a fresh random per grant fetch, connect failures back off instead of
-  retrying every 10s forever, a failed `Room` is disposed instead of
-  abandoned, and a dropped connection reconnects in place instead of
+- Last updated: 2026-08-15 (Capability ids are base64url over the same v4
+  UUID bytes instead of 32-char hex: 122 bits either way, 22 characters
+  instead of 32, so a watch link fits a chat room header that used to drop
+  it. `late-web`'s `valid_capability_id` now accepts `_` along with `-`.
+  See §2 `registry.rs`. Previously: watch-page reconnect: the viewer's
+  LiveKit identity is now `viewer-{watcher_id}` from the page's stable id
+  instead of a fresh random per grant fetch, connect failures back off
+  instead of retrying every 10s forever, a failed `Room` is disposed instead
+  of abandoned, and a dropped connection reconnects in place instead of
   dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
   path per sound: the CLI voice runtime
   now plays human microphones only — program audio (the OBS ingress mix,
@@ -40,7 +44,13 @@ one activity line.
 Owned by this domain:
 - `registry.rs` — the process-global `StreamRegistry`: one stream per user,
   phase machine (`Pending -> Live -> Grace`), watcher heartbeats, publisher
-  heartbeats/grace, capability ids, and the `StreamPublisher` kind
+  heartbeats/grace, capability ids (`capability_id()`: base64url over a v4
+  UUID's 16 bytes — 122 bits in 22 characters. Unguessable *is* the access
+  model, so the entropy is non-negotiable; the encoding is not, and the short
+  form exists because a 32-char hex id made the watch link too wide for the
+  chat room header to render at all. The alphabet is `[A-Za-z0-9_-]`, which
+  `late-web`'s `valid_capability_id` gate must keep accepting — dropping `_`
+  would 404 roughly half of all streams), and the `StreamPublisher` kind
   (`Console` vs `Obs(ObsIngress)` — the publisher kinds conflict instead of
   silently rewiring; `/golive stop` switches). In-memory only, single
   replica, dies with the process (scratchpad-registry tier).

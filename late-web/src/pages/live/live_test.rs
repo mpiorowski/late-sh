@@ -172,7 +172,13 @@ async fn golive_grant_proxy_exchanges_the_claim_cookie() {
 }
 
 #[test]
-fn capability_ids_are_hex_dash_tokens_only() {
+fn capability_ids_are_base64url_tokens_only() {
+    // What late-ssh actually mints: base64url over 16 random bytes. Both
+    // non-alphanumeric characters of that alphabet have to pass, or a stream
+    // whose id happens to contain one 404s on its own watch page.
+    assert!(valid_capability_id("HdRl3AJfRhWc7-BdvUEFrQ"));
+    assert!(valid_capability_id("HdRl3AJfRhWc7_BdvUEFrQ"));
+    // A browser `randomUUID` watcher id, and the hex form minted before.
     assert!(valid_capability_id("0198a2f4c3f07f4e8a7bde12ab34cd56"));
     assert!(valid_capability_id("abc-123"));
 
@@ -182,6 +188,9 @@ fn capability_ids_are_hex_dash_tokens_only() {
     assert!(!valid_capability_id("a/b"));
     assert!(!valid_capability_id("a?b=1"));
     assert!(!valid_capability_id("a%2e%2e"));
+    // Base64 padding is not part of the no-pad alphabet, and `+`/`/` are the
+    // standard-alphabet characters this deliberately does not accept.
+    assert!(!valid_capability_id("HdRl3AJfRhWc7+BdvUEFrQ=="));
     assert!(!valid_capability_id(&"a".repeat(65)));
 }
 

@@ -4,12 +4,12 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::common::primitives::format_relative_time;
+use crate::app::common::primitives::{EDGE_GAP, format_relative_time, horizontal_inset};
 use crate::app::common::theme;
 
 use super::api::{CircMessage, CsNotification, CsPost};
@@ -119,7 +119,12 @@ fn draw_pitch(frame: &mut Frame, area: Rect) {
             Span::styled(" to link your account.", Style::default().fg(theme::TEXT())),
         ]),
     ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+    // Inset: the pitch opens on a bare `cyberspace.online` and closes on the
+    // signup link, and neither should sit against the frame border.
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }),
+        horizontal_inset(area, EDGE_GAP as u16),
+    );
 }
 
 fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
@@ -152,9 +157,12 @@ fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
         let index = start + row;
         let post = &state.posts[index];
         let is_selected = index == selected;
+        // The rule and the selection wash keep the full width; only the text
+        // is inset, so a link in a post never runs into the frame border.
         let block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
+            .padding(Padding::horizontal(EDGE_GAP as u16))
             .style(theme::row_style(is_selected));
         let content = block.inner(row_area);
         frame.render_widget(block, row_area);
@@ -287,6 +295,9 @@ fn feed_entry_lines(post: &CsPost, unread: bool) -> Vec<Line<'static>> {
 }
 
 fn draw_thread(frame: &mut Frame, area: Rect, state: &State) {
+    // Entries and replies are full of links; wrapping them one cell short of
+    // the pane keeps a link off the frame border.
+    let area = horizontal_inset(area, EDGE_GAP as u16);
     let Some(thread) = &state.thread else {
         frame.render_widget(
             Paragraph::new("Loading entry...").style(Style::default().fg(theme::TEXT_DIM())),
@@ -607,6 +618,8 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
     }
     frame.render_widget(Paragraph::new(Line::from(header)), header_inner);
 
+    // Same one-cell reserve as the thread view: room chat carries links too.
+    let body_area = horizontal_inset(body_area, EDGE_GAP as u16);
     if room.messages.is_empty() {
         let text = match room.loading {
             true => "Joining the room...",

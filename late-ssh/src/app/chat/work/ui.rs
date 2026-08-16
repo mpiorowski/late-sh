@@ -1,13 +1,16 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::common::theme;
-use crate::app::common::{composer, primitives::format_relative_time};
+use crate::app::common::{
+    composer,
+    primitives::{EDGE_GAP, format_relative_time},
+};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -73,9 +76,13 @@ pub fn draw_work_list(frame: &mut Frame, area: Rect, view: &WorkListView<'_>) {
             .marker_read_at
             .map(|last_read_at| p.updated > last_read_at)
             .unwrap_or(true);
+        // The rule and the selection wash keep the full width; only the
+        // text is inset, so the links row and the share URL never run into
+        // the frame border.
         let item_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(theme::BORDER()))
+            .padding(Padding::horizontal(EDGE_GAP as u16))
             .style(theme::row_style(is_selected));
         let content_area = item_block.inner(item_area);
         frame.render_widget(item_block, item_area);

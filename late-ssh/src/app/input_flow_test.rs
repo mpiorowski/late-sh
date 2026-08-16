@@ -905,7 +905,7 @@ async fn chat_reaction_leader_routes_cancel_and_reaction_digits() {
     .await;
     let plain = render_plain(&mut app);
     assert!(
-        plain.contains("▸reaction target"),
+        plain.contains("▸ reaction target"),
         "message selection should stay after reacting: {plain:?}"
     );
     assert!(

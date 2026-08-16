@@ -1,6 +1,6 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
-use crate::app::common::primitives::format_relative_time;
+use crate::app::common::primitives::{EDGE_GAP, format_relative_time};
 use crate::app::common::theme;
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -71,9 +71,13 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                 .map(|last_read_at| article.created > last_read_at)
                 .unwrap_or(true);
 
+            // The rule and the selection wash keep the full width; only the
+            // text is inset, so the article URL never runs into the frame
+            // border.
             let item_block = Block::default()
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(theme::BORDER()))
+                .padding(Padding::horizontal(EDGE_GAP as u16))
                 .style(theme::row_style(article_idx == selected_index));
 
             let content_area = item_block.inner(item_area);
