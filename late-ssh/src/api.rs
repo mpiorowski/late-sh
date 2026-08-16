@@ -689,12 +689,23 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
     // from the session; a session with no known key simply cannot store audio
     // and runs entirely in memory.
     let fingerprint = state.session_registry.fingerprint_for(&token).await;
-    let device_audio = read_device_audio(&state, user_id, fingerprint.as_deref()).await;
-    state
-        .paired_client_registry
-        .note_persisted_audio(&token, device_audio.stored);
-    let target_audio = device_audio.target;
-    let mut applied_alignment = false;
+    let mut audio_flow = match read_device_audio(&state, user_id, fingerprint.as_deref()).await {
+        Ok(device_audio) => {
+            state
+                .paired_client_registry
+                .note_persisted_audio(&token, device_audio.stored);
+            PairAudioFlow::new(Some(device_audio.target))
+        }
+        Err(err) => {
+            // A failed read is not an empty one: alignment and persistence
+            // stay off for this whole connection so the session keeps its own
+            // state, and the next connection retries the read. Aligning to
+            // fresh-boot defaults here would end with the client's echo
+            // overwriting the real stored value.
+            tracing::warn!(token_hint = %token_hint, error = ?err, "device audio read failed");
+            PairAudioFlow::new(None)
+        }
+    };
     let Some(registration_id) =
         state
             .paired_client_registry
@@ -845,44 +856,38 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                     last_client_kind = kind;
                                 }
                                 let reported = KeyAudio { muted, volume_percent };
-                                if applied_alignment {
-                                    // Past the alignment, whatever the client
-                                    // reports is user intent: `m`, `+`/`-`, a
-                                    // media key, and `/brb`'s auto-mute all
-                                    // land here, because the client re-reports
-                                    // after applying any of them. Persisting
-                                    // *here* rather than at each keybind is
-                                    // what keeps one source of truth.
-                                    persist_device_audio(
-                                        &state,
-                                        &token,
-                                        user_id,
-                                        fingerprint.as_deref(),
-                                        reported,
-                                    );
-                                } else {
-                                    // Pre-alignment the client is still on its
-                                    // own boot defaults (silent, 30%), which is
-                                    // not intent and must never be written back
-                                    // over the stored value.
-                                    let plan = align_paired_audio(
-                                        client_kind,
-                                        reported,
-                                        state.paired_client_registry.cli_muted(&token),
-                                        state
-                                            .paired_client_registry
-                                            .audio_alignment_pending(&token),
-                                        target_audio,
-                                    );
-                                    if send_audio_alignment(&mut socket, plan, &token_hint)
-                                        .await
-                                        .is_ok()
-                                    {
-                                        applied_alignment = true;
-                                        state
-                                            .paired_client_registry
-                                            .note_alignment_applied(&token);
+                                match audio_flow.on_report(client_kind, reported) {
+                                    ReportAction::Align { target } => {
+                                        let plan = align_paired_audio(
+                                            client_kind,
+                                            reported,
+                                            state.paired_client_registry.cli_muted(&token),
+                                            state
+                                                .paired_client_registry
+                                                .audio_alignment_pending(&token),
+                                            target,
+                                        );
+                                        if send_audio_alignment(&mut socket, plan, &token_hint)
+                                            .await
+                                            .is_ok()
+                                        {
+                                            audio_flow.note_alignment_sent(plan);
+                                            state
+                                                .paired_client_registry
+                                                .note_alignment_applied(&token);
+                                        }
                                     }
+                                    ReportAction::Persist => {
+                                        persist_device_audio(
+                                            &state,
+                                            &token,
+                                            user_id,
+                                            fingerprint.as_deref(),
+                                            reported,
+                                        )
+                                        .await;
+                                    }
+                                    ReportAction::Ignore => {}
                                 }
                                 continue;
                             }
@@ -1029,24 +1034,21 @@ struct DeviceAudio {
     target: KeyAudio,
 }
 
-async fn read_device_audio(state: &State, user_id: Uuid, fingerprint: Option<&str>) -> DeviceAudio {
-    let client = match state.db.get().await {
-        Ok(client) => client,
-        Err(err) => {
-            tracing::warn!(error = ?err, "device audio unavailable: no db client");
-            return DeviceAudio {
-                stored: None,
-                target: KeyAudio {
-                    muted: false,
-                    volume_percent: DEFAULT_VOLUME_PERCENT,
-                },
-            };
-        }
-    };
+/// Read the connecting device's stored audio. `Err` is a failed read, not an
+/// empty one: the caller must skip alignment and persistence for the whole
+/// connection, because treating a transient DB error as "never stored" would
+/// align the client to fresh-boot defaults and then persist the client's echo
+/// of those over the user's real preference.
+async fn read_device_audio(
+    state: &State,
+    user_id: Uuid,
+    fingerprint: Option<&str>,
+) -> Result<DeviceAudio> {
+    let client = state.db.get().await.context("no db client")?;
     let stored = match fingerprint {
         Some(fingerprint) => UserSshKey::audio_for(&client, user_id, fingerprint)
             .await
-            .unwrap_or(None),
+            .context("reading device audio")?,
         None => None,
     };
     let target = match stored {
@@ -1054,11 +1056,11 @@ async fn read_device_audio(state: &State, user_id: Uuid, fingerprint: Option<&st
         None => KeyAudio {
             muted: late_core::models::user::User::start_with_music_muted(&client, user_id)
                 .await
-                .unwrap_or(false),
+                .context("reading account mute seed")?,
             volume_percent: DEFAULT_VOLUME_PERCENT,
         },
     };
-    DeviceAudio { stored, target }
+    Ok(DeviceAudio { stored, target })
 }
 
 /// What the server must push at a connecting paired client to bring it in
@@ -1070,6 +1072,15 @@ struct AudioAlignment {
     /// only way a stored (muted, 60%) survives the pair.
     volume_percent: Option<u8>,
     toggle_mute: bool,
+}
+
+impl AudioAlignment {
+    /// How many control messages [`send_audio_alignment`] emits for this
+    /// plan. The client re-reports `client_state` once per control it
+    /// applies, so this is also the number of echo reports to expect back.
+    fn control_count(self) -> usize {
+        usize::from(self.volume_percent.is_some()) + usize::from(self.toggle_mute)
+    }
 }
 
 /// Decide that push.
@@ -1141,10 +1152,91 @@ async fn send_audio_alignment(
     Ok(())
 }
 
+/// What to do with one `client_state` report from a paired client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportAction {
+    /// First report of the connection: align the client to `target`, the
+    /// stored device audio.
+    Align { target: KeyAudio },
+    /// The report is user intent (`m`, `+`/`-`, a media key, `/brb`'s
+    /// auto-mute): write it to the device row. Persisting here rather than
+    /// at each keybind is what keeps one source of truth.
+    Persist,
+    /// Nothing to do: an echo of our own alignment, a non-CLI surface, or a
+    /// connection whose stored-audio read failed.
+    Ignore,
+}
+
+/// Per-connection state machine deciding what each `client_state` report
+/// means. Pure so the persist gating is testable; the ws loop owns the I/O.
+///
+/// Three rules, each closing a way the device row gets corrupted:
+/// - A connection whose stored-audio read failed (`target: None`) neither
+///   aligns nor persists. The session keeps its own state and the next
+///   connection retries the read.
+/// - The reports echoing our own alignment are boot defaults being brought in
+///   line, not intent, and are never persisted; a stored (muted, 60%) restore
+///   would otherwise write (unmuted, 60) and then (muted, 60), with the row
+///   wrong in between.
+/// - Only the CLI persists. The webview helper diverges from the CLI on mute
+///   (its volume-up unmutes, the CLI's does not), and the CLI is the
+///   session's audio surface of record (see [`align_paired_audio`]), so a
+///   helper report must never overwrite what the CLI said. `Unknown` is an
+///   older CLI that predates `client_kind` and persists like one.
+struct PairAudioFlow {
+    target: Option<KeyAudio>,
+    aligned: bool,
+    pending_alignment_echoes: usize,
+}
+
+impl PairAudioFlow {
+    fn new(target: Option<KeyAudio>) -> Self {
+        Self {
+            target,
+            aligned: false,
+            pending_alignment_echoes: 0,
+        }
+    }
+
+    fn on_report(&mut self, client_kind: ClientKind, reported: KeyAudio) -> ReportAction {
+        let Some(target) = self.target else {
+            return ReportAction::Ignore;
+        };
+        if !self.aligned {
+            return ReportAction::Align { target };
+        }
+        if self.pending_alignment_echoes > 0 {
+            // A report matching the target means the alignment has fully
+            // landed whatever the exact echo count was; anything after it is
+            // intent.
+            if reported == target {
+                self.pending_alignment_echoes = 0;
+            } else {
+                self.pending_alignment_echoes -= 1;
+            }
+            return ReportAction::Ignore;
+        }
+        match client_kind {
+            ClientKind::Cli | ClientKind::Unknown => ReportAction::Persist,
+            ClientKind::Webview => ReportAction::Ignore,
+        }
+    }
+
+    /// Record that an alignment reached the socket; the next
+    /// [`AudioAlignment::control_count`] reports are its echoes.
+    fn note_alignment_sent(&mut self, plan: AudioAlignment) {
+        self.aligned = true;
+        self.pending_alignment_echoes = plan.control_count();
+    }
+}
+
 /// Write a paired client's reported mute/volume to its device row, unless the
-/// same value is already stored. Fire and forget, like every other preference
-/// write; a failed write clears the cached value so the next report retries.
-fn persist_device_audio(
+/// same value is already stored. Awaited on the socket task rather than
+/// spawned so a token's writes land in report order; a spawned write that
+/// completed out of order could leave the row on a stale value while the
+/// cache believes the newest one is stored. A failed write clears the cached
+/// value so the next report retries.
+async fn persist_device_audio(
     state: &State,
     token: &str,
     user_id: Uuid,
@@ -1157,21 +1249,16 @@ fn persist_device_audio(
     if !state.paired_client_registry.claim_audio_write(token, audio) {
         return;
     }
-    let db = state.db.clone();
-    let registry = state.paired_client_registry.clone();
-    let fingerprint = fingerprint.to_string();
-    let token = token.to_string();
-    let hint = token_hint(&token);
-    tokio::spawn(async move {
-        let result = match db.get().await {
-            Ok(client) => UserSshKey::set_audio(&client, user_id, &fingerprint, audio).await,
-            Err(err) => Err(anyhow::anyhow!("no db client: {err}")),
-        };
-        if let Err(err) = result {
-            tracing::warn!(token_hint = %hint, error = ?err, "failed to persist device audio");
-            registry.note_persisted_audio(&token, None);
-        }
-    });
+    let result = match state.db.get().await {
+        Ok(client) => UserSshKey::set_audio(&client, user_id, fingerprint, audio).await,
+        Err(err) => Err(anyhow::anyhow!("no db client: {err}")),
+    };
+    if let Err(err) = result {
+        tracing::warn!(token_hint = %token_hint(token), error = ?err, "failed to persist device audio");
+        state
+            .paired_client_registry
+            .note_persisted_audio(token, None);
+    }
 }
 
 /// Drop a paired-client registration and refresh the remaining clients'

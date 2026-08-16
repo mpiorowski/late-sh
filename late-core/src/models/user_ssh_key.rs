@@ -49,8 +49,9 @@ const AUDIO_VOLUME_KEY: &str = "audio_volume_percent";
 /// One device's music mute and volume, and the only source of truth for
 /// either. Both live on the key rather than the account because they belong
 /// to the machine with the speakers: muting on a laptop must not silence the
-/// desktop. The server writes this from whatever a paired client reports
-/// after applying a control, so `m`, `+`/`-`, a media key, and `/brb`'s
+/// desktop. The server writes this from what the paired CLI reports after
+/// applying a control (the webview helper's reports are never persisted; the
+/// CLI is the surface of record), so `m`, `+`/`-`, a media key, and `/brb`'s
 /// auto-mute all land here through one path, and a session resumes exactly
 /// where the last one left off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
