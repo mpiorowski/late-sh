@@ -58,7 +58,7 @@ use super::persist::{
 use super::pets::{Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
-use super::taming::{PetSkillEffect, TAMEABLE, beasts_at, pet_skills_at, tame_chance, tame_xp};
+use super::taming::{PetSkillEffect, beast_species, beasts_at, tame_chance, tame_xp};
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
     ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
@@ -5640,6 +5640,7 @@ impl WorldState {
     /// they respect the victim's armor exactly like every other pvp blow;
     /// `Roar`/`Guard` are pure self-buffs and work identically either way.
     /// Returns true if the companion's blow finished the victim off.
+    #[allow(clippy::too_many_arguments)]
     fn fire_pet_skills_pvp(
         &mut self,
         user_id: Uuid,
@@ -5647,10 +5648,15 @@ impl WorldState {
         pet_level: i32,
         pet_atk: i32,
         pet_name: &str,
+        pet_skills: &'static [super::taming::PetSkill],
         beastlord: bool,
     ) -> bool {
         let now_tick = self.world_ticks;
-        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+        for (si, skill) in pet_skills
+            .iter()
+            .filter(|s| s.level <= pet_level)
+            .enumerate()
+        {
             let ready = self
                 .pet_skill_cd
                 .get(&(user_id, si))
@@ -5721,6 +5727,15 @@ impl WorldState {
                         format!("Your {pet_name} guards you closely, warding the next blows."),
                     );
                     self.dirty = true;
+                }
+                PetSkillEffect::Mend => {
+                    let mag = skill.power + pet_atk / 6;
+                    self.heal_player(user_id, mag);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} nuzzles you with a mending glow."),
+                    );
                 }
             }
         }
@@ -6770,7 +6785,7 @@ impl WorldState {
             } else {
                 0
             };
-            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&user_id)
                 .and_then(|p| p.pet.as_ref())
@@ -6781,6 +6796,7 @@ impl WorldState {
                         pet.species.name,
                         pet.attack() + pet.attack() * pet_bonus / 100,
                         pet.level(),
+                        pet.species.skills,
                     )
                 })
             {
@@ -6807,7 +6823,7 @@ impl WorldState {
                 // own cooldown (savage bite / rend / roar / guard / pounce).
                 let beastlord = class == Some(Class::Beastlord);
                 if self.fire_pet_skills(
-                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, beastlord,
+                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, pet_skills, beastlord,
                 ) {
                     // A killing pounce may have finished the foe.
                     continue;
@@ -6945,7 +6961,7 @@ impl WorldState {
             } else {
                 0
             };
-            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&attacker_id)
                 .and_then(|p| p.pet.as_ref())
@@ -6956,6 +6972,7 @@ impl WorldState {
                         pet.species.name,
                         pet.attack() + pet.attack() * pet_bonus / 100,
                         pet.level(),
+                        pet.species.skills,
                     )
                 })
             {
@@ -6981,6 +6998,7 @@ impl WorldState {
                     pet_level,
                     pet_atk,
                     pet_name,
+                    pet_skills,
                     beastlord,
                 ) {
                     continue;
@@ -7895,10 +7913,15 @@ impl WorldState {
         pet_atk: i32,
         pet_name: &str,
         mob_name: &str,
+        pet_skills: &'static [super::taming::PetSkill],
         beastlord: bool,
     ) -> bool {
         let now_tick = self.world_ticks;
-        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+        for (si, skill) in pet_skills
+            .iter()
+            .filter(|s| s.level <= pet_level)
+            .enumerate()
+        {
             // Respect the per-skill cooldown.
             let ready = self
                 .pet_skill_cd
@@ -7978,6 +8001,15 @@ impl WorldState {
                     );
                     self.dirty = true;
                 }
+                PetSkillEffect::Mend => {
+                    let mag = skill.power + pet_atk / 6;
+                    self.heal_player(user_id, mag);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} nuzzles you with a mending glow."),
+                    );
+                }
             }
         }
         false
@@ -8010,7 +8042,7 @@ impl WorldState {
             );
             return;
         };
-        let species = &TAMEABLE[wb.species];
+        let species = beast_species(wb.species);
         let bi = wb.species;
         let now = Instant::now();
         // A spooked beast will not be approached again until it settles.
@@ -8684,7 +8716,11 @@ impl WorldState {
                 attack: pet.attack(),
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
-                skills: pet_skills_at(pet.level())
+                skills: pet
+                    .species
+                    .skills
+                    .iter()
+                    .filter(|s| s.level <= pet.level())
                     .map(|s| (s.name.to_string(), s.level))
                     .collect(),
             });
@@ -8722,7 +8758,7 @@ impl WorldState {
                         .iter()
                         .enumerate()
                         .map(|(i, wb)| {
-                            let sp = &TAMEABLE[wb.species];
+                            let sp = beast_species(wb.species);
                             let spooked = self
                                 .tame_cooldowns
                                 .get(&(*user_id, wb.species))

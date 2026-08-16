@@ -500,7 +500,7 @@ fn build_pois() -> HashMap<RoomId, Poi> {
     }
     for beast in super::taming::wild_beasts() {
         map.entry(beast.home).or_default().tameable =
-            Some(super::taming::TAMEABLE[beast.species].name);
+            Some(super::taming::beast_species(beast.species).name);
     }
     for n in super::world::NODES {
         map.entry(n.home).or_default().gather = Some(GatherPoi {
@@ -863,6 +863,17 @@ pub fn poi_arrows(
             continue;
         };
         if c.z != center.z {
+            continue;
+        }
+        // Distinct reserved blocks always sit at least `COMPONENT_MARGIN` apart
+        // (see the module doc comment), so a delta within `PAN_LIMIT` guarantees
+        // the POI is in the *same* block as the player - the one case where the
+        // coordinate delta is a real spatial relationship rather than an
+        // accident of which block `derive_coords` laid down first. Anything
+        // farther is dropped rather than pointed at with a meaningless
+        // direction (see CONTEXT.md §11); the camera could never pan there
+        // anyway, since `MapCamera::pan` clamps to the same `PAN_LIMIT`.
+        if (c.x - center.x).abs() > PAN_LIMIT || (c.y - center.y).abs() > PAN_LIMIT {
             continue;
         }
         let sc = cx + 2 * (c.x - center.x);

@@ -80,6 +80,20 @@ impl Dir {
             Self::Up | Self::Down => return None,
         })
     }
+
+    /// A single compass-arrow glyph for this direction, distinct from the
+    /// `▴`/`▾` stair markers (those mean "a staircase is here"; this means
+    /// "go this way") so the two never read as the same thing on screen.
+    pub fn compass_glyph(self) -> char {
+        match self {
+            Self::North => '\u{2191}', // ↑
+            Self::South => '\u{2193}', // ↓
+            Self::East => '\u{2192}',  // →
+            Self::West => '\u{2190}',  // ←
+            Self::Up => '\u{2B06}',    // ⬆
+            Self::Down => '\u{2B07}',  // ⬇
+        }
+    }
 }
 
 pub type RoomId = u32;
@@ -295,6 +309,20 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
         24_000,
         "moderate / taming",
         "off the Verdant Highlands",
+    ),
+    (
+        "Aelunor, the Faewood",
+        AELUNOR_BASE,
+        AELUNOR_BASE + AELUNOR_ZONES as RoomId * AELUNOR_ZONE_STRIDE,
+        "moderate / taming",
+        "off the Amber Savanna",
+    ),
+    (
+        "Silvael",
+        SILVAEL_BASE,
+        SILVAEL_BASE + SILVAEL_ROOM_COUNT,
+        "safe / city",
+        "the Faewood's own threshold",
     ),
     (
         "Portal Villages",
@@ -1905,6 +1933,129 @@ pub const VILLAGERS: &[Feature] = &[
         "an old archivist",
         FeatureKind::Villager,
         "Whatever you chose, you chose well. But it never hurts to know what everyone else in the tavern can do.",
+    ),
+    // ---- Aelunor's Wood-Gates: a warden or watcher at every zone's one safe
+    // threshold, each with a line about their own glade and its boss. ----
+    feat(
+        25_012,
+        "a sun-freckled elf ranger restringing her bow",
+        FeatureKind::Villager,
+        "Silverleaf Eaves is gentle enough for a first walk in the wood, but the Hollow-Elf Warlord doesn't share that opinion. Mind yourself past the willow arch.",
+    ),
+    feat(
+        25_083,
+        "a hooded druid listening to the standing stones",
+        FeatureKind::Villager,
+        "The Boughs don't just whisper, they warn. Thistlewitch keeps her bramble court somewhere past them - best not go looking for her unready.",
+    ),
+    feat(
+        25_156,
+        "a moss-flecked hermit sunk waist-deep in his garden",
+        FeatureKind::Villager,
+        "The moss out here grows a little too fast for my liking. The Ancient sleeps somewhere deep in it, and I mean to let it stay asleep.",
+    ),
+    feat(
+        25_237,
+        "a high elf huntsman polishing an old horn",
+        FeatureKind::Villager,
+        "Follow the light and you'll find the Erlking's Huntsman's altar. Follow it too far and you'll find him.",
+    ),
+    feat(
+        25_300,
+        "a fae child chasing drifting thistledown",
+        FeatureKind::Villager,
+        "The down never settles here, and neither does the Nightshade Nymph-Queen's temper. Watch your step past the hollow.",
+    ),
+    feat(
+        25_372,
+        "a warden who never once steps inside the fae-ring",
+        FeatureKind::Villager,
+        "Nothing grows in the circle, and nothing that walks in ever quite walks the same way out. The Ringmother minds it close.",
+    ),
+    feat(
+        25_443,
+        "a night-blooming druid tending petals by lamplight",
+        FeatureKind::Villager,
+        "These blossoms only open after dark, same as what stalks them. Best not linger past sundown.",
+    ),
+    feat(
+        25_515,
+        "a fen-wisp catcher with jars of pale light",
+        FeatureKind::Villager,
+        "The water mirrors the sky too well out there. The Seer-Queen's said to read futures in it, if you're brave or foolish enough to ask her.",
+    ),
+    feat(
+        25_587,
+        "a root-cutter missing two fingers",
+        FeatureKind::Villager,
+        "Wychroot's less a place than a tangle. The Revenant-Lord's been dead longer than the roots, and minds the deeps just the same.",
+    ),
+    feat(
+        25_661,
+        "a silver-fingered weaver untangling gossamer",
+        FeatureKind::Villager,
+        "Loom-fae mind their threads close. Pull one wrong and the Loomweaver herself comes to see who's meddling.",
+    ),
+    feat(
+        25_732,
+        "a moonlit warden bathing an old wound in the spring",
+        FeatureKind::Villager,
+        "The Moonwell only ever shows the moon, whatever the hour. Its Warden's kinder than most out here, but kind isn't the same as safe.",
+    ),
+    feat(
+        25_804,
+        "an ancient elf keeper bowed low before the great tree",
+        FeatureKind::Villager,
+        "The Heartwood's older than Aelunor's own name. The Erlqueen keeps its heart, and precious few who go to meet her come back to tell it.",
+    ),
+    // ---- Silvael, the Faewood's own city -------------------------------
+    feat(
+        SILVAEL_BASE,
+        "a high elf herald reading out the day's tidings",
+        FeatureKind::Villager,
+        "Silvael keeps no wall and charges no toll - the wood itself decides who's welcome, and so far it's decided that's near everyone. Mind the Wildwood Gate after dark all the same.",
+    ),
+    feat(
+        SILVAEL_BASE + 1,
+        "a warden of the Wildwood Gate, spear planted root-deep",
+        FeatureKind::Villager,
+        "Silverleaf Eaves is gentle by Faewood standards. Every glade deeper in gets less so. Ask after a zone's own boss before you walk in past its wood-gate, if you'd rather not meet it by surprise.",
+    ),
+    feat(
+        SILVAEL_BASE + 2,
+        "Aelwen Songleaf's apprentice, sorting charms by colour",
+        FeatureKind::Villager,
+        "Aelwen prices by whether she likes you, not by what a thing's worth. Compliment the weave and you'll do better than haggling.",
+    ),
+    feat(
+        SILVAEL_BASE + 3,
+        "a druid's apprentice grinding dried moonwell-root",
+        FeatureKind::Villager,
+        "Branwen's tinctures aren't sold so much as earned. Bring her something interesting out of the wood and she'll usually trade fair.",
+    ),
+    feat(
+        SILVAEL_BASE + 4,
+        "an elf child skipping stones that never quite sink",
+        FeatureKind::Villager,
+        "They say the Moonwell shows you something true if you look long enough. Mostly it's just shown me my own tired face.",
+    ),
+    feat(
+        SILVAEL_BASE + 5,
+        "a druid novice tending the standing stones",
+        FeatureKind::Villager,
+        "The Circle's kept its watch over Aelunor longer than Silvael's had a name. Whatever's out there, they'd know first.",
+    ),
+    feat(
+        SILVAEL_BASE + 6,
+        "a high elf archivist glaring at anyone who touches the shelves",
+        FeatureKind::Villager,
+        "Every bark-bound book on these terraces came out of the wood itself, one way or another. Ask nicely and I might actually let you read one.",
+    ),
+    feat(
+        SILVAEL_BASE + 7,
+        "a beastkeeper hung with bells and half-chewed tame-charms",
+        FeatureKind::Villager,
+        "Aelunor's fae beasts aren't for sale, not here, not anywhere in Silvael. Earn the wood's trust in Animal Taming out past the gate, and one will come to you on its own.",
     ),
 ];
 
@@ -5496,6 +5647,14 @@ pub fn seed_world() -> World {
     // the animal-taming trade (whose roaming spots are seeded in `taming.rs`).
     extend_broceliande(&mut rooms, &mut spawns, &mut behaviors);
 
+    // Append Aelunor, the Faewood: a twelve-zone sprawling forest (rooms
+    // 25000+) of elves, high elves, druids, and fae, every zone an organic
+    // cavern-carved glade (never a maze, never a grid), hung off the Amber
+    // Savanna's terminal room by a normal walk east. Home of the Aelunor
+    // hundred-creature roster and its own city, Silvael.
+    extend_aelunor(&mut rooms, &mut spawns, &mut behaviors);
+    extend_silvael(&mut rooms);
+
     // Append the Wildbound Waste: a Felucca-style pvp continent (rooms
     // 30000+) of three chained biomes - Duskmire Wood, the Hollowdeep, and
     // the Scorched Flats - hung off the Sahra Wastes' Sand-Wyrm's Maw. Every
@@ -8970,6 +9129,16 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
             BROCELIANDE_ZONES,
         ));
     }
+    if is_aelunor_room(id) {
+        return Some(multi(
+            "aelunor",
+            AELUNOR_BASE,
+            AELUNOR_W,
+            AELUNOR_H,
+            0,
+            AELUNOR_ZONES,
+        ));
+    }
     None
 }
 
@@ -9012,7 +9181,7 @@ pub fn biome_of(id: RoomId) -> Biome {
         }
         return match p.region {
             "catacombs" | "caverns" => Biome::Cavern,
-            "thornwood" | "broceliande" => Biome::Forest,
+            "thornwood" | "broceliande" | "aelunor" => Biome::Forest,
             "kaelmyr" => Biome::Ash,
             "lakes" => Biome::Water,
             "reaches" | "frontier" => Biome::Badlands,
@@ -9652,6 +9821,697 @@ fn extend_broceliande(
     if let Some(r) = rooms.get_mut(&entrance) {
         r.exits.insert(portal.opposite(), anchor);
     }
+}
+
+// ---- Aelunor, the Faewood: a sprawling elven/fae forest (rooms 25000+) ----
+//
+// Twelve zones of organic, sprawling clearings - never a maze, never a grid
+// (see `carve_cavern`; every single zone here is cavern-carved, deliberately
+// unlike Broceliande's maze/cavern mix, so Aelunor always reads as glades and
+// dells you wander between rather than corridors you solve). Home to the
+// elves, high elves, druids, and fae of Lateania: some friendly (the
+// villagers at every zone gate and the city below), most hostile (the
+// hundred-creature roster below). Chained deepest-glade -> next-gate exactly
+// like Broceliande, and hung off the Amber Savanna's terminal room by a
+// normal walk east.
+
+pub const AELUNOR_BASE: RoomId = 25_000;
+const AELUNOR_W: usize = 9;
+const AELUNOR_H: usize = 8;
+const AELUNOR_ZONES: usize = AELUNOR_ZONES_DATA.len();
+/// A fresh spawn-id band clear of every other region (Frontier/Reaches/
+/// Kaelmyr/Lakes/Broceliande all sit in 900,000..1,000,000; Wildbound sits at
+/// 1,500,000+). Falls into `tune_spawn_balance`'s default "gentle overworld"
+/// bucket exactly like Wildbound does, since it matches none of the named
+/// endgame bands - no special-casing needed.
+const AELUNOR_SPAWN_ID_START: u32 = 1_600_000;
+const AELUNOR_SEED: u64 = 0xAE1A_7702_u64;
+/// Each zone reserves this many room ids (an `AELUNOR_W`x`AELUNOR_H` cell
+/// field). Public so `taming.rs` can place the five Aelunor companions.
+pub const AELUNOR_ZONE_STRIDE: u32 = (AELUNOR_W * AELUNOR_H) as u32;
+pub const AELUNOR_ZONE_COUNT: usize = AELUNOR_ZONES;
+
+pub fn is_aelunor_room(id: RoomId) -> bool {
+    (AELUNOR_BASE..AELUNOR_BASE + AELUNOR_ZONES as u32 * AELUNOR_ZONE_STRIDE).contains(&id)
+}
+
+/// The five rarity tiers a regular Aelunor spawn can roll, from common
+/// undergrowth to a once-in-a-visit find. Deliberately the same five words
+/// `items::Rarity` already uses, so "this is the rarity system" reads as
+/// literal, not just flavour - a Legendary spawn drops from a meaningfully
+/// better loot tier than a Common one of the same base creature.
+const AELUNOR_RARITY: [&str; 5] = ["", "Uncommon", "Rare", "Epic", "Legendary"];
+
+/// The twenty base creatures of Aelunor's hostile roster, crossed with
+/// `AELUNOR_RARITY` for a hundred named variants total (the same
+/// base-name x affix-ladder shape already proven at Wildbound's 20x5 pool -
+/// see `WILDBOUND_TIER_AFFIX`). Elves, high elves, druids, and fae gone
+/// hostile: raiders, renegades, and things that were never on anyone's side.
+const AELUNOR_CREATURES: [&str; 20] = [
+    "Hollow-Elf Raider",
+    "Grey Elf Outrider",
+    "Faerie Trickster",
+    "Wild Druid",
+    "Thornbound Satyr",
+    "Moss-Cloaked Stalker",
+    "Pixie Swarm",
+    "Bramble Warden",
+    "Nightshade Nymph",
+    "Dryad Handmaiden",
+    "Faeling Marauder",
+    "High Elf Renegade",
+    "Thistlewitch Acolyte",
+    "Antlered Stag-Knight",
+    "Sylvan Revenant",
+    "Gloomfae Assassin",
+    "Wychwood Treant-Kin",
+    "Starlit Mystic",
+    "Feral Green Knight",
+    "Wild Hunt Rider",
+];
+
+/// Twelve zones: (name, adjective, greenery noun, a landmark feature, the
+/// creatures that haunt it, three "native" indices into `AELUNOR_CREATURES`
+/// this zone favours, the zone's own named boss). Chained gate to gate, the
+/// same shape as `BROCELIANDE_ZONES_DATA`. Zone names must NOT start with
+/// "The " (the builder does not prepend it).
+#[allow(clippy::type_complexity)]
+const AELUNOR_ZONES_DATA: [(&str, &str, &str, &str, &str, [usize; 3], &str); 12] = [
+    (
+        "Silverleaf Eaves",
+        "sun-dappled",
+        "silver-barked birch",
+        "a woven archway of living willow that never stops growing",
+        "eaves-wardens",
+        [0, 1, 6],
+        "the Hollow-Elf Warlord",
+    ),
+    (
+        "the Whispering Boughs",
+        "wind-stirred",
+        "tall whispering pine",
+        "a ring of standing-stones humming faintly on the breeze",
+        "bough-stalkers",
+        [1, 2, 8],
+        "Thistlewitch, the Bramble Queen",
+    ),
+    (
+        "Mossheart Glade",
+        "moss-thick",
+        "moss-cloaked old oak",
+        "a sunken hollow where the moss grows waist-deep and warm",
+        "moss-kin",
+        [5, 9, 16],
+        "the Moss-Cloaked Ancient",
+    ),
+    (
+        "the Sunfall Canopy",
+        "gold-lit",
+        "high sunfall canopy",
+        "a broken shaft of light falling clean through the leaves onto an old altar",
+        "canopy-runners",
+        [3, 13, 19],
+        "the Erlking's Huntsman",
+    ),
+    (
+        "Thistledown Hollow",
+        "thistle-choked",
+        "wild thistledown bramble",
+        "a drift of pale down that never quite settles",
+        "hollow-fae",
+        [2, 8, 12],
+        "the Nightshade Nymph-Queen",
+    ),
+    (
+        "the Elder Ring",
+        "ring-marked",
+        "an old fae-ring of toadstool and grass",
+        "a perfect green circle the grass will not grow inside",
+        "ring-wardens",
+        [4, 7, 9],
+        "the Ringmother of the Elder Circle",
+    ),
+    (
+        "Duskpetal Grove",
+        "dusk-shadowed",
+        "dusk-petal blossom",
+        "a grove of trees that only flower after dark",
+        "duskpetal stalkers",
+        [15, 16, 6],
+        "the Gloomfae Reaper",
+    ),
+    (
+        "the Starlit Fen",
+        "star-mirrored",
+        "reed and starlit water",
+        "a still black mere that mirrors the sky too perfectly",
+        "fen-wisps",
+        [17, 8, 2],
+        "the Starlit Seer-Queen",
+    ),
+    (
+        "Wychroot Deeps",
+        "root-choked",
+        "gnarled wychroot",
+        "a tangle of roots thick enough to walk on",
+        "root-things",
+        [16, 14, 5],
+        "the Wychroot Revenant-Lord",
+    ),
+    (
+        "the Faerie Loom",
+        "thread-hung",
+        "silver gossamer",
+        "strands of cobweb-silk strung between the trees like a vast loom",
+        "loom-fae",
+        [2, 10, 6],
+        "the Faerie Loomweaver",
+    ),
+    (
+        "Moonwell Thicket",
+        "moon-silvered",
+        "pale moonwell birch",
+        "a spring that only ever reflects the moon, whatever the hour",
+        "moonwell wardens",
+        [9, 17, 11],
+        "the Moonwell Warden",
+    ),
+    (
+        "the Heartwood Sanctum",
+        "ancient",
+        "the Heartwood itself, oldest tree in Aelunor",
+        "the vast, living Heartwood, roots sunk to the world's own bones",
+        "heartwood guardians",
+        [11, 18, 19],
+        "the Erlqueen, Heart of Aelunor",
+    ),
+];
+
+/// Twelve places, one per zone, cycled by cell like `BROCELIANDE_PLACES`.
+const AELUNOR_PLACES: [&str; 10] = [
+    "the Glade Path",
+    "a Sun-Break",
+    "the Root Hollow",
+    "a Fae Circle",
+    "the Bramble Turn",
+    "a Mossy Rise",
+    "the Stillwater",
+    "a Thicket Bend",
+    "the Old Way",
+    "a Quiet Dell",
+];
+
+/// Aelunor's regular-spawn loot: borrows the Frontier catalog exactly like
+/// `broceliande_loot`. Depth is a **shallow** ladder (half a tier per zone,
+/// the same slope Broceliande walks), and the rolled rarity is where the
+/// reward actually lives - each affix step is worth three zones of depth, so
+/// a Legendary spawn drops from a table a continent above its neighbours'.
+/// This is the literal mechanism behind "different rarity, different drops",
+/// and it is what makes the wood a lottery rather than a shortcut: the
+/// jackpot is real (a Deep Heart Legendary reaches the catalog's Legendary
+/// band) but you cannot farm it, because the affix is a rare roll at every
+/// depth (see the rarity roll in `extend_aelunor`).
+///
+/// It must stay that way. Aelunor is entered by a plain walk off the Amber
+/// Savanna with no title gate, and its mobs keep the gentle overworld
+/// multipliers, so a *reliable* high tier here would hand out at ~660hp what
+/// the Frontier guards at ~3280hp behind four Bane titles.
+fn aelunor_loot(zone: usize, rarity: usize) -> &'static [u32] {
+    let tier = (zone / 2 + rarity * 3).min(super::items::FRONTIER_TIERS - 1);
+    super::items::frontier_loot(tier)
+}
+
+/// A named zone boss always drops, so it pays as though it were an Epic
+/// spawn: the best table the wood offers reliably, still one affix step below
+/// the Legendary roll that only luck produces.
+fn aelunor_notable_loot(zone: usize) -> &'static [u32] {
+    aelunor_loot(zone, 3)
+}
+
+/// Carve zone `z`'s glade floor. A pure function of the zone index (same
+/// seed formula every call), factored out so the entrance a beast/city is
+/// placed at (computed by external code, before or after `extend_aelunor`
+/// runs) can never drift from the one `extend_aelunor` actually builds rooms
+/// for. A too-sparse roll is re-rolled with a different stream rather than
+/// falling back to a maze, so the "no maze here" promise never slips.
+fn aelunor_carve_floor(z: usize) -> Vec<bool> {
+    let (w, h) = (AELUNOR_W, AELUNOR_H);
+    let mut rng = MazeRng::new(AELUNOR_SEED ^ (z as u64).wrapping_mul(0xA5A5_1234_5678_9ABCu64));
+    let mut attempt = carve_cavern(w, h, &mut rng);
+    let mut tries = 0;
+    while attempt.iter().filter(|f| **f).count() < 24 && tries < 6 {
+        attempt = carve_cavern(w, h, &mut rng);
+        tries += 1;
+    }
+    attempt
+}
+
+/// Every zone's entrance room id (the "Wood-Gate"), the one cell every zone
+/// is guaranteed to have reachable and safe. **Never assume offset 0 is the
+/// entrance here** the way `taming::wild_beasts` does for Broceliande's
+/// maze zones (where the maze carver's DFS always starts at cell 0): every
+/// Aelunor zone is cavern-carved, and `carve_cavern` forces the whole grid
+/// border - including cell 0 - to solid rock, so offset 0 is never even a
+/// room. Computed once and cached.
+pub(super) fn aelunor_entrances() -> &'static [RoomId] {
+    static ENTRANCES: OnceLock<Vec<RoomId>> = OnceLock::new();
+    ENTRANCES.get_or_init(|| {
+        let n = AELUNOR_W * AELUNOR_H;
+        (0..AELUNOR_ZONES)
+            .map(|z| {
+                let floor = aelunor_carve_floor(z);
+                let cell = (0..n).find(|&i| floor[i]).unwrap_or(0);
+                AELUNOR_BASE + z as u32 * AELUNOR_ZONE_STRIDE + cell as u32
+            })
+            .collect()
+    })
+}
+
+/// Build Aelunor: twelve zones of organic forest glade (rooms 25000+), every
+/// one cavern-carved (never a maze, never a grid), chained deepest-glade ->
+/// next-gate, and hung off the Amber Savanna's terminal room. A moderate
+/// green country, home of the hundred-creature Aelunor roster and the five
+/// Aelunor companions (seeded in `taming.rs`), plus its own city, Silvael
+/// (`extend_silvael`).
+#[allow(clippy::needless_range_loop)]
+fn extend_aelunor(
+    rooms: &mut HashMap<RoomId, Room>,
+    spawns: &mut Vec<MobSpawn>,
+    behaviors: &mut HashMap<u32, MobBehavior>,
+) {
+    let (w, h) = (AELUNOR_W, AELUNOR_H);
+    let n = w * h;
+    let mut spawn_id: u32 = AELUNOR_SPAWN_ID_START;
+    let mut prev_exit: Option<RoomId> = None;
+
+    for (z, &(zname, adj, green, feature, creature, native, boss)) in
+        AELUNOR_ZONES_DATA.iter().enumerate()
+    {
+        let zbase = AELUNOR_BASE + (z as u32) * AELUNOR_ZONE_STRIDE;
+        // A separate stream from the carve's own rng (that one is fully
+        // encapsulated in `aelunor_carve_floor` now), used only for mob
+        // placement/rarity rolls below.
+        let mut rng = MazeRng::new(
+            AELUNOR_SEED.wrapping_mul(0xD1CE_u64) ^ (z as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        );
+
+        // Always an organic cavern glade - never a maze, never a grid. Uses
+        // the same carve as `aelunor_entrances`, so the two can never
+        // disagree about which cell is the entrance.
+        let floor = aelunor_carve_floor(z);
+        let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
+        let dist = cavern_distances(&floor, w, h, entrance);
+        let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
+        let cell_exits: Vec<Vec<(Dir, usize)>> = (0..n)
+            .map(|c| {
+                let mut v = Vec::new();
+                if !reachable[c] {
+                    return v;
+                }
+                let (x, y) = (c % w, c / w);
+                let consider = |nx: i64, ny: i64, d: Dir, v: &mut Vec<(Dir, usize)>| {
+                    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                        let nb = ny as usize * w + nx as usize;
+                        if reachable[nb] {
+                            v.push((d, nb));
+                        }
+                    }
+                };
+                consider(x as i64, y as i64 - 1, Dir::North, &mut v);
+                consider(x as i64 + 1, y as i64, Dir::East, &mut v);
+                consider(x as i64, y as i64 + 1, Dir::South, &mut v);
+                consider(x as i64 - 1, y as i64, Dir::West, &mut v);
+                v
+            })
+            .collect();
+
+        let deepest = (0..n)
+            .filter(|&c| reachable[c])
+            .max_by_key(|&c| dist[c])
+            .unwrap_or(entrance);
+        let zone: &'static str = Box::leak(zname.to_string().into_boxed_str());
+
+        for cell in 0..n {
+            if !reachable[cell] {
+                continue;
+            }
+            let id = zbase + cell as u32;
+            let is_entrance = cell == entrance;
+            let is_boss = cell == deepest && cell != entrance;
+
+            let exits: HashMap<Dir, RoomId> = cell_exits[cell]
+                .iter()
+                .map(|(d, nb)| (*d, zbase + *nb as u32))
+                .collect();
+
+            let name: &'static str = if is_entrance {
+                Box::leak(format!("{zname} - the Wood-Gate").into_boxed_str())
+            } else if is_boss {
+                Box::leak(format!("{zname} - the Deep Heart").into_boxed_str())
+            } else {
+                Box::leak(format!("{zname} - {}", AELUNOR_PLACES[cell % 10]).into_boxed_str())
+            };
+            let desc: &'static str = Box::leak(
+                broceliande_desc(adj, green, feature, creature, cell as u32).into_boxed_str(),
+            );
+
+            rooms.insert(
+                id,
+                Room {
+                    id,
+                    name,
+                    desc,
+                    zone,
+                    // Every zone's wood-gate is a safe haven, so Aelunor reads
+                    // as a chain of gates between deepening wildwood.
+                    safe: is_entrance,
+                    pvp: false,
+                    exits,
+                },
+            );
+
+            if is_entrance {
+                continue;
+            }
+
+            let depth = dist[cell] as i32;
+            let tier = z as i32;
+            if is_boss {
+                let profile = DamageProfile::new(
+                    DamageType::Shadow,
+                    Some(DamageType::Physical),
+                    Some(DamageType::Holy),
+                );
+                spawns.push(MobSpawn {
+                    id: spawn_id,
+                    name: boss,
+                    home: id,
+                    max_hp: 620 + tier * 120,
+                    damage: 32 + tier * 4,
+                    xp: 170 + tier * 36,
+                    respawn_secs: 260,
+                    loot: aelunor_notable_loot(z),
+                    boss: true,
+                    profile,
+                });
+                behaviors.insert(spawn_id, MobBehavior::Brute);
+                spawn_id += 1;
+                continue;
+            }
+
+            // Roughly a third of glade cells stay empty, so the wood breathes
+            // rather than every clearing holding a fight.
+            if rng.chance(34) {
+                continue;
+            }
+            let base = AELUNOR_CREATURES[native[rng.below(3)]];
+            // A lottery, not a depth ladder. The affix bands are fixed and
+            // depth only nudges the roll, so a Legendary stays a rare find
+            // wherever you are: ~1% at the eaves, ~5% in the Deep Heart.
+            // A roll that climbed with depth instead (`below(20) + tier * 3`)
+            // made the affix a second name for "how deep am I" - past zone 8
+            // *every* spawn came up Legendary, and since the rarity picks the
+            // drop table (`aelunor_loot`), that pointed a whole region of
+            // ~660hp mobs at the Frontier catalog's top tier.
+            let roll = rng.below(1000) as i32 + tier * 4;
+            let rarity: usize = match roll {
+                0..=549 => 0,
+                550..=799 => 1,
+                800..=929 => 2,
+                930..=989 => 3,
+                _ => 4,
+            };
+            let affix = AELUNOR_RARITY[rarity];
+            let mob_name: &'static str = if affix.is_empty() {
+                base
+            } else {
+                Box::leak(format!("{affix} {base}").into_boxed_str())
+            };
+            let behavior = match rng.below(3) {
+                0 => MobBehavior::Wanderer,
+                1 => MobBehavior::Skirmisher,
+                _ => MobBehavior::Patroller,
+            };
+            // Now that the affix is a rare roll rather than a depth stamp, it
+            // can buy a real fight instead of a slightly fatter common: the
+            // premium is **quadratic** in the affix, so a Legendary spawn
+            // lands at roughly twice its glade-mates' hp and reads as the
+            // mini-boss it is. Deliberately flat across zones - the affix
+            // jumps the drop table twelve tiers wherever it lands
+            // (`aelunor_loot`), so the guard has to stand as far above the
+            // local floor as the prize does, or a first-glade Legendary hands
+            // a wanderer Epic-band gear off an ordinary fight.
+            let elite = (rarity * rarity) as i32;
+            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            spawns.push(MobSpawn {
+                id: spawn_id,
+                name: mob_name,
+                home: id,
+                max_hp: 190 + tier * 28 + depth * 4 + elite * 40,
+                damage: 14 + tier + depth / 2 + elite * 3 / 2,
+                xp: 32 + tier * 8 + depth * 2 + elite * 10,
+                respawn_secs: 60,
+                loot: aelunor_loot(z, rarity),
+                boss: false,
+                profile,
+            });
+            behaviors.insert(spawn_id, behavior);
+            spawn_id += 1;
+        }
+
+        let entrance_id = zbase + entrance as u32;
+        if let Some(prev) = prev_exit {
+            if let Some(r) = rooms.get_mut(&prev) {
+                r.exits.insert(Dir::Down, entrance_id);
+            }
+            if let Some(r) = rooms.get_mut(&entrance_id) {
+                r.exits.insert(Dir::Up, prev);
+            }
+        }
+        prev_exit = Some(zbase + deepest as u32);
+    }
+
+    // Hang Aelunor off the Amber Savanna's terminal room (its only free
+    // direction: the wing chains east, so the last room never gained an east
+    // neighbour) by a normal walk east. Lightly gated - a green country meant
+    // to be entered and explored, same as Broceliande.
+    let anchor = rooms
+        .iter()
+        .find(|(_, r)| r.name == "The Amber Savanna - The Pride's Reckoning")
+        .map(|(&id, _)| id)
+        .unwrap_or(MELVANALA_SQUARE);
+    // Zone 0's real entrance, not `AELUNOR_BASE` (offset 0) - see
+    // `aelunor_entrances`'s doc comment for why that would be a rock cell.
+    let entrance = aelunor_entrances().first().copied().unwrap_or(AELUNOR_BASE);
+    let portal = [Dir::East, Dir::North, Dir::South, Dir::West, Dir::Down]
+        .into_iter()
+        .find(|d| rooms.get(&anchor).is_some_and(|r| !r.exits.contains_key(d)))
+        .unwrap_or(Dir::East);
+    if let Some(hub) = rooms.get_mut(&anchor) {
+        hub.exits.insert(portal, entrance);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(portal.opposite(), anchor);
+    }
+}
+
+/// Silvael, the Faewood's own city (rooms 26000+): a small, hand-wired haven
+/// of elves, high elves, druids, and court fae. Every room here is safe -
+/// "some friendly, some foe" plays out as the split between this city (the
+/// friendly side) and the wood outside it, whose `AELUNOR_CREATURES` roster
+/// reuses the same elf/druid/fae vocabulary for the hostile half.
+pub const SILVAEL_BASE: RoomId = 26_000;
+const SILVAEL_ROOM_COUNT: u32 = 8;
+
+/// The direction a room should try next when chaining a fresh room onto it:
+/// its first exit-free compass direction. Lets Silvael's inner wiring stay
+/// correct no matter which direction `extend_aelunor` happened to splice the
+/// city's own gate onto.
+fn first_free_dir(rooms: &HashMap<RoomId, Room>, at: RoomId) -> Dir {
+    [
+        Dir::North,
+        Dir::East,
+        Dir::South,
+        Dir::West,
+        Dir::Up,
+        Dir::Down,
+    ]
+    .into_iter()
+    .find(|d| rooms.get(&at).is_some_and(|r| !r.exits.contains_key(d)))
+    .unwrap_or(Dir::North)
+}
+
+/// Build Silvael and splice it onto the seam `extend_aelunor` used to hang
+/// the wood off the Amber Savanna. That earlier splice walked the overworld
+/// straight into the Faewood's first zone; this reopens that same link as
+/// anchor -> Silvael's square -> the Wildwood Gate -> the wood, so the city
+/// sits exactly where its story says it does: the threshold between the
+/// King's roads and the Faewood proper. Never assumes the splice direction
+/// was East - it re-derives it by finding whichever room actually links to
+/// Aelunor's first zone entrance.
+fn extend_silvael(rooms: &mut HashMap<RoomId, Room>) {
+    let entrance = aelunor_entrances().first().copied().unwrap_or(AELUNOR_BASE);
+    // Only the overworld side counts as the real anchor - the entrance cell
+    // also has ordinary cavern-carved neighbours *within* Aelunor itself
+    // (it's a normal reachable cell, not an island), and a search that
+    // didn't exclude `is_aelunor_room` could match one of those instead,
+    // depending on `HashMap` iteration order.
+    let Some((anchor, dir)) = rooms.iter().find_map(|(&id, r)| {
+        if is_aelunor_room(id) {
+            return None;
+        }
+        r.exits
+            .iter()
+            .find(|&(_, &t)| t == entrance)
+            .map(|(&d, _)| (id, d))
+    }) else {
+        return;
+    };
+
+    const ZONE: &str = "Silvael";
+    let square = SILVAEL_BASE;
+    let gate = SILVAEL_BASE + 1;
+    let market = SILVAEL_BASE + 2;
+    let larder = SILVAEL_BASE + 3;
+    let moonwell = SILVAEL_BASE + 4;
+    let circle = SILVAEL_BASE + 5;
+    let terraces = SILVAEL_BASE + 6;
+    let hollow = SILVAEL_BASE + 7;
+
+    for (id, name, desc) in [
+        (
+            square,
+            "Silvael - the Starlit Square",
+            "Silvael rises straight out of the Faewood, with no wall to mark where \
+             forest ends and city begins - only a ring of vast silver-barked trees \
+             whose canopy has been coaxed, over centuries, into archways, stairs, \
+             and whole hanging halls. Elf and high elf walk the square in equal \
+             number, lantern-moths drift between the boughs where torches would \
+             be anywhere else, and somewhere above a druid's low song keeps time \
+             with the swaying leaves. The Wildwood breathes in cool and green from \
+             one side of the square; a market, a moonwell, a stair of living wood, \
+             and a quieter hollow open off the others.",
+        ),
+        (
+            gate,
+            "Silvael - the Wildwood Gate",
+            "Silvael's living archways finally give out here, and the true Faewood \
+             begins. The trees crowd closer, the lantern-moths thin to nothing, and \
+             the last carved rail gives way to root and bramble underfoot. A pair \
+             of high elf wardens keep this threshold, less to bar the way than to \
+             mark it - nobody official has ever quite managed to say what waits \
+             deeper in, only that it answers to older rules than the city's. The \
+             square lies safe behind you.",
+        ),
+        (
+            market,
+            "Silvael - the Canopy Market",
+            "Stalls hang from the branches on rope and pulley as often as they \
+             stand on the ground, strung with pressed leaf-paper, woven charms, \
+             and fae-work jewellery that shifts colour the moment nobody's looking \
+             straight at it. Aelwen Songleaf, a high elf trader with a voice like \
+             a struck bell, holds court at the finest stall and drives a harder \
+             bargain than her smile suggests. Smaller vendors work the branches \
+             above and below hers, trading in things that don't always translate \
+             well to human coin.",
+        ),
+        (
+            larder,
+            "Silvael - the Green Larder",
+            "A low, warm room built into the hollow of an ancient oak, its shelves \
+             crowded with bundled herbs, jarred honey, and roots that smell of \
+             nothing found outside the Faewood. Branwen Oakshadow, a druid with \
+             moss for a beard, weighs out tinctures on a bone scale and never once \
+             looks up from the work, though she always seems to know exactly who's \
+             walked in. The Canopy Market lies back through the boughs.",
+        ),
+        (
+            moonwell,
+            "Silvael - the Moonwell",
+            "A still, silver spring set into a hollow of root and stone, said to \
+             reflect the moon whatever the actual hour above the canopy. Elves \
+             kneel at its edge to wash the road from their faces, or simply to sit \
+             and watch the water do something the sky above it isn't doing. The \
+             old fae claim a wish spoken here on a true-dark night is heard, \
+             though nobody in Silvael will confirm which nights those are. The \
+             square lies close by.",
+        ),
+        (
+            circle,
+            "Silvael - the Druids' Circle",
+            "A ring of standing stones stands here, worn smooth and hung with \
+             willow-bark charms, where Silvael's druids keep their long watches \
+             over the wood beyond the city. An elder druid tends the circle's low \
+             fire without ever seeming to feed it, and the grass inside the ring \
+             grows a shade greener than anywhere else in the city. The moonwell \
+             glimmers back the way you came.",
+        ),
+        (
+            terraces,
+            "Silvael - the High Elm Terraces",
+            "Tiered platforms climb the trunk of a single vast elm, linked by rope \
+             bridges and stairs grown rather than built, where Silvael's high \
+             elves keep their halls and their long, unhurried arguments about the \
+             world beyond the wood. Shelves of bark-bound books line every \
+             terrace, tended by an archivist who seems personally offended \
+             whenever anyone actually asks to borrow one. The square lies below.",
+        ),
+        (
+            hollow,
+            "Silvael - the Beastkeeper's Hollow",
+            "A quieter clearing behind the city proper, ringed with low dens and \
+             roosts where a soft-spoken beastkeeper tends whatever the wood has \
+             recently decided to trust to human hands. Bells and tame-charms hang \
+             from every branch, and something with too many eyes watches you from \
+             the shadows without ever quite showing itself. None of Silvael's fae \
+             companions are sold here - the wood gives them, or it doesn't, same \
+             as it always has. The square lies just beyond the trees.",
+        ),
+    ] {
+        rooms.insert(id, room(id, name, ZONE, true, desc, &[]));
+    }
+
+    // Splice the city into the seam `extend_aelunor` used: overworld used to
+    // walk straight from `anchor` into the wood; now it detours through
+    // Silvael's square and its own Wildwood Gate first.
+    if let Some(r) = rooms.get_mut(&anchor) {
+        r.exits.insert(dir, square);
+    }
+    if let Some(r) = rooms.get_mut(&entrance) {
+        r.exits.insert(dir.opposite(), gate);
+    }
+    if let Some(r) = rooms.get_mut(&square) {
+        r.exits.insert(dir.opposite(), anchor);
+        r.exits.insert(dir, gate);
+    }
+    if let Some(r) = rooms.get_mut(&gate) {
+        r.exits.insert(dir.opposite(), square);
+        r.exits.insert(dir, entrance);
+    }
+
+    // The square's remaining four compass directions (whichever they are)
+    // fan out to the market, the moonwell, the terraces, and the hollow;
+    // the market and the moonwell each chain one step further to the larder
+    // and the circle.
+    let spokes: Vec<Dir> = [
+        Dir::North,
+        Dir::East,
+        Dir::South,
+        Dir::West,
+        Dir::Up,
+        Dir::Down,
+    ]
+    .into_iter()
+    .filter(|&d| d != dir && d != dir.opposite())
+    .collect();
+    link(rooms, square, spokes[0], market);
+    link(rooms, square, spokes[1], moonwell);
+    link(rooms, square, spokes[2], terraces);
+    link(rooms, square, spokes[3], hollow);
+    let d = first_free_dir(rooms, market);
+    link(rooms, market, d, larder);
+    let d = first_free_dir(rooms, moonwell);
+    link(rooms, moonwell, d, circle);
 }
 
 // ---- The Wildbound Waste: a Felucca-style pvp continent (rooms 30000+) ----

@@ -1117,7 +1117,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         let (text, color) = match heading {
             Heading::Toward(name, route) => (
                 format!(
-                    "\u{2691} heading for {name} · {} room{} · take {}",
+                    "{} compass: {name} · {} room{} · take {}",
+                    route.next.compass_glyph(),
                     route.rooms,
                     if route.rooms == 1 { "" } else { "s" },
                     route.next.label()
@@ -1126,7 +1127,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             ),
             Heading::Arrived(name) => (format!("\u{2691} {name} · you're here"), theme::SUCCESS()),
             Heading::Unreachable(name) => (
-                format!("\u{2691} {name} · no way there over ground you know"),
+                format!("\u{2715} {name} · no way there over ground you know"),
                 theme::ERROR(),
             ),
         };
@@ -2029,20 +2030,21 @@ fn room_panel(
         let (text, color) = match heading {
             Heading::Toward(name, route) => (
                 format!(
-                    "{name} · {} room{} · take {}",
+                    "{} {name} · {} room{} · take {}",
+                    route.next.compass_glyph(),
                     route.rooms,
                     if route.rooms == 1 { "" } else { "s" },
                     route.next.label()
                 ),
                 theme::SUCCESS(),
             ),
-            Heading::Arrived(name) => (format!("{name} · you're here"), theme::SUCCESS()),
+            Heading::Arrived(name) => (format!("\u{2691}{name} · you're here"), theme::SUCCESS()),
             Heading::Unreachable(name) => (
                 format!("{name} · no way there over ground you know"),
                 theme::ERROR(),
             ),
         };
-        lines.extend(side_kv_wrap("heading", &text, color, width));
+        lines.extend(side_kv_wrap("compass", &text, color, width));
     }
     if !view.features.is_empty() {
         lines.push(section("Of note"));

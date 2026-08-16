@@ -1723,7 +1723,7 @@ fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
     let beasts = super::super::taming::beasts_at(broceliande_beast_room());
     assert!(!beasts.is_empty(), "beasts roam the first forest gate");
     let beast_index = beasts[0].species;
-    let species = &TAMEABLE[beast_index];
+    let species = super::super::taming::beast_species(beast_index);
     let cooldown_key = (user_id, beast_index);
     let baseline_xp = super::super::skills::xp_for_skill_level(species.tame_level);
     s.players.get_mut(&user_id).unwrap().taming_xp = baseline_xp;
