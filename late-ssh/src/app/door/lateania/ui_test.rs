@@ -403,9 +403,28 @@ fn room_panel_makes_each_foe_a_clickable_row() {
         "the targeted foe is marked with »"
     );
     // In the field layout the side panel swaps to the battle frame while a
-    // foe is locked: the target's full nature and wide meter, and the other
-    // foes still clickable for switching the lock.
-    let (blines, bhits, _bplayer_hits) = super::battle_side_panel(&view, &usernames, 30);
+    // foe is locked: the target's full nature and wide meter, the ability
+    // roster with readiness, and the other foes still clickable for
+    // switching the lock.
+    use super::super::state::ClickAction;
+    use super::super::svc::AbilityView;
+    view.abilities = vec![
+        AbilityView {
+            slot: 1,
+            name: "Cleave".to_string(),
+            cost: 12,
+            ready: true,
+            effect: "heavy swing".to_string(),
+        },
+        AbilityView {
+            slot: 2,
+            name: "War Cry".to_string(),
+            cost: 40,
+            ready: false,
+            effect: "empower".to_string(),
+        },
+    ];
+    let (blines, bhits) = super::battle_side_panel(&view, &usernames, 30);
     let all: String = blines.iter().map(line_text).collect::<Vec<_>>().join("\n");
     assert!(all.contains("Battle"), "the battle section renders: {all}");
     assert!(
@@ -417,7 +436,20 @@ fn room_panel_makes_each_foe_a_clickable_row() {
         all.contains("Also here") && all.contains("Goblin"),
         "the other foe stays visible for switching: {all}"
     );
-    assert_eq!(bhits.len(), 2, "both foes stay clickable mid-fight");
+    assert!(
+        all.contains("Cleave") && all.contains("War Cry"),
+        "the ability roster shows mid-fight: {all}"
+    );
+    let foe_hits = bhits
+        .iter()
+        .filter(|(_, a)| matches!(a, ClickAction::AttackMob(_)))
+        .count();
+    let cast_hits = bhits
+        .iter()
+        .filter(|(_, a)| matches!(a, ClickAction::Ability(_)))
+        .count();
+    assert_eq!(foe_hits, 2, "both foes stay clickable mid-fight");
+    assert_eq!(cast_hits, 2, "each ability row casts on click");
 }
 
 #[test]

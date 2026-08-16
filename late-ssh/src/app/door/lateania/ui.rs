@@ -1691,14 +1691,30 @@ fn draw_room_side(
 
     // Mid-fight the field layout's side panel becomes the battle frame - the
     // classic layout keeps the room summary here, since its main column
-    // already swaps to `battle_context`.
+    // already swaps to `battle_context`. Its rows carry their own click
+    // actions (foes to switch the lock, ability rows to cast).
     let fighting =
         view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted);
-    let (lines, foe_hits, player_hits) = if !with_minimap && fighting {
-        battle_side_panel(view, usernames, panel_area.width as usize)
-    } else {
-        room_panel(view, usernames, panel_area.width as usize, state.heading())
-    };
+    if !with_minimap && fighting {
+        let (lines, hits) = battle_side_panel(view, usernames, panel_area.width as usize);
+        for (idx, action) in hits {
+            if (idx as u16) < panel_area.height {
+                state.record_combat_hit(
+                    Rect {
+                        x: panel_area.x,
+                        y: panel_area.y + idx as u16,
+                        width: panel_area.width,
+                        height: 1,
+                    },
+                    action,
+                );
+            }
+        }
+        frame.render_widget(Paragraph::new(lines), panel_area);
+        return;
+    }
+    let (lines, foe_hits, player_hits) =
+        room_panel(view, usernames, panel_area.width as usize, state.heading());
     // Make each visible foe row clickable: its rect is where the panel (drawn
     // from the top, one pre-wrapped line per row) places that line. Rows scrolled
     // off the bottom just aren't recorded, so they aren't clickable.
@@ -2429,17 +2445,17 @@ fn room_panel(
 
 /// The side panel while a fight is on, in the field layout: the room summary
 /// gives way to a battle frame - your vitals, the locked foe's full name,
-/// nature, and wide meter, your battle effects, and the room's other foes for
+/// nature, and wide meter, your battle effects and companion, your ability
+/// roster with live costs and readiness, and the room's other foes for
 /// switching targets. The classic layout keeps the room summary, since its
-/// main column already carries `battle_context`.
-#[allow(clippy::type_complexity)]
+/// main column already carries `battle_context`. Returns each clickable row's
+/// line index with its action (switch the lock, cast an ability).
 fn battle_side_panel(
     view: &PlayerView,
     usernames: &UsernameLookup<'_>,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
-    let mut foe_hits: Vec<(usize, u32)> = Vec::new();
-    let player_hits: Vec<(usize, Uuid)> = Vec::new();
+) -> (Vec<Line<'static>>, Vec<(usize, ClickAction)>) {
+    let mut hits: Vec<(usize, ClickAction)> = Vec::new();
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Battle"));
@@ -2450,7 +2466,7 @@ fn battle_side_panel(
             .fg(rarity_color(&mob.rank))
             .add_modifier(Modifier::BOLD);
         let marker = if mob.boss { "\u{2021} " } else { "\u{00bb} " };
-        foe_hits.push((lines.len(), mob.id));
+        hits.push((lines.len(), ClickAction::AttackMob(mob.id)));
         for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
             .into_iter()
             .enumerate()
@@ -2558,6 +2574,55 @@ fn battle_side_panel(
             )
         };
         lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+        // Its unlocked auto-skills, so what fires by itself is no mystery.
+        if !pet.downed && !pet.skills.is_empty() {
+            let names = pet
+                .skills
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.extend(side_text_wrap(
+                &format!("    auto: {names}"),
+                theme::AMBER_DIM(),
+                width,
+            ));
+        }
+    }
+    // The ability roster, with live costs and readiness - what the bottom
+    // action bar has no room to say. Each row casts on click, like its key.
+    if !view.abilities.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Abilities"));
+        for a in &view.abilities {
+            // Slot 10 is cast with `0`, matching the keybind; show that digit.
+            let key = if a.slot == 10 { 0 } else { a.slot };
+            let (key_style, name_color) = if a.ready {
+                (theme::punch_through(theme::AMBER()), theme::TEXT_BRIGHT())
+            } else {
+                (
+                    theme::punch_through(theme::BORDER_DIM()),
+                    theme::TEXT_FAINT(),
+                )
+            };
+            hits.push((lines.len(), ClickAction::Ability(a.slot)));
+            let key_label = format!(" {key} ");
+            let name = format!(" {}", a.name);
+            let used =
+                UnicodeWidthStr::width(key_label.as_str()) + UnicodeWidthStr::width(name.as_str());
+            let detail = truncate_chars(
+                &format!("  {}c {}", a.cost, a.effect),
+                width.saturating_sub(used),
+            );
+            lines.push(Line::from(vec![
+                Span::styled(key_label, key_style),
+                Span::styled(
+                    name,
+                    Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(detail, Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
     }
     // The room's other foes, so a click can switch the lock mid-fight.
     let others: Vec<&MobView> = view.mobs.iter().filter(|m| !m.targeted).collect();
@@ -2567,7 +2632,7 @@ fn battle_side_panel(
         for mob in others {
             let marker = if mob.boss { "\u{2021} " } else { "  " };
             let name_style = Style::default().fg(rarity_color(&mob.rank));
-            foe_hits.push((lines.len(), mob.id));
+            hits.push((lines.len(), ClickAction::AttackMob(mob.id)));
             for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
                 .into_iter()
                 .enumerate()
@@ -2591,9 +2656,8 @@ fn battle_side_panel(
         lines.push(hint("click", "switch target"));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("space/x", "strike  1-9 0 abilities"));
-    lines.push(hint("z", "flee  Q quaff"));
-    (lines, foe_hits, player_hits)
+    lines.push(hint("space/x", "strike  z flee  Q quaff"));
+    (lines, hits)
 }
 
 /// The overhead minimap section: a small map of the explored neighbourhood,
