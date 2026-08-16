@@ -232,6 +232,25 @@ fn door_only_cycle_hops_between_dungeons() {
 }
 
 #[test]
+fn recently_detached_lateania_leads_the_door_stops() {
+    // Lateania sits first among the door stops (hub sidebar order), ahead of
+    // the roguelikes, then the cycle wraps home.
+    let doors = [Screen::Lateania, Screen::Dcss];
+    assert_eq!(
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Dashboard),
+        GameWorkspace::Door(Screen::Lateania)
+    );
+    assert_eq!(
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Lateania)),
+        GameWorkspace::Door(Screen::Dcss)
+    );
+    assert_eq!(
+        next_workspace(&[], &[], &[], &doors, GameWorkspace::Door(Screen::Dcss)),
+        GameWorkspace::Dashboard
+    );
+}
+
+#[test]
 fn ended_door_run_restarts_from_front() {
     // The dungeon run ended while detached: its stop left the list, so the
     // next hop drains the rest of the queue instead of bailing home.

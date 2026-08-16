@@ -896,18 +896,19 @@ impl State {
                 }
             }
             Panel::Examine => {
-                // The board is a picker, not a plain look-at: choosing what to
-                // accept or claim must be an explicit decision, so Enter opens
-                // its menu instead of interacting blind.
+                // Every feature reveals its description when looked at, boards
+                // included - that's the "look at things" rule. A board then
+                // also opens its picker on top, because choosing what to accept
+                // or claim must be an explicit decision rather than a blind
+                // draw (the same shape as the Portal's look + fast-travel menu).
                 let is_board = self
                     .view()
                     .features
                     .get(self.cursor)
                     .is_some_and(|f| f.kind == "board");
+                self.svc.interact_task(self.user_id, self.cursor);
                 if is_board {
                     self.set_panel(Panel::Board);
-                } else {
-                    self.svc.interact_task(self.user_id, self.cursor);
                 }
             }
             Panel::Board => {

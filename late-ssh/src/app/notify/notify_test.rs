@@ -94,3 +94,36 @@ fn drain_honors_cooldown() {
     notifier.push(Notification::dm("a", "second".to_string()));
     assert!(outbox.drain(&profile).is_none());
 }
+
+// The whole reason `Streams` exists as its own kind: both stream alerts
+// must be mutable on their own. A friend going live is the one `Friends`
+// producer that does NOT ride the always-on `/friend` opt-in, so a nightly
+// streamer cannot force you to give up their login pings.
+#[test]
+fn stream_alerts_gate_on_their_own_kind() {
+    let (notifier, mut outbox) = channel();
+    let everything_else = Profile {
+        notify_kinds: vec![
+            "dms".to_string(),
+            "mentions".to_string(),
+            "game_events".to_string(),
+        ],
+        ..Profile::default()
+    };
+    notifier.push(Notification::stream_viewer("bob"));
+    assert!(outbox.drain(&everything_else).is_none());
+    notifier.push(Notification::friend_live("pal", None));
+    assert!(outbox.drain(&everything_else).is_none());
+
+    let streams_on = Profile {
+        notify_kinds: vec!["streams".to_string()],
+        ..Profile::default()
+    };
+    notifier.push(Notification::stream_viewer("bob"));
+    let got = String::from_utf8(outbox.drain(&streams_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("@bob is watching your stream"));
+
+    notifier.push(Notification::friend_live("pal", Some("render loop")));
+    let got = String::from_utf8(outbox.drain(&streams_on).expect("one payload")).expect("utf8");
+    assert!(got.contains("@pal is live: render loop"));
+}

@@ -75,6 +75,25 @@ fn chat_profile_award_badges_prefer_ascension_over_amulet() {
 }
 
 #[test]
+fn chat_profile_award_badges_prefer_brogue_mastery_over_escape() {
+    // A mastery implies the escape, so the chat label collapses BRE into BRM.
+    assert_eq!(
+        chat_profile_award_badges(Some("BRE BRM".to_string())).as_deref(),
+        Some("BRM")
+    );
+    // The escape alone stands on its own, and other games' pairs collapse
+    // independently.
+    assert_eq!(
+        chat_profile_award_badges(Some("AW1 BRE".to_string())).as_deref(),
+        Some("AW1 BRE")
+    );
+    assert_eq!(
+        chat_profile_award_badges(Some("NHA BRE BRM DCO".to_string())).as_deref(),
+        Some("NHA BRM DCO")
+    );
+}
+
+#[test]
 fn extract_bio_missing_returns_empty() {
     let settings = json!({});
     assert_eq!(extract_bio(&settings), "");

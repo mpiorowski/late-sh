@@ -1,15 +1,15 @@
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use anyhow::Context;
 use anyhow::Result;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use tracing::{debug, info, warn};
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use livekit::{
     PlatformAudio,
     options::TrackPublishOptions,
@@ -26,11 +26,11 @@ pub(super) struct VoiceRuntimeState {
     pub(super) muted: bool,
     pub(super) deafened: bool,
     pub(super) speaking: bool,
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     media: Option<VoiceMediaSession>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 struct VoiceMediaSession {
     room: Room,
     _audio: PlatformAudio,
@@ -41,7 +41,7 @@ struct VoiceMediaSession {
     events_task: tokio::task::JoinHandle<()>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl VoiceMediaSession {
     fn set_remote_playback_enabled(&self, enabled: bool) {
         self.remote_playback_enabled
@@ -73,7 +73,7 @@ impl VoiceRuntimeState {
     ) -> Result<()> {
         self.leave().await;
 
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         {
             let media = connect_voice_media(&room, &url, &token, muted).await?;
             self.media = Some(media);
@@ -89,21 +89,21 @@ impl VoiceRuntimeState {
             Ok(())
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             let _ = (&room, &url, &token, muted, deafened);
             anyhow::bail!("voice media is not supported on this platform");
         }
     }
 
-    // Linux and Windows await the media-room shutdown below. Keep the same
+    // Desktop targets await the media-room shutdown below. Keep the same
     // async API on unsupported targets so callers remain platform-agnostic.
     #[cfg_attr(
-        not(any(target_os = "linux", target_os = "windows")),
+        not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
         allow(clippy::unused_async)
     )]
     pub(super) async fn leave(&mut self) {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         if let Some(media) = self.media.take() {
             let VoiceMediaSession {
                 room,
@@ -129,7 +129,7 @@ impl VoiceRuntimeState {
         self.muted = muted;
         self.speaking = false;
 
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         if let Some(media) = self.media.as_ref() {
             if muted {
                 media.publication.mute();
@@ -143,28 +143,28 @@ impl VoiceRuntimeState {
         self.deafened = deafened;
         self.speaking = false;
 
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         if let Some(media) = self.media.as_ref() {
             media.set_remote_playback_enabled(!deafened);
         }
     }
 
     pub(super) fn media_disconnected(&self) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         {
             self.media
                 .as_ref()
                 .is_some_and(|media| media.disconnected.load(Ordering::Relaxed))
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             false
         }
     }
 
     pub(super) fn sync_speaking_from_media(&mut self) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
         {
             let next = self
                 .media
@@ -177,14 +177,14 @@ impl VoiceRuntimeState {
             false
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             false
         }
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 async fn connect_voice_media(
     room_name: &str,
     url: &str,
@@ -245,6 +245,29 @@ async fn connect_voice_media(
                     let track_id = publication.sid().to_string();
                     match track {
                         RemoteTrack::Audio(track) => {
+                            // One audio path per sound: CLI voice carries
+                            // human mics only. Program audio (the OBS ingress
+                            // mix, the console's screen-share audio) lives on
+                            // the watch page.
+                            if !keep_remote_audio(
+                                &participant.identity().to_string(),
+                                publication.source(),
+                            ) {
+                                // The track is already attached and audible;
+                                // disable it locally right now, then tell the
+                                // server to stop forwarding. Unsubscribe alone
+                                // leaves an audible burst until the server
+                                // acks.
+                                track.disable();
+                                publication.set_subscribed(false);
+                                info!(
+                                    track_id = %track_id,
+                                    participant = %participant.identity(),
+                                    source = ?publication.source(),
+                                    "ignoring non-voice remote audio track"
+                                );
+                                continue;
+                            }
                             if !event_remote_playback_enabled.load(Ordering::Relaxed) {
                                 track.disable();
                             }
@@ -321,3 +344,23 @@ async fn connect_voice_media(
         events_task,
     })
 }
+
+/// Whether the audio-only voice runtime should stay subscribed to a remote
+/// audio track. CLI voice plays human microphones only: program audio (the
+/// OBS ingress mix, the console's screen-share audio) belongs to the watch
+/// page. Any `stream-*` identity is a program publisher (OBS ingress or
+/// go-live console), never a human mic, so its audio is dropped whatever
+/// source label it carries: the ingress label is not guaranteed to survive
+/// the transcoding-off passthrough, and this also covers the local user's
+/// own `stream-{user_id}` publisher echoing back.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn keep_remote_audio(participant_identity: &str, source: TrackSource) -> bool {
+    !participant_identity.starts_with("stream-") && matches!(source, TrackSource::Microphone)
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+#[path = "voice_test.rs"]
+mod voice_test;

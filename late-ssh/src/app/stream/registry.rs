@@ -6,7 +6,7 @@
 //! browser/CLI -> LiveKit -> browser/CLI.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -38,6 +38,16 @@ pub const WATCHERS_MAX: usize = 500;
 /// longer is rejected at the API boundary before it reaches the registry.
 pub const WATCHER_ID_MAX_LEN: usize = 64;
 
+/// A watcher id is both the heartbeat key and (as `viewer-{id}`) the
+/// viewer's LiveKit identity, so it is validated once here and refused at
+/// the API boundary rather than trusted downstream. The shape is what the
+/// watch page generates: a browser UUID, or its digits-only fallback.
+pub fn valid_watcher_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= WATCHER_ID_MAX_LEN
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 /// Lifecycle of one registered stream. `Pending` is the window between
 /// `/golive` and the page's first media report; the announcement fires only
 /// on the `Pending -> Live` transition (no "live" lines pointing at black
@@ -50,6 +60,26 @@ pub enum StreamPhase {
     Grace,
 }
 
+/// How the stream's media reaches LiveKit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamPublisher {
+    /// Browser go-live console: claim-once publish token, page state reports.
+    Console,
+    /// OBS pushing to a WHIP ingress; liveness comes from the server-side
+    /// ingress status poll, not from any page.
+    Obs(ObsIngress),
+}
+
+/// The WHIP ingress behind an OBS stream. Kept in the registry so a re-run
+/// `/golive obs` re-shows the same connection details instead of minting a
+/// second ingress, and so teardown knows what to delete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObsIngress {
+    pub ingress_id: String,
+    pub whip_url: String,
+    pub stream_key: String,
+}
+
 struct StreamEntry {
     user_id: Uuid,
     username: String,
@@ -58,6 +88,7 @@ struct StreamEntry {
     voice_channel_id: Uuid,
     stream_id: String,
     publish_token: String,
+    publisher: StreamPublisher,
     phase: StreamPhase,
     created_at: Instant,
     last_publisher_report: Instant,
@@ -70,15 +101,54 @@ struct StreamEntry {
     /// it; leaked *before* claiming, the intruder claims first and the real
     /// console fails loudly (403), so the hijack is visible, never silent.
     publisher_claim: Option<String>,
-    /// The go-live page's self-reported browser-mic state. Feeds the "on
-    /// air" line in the room's voice display so a browser-mic streamer is
-    /// never an invisible speaker. Nothing detects anything: the page
-    /// reports its own state.
-    mic_on_air: bool,
     watchers: HashMap<String, Instant>,
+    /// Named late.sh users already announced for this stream. A different
+    /// thing from `watchers`: those are anonymous browser ids behind the "N
+    /// watching" count, with no user to name. Per stream, so the same
+    /// regular is announced again at tomorrow's broadcast.
+    viewers: HashSet<Uuid>,
+}
+
+/// A fresh `Pending` entry with newly minted capability ids.
+fn new_entry(
+    user_id: Uuid,
+    username: &str,
+    title: &str,
+    room_id: Uuid,
+    voice_channel_id: Uuid,
+    publisher: StreamPublisher,
+) -> StreamEntry {
+    let now = Instant::now();
+    StreamEntry {
+        user_id,
+        username: username.to_string(),
+        title: title.to_string(),
+        room_id,
+        voice_channel_id,
+        stream_id: capability_id(),
+        publish_token: capability_id(),
+        publisher,
+        phase: StreamPhase::Pending,
+        created_at: now,
+        last_publisher_report: now,
+        grace_since: None,
+        announced: false,
+        publisher_claim: None,
+        watchers: HashMap::new(),
+        viewers: HashSet::new(),
+    }
 }
 
 impl StreamEntry {
+    fn handles(&self) -> StreamHandles {
+        StreamHandles {
+            stream_id: self.stream_id.clone(),
+            publish_token: self.publish_token.clone(),
+            room_id: self.room_id,
+            voice_channel_id: self.voice_channel_id,
+        }
+    }
+
     fn view(&self) -> LiveStreamView {
         LiveStreamView {
             user_id: self.user_id,
@@ -88,7 +158,6 @@ impl StreamEntry {
             voice_channel_id: self.voice_channel_id,
             stream_id: self.stream_id.clone(),
             live: self.phase != StreamPhase::Pending,
-            mic_on_air: self.mic_on_air,
             watching: self.watchers.len(),
             watch_url: String::new(),
         }
@@ -99,6 +168,10 @@ impl StreamEntry {
             user_id: self.user_id,
             username: self.username.clone(),
             voice_channel_id: self.voice_channel_id,
+            ingress_id: match &self.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.ingress_id.clone()),
+            },
             reason,
             phase: self.phase,
             announced: self.announced,
@@ -120,7 +193,6 @@ pub struct LiveStreamView {
     pub voice_channel_id: Uuid,
     pub stream_id: String,
     pub live: bool,
-    pub mic_on_air: bool,
     pub watching: usize,
     /// Public watch-page URL. The registry does not know the web base URL,
     /// so it leaves this empty; `App::tick_stream` fills it from
@@ -155,6 +227,38 @@ pub struct StreamHandles {
     pub publish_token: String,
     pub room_id: Uuid,
     pub voice_channel_id: Uuid,
+}
+
+/// Outcome of registering a console stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeginOutcome {
+    Ready(StreamHandles),
+    /// The user's registered stream publishes through OBS; `/golive stop`
+    /// first.
+    PublisherConflict,
+}
+
+/// Outcome of registering an OBS stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeginObsOutcome {
+    Ready {
+        handles: StreamHandles,
+        /// The ingress actually stored on the stream. On a re-run this is
+        /// the existing one; a caller that just minted a duplicate compares
+        /// ingress ids and deletes its own.
+        ingress: ObsIngress,
+    },
+    /// The user's registered stream publishes through the browser console;
+    /// `/golive stop` first.
+    PublisherConflict,
+}
+
+/// One OBS stream as the ingress status poll sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObsPublisherPoll {
+    pub user_id: Uuid,
+    pub title: String,
+    pub ingress_id: String,
 }
 
 /// Everything the publisher grant endpoint needs to mint a publish ticket.
@@ -199,12 +303,15 @@ impl EndReason {
 /// A stream the registry just tore down. The caller (StreamService) uses
 /// this to force-disconnect the publisher's LiveKit session (registry
 /// removal alone only kills the capability URLs, not an already-connected
-/// go-live page) and to log the teardown.
+/// go-live page) and to log the teardown. For an OBS stream, `ingress_id`
+/// is the WHIP ingress to delete: without that, the stream key stays valid
+/// and OBS reconnects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EndedStream {
     pub user_id: Uuid,
     pub username: String,
     pub voice_channel_id: Uuid,
+    pub ingress_id: Option<String>,
     pub reason: EndReason,
     /// Phase the stream was in when it left the registry.
     pub phase: StreamPhase,
@@ -279,10 +386,12 @@ impl StreamRegistry {
         self.tx.subscribe()
     }
 
-    /// Register (or re-surface) the user's stream. One stream per user: a
-    /// second `/golive` while one is registered updates the title and hands
-    /// back the same capability ids, so re-running the command re-shows the
-    /// modal instead of minting a parallel stream.
+    /// Register (or re-surface) the user's console stream. One stream per
+    /// user: a second `/golive` while one is registered updates the title and
+    /// hands back the same capability ids, so re-running the command re-shows
+    /// the modal instead of minting a parallel stream. A registered OBS
+    /// stream is a conflict: a live broadcast is never silently rewired to a
+    /// different publisher.
     pub fn begin(
         &self,
         user_id: Uuid,
@@ -290,38 +399,144 @@ impl StreamRegistry {
         title: &str,
         room_id: Uuid,
         voice_channel_id: Uuid,
-    ) -> StreamHandles {
-        let handles = {
+    ) -> BeginOutcome {
+        let outcome = {
             let mut inner = self.inner.lock_recover();
-            let now = Instant::now();
-            let entry = inner.entry(user_id).or_insert_with(|| StreamEntry {
-                user_id,
-                username: username.to_string(),
-                title: title.to_string(),
-                room_id,
-                voice_channel_id,
-                stream_id: capability_id(),
-                publish_token: capability_id(),
-                phase: StreamPhase::Pending,
-                created_at: now,
-                last_publisher_report: now,
-                grace_since: None,
-                announced: false,
-                publisher_claim: None,
-                watchers: HashMap::new(),
-                mic_on_air: false,
-            });
-            entry.title = title.to_string();
-            entry.username = username.to_string();
-            StreamHandles {
-                stream_id: entry.stream_id.clone(),
-                publish_token: entry.publish_token.clone(),
-                room_id: entry.room_id,
-                voice_channel_id: entry.voice_channel_id,
+            match inner.get_mut(&user_id) {
+                Some(entry) => match &entry.publisher {
+                    StreamPublisher::Obs(_) => return BeginOutcome::PublisherConflict,
+                    StreamPublisher::Console => {
+                        entry.title = title.to_string();
+                        entry.username = username.to_string();
+                        BeginOutcome::Ready(entry.handles())
+                    }
+                },
+                None => {
+                    let entry = new_entry(
+                        user_id,
+                        username,
+                        title,
+                        room_id,
+                        voice_channel_id,
+                        StreamPublisher::Console,
+                    );
+                    let handles = entry.handles();
+                    inner.insert(user_id, entry);
+                    BeginOutcome::Ready(handles)
+                }
             }
         };
         self.publish();
-        handles
+        outcome
+    }
+
+    /// Register (or re-surface) the user's OBS stream. On a re-run the
+    /// stored ingress wins and is handed back so the same connection details
+    /// re-show; the caller compares ingress ids and deletes a freshly minted
+    /// duplicate. A registered console stream is a conflict, mirroring
+    /// [`begin`](Self::begin).
+    pub fn begin_obs(
+        &self,
+        user_id: Uuid,
+        username: &str,
+        title: &str,
+        room_id: Uuid,
+        voice_channel_id: Uuid,
+        ingress: ObsIngress,
+    ) -> BeginObsOutcome {
+        let outcome = {
+            let mut inner = self.inner.lock_recover();
+            match inner.get_mut(&user_id) {
+                Some(entry) => match &entry.publisher {
+                    StreamPublisher::Console => return BeginObsOutcome::PublisherConflict,
+                    StreamPublisher::Obs(existing) => {
+                        let existing = existing.clone();
+                        entry.title = title.to_string();
+                        entry.username = username.to_string();
+                        BeginObsOutcome::Ready {
+                            handles: entry.handles(),
+                            ingress: existing,
+                        }
+                    }
+                },
+                None => {
+                    let entry = new_entry(
+                        user_id,
+                        username,
+                        title,
+                        room_id,
+                        voice_channel_id,
+                        StreamPublisher::Obs(ingress.clone()),
+                    );
+                    let handles = entry.handles();
+                    inner.insert(user_id, entry);
+                    BeginObsOutcome::Ready { handles, ingress }
+                }
+            }
+        };
+        self.publish();
+        outcome
+    }
+
+    /// The stored ingress of the user's registered OBS stream, if any. Lets
+    /// `/golive obs` re-runs skip minting a duplicate ingress.
+    pub fn obs_ingress(&self, user_id: Uuid) -> Option<ObsIngress> {
+        let inner = self.inner.lock_recover();
+        inner
+            .get(&user_id)
+            .and_then(|entry| match &entry.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ingress.clone()),
+            })
+    }
+
+    /// Every registered OBS stream, for the ingress status poll.
+    pub fn obs_streams(&self) -> Vec<ObsPublisherPoll> {
+        let inner = self.inner.lock_recover();
+        inner
+            .values()
+            .filter_map(|entry| match &entry.publisher {
+                StreamPublisher::Console => None,
+                StreamPublisher::Obs(ingress) => Some(ObsPublisherPoll {
+                    user_id: entry.user_id,
+                    title: entry.title.clone(),
+                    ingress_id: ingress.ingress_id.clone(),
+                }),
+            })
+            .collect()
+    }
+
+    /// Apply an ingress status poll result to the user's OBS stream. Mirrors
+    /// [`report_publisher`](Self::report_publisher) without the claim
+    /// machinery: the server itself is the reporter, there is no page.
+    /// `Gone` covers a stream that ended (or switched publisher) since the
+    /// poll snapshot was taken.
+    pub fn report_obs(&self, user_id: Uuid, publishing: bool) -> PublisherReport {
+        let outcome = {
+            let mut inner = self.inner.lock_recover();
+            let Some(entry) = inner
+                .get_mut(&user_id)
+                .filter(|entry| matches!(entry.publisher, StreamPublisher::Obs(_)))
+            else {
+                return PublisherReport::Gone;
+            };
+            entry.last_publisher_report = Instant::now();
+            if publishing {
+                let went_live = !entry.announced;
+                entry.announced = true;
+                entry.phase = StreamPhase::Live;
+                entry.grace_since = None;
+                PublisherReport::Live { went_live }
+            } else {
+                if entry.phase == StreamPhase::Live {
+                    entry.phase = StreamPhase::Grace;
+                    entry.grace_since = Some(Instant::now());
+                }
+                PublisherReport::Stopped
+            }
+        };
+        self.publish();
+        outcome
     }
 
     /// Tear the user's stream down now (`/golive stop`, moderation kick).
@@ -391,15 +606,14 @@ impl StreamRegistry {
         }
     }
 
-    /// Apply a go-live page state report (media flowing or stopped, plus the
-    /// page's own browser-mic state). Once the token is claimed, reports must
-    /// present the claim secret: a bare URL-holder must not be able to shove
-    /// a live stream into grace with a forged `publishing: false`.
+    /// Apply a go-live page state report (media flowing or stopped). Once
+    /// the token is claimed, reports must present the claim secret: a bare
+    /// URL-holder must not be able to shove a live stream into grace with a
+    /// forged `publishing: false`.
     pub fn report_publisher(
         &self,
         publish_token: &str,
         publishing: bool,
-        mic_live: bool,
         presented_claim: Option<&str>,
     ) -> PublisherReport {
         let outcome = {
@@ -416,7 +630,6 @@ impl StreamRegistry {
                 return PublisherReport::Denied;
             }
             entry.last_publisher_report = Instant::now();
-            entry.mic_on_air = mic_live;
             if publishing {
                 let went_live = !entry.announced;
                 entry.announced = true;
@@ -473,6 +686,27 @@ impl StreamRegistry {
             self.publish();
         }
         known
+    }
+
+    /// Record a named late.sh user arriving at a stream. Returns the
+    /// streamer's username the first time this viewer shows up at this
+    /// stream, `None` on a repeat visit, on the streamer opening their own
+    /// room, and while the stream is still pending (no announcement ever
+    /// points at a black screen). No `publish`: viewers are not part of the
+    /// snapshot, so a room reopen costs nothing on the wire.
+    pub fn note_viewer(&self, streamer_id: Uuid, viewer_id: Uuid) -> Option<String> {
+        if streamer_id == viewer_id {
+            return None;
+        }
+        let mut inner = self.inner.lock_recover();
+        let entry = inner.get_mut(&streamer_id)?;
+        if entry.phase == StreamPhase::Pending {
+            return None;
+        }
+        entry
+            .viewers
+            .insert(viewer_id)
+            .then(|| entry.username.clone())
     }
 
     /// The live (or grace) stream of a user, by username, for `/watch @user`.

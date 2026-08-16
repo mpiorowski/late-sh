@@ -423,6 +423,65 @@ fn parse_dm_trims_whitespace() {
     assert_eq!(parse_dm_command("/dm  @alice  "), Some("alice"));
 }
 
+// --- parse_room_ban_command ---
+
+/// The whole point of the duration slot: `/ban @user 7d spam` must not read
+/// "7d" as the first word of the reason, and `/ban @user spamming` must not
+/// lose its first word to a failed duration parse.
+#[test]
+fn parse_ban_splits_duration_from_reason() {
+    let parsed = parse_room_ban_command("/ban @bob 7d shouting over me", "/ban")
+        .expect("is a ban command")
+        .expect("parses");
+    assert_eq!(parsed.username, "bob");
+    assert_eq!(parsed.duration, Some(chrono::Duration::days(7)));
+    assert_eq!(parsed.reason, "shouting over me");
+
+    let parsed = parse_room_ban_command("/ban bob shouting over me", "/ban")
+        .expect("is a ban command")
+        .expect("parses");
+    assert_eq!(parsed.username, "bob");
+    assert_eq!(parsed.duration, None);
+    assert_eq!(parsed.reason, "shouting over me");
+}
+
+#[test]
+fn parse_ban_bare_username_is_permanent_with_no_reason() {
+    let parsed = parse_room_ban_command("/ban @bob", "/ban")
+        .expect("is a ban command")
+        .expect("parses");
+    assert_eq!(parsed.username, "bob");
+    assert_eq!(parsed.duration, None);
+    assert_eq!(parsed.reason, "");
+}
+
+#[test]
+fn parse_ban_rejects_a_missing_username_and_a_bad_duration() {
+    assert!(
+        parse_room_ban_command("/ban", "/ban")
+            .expect("is a ban command")
+            .is_err()
+    );
+    assert!(
+        parse_room_ban_command("/ban   ", "/ban")
+            .expect("is a ban command")
+            .is_err()
+    );
+    assert!(
+        parse_room_ban_command("/ban @bob -3d rude", "/ban")
+            .expect("is a ban command")
+            .is_err(),
+        "a negative duration is a typo, not a permanent ban"
+    );
+}
+
+#[test]
+fn parse_ban_ignores_other_commands() {
+    assert!(parse_room_ban_command("/banana split", "/ban").is_none());
+    assert!(parse_room_ban_command("hello world", "/ban").is_none());
+    assert!(parse_room_ban_command("/unban @bob", "/ban").is_none());
+}
+
 // --- parse_roll_command ---
 
 fn specs(items: &[(u32, u32)]) -> RollParse {
@@ -2187,6 +2246,7 @@ fn chat_state_with_cyberspace(
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     (state, cyberspace)
 }
@@ -2326,7 +2386,6 @@ async fn sync_selection_keeps_a_selected_stream_room() {
         voice_channel_id: Uuid::now_v7(),
         stream_id: "stream-id".to_string(),
         live: true,
-        mic_on_air: false,
         watching: 0,
         watch_url: String::new(),
     }];
@@ -2955,6 +3014,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, seed.id).await;
     state.set_visible_room_id(Some(lounge.id));
@@ -3113,6 +3173,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
         None,
         notifier,
         crate::app::ai::ladder::MentionLadders::new(),
+        None,
     );
     load_room_tail(&mut state, lounge.id, own.id).await;
 
@@ -3315,4 +3376,46 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             RoomSlot::Discover,
         ]
     );
+}
+
+#[test]
+fn parse_golive_routes_console_obs_and_stop() {
+    assert_eq!(
+        parse_golive_command("/golive"),
+        Some(GoLiveCommand::Start { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive fixing the render loop"),
+        Some(GoLiveCommand::Start {
+            title: Some("fixing the render loop".to_string())
+        })
+    );
+    assert_eq!(
+        parse_golive_command("/golive stop"),
+        Some(GoLiveCommand::Stop)
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs"),
+        Some(GoLiveCommand::StartObs { title: None })
+    );
+    assert_eq!(
+        parse_golive_command("/golive obs speedrun night"),
+        Some(GoLiveCommand::StartObs {
+            title: Some("speedrun night".to_string())
+        })
+    );
+    // Not the command at all: no space boundary after /golive.
+    assert_eq!(parse_golive_command("/golivenow"), None);
+    assert_eq!(parse_golive_command("hello"), None);
+}
+
+#[test]
+fn parse_golive_clamps_titles_at_the_boundary() {
+    let long = "x".repeat(GOLIVE_TITLE_MAX_CHARS + 20);
+    match parse_golive_command(&format!("/golive obs {long}")) {
+        Some(GoLiveCommand::StartObs { title: Some(title) }) => {
+            assert_eq!(title.chars().count(), GOLIVE_TITLE_MAX_CHARS);
+        }
+        other => panic!("expected clamped obs title, got {other:?}"),
+    }
 }

@@ -20,9 +20,11 @@ async fn proxies_forward_upstream_404_instead_of_500() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
@@ -37,7 +39,7 @@ async fn proxies_forward_upstream_404_instead_of_500() {
     let client = reqwest::Client::new();
     for path in [
         "/live/deadbeef/state",
-        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=abc-123",
         "/golive/deadbeef/grant",
     ] {
         let response = client
@@ -46,6 +48,22 @@ async fn proxies_forward_upstream_404_instead_of_500() {
             .await
             .expect("proxy get");
         assert_eq!(response.status(), 404, "GET {path}");
+    }
+
+    // The watcher id is interpolated into the internal query string and
+    // becomes a LiveKit identity upstream, so an absent or off-shape one is
+    // refused here instead of being forwarded.
+    for path in [
+        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=",
+        "/live/deadbeef/grant?watcher_id=a%2Fb",
+    ] {
+        let response = client
+            .get(format!("http://{addr}{path}"))
+            .send()
+            .await
+            .expect("proxy get");
+        assert_eq!(response.status(), 400, "GET {path}");
     }
     let response = client
         .post(format!("http://{addr}/golive/deadbeef/state"))
@@ -100,9 +118,11 @@ async fn golive_grant_proxy_exchanges_the_claim_cookie() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
@@ -175,9 +195,29 @@ fn watch_and_golive_pages_render_with_the_id_embedded() {
     .render()
     .expect("watch page renders");
     assert!(watch.contains("abc123"));
+    // Audio defaults ON (autoplay permitting), voices separately togglable
+    // and also on; the button labels are what the viewer sees.
     assert!(
-        watch.contains("muted"),
-        "the watch page must be born silent"
+        watch.contains("mute room audio"),
+        "room audio starts on, so the button offers mute"
+    );
+    assert!(watch.contains("voices: on"), "voices toggle starts on");
+    assert!(watch.contains("id=\"volume\""), "stream volume slider");
+    assert!(
+        watch.contains("id=\"fullscreen-btn\""),
+        "fullscreen control"
+    );
+    // The grant fetch carries the page's watcher id, so every retry from
+    // one viewer joins LiveKit under the same identity.
+    assert!(
+        watch.contains("grant?watcher_id="),
+        "the grant fetch carries the watcher id"
+    );
+    // A dropped connection must be recoverable in place: telling the viewer
+    // to reload was a dead end the page could never leave on its own.
+    assert!(
+        !watch.contains("reload to retry"),
+        "a lost connection reconnects instead of demanding a reload"
     );
 
     let golive = super::GoLivePage {
@@ -186,8 +226,14 @@ fn watch_and_golive_pages_render_with_the_id_embedded() {
     .render()
     .expect("golive page renders");
     assert!(golive.contains("tok456"));
+    // Voice is CLI-only with no exceptions: the console page has no
+    // browser mic at all, and publishes nothing until the share click.
     assert!(
-        golive.contains("mic: off"),
-        "the go-live page mic starts off"
+        !golive.contains("mic-btn") && !golive.contains("setMicrophoneEnabled"),
+        "the go-live page must have no browser mic"
+    );
+    assert!(
+        golive.contains("room audio: muted"),
+        "console room audio starts muted"
     );
 }

@@ -24,10 +24,6 @@
             class="text-xs border border-green-700 hover:border-green-500 rounded px-3 py-1 text-green-400 transition-colors">
             share a screen
         </button>
-        <button type="button" id="mic-btn"
-            class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
-            mic: off
-        </button>
         <button type="button" id="speaker-btn"
             class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
             room audio: muted
@@ -41,10 +37,9 @@
             close this tab (or stop sharing) to end the stream; a refresh gets a ~30s grace window.
         </p>
         <p>
-            talking through the <span class="text-green-400">late</span> CLI voice already? leave the
-            mic here <span class="text-gray-300">off</span>, or the room hears you twice. the mic
-            toggle exists for machines with no CLI voice (macOS): while it is on, the room's voice
-            strip shows you as <span class="text-gray-300">on air</span>.
+            talking happens in the <span class="text-green-400">late</span> CLI voice channel
+            (Ctrl+V in your stream room), never through this page: there is no browser mic.
+            viewers hear the shared screen's audio plus everyone in voice.
         </p>
     </div>
 </div>
@@ -58,14 +53,13 @@
         const watchUrlEl = document.getElementById('watch-url');
         const preview = document.getElementById('preview');
         const shareBtn = document.getElementById('share-btn');
-        const micBtn = document.getElementById('mic-btn');
         const speakerBtn = document.getElementById('speaker-btn');
         let room = null;
         let publishing = false;
         let over = false;
-        // Born silent in both directions: mic off, room audio muted. The
-        // human opens each direction with a click; nothing detects anything.
-        let micLive = false;
+        // Born silent: nothing publishes until the human clicks share, and
+        // room audio starts muted. There is no mic on this page at all;
+        // voice is CLI-only.
         let speakerOn = false;
         const audioEls = [];
 
@@ -78,9 +72,7 @@
             if (over) return;
             over = true;
             publishing = false;
-            micLive = false;
             shareBtn.disabled = true;
-            micBtn.disabled = true;
             speakerBtn.disabled = true;
             setStatus('this stream has ended. run /golive in the terminal to start a new one.');
             if (room) { room.disconnect(); }
@@ -91,7 +83,7 @@
             fetch('/golive/' + publishToken + '/state', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ publishing: publishing, mic_live: micLive }),
+                body: JSON.stringify({ publishing: publishing }),
             }).then(function (res) {
                 // A dead publish token means the stream is gone; a report
                 // that vanished into a non-2xx must not keep the share up.
@@ -119,14 +111,12 @@
                 // Claim-once: the first browser to open this link owns it.
                 setStatus('this go-live link is already in use by another browser. run /golive stop, then /golive again for a fresh link.');
                 shareBtn.disabled = true;
-                micBtn.disabled = true;
                 speakerBtn.disabled = true;
                 return;
             }
             if (!res.ok) {
                 setStatus('this go-live link is no longer valid. run /golive again in the terminal.');
                 shareBtn.disabled = true;
-                micBtn.disabled = true;
                 speakerBtn.disabled = true;
                 return;
             }
@@ -156,7 +146,7 @@
             window.addEventListener('pagehide', function () {
                 navigator.sendBeacon(
                     '/golive/' + publishToken + '/state',
-                    new Blob([JSON.stringify({ publishing: false, mic_live: false })], { type: 'application/json' })
+                    new Blob([JSON.stringify({ publishing: false })], { type: 'application/json' })
                 );
             });
         }
@@ -182,18 +172,6 @@
             if (publication && publication.track) { publication.track.attach(preview); }
             // The announcement fires off this report, never off the command:
             // no "live" line ever points at a black screen.
-            report();
-        });
-
-        micBtn.addEventListener('click', async function () {
-            if (!room) return;
-            micLive = !micLive;
-            try {
-                await room.localParticipant.setMicrophoneEnabled(micLive);
-            } catch (e) {
-                micLive = false;
-            }
-            micBtn.textContent = micLive ? 'mic: ON AIR' : 'mic: off';
             report();
         });
 

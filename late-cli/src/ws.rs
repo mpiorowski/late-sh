@@ -128,11 +128,8 @@ impl From<PairAudioSource> for MediaSource {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "open_url"];
-
-#[cfg(target_os = "macos")]
-const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "open_url"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CLIENT_CAPABILITIES: &[&str] = &[];

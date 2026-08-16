@@ -1,0 +1,21 @@
+Restore normal-mode victory logging in the run history (late.sh door hosting;
+applied by the Dockerfile brogue-build stage, re-verify on CE bumps).
+
+Upstream 1.15.1 has the victory-path condition inverted: the death path skips
+Easy and Wizard games (`mode != GAME_MODE_EASY && mode != GAME_MODE_WIZARD`),
+but the victory path tests `mode != GAME_MODE_NORMAL`, so ordinary victories
+never reach the run history file while wizard-mode victories do. The late.sh
+award pipe reads that file for the Escaped/Mastered badge pair, so the fix
+matters twice over: normal wins must land, and wizard wins must not.
+
+--- a/src/brogue/RogueMain.c
++++ b/src/brogue/RogueMain.c
+@@ -1373,7 +1373,7 @@
+         notifyEvent(GAMEOVER_RECORDING, 0, 0, "recording ended", "none");
+     }
+
+-    if (!rogue.playbackMode && rogue.mode != GAME_MODE_EASY && rogue.mode != GAME_MODE_NORMAL) {
++    if (!rogue.playbackMode && rogue.mode != GAME_MODE_EASY && rogue.mode != GAME_MODE_WIZARD) {
+         saveRunHistory(victoryVerb, "-", (int) theEntry.score, gemCount);
+     }
+

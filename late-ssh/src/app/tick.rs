@@ -762,14 +762,28 @@ impl App {
         }
 
         // The activity feed subscription survives the retired sidebar panel
-        // for one job: edge-detecting friend joins for the friend-online
-        // banner. The public feed itself ships to #lounge (activity/lounge).
+        // for one job: edge-detecting a friend's arrivals — logging in, and
+        // going live — for the banner + desktop notification. The public
+        // feed itself ships to #lounge (activity/lounge).
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
-                if matches!(&event.kind, ActivityKind::UserJoined)
-                    && let Some(user_id) = event.user_id
-                    && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
-                {
+                let Some(user_id) = event.user_id else {
+                    continue;
+                };
+                let banner = match &event.kind {
+                    ActivityKind::UserJoined => {
+                        self.chat.note_friend_join(user_id, &event.username)
+                    }
+                    ActivityKind::WentLive { title } => {
+                        self.chat
+                            .note_friend_went_live(user_id, &event.username, title.as_deref())
+                    }
+                    // Everything else on the global feed is somebody else's
+                    // business: this subscription only exists for the two
+                    // friend edges above.
+                    _ => None,
+                };
+                if let Some(b) = banner {
                     self.banner = Some(b);
                     changed = true;
                 }

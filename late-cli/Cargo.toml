@@ -49,8 +49,6 @@ late-webview = { path = "../late-webview" }
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 arboard.workspace = true
 image.workspace = true
-
-[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 livekit.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -899,3 +899,23 @@ async fn one_escape_never_drops_you_out_of_an_active_lateania_world() {
         "and lands back on the hub that launched it"
     );
 }
+
+// A backtick detach keeps Lateania on the workspace cycle for a few minutes,
+// but an explicit Esc-Esc leave means "I'm done": it must drop the door off
+// the cycle immediately, not leave a stale hop-back stop behind.
+#[tokio::test]
+async fn explicit_esc_esc_leave_drops_lateania_off_the_backtick_cycle() {
+    let db = crate::test_helpers::new_test_db().await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), uuid::Uuid::now_v7(), "esc-window");
+    app.set_screen(Screen::Lateania);
+    app.enter_lateania();
+    app.lateania_detached_at = Some(std::time::Instant::now());
+
+    dispatch_escape(&mut app);
+    dispatch_escape(&mut app);
+    assert!(app.lateania_state.is_none(), "esc esc leaves the world");
+    assert!(
+        !app.lateania_recently_active(),
+        "an explicit leave must clear the backtick recency window"
+    );
+}

@@ -148,6 +148,18 @@ impl ActivityPublisher {
         });
     }
 
+    /// `viewer_id` is who showed up; `streamer` is the broadcaster's
+    /// username, already resolved by the registry that owns the stream.
+    pub fn watching_stream_task(&self, viewer_id: Uuid, streamer: String) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(viewer_id).await;
+            let _ = publisher.tx.send(ActivityEvent::watching_stream(
+                viewer_id, username, streamer,
+            ));
+        });
+    }
+
     pub fn cyberspace_posted_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

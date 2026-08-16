@@ -168,6 +168,9 @@ struct DrawContext<'a> {
     /// This account's character slots, for the character-select landing.
     lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
     lateania_slot_cursor: usize,
+    /// The backtick-detach recency window is live: Lateania counts as a
+    /// game in progress on the hub sidebar.
+    lateania_live: bool,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -249,7 +252,7 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
-    stream_qr_modal: Option<&'a crate::app::state::StreamQrModal>,
+    stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -302,6 +305,9 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Computed up front: the method borrows all of `self`, which would
+        // collide with the mutable field borrows the view structs hold below.
+        let lateania_live = self.lateania_recently_active();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_strip_pet_rect.set(None);
@@ -1000,6 +1006,7 @@ impl App {
                         lateania_online: self.lateania_service.player_count(),
                         lateania_slots: self.lateania_service.character_slots(self.user_id),
                         lateania_slot_cursor: self.lateania_slot_cursor,
+                        lateania_live,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1077,7 +1084,7 @@ impl App {
                         } else {
                             None
                         },
-                        stream_qr_modal: self.stream_qr_modal.as_ref(),
+                        stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1364,6 +1371,7 @@ impl App {
                         lateania_online: ctx.lateania_online,
                         lateania_slots: ctx.lateania_slots.clone(),
                         lateania_slot_cursor: ctx.lateania_slot_cursor,
+                        lateania_live: ctx.lateania_live,
                         nethack_live: ctx
                             .nethack_state
                             .as_deref()
@@ -1794,16 +1802,29 @@ impl App {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
 
-        // Stream URL + QR modal (publisher URL from `/golive`, watch URL
-        // from `/watch`): topmost, since it was just explicitly requested.
-        if let Some(modal) = ctx.stream_qr_modal {
-            crate::app::common::qr::draw_qr_overlay(
-                frame,
-                inner,
-                &modal.url,
-                &modal.title,
-                &modal.subtitle,
-            );
+        // Stream handoff modal (publisher URL from `/golive`, watch URL
+        // from `/watch`, OBS details from `/golive obs`): topmost, since it
+        // was just explicitly requested.
+        match ctx.stream_modal {
+            Some(crate::app::state::StreamModal::Qr(modal)) => {
+                crate::app::common::qr::draw_qr_overlay(
+                    frame,
+                    inner,
+                    &modal.url,
+                    &modal.title,
+                    &modal.subtitle,
+                );
+            }
+            Some(crate::app::state::StreamModal::Obs(modal)) => {
+                crate::app::stream::ui::draw_obs_overlay(
+                    frame,
+                    inner,
+                    &modal.whip_url,
+                    &modal.stream_key,
+                    &modal.watch_url,
+                );
+            }
+            None => {}
         }
     }
 }
@@ -1819,7 +1840,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
-        || ctx.stream_qr_modal.is_some()
+        || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()

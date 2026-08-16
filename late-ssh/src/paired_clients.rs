@@ -1,5 +1,6 @@
 use late_core::MutexRecover;
 use late_core::models::user::{AudioSource, IcecastStream, RadioStation};
+use late_core::models::user_ssh_key::KeyAudio;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -108,6 +109,27 @@ pub struct PairedClientRegistry {
     /// request and is dropped too.
     clipboard_requests: Arc<Mutex<HashMap<String, u64>>>,
     next_clipboard_request_id: Arc<AtomicU64>,
+    /// Per-session audio bookkeeping that has to outlive the individual
+    /// sockets. Retired by `forget_session` when the SSH session ends.
+    session_audio: Arc<Mutex<HashMap<String, SessionAudio>>>,
+}
+
+/// What the server remembers about one SSH session's audio, across pair-WS
+/// reconnects.
+#[derive(Default)]
+struct SessionAudio {
+    /// True once the session's stored device audio has been pushed at a
+    /// paired client. The stored value describes what the CLI *process*
+    /// should start with, and one SSH session token is one CLI process, so it
+    /// is applied once per token and never again: a pair-WS reconnect
+    /// mid-session (a network change, an ingress restart) reports the state
+    /// the session is already running with, and re-aligning it there is how a
+    /// muted session used to get unmuted behind the user's back.
+    alignment_applied: bool,
+    /// Last mute/volume written to this device's key row. Kept so the
+    /// periodic `client_state` reports do not rewrite an unchanged value on
+    /// every heartbeat; only a real change costs a DB write.
+    persisted: Option<KeyAudio>,
 }
 
 #[derive(Clone)]
@@ -130,6 +152,7 @@ impl PairedClientRegistry {
             icecast_base_url: Arc::new(icecast_base_url.into()),
             clipboard_requests: Arc::default(),
             next_clipboard_request_id: Arc::default(),
+            session_audio: Arc::default(),
         }
     }
 
@@ -358,6 +381,64 @@ impl PairedClientRegistry {
             .rev()
             .find(|entry| entry.state.client_kind == ClientKind::Cli)
             .map(|entry| entry.state.muted)
+    }
+
+    /// True while this session has never been handed its stored device audio.
+    /// The first paired client of the session consumes it (see
+    /// `note_alignment_applied`); every later connection on the same token is
+    /// a reconnect or a second surface and keeps whatever mute and volume the
+    /// session is already running with.
+    pub fn audio_alignment_pending(&self, token: &str) -> bool {
+        !self
+            .session_audio
+            .lock_recover()
+            .get(token)
+            .is_some_and(|audio| audio.alignment_applied)
+    }
+
+    /// Record that the stored device audio reached a paired client of `token`.
+    /// Called only once the alignment was actually delivered: a failed send
+    /// means the socket is dying and the CLI's next attempt still needs it,
+    /// otherwise a session that boots silent stays silent.
+    pub fn note_alignment_applied(&self, token: &str) {
+        self.session_audio
+            .lock_recover()
+            .entry(token.to_string())
+            .or_default()
+            .alignment_applied = true;
+    }
+
+    /// Claim a device-audio write for `token`, or decline it because the same
+    /// value is already stored. Reserving the value under the same lock that
+    /// reads it keeps two concurrent reports from both firing a write, and
+    /// keeps the CLI's periodic `client_state` heartbeats from rewriting an
+    /// unchanged row. Seed with [`note_persisted_audio`] at connect so the
+    /// value just read out of the DB is not immediately written back.
+    pub fn claim_audio_write(&self, token: &str, audio: KeyAudio) -> bool {
+        let mut sessions = self.session_audio.lock_recover();
+        let entry = sessions.entry(token.to_string()).or_default();
+        if entry.persisted == Some(audio) {
+            return false;
+        }
+        entry.persisted = Some(audio);
+        true
+    }
+
+    /// Seed what this session believes is already stored, without claiming a
+    /// write. Used right after the connect-time read.
+    pub fn note_persisted_audio(&self, token: &str, audio: Option<KeyAudio>) {
+        self.session_audio
+            .lock_recover()
+            .entry(token.to_string())
+            .or_default()
+            .persisted = audio;
+    }
+
+    /// Drop everything this registry remembers about a finished SSH session.
+    /// Paired-client entries retire themselves when their sockets close;
+    /// this covers the token-scoped state that outlives them by design.
+    pub fn forget_session(&self, token: &str) {
+        self.session_audio.lock_recover().remove(token);
     }
 
     /// True when any paired native CLI on `token` advertises voice support.

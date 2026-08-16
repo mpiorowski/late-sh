@@ -118,7 +118,7 @@ Testing guidance:
 - Generic chip balance mutations in `late-core/src/models/chips.rs` notify `chip_user_changed` with the affected `user_id`; Hub Shop listens to that channel to refresh active balance snapshots.
 - Daily puzzle services record the persisted win and publish `ActivityEvent::GameWon`; `ChipService`'s activity reward task awards the corresponding daily puzzle base chips from `reward_templates` and records the once-per-UTC-day claim in `game_payout_claims`.
 - Daily services call `record_win_task()` on completion. That records the daily win, grants chips, and publishes a structured Activity event with the difficulty key in `detail` so Hub Dailies quests can match goals such as "win medium Sudoku".
-- `hub::svc::LeaderboardService` refreshes from DB every 5 minutes while subscribed. Immediate win callouts come from Activity; the Leaderboards page lags until the next refresh.
+- `leaderboard::svc::LeaderboardService` refreshes from DB every 5 minutes while subscribed. Immediate win callouts come from Activity; the Leaderboards page lags until the next refresh.
 
 ## Nonogram Runtime
 

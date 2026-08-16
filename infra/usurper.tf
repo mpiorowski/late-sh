@@ -18,10 +18,8 @@
 # reasoning as nethack.tf.
 
 locals {
-  # USURPER_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on. This gates only the CLIENT door (service-ssh's
-  # LATE_USURPER_ENABLED); the late-usurper host pod is always deployed.
-  usurper_enabled = trimspace(var.USURPER_ENABLED) != "" ? trimspace(var.USURPER_ENABLED) : "1"
+  # Whether the usurper door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-usurper host pod is always deployed.
 
   # The writable game tree on the PVC. MUST match LATE_USURPER_GAME_DIR's
   # default baked into the host (see the runtime-usurper Dockerfile stage and

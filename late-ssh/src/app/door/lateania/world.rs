@@ -597,7 +597,8 @@ pub enum FeatureKind {
     Bank,
     Plaque,
     Vista,
-    /// A quest board: examine it to accept the next bounty or claim a finished one.
+    /// A quest board: examine it to read it and open its picker, where you
+    /// accept an open bounty or claim a finished one.
     Board,
     /// A beast stable/menagerie: examine it to open the companion vendor.
     Stable,

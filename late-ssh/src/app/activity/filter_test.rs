@@ -23,3 +23,11 @@ fn lounge_includes_username_effects() {
     assert!(lounge_includes(&event));
     assert_eq!(event.action, "is glowing (24h)");
 }
+
+#[test]
+fn lounge_includes_stream_viewers() {
+    let event = ActivityEvent::watching_stream(Uuid::nil(), "bob", "mat".to_string());
+
+    assert!(lounge_includes(&event));
+    assert_eq!(event.action, "is watching mat's stream");
+}

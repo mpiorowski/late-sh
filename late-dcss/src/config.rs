@@ -18,6 +18,11 @@ pub(crate) struct Config {
     pub(crate) listen_addr: String,
     /// Port to bind the SSH listener to.
     pub(crate) port: u16,
+    /// Port to bind the read-only HTTP publisher to (`src/publish.rs`), which
+    /// serves the shared crawl logs to the public DCSS tooling. Shares
+    /// `listen_addr` with the SSH listener; whether it is reachable from
+    /// outside the cluster is the ingress's call, not this host's.
+    pub(crate) publish_port: u16,
     /// SSH inactivity timeout in seconds.
     pub(crate) idle_timeout: u64,
 }
@@ -48,6 +53,7 @@ impl Config {
             secret,
             listen_addr: optional("LATE_DCSS_LISTEN_ADDR").unwrap_or_else(|| "0.0.0.0".to_string()),
             port: optional_parse("LATE_DCSS_PORT", 2325)?,
+            publish_port: optional_parse("LATE_DCSS_PUBLISH_PORT", 2329)?,
             idle_timeout: optional_parse("LATE_DCSS_IDLE_TIMEOUT", 3600)?,
         })
     }

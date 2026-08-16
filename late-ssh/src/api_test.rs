@@ -16,12 +16,22 @@ async fn ws_pair_endpoint_rate_limits_repeated_attempts_from_same_ip() {
     let (session_tx_one, _rx_one) = tokio::sync::mpsc::channel(1);
     state
         .session_registry
-        .register("tok-one".to_string(), session_tx_one, uuid::Uuid::now_v7())
+        .register(
+            "tok-one".to_string(),
+            session_tx_one,
+            uuid::Uuid::now_v7(),
+            None,
+        )
         .await;
     let (session_tx_two, _rx_two) = tokio::sync::mpsc::channel(1);
     state
         .session_registry
-        .register("tok-two".to_string(), session_tx_two, uuid::Uuid::now_v7())
+        .register(
+            "tok-two".to_string(),
+            session_tx_two,
+            uuid::Uuid::now_v7(),
+            None,
+        )
         .await;
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -114,6 +124,7 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let mut config = test_config(test_db.db.config().clone());
     config.voice = crate::app::voice::svc::VoiceConfig::enabled(
         "wss://rtc.test".to_string(),
+        "http://livekit-sv.test".to_string(),
         "test-key".to_string(),
         "test-secret".to_string(),
         "late-voice".to_string(),
@@ -171,9 +182,13 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert!(body.contains("demo show"));
     // No subscribe grant while pending: nobody listens to the room's voice
     // channel before media has actually flowed.
-    let (status, _) = http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
-        .await
-        .expect("pending watch grant");
+    let (status, _) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("pending watch grant");
     assert_eq!(status, 404);
 
     // The publisher page fetches its grant; the first fetch claims the
@@ -206,7 +221,7 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let (status, _) = http_post_json(
         addr,
         &format!("/api/stream/publish/{publish_token}/state"),
-        "{\"publishing\":false,\"mic_live\":false}",
+        "{\"publishing\":false}",
     )
     .await
     .expect("unclaimed state report");
@@ -216,6 +231,8 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     let (status, _) = http_post_json_with_header(
         addr,
         &format!("/api/stream/publish/{publish_token}/state"),
+        // The legacy `mic_live` field (removed with the browser mic) must
+        // stay ignored: an older cached go-live page still sends it.
         "{\"publishing\":true,\"mic_live\":false}",
         Some(("x-late-publish-claim", &claim)),
     )
@@ -230,12 +247,61 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
         .expect("watch state");
     assert_eq!(status, 200);
     assert!(body.contains("\"live\":true"), "live stream: {body}");
-    let (status, body) =
-        http_get_with_retry(addr, &format!("/api/stream/watch/{stream_id}/grant"), 3)
-            .await
-            .expect("watch grant");
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("watch grant");
     assert_eq!(status, 200);
     assert!(body.contains("\"livekit_url\":\"wss://rtc.test\""));
+    // The viewer's LiveKit identity is derived from its watcher id, not
+    // minted fresh per fetch: a viewer whose media path keeps failing
+    // retries under one identity instead of leaving a new ghost
+    // participant in the room every 10 seconds.
+    let first_identity = grant_token_subject(&body);
+    assert_eq!(first_identity, "viewer-watcher-a", "grant: {body}");
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-a"),
+        3,
+    )
+    .await
+    .expect("watch grant retry");
+    assert_eq!(status, 200);
+    assert_eq!(
+        grant_token_subject(&body),
+        first_identity,
+        "a retry reuses the same identity"
+    );
+    // A different viewer is still a different participant.
+    let (status, body) = http_get_with_retry(
+        addr,
+        &format!("/api/stream/watch/{stream_id}/grant?watcher_id=watcher-b"),
+        3,
+    )
+    .await
+    .expect("second watcher grant");
+    assert_eq!(status, 200);
+    assert_eq!(grant_token_subject(&body), "viewer-watcher-b");
+    // The watcher id is required and shaped: it becomes a LiveKit identity,
+    // so junk is refused at the boundary rather than minted into a token.
+    for query in [
+        String::new(),
+        "?watcher_id=".to_string(),
+        format!("?watcher_id={}", "x".repeat(65)),
+        "?watcher_id=a/b".to_string(),
+    ] {
+        let (status, _) = http_get_with_retry(
+            addr,
+            &format!("/api/stream/watch/{stream_id}/grant{query}"),
+            3,
+        )
+        .await
+        .expect("malformed watcher id grant");
+        assert_eq!(status, 400, "watcher id query {query:?}");
+    }
     let (status, _) = http_post_json(
         addr,
         &format!("/api/stream/watch/{stream_id}/heartbeat"),
@@ -272,6 +338,20 @@ async fn stream_endpoints_serve_the_watch_and_publish_flow() {
     assert_eq!(status, 404);
 
     api_task.abort();
+}
+
+/// The LiveKit identity a watch grant minted, read out of the JWT's `sub`
+/// claim. The identity is what LiveKit dedupes participants by, so it is
+/// the observable the retry behaviour hangs on.
+fn grant_token_subject(grant_body: &str) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let grant: serde_json::Value = serde_json::from_str(grant_body).expect("grant json");
+    let token = grant["token"].as_str().expect("grant token");
+    let payload = token.split('.').nth(1).expect("jwt payload segment");
+    let decoded = URL_SAFE_NO_PAD.decode(payload).expect("jwt payload base64");
+    let claims: serde_json::Value = serde_json::from_slice(&decoded).expect("jwt claims");
+    claims["sub"].as_str().expect("jwt sub").to_string()
 }
 
 /// GET that also returns the raw response head, for header assertions.

@@ -31,10 +31,11 @@ pub enum HelpTopic {
     Bonsai,
     Settings,
     Voice,
+    Streaming,
 }
 
 impl HelpTopic {
-    pub const ALL: [HelpTopic; 22] = [
+    pub const ALL: [HelpTopic; 23] = [
         HelpTopic::Pair,
         HelpTopic::Overview,
         HelpTopic::Chat,
@@ -56,6 +57,7 @@ impl HelpTopic {
         HelpTopic::Bonsai,
         HelpTopic::Settings,
         HelpTopic::Voice,
+        HelpTopic::Streaming,
         HelpTopic::Architecture,
     ];
 
@@ -83,6 +85,7 @@ impl HelpTopic {
             HelpTopic::Bonsai => "Bonsai",
             HelpTopic::Settings => "Settings",
             HelpTopic::Voice => "Voice",
+            HelpTopic::Streaming => "Streaming",
         }
     }
 
@@ -109,7 +112,8 @@ impl HelpTopic {
             HelpTopic::Bonsai => 18,
             HelpTopic::Settings => 19,
             HelpTopic::Voice => 20,
-            HelpTopic::Architecture => 21,
+            HelpTopic::Streaming => 21,
+            HelpTopic::Architecture => 22,
         }
     }
 }
@@ -154,6 +158,7 @@ pub(crate) fn lines_for(
         HelpTopic::Bonsai => bonsai_help_lines(),
         HelpTopic::Settings => settings_help_lines(),
         HelpTopic::Voice => voice_help_lines(),
+        HelpTopic::Streaming => streaming_help_lines(),
     }
 }
 
@@ -172,9 +177,10 @@ pub(crate) fn bot_app_context() -> String {
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
         - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
         - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
+        - Lateania rides the backtick cycle too, with a twist: pressing ` inside the world hops out like a single-press leave (the character autosaves out of the world, same as a confirmed Esc), and for the next 5 minutes Lateania stays a stop on the cycle, so ` from Home hops straight back into the same character, skipping the character-select gate. While that window is live the Games hub sidebar marks Lateania with the same green dot the roguelikes get. An explicit Esc-Esc leave drops it off the cycle immediately.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
         - Profiles page 5 lists people: one row per user who shared a project or posted a work card. Artboard has detailed page-local editing keybinds.\n\
-        - Leaderboards page 6 holds every board: Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
+        - Leaderboards page 6 holds every board. The Games section leads: Lateania Adventurers (living characters by level, class shown on the row) and Lateania Frontier (deepest Frontier zone walked), then a board triple for each roguelike door in DCSS, NetHack, Brogue order: Wins (all-time), Deepest Dive, and Top Score (monthly + all-time), fed spoof-proof from the games' own log files, seconds after a game ends. Then Top Chips, Arcade Wins, per-game daily win counts, and per-game high scores, each with monthly and all-time standings. Daily quests render at the top of The Arcade (page 2). The Shop opens with the /shop composer command; there is no Hub modal and no shop chord anymore.\n",
     );
     for topic in HelpTopic::ALL {
         out.push_str(&format!("## {}\n", topic.title()));
@@ -467,6 +473,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /rules             show this room's rules",
         "  /invite @user      add a user to the current room",
         "  /kick @user        remove a user from your private room (or a mod)",
+        "  /ban @user         ban from your stream room; add 7d and a reason",
+        "  /unban @user       lift a ban you set on your stream room",
         "  /leave             leave the current room",
         "  /dm @user          open a direct message",
         "  /active            list active users",
@@ -478,10 +486,10 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /list              list public rooms",
         "  /poll              start a Home room poll with 2-3 options",
         "  /pair @user        shared live coding scratchpad (both of you must run it)",
-        "  /golive [title]    stream your screen: opens a browser publisher page, the",
-        "                     room shows up under the rail's `stream` section, and a",
-        "                     `is live` line hits #lounge once media flows; /golive stop ends it",
+        "  /golive [title]    stream your screen via a browser publisher page",
+        "  /golive obs [..]   stream from OBS over WHIP; /golive stop ends either",
         "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
+        "                     setup and OBS details live in the Streaming tab",
         "  /pomodoro [m] [..] focus countdown in the top bar, 1-180 min (default 25)",
         "                     [..] names the block; /pomodoro stop cancels it",
         "  /roll [NdM ...]    roll dice (default d20), e.g. /roll 3d6 2d20",
@@ -807,7 +815,7 @@ fn directory_help_lines() -> Vec<String> {
         "  j / k, arrows     scroll profile modal",
         "  PageUp/PageDown   page profile modal",
         "  Esc / q           close profile modal",
-        "  Profiles show username, birthday, country, timezone/current time, chips, markdown bio,",
+        "  Profiles show username, country, timezone/current time, chips, markdown bio,",
         "  bonsai, late.fetch fields, and the user's showcases when available.",
     ]
     .into_iter()
@@ -867,7 +875,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  c / C             post an open or directed chess, battleship, connect4, reversi, checkers, backgammon, or briscola challenge",
         "  24h per move; boards live outside the Tab cycle, Esc returns to the Lobby",
         "  briscola holds a hand: yours is drawn face up, theirs never is, and spectators see neither",
-        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies, live roguelike dungeons (inside one, ` detaches and hops onward; the game keeps running)",
+        "  `                 hop Home chat, boards on your move, seated tables, unfinished dailies, live door games (inside a roguelike, ` detaches and hops onward; inside Lateania it leaves with an autosave and keeps the door on the cycle for 5 minutes)",
         "",
         "House tables",
         "  Poker, Blackjack, Asterion, Tron, and Super Snake: one fixed table each, no setup forms",
@@ -1162,7 +1170,6 @@ fn settings_help_lines() -> Vec<String> {
         "".to_string(),
         "What you can set".to_string(),
         "  username".to_string(),
-        "  birthday as month/day".to_string(),
         "  theme and terminal background sync".to_string(),
         "  notifications, bell, cooldown, notification format".to_string(),
         "  multiline bio".to_string(),
@@ -1223,9 +1230,6 @@ fn settings_help_lines() -> Vec<String> {
         "  Compose".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
-        "  Music".to_string(),
-        "    Start app with music muted    mutes the first paired audio client on each new session so music doesn't auto-play"
-            .to_string(),
         "  Display".to_string(),
         "    Chat flag text fallback       show text/boxed-letter labels instead of flag emoji in chat badges and Shop Flags"
             .to_string(),
@@ -1252,7 +1256,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "tmux strips notification escapes by default; see the Notifications tab for passthrough setup."
             .to_string(),
-        "Notifications can fire for DMs, mentions, friend joins, and game events.".to_string(),
+        "Notifications can fire for DMs, mentions, friend joins, game events, and streams (a friend going live, or someone opening yours).".to_string(),
         "Bell and cooldown decide how loud and how often they show up.".to_string(),
         "".to_string(),
         "Native CLI config file".to_string(),
@@ -1325,14 +1329,91 @@ fn voice_help_lines() -> Vec<String> {
         "",
         "What you need to join",
         "  Voice media runs in the native `late` CLI, so install it and run `late` (see the Pair tab).",
-        "  Supported for joining on Linux and Windows.",
-        "  Raw `ssh late.sh` sessions and macOS can see the roster and badge but cannot join or listen yet.",
+        "  Supported for joining on Linux, macOS, and Windows.",
+        "  Raw `ssh late.sh` sessions can see the roster and badge but cannot join or listen yet.",
         "  If no capable CLI is paired, the strip prompts you to run the native late CLI.",
         "",
         "How it works under the hood",
         "  LiveKit carries the actual audio; late.sh never relays voice media through SSH or the music stack.",
         "  late.sh only mints a short-lived LiveKit token per join and tracks who is connected, muted, or speaking for the roster.",
         "  The native CLI captures your mic and plays back the room over LiveKit, and reports its state back so the TUI roster stays in sync.",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn streaming_help_lines() -> Vec<String> {
+    [
+        "Streaming",
+        "",
+        "/golive puts you live in your own stream room: viewers watch in a browser, chat rides the room, and the room's voice channel is the stream's voice. One stream per account.",
+        "",
+        "Two ways to publish",
+        "  /golive [title]    stream your screen from a browser publisher page;",
+        "                     late.sh opens it via your paired CLI, or shows a QR",
+        "  /golive obs [..]   stream from OBS over WHIP; shows the server URL and",
+        "                     bearer token to paste into OBS",
+        "  The two kinds do not mix: to switch, /golive stop first, then start the other.",
+        "  Rerunning /golive obs while set up shows the same credentials again.",
+        "  /golive stop       end your stream (either kind)",
+        "  Either handoff box stays up until you press Esc, so a stray key cannot",
+        "  take the URL or the token off your screen while you copy it.",
+        "",
+        "Watching",
+        "  /watch @user       open someone's live stream (browser via paired CLI, else QR)",
+        "  Live streams also show under the room rail's `stream` section, and an",
+        "  `is live` line hits #lounge once media flows.",
+        "  Watch pages are born silent: nothing is audible until the viewer turns sound on.",
+        "  When a friend goes live you get a banner and a desktop notification.",
+        "",
+        "Your audience",
+        "  The first time a late.sh user opens your stream, by /watch or by walking",
+        "  into your stream room, you get an `is watching` banner and #lounge gets",
+        "  an `is watching` line.",
+        "  Both stream notifications share one settings row, `Streams`; banners",
+        "  show either way.",
+        "  Browser viewers who only have the link stay anonymous: they show up in",
+        "  the header's watcher count and nowhere else.",
+        "",
+        "OBS setup: Settings > Stream",
+        "  Service           WHIP",
+        "  Server            the WHIP URL from /golive obs",
+        "  Bearer Token      the token from /golive obs",
+        "",
+        "OBS setup: Settings > Output",
+        "  Video Encoder     H.264: hardware if you have it (NVENC, AMF, VAAPI,",
+        "                    Apple VT), otherwise x264",
+        "  Audio Encoder     Opus, required: WHIP cannot carry AAC",
+        "  Bitrate           whatever your upload handles; 4000-8000 Kbps is plenty",
+        "  The server forwards your encoding untouched (no re-encode), so what you",
+        "  send is exactly what viewers get.",
+        "",
+        "If OBS says \"at least one video or audio encoder is not set\"",
+        "  Switching Service to WHIP resets any encoder it cannot carry, including",
+        "  the Recording ones, and OBS refuses to save while any output has none.",
+        "  Simple output mode: set Recording Quality to \"Same as stream\".",
+        "  Advanced output mode: check the Recording tab and pick its encoders",
+        "  (\"Use stream encoder\" is fine).",
+        "  Still complaining with everything set? Restart OBS: older versions do",
+        "  not rebind encoders after the service switch until a restart.",
+        "",
+        "Credentials",
+        "  The WHIP URL and bearer token are minted per stream and die with it:",
+        "  /golive stop (or the stream ending) invalidates them, and the next",
+        "  /golive obs mints a fresh pair to paste in.",
+        "",
+        "On air and voice",
+        "  While you publish, the stream room's voice strip shows ⦿ ON AIR.",
+        "  Voice in a stream room is audible to watch-page viewers, and an OBS",
+        "  stream counts as on air the whole time it publishes, since program",
+        "  audio can carry a microphone.",
+        "",
+        "Disconnects",
+        "  OBS dropping does not kill the stream instantly: after ~30 seconds",
+        "  without media it falls to a reconnect grace, and ends ~30 seconds",
+        "  later if OBS has not come back. OBS's automatic reconnect picks the",
+        "  stream back up within that window.",
     ]
     .into_iter()
     .map(str::to_string)

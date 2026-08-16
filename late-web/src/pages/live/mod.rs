@@ -12,12 +12,13 @@ use anyhow::Context;
 use askama::Template;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use late_core::telemetry::TracedExt;
+use serde::Deserialize;
 
 use crate::{AppState, error::AppError, metrics};
 
@@ -62,6 +63,11 @@ struct WatchPage<'a> {
     stream_id: &'a str,
 }
 
+#[derive(Deserialize)]
+struct WatchGrantParams {
+    watcher_id: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/live/golive.html")]
 struct GoLivePage<'a> {
@@ -97,11 +103,27 @@ async fn watch_state_handler(
     proxy_get(&state, &id, &format!("/api/stream/watch/{id}")).await
 }
 
+/// The page's stable watcher id rides through to late-ssh, which turns it
+/// into the viewer's LiveKit identity so retries reuse one participant. It
+/// is validated here too, since it is interpolated into the internal query
+/// string: same alnum/dash shape as a capability id.
 async fn watch_grant_handler(
     Path(id): Path<String>,
+    Query(params): Query<WatchGrantParams>,
     State(state): State<AppState>,
 ) -> Result<Response, AppError> {
-    proxy_get(&state, &id, &format!("/api/stream/watch/{id}/grant")).await
+    if !valid_capability_id(&params.watcher_id) {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    }
+    proxy_get(
+        &state,
+        &id,
+        &format!(
+            "/api/stream/watch/{id}/grant?watcher_id={}",
+            params.watcher_id
+        ),
+    )
+    .await
 }
 
 async fn watch_heartbeat_handler(

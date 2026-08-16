@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-11 (stream-room exception: `VoiceService` now also mints source-restricted publish tickets for the streamer's go-live page and hidden subscribe-only tickets for anonymous watch pages; see §7 and `../stream/CONTEXT.md`)
+- Last updated: 2026-08-15 (A room ban now refuses a voice ticket: `checked_join_ticket` checks `RoomBan` alongside membership, so a ban takes the microphone and not just the chat. This is what makes a stream owner's `/ban` bite, since a public room can be re-entered from the rail; see §3/§5 and `../stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -48,7 +48,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard opting out.
 - `late-ssh/src/app/chat/ui.rs` — chat and game surfaces embed `draw_voice_strip` when a voice channel is present.
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, and CLI capability.
-- `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
+- `late-ssh/src/config.rs` / `main.rs` — `VoiceConfig` profile literals plus `LATE_LIVEKIT_API_KEY`/`LATE_LIVEKIT_API_SECRET` env secrets, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
 - `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s and on speaking-state changes.
 - `late-cli/src/main.rs::run_ws_pairing` — creates one `VoiceRuntimeState` before its pair-WS retry loop and passes it into each `run_viz_ws` attempt, so pair-WS reconnects do not implicitly leave LiveKit.
@@ -63,7 +63,7 @@ Keep `mod.rs` declaration-only.
 `VoiceService` is an in-memory control/status service. It does not carry media and does not talk to LiveKit at runtime except by minting JWTs.
 
 Main types:
-- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{LATE_VOICE_ROOM}-{voice_channel_id}`.
+- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{room_name}-{voice_channel_id}` (base name `late-voice` in every profile).
 - `VoiceSnapshot` — `{ enabled, livekit_url, rooms }`, delivered via `watch`. `rooms` is keyed by `voice_channels.id`.
 - `VoiceParticipant` — `{ user_id, username, muted, deafened, speaking, updated_at }`.
 - `VoiceClientState` — inbound CLI state shape `{ joined, room, muted, deafened, speaking }`.
@@ -72,7 +72,7 @@ Main types:
 Public API:
 - `new(config)` — initializes an empty snapshot.
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
-- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat-room membership before minting a CLI ticket.
+- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel, target chat-room membership, and the absence of an active room ban before minting a CLI ticket. The ban check is not redundant with membership: banning drops membership, but a public room (a streamer's above all) can be re-entered from the rail, so without it a banned user walks back in and is handed a `canPublish` ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
 - `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` is missing/unrecognized or lacks the configured base-name plus UUID suffix, or if the parsed voice channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
@@ -132,7 +132,7 @@ CLI → server:
 
 Routing rules:
 - Voice controls are sent only to native CLI paired entries whose `ClientAudioState::supports_voice()` is true.
-- The CLI advertises `"voice"` in `client_state.capabilities` on Linux and Windows. macOS does not advertise native voice.
+- The CLI advertises `"voice"` in `client_state.capabilities` on Linux, macOS, and Windows.
 - Browsers and older CLIs do not receive voice join/mute/deafen controls.
 - Pair-WS close removes the participant only when the closing entry's last known `client_kind` was `Cli`. Browser/webview pair disconnects should not force voice leave.
 - On a pair-WS reconnect, the CLI immediately re-sends `voice_state` if already joined.
@@ -173,7 +173,8 @@ Current UX gaps worth addressing:
 
 Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
-- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones).
+- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones). A *ban* additionally refuses future tickets for that channel (see `checked_join_ticket` in §3); a kick does not, so a kicked user may rejoin and speak again.
+- A stream room's owner can reach this without staff, through `/ban` in their own room. See `../stream/CONTEXT.md` §6.
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
 - `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.
@@ -205,13 +206,21 @@ Events:
 - `RoomEvent::Reconnecting` / `Reconnected` / `Disconnected` are logged.
 - Disconnected sets an atomic flag. The pair-WS heartbeat checks `media_disconnected()`, then leaves and sends `voice_state`.
 - `ActiveSpeakersChanged` updates the CLI runtime `speaking` flag; pair WS reports that state quickly so SSH can render the green speaking indicator.
-- `TrackSubscribed` logs remote audio and disables it immediately if deafened.
+- `TrackSubscribed` keeps only microphone-source remote audio, and never
+  from any `stream-*` publisher whatever source label it carries
+  (`keep_remote_audio` + `voice_test.rs`): program audio (the OBS ingress
+  mix, a console's screen-share audio) is disabled locally then
+  unsubscribed like video, so it lives on the watch page only and a
+  streamer never hears their own broadcast echo. Kept tracks are disabled
+  immediately if deafened.
 - `TrackUnsubscribed` logs the remote track id.
 
 Unsupported platforms:
-- CLI voice media is compiled only for Linux and Windows.
-- macOS, Android/Termux, and other platforms advertise no voice capability and `join` bails with `voice media is not supported on this platform`.
-- macOS users currently cannot join voice because browser listen-only support has been removed for v1 private-room safety.
+- CLI voice media is compiled only for Linux, macOS, and Windows.
+- Android/Termux and other platforms advertise no voice capability and `join` bails with `voice media is not supported on this platform`. There is no browser fallback for them: browser listen-only was removed for v1 private-room safety.
+
+macOS link requirements:
+- The `late` binary must be linked with `-ObjC` and must embed `NSMicrophoneUsageDescription`; both come from `late-cli/build.rs` on `apple-darwin` targets. Without `-ObjC` the process aborts on an uncaught `NSException` (a dropped ObjC category in LiveKit's static `libwebrtc.a`) while LiveKit builds its video encoder factory during peer-connection setup, even though this runtime is audio-only. Without the plist section macOS aborts on first microphone access, bypassing raw-mode cleanup. Details and the upstream tracking issue are in `late-cli/CONTEXT.md` §9.
 
 Important audio-engine boundary:
 - Do not reintroduce a second manual CPAL/FIFO remote-track playout path. Earlier manual output could duplicate/stutter remote voice.
@@ -233,10 +242,11 @@ deliberately and narrowly:
 - `stream_publish_ticket` — the streamer's own broadcast console page, room
   owner only, reached through a per-stream capability URL minted from the
   TUI. Publishing is restricted at the SFU grant level to
-  `screen_share`/`screen_share_audio`/`microphone` (the streamer-mic
-  exception, so macOS streamers are not condemned to silent streams).
-  Identity is `stream-{user_id}` so a CLI streamer in voice is not kicked by
-  their own console connecting.
+  `screen_share`/`screen_share_audio` only: no browser mic exists anywhere,
+  voice is CLI-only with zero exceptions (the former streamer-mic exception
+  was removed once macOS CLI voice landed; a streamer talks through CLI
+  voice like everyone else). Identity is `stream-{user_id}` so a CLI
+  streamer in voice is not kicked by their own console connecting.
 - `stream_watch_ticket` — anonymous watch pages: `canPublish=false` enforced
   at the grant level (a tampered page still cannot open a mic) and
   `hidden=true` so viewers never appear in LiveKit rosters; the watcher
@@ -246,22 +256,46 @@ deliberately and narrowly:
 Viewers never publish. General browser voice remains a separate, unmade
 decision.
 
+`/golive obs` adds a third, non-browser publisher: a WHIP ingress created
+through the LiveKit Ingress API (`create_whip_ingress`, with
+`delete_ingress` and `ingress_publishing` beside it; all Twirp calls on the
+LiveKit server authorized by a short-lived `ingressAdmin` admin token,
+server-to-server only, same pattern as `RemoveParticipant`). The ingress
+participant identity is `stream-{user_id}`, the same identity as the go-live
+console, so every existing teardown path finds it; transcoding is disabled
+at CreateIngress time (OBS already sends h264+opus), so the ingress service
+forwards packets instead of re-encoding. The ingress audio is labeled
+`SCREEN_SHARE_AUDIO` (program audio, not a voice), but the label is
+advisory only: it may not survive the `enable_transcoding: false`
+passthrough, so the CLI voice runtime and the watch page both classify
+program audio by the `stream-*` identity instead of trusting the source
+label. Ownership of when to create/delete
+ingresses lives entirely in `../stream` — this service only speaks the API.
+
 ---
 
 ## 8. Config, Infra, and Background Tasks
 
-Config env vars (`late-ssh/src/config.rs`):
-- `LATE_VOICE_ENABLED` — defaults false in config parsing.
-- `LATE_LIVEKIT_URL` — required when voice is enabled.
-- `LATE_LIVEKIT_API_KEY` — required when voice is enabled.
-- `LATE_LIVEKIT_API_SECRET` — required when voice is enabled.
-- `LATE_VOICE_ROOM` — optional; default `late-voice`.
+Config (`late-ssh/src/config.rs`):
+- Voice enabled-ness, the client-facing LiveKit URL (`ws://localhost:7880` dev, `wss://rtc.late.sh` prod), the server-to-server Twirp base (`http://livekit:7880` dev, `http://livekit-sv` prod), and the room base name are profile literals in `late-ssh/src/config.rs`; every current profile enables voice. The two URLs are split because their audiences differ: browsers and the CLI reach LiveKit from the host or the public edge, while late-ssh reaches it from inside the container network.
+- `LATE_LIVEKIT_API_KEY` / `LATE_LIVEKIT_API_SECRET` — env secrets, required at startup.
 
 Production infra:
 - `infra/livekit.tf` manages the LiveKit deployment.
 - `rtc.<domain>` is the public LiveKit signaling endpoint.
 - Media ports are bound directly on the node; keep DNS/networking assumptions distinct from SSH/API/web routing.
 - `infra/service-ssh.tf` wires the voice env vars into `service-ssh`.
+- `infra/redis.tf` + `infra/livekit-ingress.tf` back the OBS/WHIP ingest:
+  redis is the LiveKit<->ingress bus (the server refuses Ingress API calls
+  without it), `whip.<domain>` is the public WHIP endpoint (nginx TLS in
+  front of the ingress service's HTTP port; ICE/UDP bound on the node).
+  Note the blast radius: once livekit-server has redis configured it routes
+  room lookups and its server API RPCs through it, so redis health gates
+  voice joins, RemoveParticipant kicks, and stream teardown too, not just
+  OBS ingest. Media already flowing keeps flowing.
+  The LiveKit `room.enabled_codecs` list includes `video/h264` and
+  `video/vp8`: stream rooms need them, opus-only silently refuses every
+  video publish.
 
 Background tasks:
 - `main.rs` prunes stale voice participants every 30s with `ttl = 90s`.

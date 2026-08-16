@@ -4832,8 +4832,6 @@ impl WorldState {
         }
     }
 
-    /// Examine a quest board: claim a finished bounty if one is ready here,
-    /// otherwise take up the next available posting for this capital's region.
     /// Every posting for a board in the player's room: ready-to-claim
     /// counter-bounties first, then bounties still open to accept. Backs the
     /// picker menu (`Panel::Board`) - the player chooses, rather than

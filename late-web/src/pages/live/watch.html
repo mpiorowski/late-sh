@@ -21,12 +21,24 @@
             playsinline muted></video>
     </div>
 
-    <div class="flex items-center justify-between gap-4 mt-3">
+    <div class="flex items-center justify-between gap-4 mt-3 flex-wrap">
         <div class="text-xs text-gray-400" id="status">connecting&hellip;</div>
-        <button type="button" id="mute-btn"
-            class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
-            unmute room audio
-        </button>
+        <div class="flex items-center gap-2">
+            <button type="button" id="voices-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                voices: on
+            </button>
+            <input type="range" id="volume" min="0" max="100" value="100" class="w-24 accent-green-600"
+                title="stream volume">
+            <button type="button" id="mute-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                mute room audio
+            </button>
+            <button type="button" id="fullscreen-btn"
+                class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+                fullscreen
+            </button>
+        </div>
     </div>
 
     <p class="text-xs text-gray-500 mt-6 leading-relaxed">
@@ -48,14 +60,53 @@
         const streamerEl = document.getElementById('streamer');
         const watchingEl = document.getElementById('watching');
         const muteBtn = document.getElementById('mute-btn');
-        // Born silent: browser autoplay policy demands the muted-until-gesture
-        // shape anyway, and a CLI viewer already hearing voice through the
-        // terminal must not get the room twice.
-        let muted = true;
+        const voicesBtn = document.getElementById('voices-btn');
+        const volumeEl = document.getElementById('volume');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        // Audio defaults on; when the browser's autoplay policy blocks it,
+        // we fall back to muted and the button reads "unmute". The voices
+        // toggle exists for the CLI viewer who already hears the room's
+        // voices through the terminal and only wants the stream audio here:
+        // one audio path per sound.
+        let audioOn = true;
+        let voicesOn = true;
+        let volume = 1;
         let ended = false;
         let room = null;
         let connecting = false;
-        const audioEls = [];
+        // Consecutive failed connect attempts, and the earliest time the next
+        // one may run. A viewer whose network cannot carry WebRTC fails every
+        // attempt, so the retry backs off (10s, 20s, 40s, capped at 60s)
+        // instead of minting a token and a peer connection every 10s forever.
+        // A success resets both.
+        let failures = 0;
+        let retryAt = 0;
+        const RETRY_BASE_MS = 10000;
+        const RETRY_MAX_MS = 60000;
+        // Each entry: { el, voice }. Mic-source tracks are voices; everything
+        // else (the OBS mix, the console's screen-share audio) is the stream.
+        const audioTracks = [];
+
+        // Audio elements are attached per track, so a reconnect must drop the
+        // previous room's elements or the viewer accumulates zombie players
+        // the mute/volume controls no longer reach.
+        function clearAudioTracks() {
+            audioTracks.forEach(function (t) {
+                if (t.el && t.el.parentNode) { t.el.parentNode.removeChild(t.el); }
+            });
+            audioTracks.length = 0;
+        }
+
+        function applyAudio() {
+            audioTracks.forEach(function (t) {
+                t.el.muted = !audioOn || (t.voice && !voicesOn);
+                // The slider is stream volume only; voices have their own
+                // on/off toggle and stay at full level.
+                t.el.volume = t.voice ? 1 : volume;
+            });
+            muteBtn.textContent = audioOn ? 'mute room audio' : 'unmute room audio';
+            voicesBtn.textContent = voicesOn ? 'voices: on' : 'voices: off';
+        }
 
         function setStatus(text) { statusEl.textContent = text; }
 
@@ -79,14 +130,28 @@
             // withholds the grant while the stream is pending, so nobody
             // listens in on the room's voice channel before the show starts.
             if (!state.live) { setStatus('not live yet - hang tight.'); return; }
-            if (!room && !connecting) {
-                connecting = true;
-                connect().catch(function () {
-                    room = null;
-                    connecting = false;
-                    setStatus('could not connect - retrying.');
-                });
-            }
+            if (room || connecting || Date.now() < retryAt) { return; }
+            connecting = true;
+            connect().then(function () {
+                connecting = false;
+                failures = 0;
+                retryAt = 0;
+            }).catch(function () {
+                connecting = false;
+                failures += 1;
+                const wait = Math.min(
+                    RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, failures - 1));
+                retryAt = Date.now() + wait;
+                // We only reach connect() after a state poll succeeded, so
+                // the plain-HTTPS path to late.sh demonstrably works and a
+                // run of failures here means the WebRTC path to the SFU is
+                // the broken half. Name that rather than repeating a generic
+                // retry line forever: a working page with no picture is
+                // otherwise indistinguishable from a dead stream.
+                setStatus(failures < 3
+                    ? 'could not connect - retrying.'
+                    : 'could not reach the video stream - your network may be blocking it. still retrying.');
+            });
         }
 
         function heartbeat() {
@@ -98,50 +163,114 @@
             }).catch(function () { });
         }
 
-        function attachTrack(track) {
+        function attachTrack(track, participant) {
             if (track.kind === 'video') {
                 track.attach(video);
                 setStatus('');
             } else if (track.kind === 'audio') {
                 const el = track.attach();
-                el.muted = muted;
-                audioEls.push(el);
+                // Anything published by a stream-* identity (OBS ingress,
+                // go-live console) is the stream, whatever source label it
+                // carries: the ingress label is not guaranteed to survive
+                // transcoding-off passthrough. Voices are mics from everyone
+                // else.
+                const fromStream = participant.identity.indexOf('stream-') === 0;
+                audioTracks.push({
+                    el: el,
+                    voice: !fromStream
+                        && track.source === LivekitClient.Track.Source.Microphone,
+                });
                 document.body.appendChild(el);
+                applyAudio();
             }
         }
 
+        // Throws on every failure path; the caller owns the retry, the
+        // backoff and the status line, so there is one place to look for
+        // what a failed connect does.
         async function connect() {
-            let res;
-            try { res = await fetch('/live/' + streamId + '/grant'); } catch (e) {
-                setStatus('could not reach the server - retrying.');
-                connecting = false;
+            // The watcher id rides along so this viewer keeps one LiveKit
+            // identity across retries: a fresh identity per attempt left a
+            // ghost participant in the room every time.
+            const res = await fetch('/live/' + streamId + '/grant?watcher_id='
+                + encodeURIComponent(watcherId));
+            // A 404 here while the state poll says live is a race with the
+            // stream ending; the next poll settles it either way. Not a
+            // failure, so it must not burn a backoff step.
+            if (res.status === 404) { return; }
+            if (!res.ok) { throw new Error('grant ' + res.status); }
+            const grant = await res.json();
+            const next = new LivekitClient.Room();
+            next.on(LivekitClient.RoomEvent.TrackSubscribed, function (track, publication, participant) {
+                attachTrack(track, participant);
+            });
+            // A dropped connection is recoverable: clear the room so the
+            // state poll connects again. This used to be a dead end that
+            // only a manual reload could leave, which meant a viewer who
+            // lost ICE mid-stream stayed dark for the rest of the show.
+            next.on(LivekitClient.RoomEvent.Disconnected, function () {
+                if (ended || room !== next) { return; }
+                room = null;
+                clearAudioTracks();
+                setStatus('connection lost - reconnecting.');
+            });
+            // Autoplay-on-by-default: if the browser refuses audio without a
+            // gesture, fall back to muted and let the button do its old job.
+            next.on(LivekitClient.RoomEvent.AudioPlaybackStatusChanged, function () {
+                if (!next.canPlaybackAudio && audioOn) {
+                    audioOn = false;
+                    applyAudio();
+                }
+            });
+            try {
+                await next.connect(grant.livekit_url, grant.token);
+            } catch (err) {
+                // Dispose before rethrowing: a half-open Room keeps its
+                // signal socket and peer connections alive, and a retry loop
+                // that abandons one per attempt piles them up in the tab.
+                try { next.disconnect(); } catch (e) { }
+                throw err;
+            }
+            // The stream can end while the connect is in flight: endStream
+            // saw room === null then, so this side owns the cleanup, or the
+            // ended page keeps a live media connection to the room.
+            if (ended) {
+                try { next.disconnect(); } catch (e) { }
                 return;
             }
-            // A 404 here while the state poll says live is a race with the
-            // stream ending; the next poll settles it either way.
-            if (!res.ok) { connecting = false; return; }
-            const grant = await res.json();
-            room = new LivekitClient.Room();
-            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track) { attachTrack(track); });
-            room.on(LivekitClient.RoomEvent.Disconnected, function () {
-                if (!ended) { setStatus('disconnected - reload to retry.'); }
-            });
-            await room.connect(grant.livekit_url, grant.token);
-            room.remoteParticipants.forEach(function (participant) {
+            room = next;
+            next.remoteParticipants.forEach(function (participant) {
                 participant.trackPublications.forEach(function (publication) {
-                    if (publication.track) { attachTrack(publication.track); }
+                    if (publication.track) { attachTrack(publication.track, participant); }
                 });
             });
+            try { await next.startAudio(); } catch (e) {
+                audioOn = false;
+                applyAudio();
+            }
         }
 
         muteBtn.addEventListener('click', async function () {
-            muted = !muted;
-            if (!muted && room) {
+            audioOn = !audioOn;
+            if (audioOn && room) {
                 try { await room.startAudio(); } catch (e) { }
             }
-            audioEls.forEach(function (el) { el.muted = muted; });
-            video.muted = muted;
-            muteBtn.textContent = muted ? 'unmute room audio' : 'mute room audio';
+            applyAudio();
+        });
+
+        voicesBtn.addEventListener('click', function () {
+            voicesOn = !voicesOn;
+            applyAudio();
+        });
+
+        volumeEl.addEventListener('input', function () {
+            volume = volumeEl.value / 100;
+            applyAudio();
+        });
+
+        fullscreenBtn.addEventListener('click', function () {
+            if (video.requestFullscreen) { video.requestFullscreen(); }
+            else if (video.webkitEnterFullscreen) { video.webkitEnterFullscreen(); }
         });
 
         poll();

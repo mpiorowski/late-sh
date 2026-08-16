@@ -20,13 +20,11 @@ pub const VOICE_STRIP_HEIGHT: u16 = 1;
 
 /// ON AIR context for a stream room's voice strip: while the room's stream
 /// is live, everyone in voice is audible to anonymous watch-page listeners,
-/// and the strip must say so loudly. `streamer_mic` is the streamer's
-/// `(user_id, username)` while their go-live page reports the browser mic
-/// open: `VoiceService`'s roster only knows CLI participants, and a speaker
-/// the roster hides is the one betrayal this display must never allow.
+/// and the strip must say so loudly. Voice is CLI-only with no exceptions
+/// (no browser mic exists), so `VoiceService`'s CLI roster is the complete
+/// speaker list and the strip needs nothing beyond the live flag.
 pub struct OnAirView {
     pub live: bool,
-    pub streamer_mic: Option<(Uuid, String)>,
 }
 
 pub struct VoiceRoomView<'a> {
@@ -91,27 +89,12 @@ fn voice_roster_spans(view: &VoiceRoomView<'_>) -> Vec<Span<'static>> {
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    // A browser-mic streamer is audible but absent from `VoiceService`'s
-    // CLI-only roster; the page's own mic report puts them on the row.
-    let streamer_mic = view.on_air.as_ref().and_then(|on_air| {
-        on_air.streamer_mic.as_ref().filter(|(user_id, _)| {
-            view.participants()
-                .iter()
-                .all(|participant| participant.user_id != *user_id)
-        })
-    });
-    if view.participants().is_empty() && streamer_mic.is_none() {
+    if view.participants().is_empty() {
         spans.push(Span::styled(
             "No one is in voice yet.",
             Style::default().fg(theme::TEXT_DIM()),
         ));
         return spans;
-    }
-    if let Some((_, username)) = streamer_mic {
-        spans.push(Span::styled(
-            format!("{username} · on air"),
-            Style::default().fg(theme::AMBER()),
-        ));
     }
     for participant in view.participants() {
         if !spans.is_empty() {

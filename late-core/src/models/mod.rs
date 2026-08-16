@@ -14,9 +14,6 @@ mod article_feed_read_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
-pub mod birthday;
-#[cfg(test)]
-mod birthday_test;
 pub mod blackjack;
 pub mod bonsai;
 pub mod bonsai_decay_protection;
@@ -41,9 +38,12 @@ mod chips_test;
 pub mod cyberspace_account;
 pub mod daily_match;
 pub mod darkroom_save;
+pub mod door_log_cursor;
+pub mod door_milestone;
 pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;
+pub mod door_run;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;

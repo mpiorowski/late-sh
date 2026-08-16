@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
@@ -53,12 +53,27 @@ struct VoiceJoinTaskResult {
     ticket: Result<crate::app::voice::svc::VoiceJoinTicket, String>,
 }
 
-/// Full-screen URL + QR modal for stream pages, drawn over everything and
-/// dismissed by any key.
+/// Full-screen stream handoff overlay, drawn over everything and dismissed
+/// by Esc alone: it holds hand-copied capability values, so a stray key must
+/// not clear them off the screen.
+pub(crate) enum StreamModal {
+    /// URL + QR (publisher URL from `/golive`, watch URL from `/watch`).
+    Qr(StreamQrModal),
+    /// OBS connection details from `/golive obs`. No QR: the values are
+    /// pasted into OBS settings on a desktop, not scanned by a phone.
+    Obs(StreamObsModal),
+}
+
 pub(crate) struct StreamQrModal {
     pub url: String,
     pub title: String,
     pub subtitle: String,
+}
+
+pub(crate) struct StreamObsModal {
+    pub whip_url: String,
+    pub stream_key: String,
+    pub watch_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,9 +182,8 @@ pub struct SessionConfig {
     /// Services / data sources
     pub audio_service: crate::app::audio::svc::AudioService,
     pub voice_service: crate::app::voice::svc::VoiceService,
-    /// Process-global "watch me" stream registry/orchestration. `None` on
-    /// headless/test paths, which disables `/golive` and `/watch`.
-    pub stream_service: Option<crate::app::stream::svc::StreamService>,
+    /// Process-global "watch me" stream registry/orchestration.
+    pub stream_service: crate::app::stream::svc::StreamService,
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
     pub notification_service: NotificationService,
@@ -248,9 +262,10 @@ pub struct SessionConfig {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
-    /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
-    /// on headless/test paths, which disables milestone awards.
-    pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher for the NetHack door's connect-based "started" event
+    /// (badges and death/win events come from the log pipe). `None` on
+    /// headless/test paths.
+    pub nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     /// DCSS door game: reached over SSH like nethack (host `late-dcss`).
     pub dcss_enabled: bool,
     pub dcss_host: String,
@@ -303,6 +318,8 @@ pub struct SessionConfig {
     /// Process-global ghost-bot mention cooldown ladders, peeked at composer
     /// submit for the cooldown banner. Tests pass a fresh instance.
     pub mention_ladders: crate::app::ai::ladder::MentionLadders,
+    /// S3/R2 upload storage from `Config.files`; `None` disables uploads.
+    pub files: Option<crate::config::FilesConfig>,
     /// Process-global `/pair` intents and shared scratchpad buffers. `None`
     /// on headless/test paths, which disables `/pair`.
     pub scratchpad_registry: Option<crate::app::scratchpad::registry::SharedScratchpadRegistry>,
@@ -417,7 +434,7 @@ pub struct App {
     pub(super) shared: SharedBuffer,
 
     /// Session / connection
-    /// Public site base (`LATE_WEB_URL`), no trailing slash. Profile links and
+    /// Public site base (`Config::web_url`), no trailing slash. Profile links and
     /// the listen-page URL in the guide are built from it.
     pub(super) web_url: String,
     pub(super) session_registry: Option<SessionRegistry>,
@@ -493,14 +510,14 @@ pub struct App {
     pub(crate) voice_service: crate::app::voice::svc::VoiceService,
     voice_join_tx: mpsc::UnboundedSender<VoiceJoinTaskResult>,
     voice_join_rx: mpsc::UnboundedReceiver<VoiceJoinTaskResult>,
-    /// Process-global stream service; `None` disables `/golive`/`/watch`.
-    pub(crate) stream_service: Option<crate::app::stream::svc::StreamService>,
-    /// Go-live results for this session, drained in tick.
+    /// Process-global stream service backing `/golive` and `/watch`.
+    pub(crate) stream_service: crate::app::stream::svc::StreamService,
+    /// Go-live results for this session, drained in tick. `None` once the
+    /// broadcast channel closes, which only happens at shutdown.
     stream_events_rx: Option<broadcast::Receiver<crate::app::stream::svc::StreamEvent>>,
     /// Live-stream snapshot watch; polled ~1/s in tick into `chat`'s copy so
     /// render paths read local memory only.
-    stream_snapshot_rx:
-        Option<tokio::sync::watch::Receiver<crate::app::stream::registry::StreamSnapshot>>,
+    stream_snapshot_rx: tokio::sync::watch::Receiver<crate::app::stream::registry::StreamSnapshot>,
     /// Set when the user pressed Ctrl+V in an on-air stream room and still
     /// has to confirm they will be audible to anonymous watchers. Holds the
     /// voice channel the confirm is for; a second Ctrl+V within the window
@@ -508,7 +525,7 @@ pub struct App {
     pub(crate) pending_on_air_voice_confirm: Option<Uuid>,
     /// Full-screen URL + QR modal for the stream pages (`/golive` publisher
     /// URL, `/watch` for raw SSH sessions). Any key closes it.
-    pub(crate) stream_qr_modal: Option<StreamQrModal>,
+    pub(crate) stream_modal: Option<StreamModal>,
     pub(crate) user_id: Uuid,
     pub(crate) permissions: Permissions,
     pub(crate) is_admin: bool,
@@ -598,6 +615,13 @@ pub struct App {
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    /// When a backtick detach last hopped out of an active Lateania world.
+    /// Unlike the roguelikes, Lateania has no detached session to resume (the
+    /// hop-out autosaves and removes the character), so this recency stamp is
+    /// what keeps the door on the backtick workspace cycle for a quick
+    /// rejoin. Armed only by the backtick detach; an explicit leave (Esc-Esc,
+    /// slot delete) clears it.
+    pub(crate) lateania_detached_at: Option<Instant>,
     pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
     pub(crate) darkroom_state: Option<crate::app::door::darkroom::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
@@ -618,8 +642,9 @@ pub struct App {
     pub(crate) nethack_host: String,
     pub(crate) nethack_port: u16,
     pub(crate) nethack_secret: String,
-    /// Chip/badge grant sink threaded into the per-session NetHack door state.
-    pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher threaded into the per-session NetHack door state for
+    /// its connect-based "started" event.
+    pub(crate) nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     pub(crate) dcss_state: Option<crate::app::door::dcss::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the DCSS
     /// host so curses gets a real terminfo entry.
@@ -1280,12 +1305,9 @@ impl App {
             voice_service,
             voice_join_tx,
             voice_join_rx,
-            stream_events_rx: config
-                .stream_service
-                .as_ref()
-                .map(|service| service.subscribe_events()),
-            stream_snapshot_rx: config.stream_service.as_ref().map(|service| {
-                let mut rx = service.subscribe();
+            stream_events_rx: Some(config.stream_service.subscribe_events()),
+            stream_snapshot_rx: {
+                let mut rx = config.stream_service.subscribe();
                 // `watch::Sender::subscribe` marks the current value as seen
                 // (same trap as the leaderboard channel below): without this
                 // a session connecting mid-stream shows no rail row or LIVE
@@ -1294,10 +1316,10 @@ impl App {
                 // the first `tick_stream` apply the snapshot sitting there.
                 rx.mark_changed();
                 rx
-            }),
+            },
             stream_service: config.stream_service,
             pending_on_air_voice_confirm: None,
-            stream_qr_modal: None,
+            stream_modal: None,
             user_id: config.user_id,
             permissions: config.permissions,
             is_admin: config.permissions.is_admin(),
@@ -1320,6 +1342,7 @@ impl App {
                 active_users.clone(),
                 notifier.clone(),
                 config.mention_ladders.clone(),
+                config.files.clone(),
             ),
             afk_user_ids: crate::state::afk_users_snapshot(&afk_users),
             dashboard_chat_rows_cache: chat::ui::ChatRowsCache::default(),
@@ -1386,6 +1409,7 @@ impl App {
             greendragon_service: config.greendragon_service,
             darkroom_service: config.darkroom_service,
             lateania_state: None,
+            lateania_detached_at: None,
             greendragon_state: None,
             darkroom_state: None,
             rebels_state: None,
@@ -1400,7 +1424,7 @@ impl App {
             nethack_host: config.nethack_host,
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
-            nethack_awards: config.nethack_awards,
+            nethack_activity: config.nethack_activity,
             dcss_state: None,
             dcss_term: config.term.clone(),
             dcss_enabled: config.dcss_enabled,
@@ -1549,6 +1573,14 @@ impl App {
         self.lateania_service.character_slots_task(self.user_id);
     }
 
+    /// A backtick detach hopped out of the Lateania world recently enough
+    /// that the door still counts as a live stop on the workspace cycle.
+    pub(crate) fn lateania_recently_active(&self) -> bool {
+        const LATEANIA_DETACH_WINDOW: Duration = Duration::from_secs(5 * 60);
+        self.lateania_detached_at
+            .is_some_and(|at| at.elapsed() < LATEANIA_DETACH_WINDOW)
+    }
+
     pub(crate) fn enter_greendragon(&mut self) {
         if self.greendragon_state.is_some() {
             return;
@@ -1630,7 +1662,7 @@ impl App {
             self.nethack_term.clone(),
             self.nethack_enabled,
             self.repaint_signal.clone(),
-            self.nethack_awards.clone(),
+            self.nethack_activity.clone(),
             Some(self.arcade_handle_service.clone()),
             self.door_rc(late_core::models::door_rc::DoorRcGame::Nethack),
         ));
@@ -1849,7 +1881,7 @@ impl App {
     /// stop on the backtick workspace cycle (another live dungeon, a waiting
     /// board or seat, or Home chat) while `set_screen` keeps the running door
     /// state alive. Falls back to the Games hub if the cycle has no opinion.
-    fn detach_door_game(&mut self) {
+    pub(crate) fn detach_door_game(&mut self) {
         if !crate::app::lobby::workspace::cycle_game_workspace(self) {
             self.set_screen(Screen::Games);
         }
@@ -2700,52 +2732,63 @@ impl App {
 
         if let Some(command) = self.chat.take_requested_golive() {
             changed = true;
-            match (&self.stream_service, command) {
-                (None, _) => {
-                    self.banner = Some(Banner::error("Streaming is not available on this server."));
-                }
-                (Some(service), crate::app::chat::state::GoLiveCommand::Start { title }) => {
-                    service.go_live_task(self.user_id, self.username.clone(), title);
+            match command {
+                crate::app::chat::state::GoLiveCommand::Start { title } => {
+                    self.stream_service
+                        .go_live_task(self.user_id, self.username.clone(), title);
                     self.banner = Some(Banner::success("Setting up your stream..."));
                 }
-                (Some(service), crate::app::chat::state::GoLiveCommand::Stop) => {
-                    self.banner = Some(
-                        if service.stop(
-                            self.user_id,
-                            crate::app::stream::registry::EndReason::Command,
-                        ) {
-                            Banner::success("Stream ended.")
-                        } else {
-                            Banner::error("You are not streaming.")
-                        },
+                crate::app::chat::state::GoLiveCommand::StartObs { title } => {
+                    self.stream_service.go_live_obs_task(
+                        self.user_id,
+                        self.username.clone(),
+                        title,
                     );
+                    self.banner = Some(Banner::success("Setting up your OBS stream..."));
+                }
+                crate::app::chat::state::GoLiveCommand::Stop => {
+                    let stopped = self.stream_service.stop(
+                        self.user_id,
+                        crate::app::stream::registry::EndReason::Command,
+                    );
+                    self.banner = Some(if stopped {
+                        Banner::success("Stream ended.")
+                    } else {
+                        Banner::error("You are not streaming.")
+                    });
                 }
             }
         }
 
         if let Some(username) = self.chat.take_requested_watch() {
             changed = true;
-            match &self.stream_service {
-                None => {
-                    self.banner = Some(Banner::error("Streaming is not available on this server."));
+            match self.stream_service.watch_url_for_username(&username) {
+                Some(url) => {
+                    self.stream_service.note_viewer_of_username(
+                        &username,
+                        self.user_id,
+                        &self.username,
+                    );
+                    self.open_stream_url(
+                        url,
+                        "Watch Stream".to_string(),
+                        format!("@{username} is live. Open on any device or scan:"),
+                        true,
+                    );
                 }
-                Some(service) => match service.watch_url_for_username(&username) {
-                    Some(url) => {
-                        let streamer = username.clone();
-                        self.open_stream_url(
-                            url,
-                            "Watch Stream".to_string(),
-                            format!("@{streamer} is live. Open on any device or scan:"),
-                            true,
-                        );
-                    }
-                    None => {
-                        self.banner = Some(Banner::error(&format!(
-                            "@{username} is not live right now."
-                        )));
-                    }
-                },
+                None => {
+                    self.banner = Some(Banner::error(&format!(
+                        "@{username} is not live right now."
+                    )));
+                }
             }
+        }
+
+        // Walking into a stream room counts as arriving at the stream. No
+        // banner for the viewer: they can see where they are.
+        if let Some(room_id) = self.chat.take_opened_stream_room() {
+            self.stream_service
+                .note_viewer_in_room(room_id, self.user_id, &self.username);
         }
 
         let mut events = Vec::new();
@@ -2765,14 +2808,10 @@ impl App {
         // The snapshot applies before the events: a `GoLiveReady` selects
         // the fresh stream room, and `select_room_slot` only special-cases
         // rooms it can see in `live_streams`.
-        if let Some(rx) = &mut self.stream_snapshot_rx
-            && rx.has_changed().unwrap_or(false)
-        {
-            let mut snapshot = rx.borrow_and_update().clone();
-            if let Some(service) = &self.stream_service {
-                for stream in &mut snapshot.streams {
-                    stream.watch_url = service.watch_url(&stream.stream_id);
-                }
+        if self.stream_snapshot_rx.has_changed().unwrap_or(false) {
+            let mut snapshot = self.stream_snapshot_rx.borrow_and_update().clone();
+            for stream in &mut snapshot.streams {
+                stream.watch_url = self.stream_service.watch_url(&stream.stream_id);
             }
             // Pending -> Live edges for someone else's stream: the co-host
             // case. The channel persists between streams, so a co-host can
@@ -2835,11 +2874,47 @@ impl App {
                         false,
                     );
                 }
+                StreamEvent::GoLiveObsReady {
+                    user_id,
+                    whip_url,
+                    stream_key,
+                    watch_url,
+                    room_id,
+                    ..
+                } if user_id == self.user_id => {
+                    changed = true;
+                    // Same landing as the console flow: the streamer ends up
+                    // in their stream room with the header in front of them.
+                    self.chat.request_list();
+                    self.chat
+                        .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id));
+                    self.stream_modal = Some(StreamModal::Obs(StreamObsModal {
+                        whip_url,
+                        stream_key,
+                        watch_url,
+                    }));
+                }
                 StreamEvent::GoLiveFailed { user_id, message } if user_id == self.user_id => {
                     changed = true;
                     self.banner = Some(Banner::error(&message));
                 }
-                StreamEvent::GoLiveReady { .. } | StreamEvent::GoLiveFailed { .. } => {}
+                StreamEvent::ViewerJoined {
+                    streamer_id,
+                    viewer_username,
+                } if streamer_id == self.user_id => {
+                    changed = true;
+                    self.notifier
+                        .push(crate::app::notify::Notification::stream_viewer(
+                            &viewer_username,
+                        ));
+                    self.banner = Some(Banner::success(&format!(
+                        "@{viewer_username} is watching your stream."
+                    )));
+                }
+                StreamEvent::GoLiveReady { .. }
+                | StreamEvent::GoLiveObsReady { .. }
+                | StreamEvent::GoLiveFailed { .. }
+                | StreamEvent::ViewerJoined { .. } => {}
             }
         }
 
@@ -2871,11 +2946,11 @@ impl App {
                 return;
             }
         }
-        self.stream_qr_modal = Some(StreamQrModal {
+        self.stream_modal = Some(StreamModal::Qr(StreamQrModal {
             url,
             title,
             subtitle,
-        });
+        }));
     }
 
     fn voice_leave_current_channel(&mut self) -> bool {
@@ -3051,12 +3126,18 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        let Some(registry) = self.session_registry.clone() else {
-            return;
-        };
         if self.session_token.is_empty() {
             return;
         }
+        // The paired registry keeps token-scoped state that outlives the
+        // sockets (the once-per-session boot mute claim), so the session end
+        // has to retire it or it accumulates a row per session forever.
+        if let Some(paired) = &self.paired_client_registry {
+            paired.forget_session(&self.session_token);
+        }
+        let Some(registry) = self.session_registry.clone() else {
+            return;
+        };
         let token = self.session_token.clone();
         tokio::spawn(async move {
             registry.unregister(&token).await;

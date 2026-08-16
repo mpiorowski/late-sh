@@ -38,7 +38,11 @@ use crate::app::common::{composer, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
-use crate::moderation::{command::ServerUserAction, event::ModerationEvent};
+use crate::moderation::{
+    command::{RoomModAction, ServerUserAction, parse_optional_duration},
+    event::ModerationEvent,
+    service::{RoomModRequest, RoomRef},
+};
 use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
 
@@ -233,26 +237,34 @@ pub(crate) enum GoLiveCommand {
     /// `/golive [title]`: register (or re-surface) this user's stream and
     /// show the publisher URL modal.
     Start { title: Option<String> },
+    /// `/golive obs [title]`: register the stream with OBS as the
+    /// publisher and show the WHIP connection details modal.
+    StartObs { title: Option<String> },
     /// `/golive stop`: tear the stream down now.
     Stop,
 }
 
-/// `/golive` with an optional title or the `stop` subcommand. `None` means
-/// the body is not a golive command at all.
+/// `/golive` with an optional title, or the `stop` / `obs [title]`
+/// subcommands. `None` means the body is not a golive command at all.
 fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
     let trimmed = body.trim();
     let rest = trimmed.strip_prefix("/golive")?;
     if !rest.is_empty() && !rest.starts_with(' ') {
         return None;
     }
+    // Free text that ends up in the rail, the stream header, and the
+    // #lounge announcement; clamp it at the parse boundary so no downstream
+    // surface needs its own cap.
+    let clamp = |title: &str| Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect());
     Some(match rest.trim() {
         "" => GoLiveCommand::Start { title: None },
         "stop" => GoLiveCommand::Stop,
-        title => GoLiveCommand::Start {
-            // Free text that ends up in the rail, the stream header, and
-            // the #lounge announcement; clamp it at the boundary so no
-            // downstream surface needs its own cap.
-            title: Some(title.chars().take(GOLIVE_TITLE_MAX_CHARS).collect()),
+        "obs" => GoLiveCommand::StartObs { title: None },
+        text => match text.strip_prefix("obs ") {
+            Some(title) => GoLiveCommand::StartObs {
+                title: clamp(title.trim()),
+            },
+            None => GoLiveCommand::Start { title: clamp(text) },
         },
     })
 }
@@ -524,6 +536,8 @@ pub struct ChatState {
     is_admin: bool,
     is_moderator: bool,
     active_users: Option<ActiveUsers>,
+    /// S3/R2 upload storage; `None` means every upload feature is disabled.
+    files: Option<crate::config::FilesConfig>,
     /// Process-global ghost-bot cooldown ladders, peeked at submit time for
     /// the "bot is cooling down" banner. The ghost loops own stepping it.
     mention_ladders: MentionLadders,
@@ -715,6 +729,10 @@ pub struct ChatState {
     requested_golive: Option<GoLiveCommand>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
+    /// A stream room this session just opened; consumed by `App`, which
+    /// tells the stream service a named viewer showed up. Recorded here
+    /// rather than acted on inline because `App` owns the stream service.
+    opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tray).
     requested_aquarium_command: Option<AquariumCommand>,
     /// Set by /pet, /pet feed, /pet water; consumed by `App` (which owns the pet).
@@ -803,6 +821,7 @@ impl ChatState {
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
         mention_ladders: MentionLadders,
+        files: Option<crate::config::FilesConfig>,
     ) -> Self {
         let ChatServices {
             chat: service,
@@ -830,6 +849,7 @@ impl ChatState {
             is_admin: permissions.is_admin(),
             is_moderator: permissions.is_moderator(),
             active_users,
+            files,
             mention_ladders,
             snapshot_rx,
             targeted_event_rx,
@@ -938,6 +958,7 @@ impl ChatState {
             requested_voice_command: None,
             requested_golive: None,
             requested_watch: None,
+            opened_stream_room: None,
             requested_aquarium_command: None,
             requested_pet_command: None,
             requested_audio_url: None,
@@ -1497,6 +1518,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
         self.requested_watch.take()
+    }
+
+    pub(crate) fn take_opened_stream_room(&mut self) -> Option<Uuid> {
+        self.opened_stream_room.take()
     }
 
     /// Replace the live-stream copy. Returns true when it changed (the
@@ -2351,6 +2376,15 @@ impl ChatState {
                 if !changed {
                     self.mark_room_read(next_id);
                 }
+                if changed && is_stream_room {
+                    // Walking into someone's stream room is one of the two
+                    // identified ways into a stream (`/watch @user` is the
+                    // other). `App` turns this into the "is watching" line
+                    // and the streamer's notification; the once-per-viewer
+                    // dedupe lives in the stream registry, so re-opening the
+                    // room is free.
+                    self.opened_stream_room = Some(next_id);
+                }
                 changed
             }
         }
@@ -2865,7 +2899,7 @@ impl ChatState {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Some(Banner::error("/upload: URL must start with http(s)://"));
             }
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             let room_id = self.upload_target_room_id();
@@ -2875,7 +2909,7 @@ impl ChatState {
         }
 
         if body.trim() == "/paste-image" {
-            if !crate::app::files::image_upload::is_file_upload_configured() {
+            if self.files.is_none() {
                 return Some(Banner::error("File uploads are disabled"));
             }
             self.clear_expired_pending_clipboard_image_upload();
@@ -3135,16 +3169,82 @@ impl ChatState {
             let Some(target) = target else {
                 return Some(Banner::error("Usage: /kick @user"));
             };
-            let Some(slug) = self.room_slug(room_id) else {
+            // A slug-less room is a DM: nothing to moderate there. The room
+            // itself travels as its id, since slugs are not globally unique.
+            if self.room_slug(room_id).is_none() {
                 return Some(Banner::error("This room has no members to kick"));
-            };
-            self.service.kick_from_room_task(
+            }
+            self.service.room_mod_task(
                 self.user_id,
                 self.permissions,
-                slug,
-                target.to_string(),
+                RoomModRequest {
+                    action: RoomModAction::Kick,
+                    room: RoomRef::Id(room_id),
+                    username: target.to_string(),
+                    duration: None,
+                    reason: String::new(),
+                },
             );
             return Some(Banner::success(&format!("Kicking @{target}...")));
+        }
+
+        // Banning is the same authorization path as kicking, and the one that
+        // actually holds: a public room (a streamer's, above all) can be
+        // re-entered from the rail the moment a kick lands.
+        if let Some(request) = parse_room_ban_command(&body, "/ban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(usage) => return Some(Banner::error(usage)),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no members to ban"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Ban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: request.duration,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Banning @{target}...")));
+        }
+
+        if let Some(request) = parse_room_ban_command(&body, "/unban") {
+            let room_id = self.room_membership_command_target();
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("No room selected"));
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(_) => return Some(Banner::error("Usage: /unban @user")),
+            };
+            if self.room_slug(room_id).is_none() {
+                return Some(Banner::error("This room has no bans to lift"));
+            }
+            let target = request.username.to_string();
+            self.service.room_mod_task(
+                self.user_id,
+                self.permissions,
+                RoomModRequest {
+                    action: RoomModAction::Unban,
+                    room: RoomRef::Id(room_id),
+                    username: target.clone(),
+                    duration: None,
+                    reason: request.reason,
+                },
+            );
+            return Some(Banner::success(&format!("Unbanning @{target}...")));
         }
 
         if let Some(target) = parse_user_command(&body, "/invite") {
@@ -3509,9 +3609,9 @@ impl ChatState {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
         };
-        if !crate::app::files::image_upload::is_file_upload_configured() {
+        let Some(files) = self.files.clone() else {
             return Some(Banner::error("File uploads are disabled"));
-        }
+        };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         if let Some(banner) = self.begin_image_upload(room_id, rx) {
@@ -3520,13 +3620,19 @@ impl ChatState {
         let mime = mime.to_string();
 
         tokio::spawn(async move {
-            let result = crate::app::files::image_upload::upload_image_bytes(bytes, &mime)
+            let result = crate::app::files::image_upload::upload_image_bytes(&files, bytes, &mime)
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
 
         None
+    }
+
+    /// Upload storage for features outside chat state (URL uploads in input
+    /// handling); `None` means uploads are disabled in this environment.
+    pub(crate) fn files_config(&self) -> Option<&crate::config::FilesConfig> {
+        self.files.as_ref()
     }
 
     pub(crate) fn upload_target_room_id(&self) -> Option<Uuid> {
@@ -4292,6 +4398,28 @@ impl ChatState {
         self.note_username(user_id, username.to_string());
         self.notifier.push(Notification::friend_online(username));
         Some(Banner::success(&format!("Friend online: @{username}")))
+    }
+
+    /// A friend's stream reported its first media (the `WentLive` edge, not
+    /// `/golive` time), so the banner never points at a black screen.
+    /// `title` is the raw `/golive` title, already clamped at the composer
+    /// boundary; unlike a #lounge body it may keep its `@`, since nothing
+    /// here runs the mention pipeline.
+    pub fn note_friend_went_live(
+        &mut self,
+        user_id: Uuid,
+        username: &str,
+        title: Option<&str>,
+    ) -> Option<Banner> {
+        if user_id == self.user_id || !self.friend_user_ids.contains(&user_id) {
+            return None;
+        }
+        self.note_username(user_id, username.to_string());
+        self.notifier
+            .push(Notification::friend_live(username, title));
+        Some(Banner::success(&format!(
+            "@{username} is live. /watch @{username} to open it."
+        )))
     }
 
     pub fn message_reactions(&self) -> &HashMap<Uuid, Vec<ChatMessageReactionSummary>> {
@@ -5073,17 +5201,20 @@ impl ChatState {
                 ChatEvent::InviteFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
-                ChatEvent::KickSucceeded {
+                ChatEvent::RoomModSucceeded {
                     user_id,
                     room_slug,
                     username,
+                    action,
                 } if self.user_id == user_id => {
                     self.request_list();
-                    banner = Some(Banner::success(&format!(
-                        "Kicked @{username} from #{room_slug}"
-                    )));
+                    banner = Some(Banner::success(&match action {
+                        RoomModAction::Kick => format!("Kicked @{username} from #{room_slug}"),
+                        RoomModAction::Ban => format!("Banned @{username} from #{room_slug}"),
+                        RoomModAction::Unban => format!("Unbanned @{username} in #{room_slug}"),
+                    }));
                 }
-                ChatEvent::KickFailed { user_id, message } if self.user_id == user_id => {
+                ChatEvent::RoomModFailed { user_id, message } if self.user_id == user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 // Not filtered to the editor: every session sitting in the room
@@ -6871,6 +7002,49 @@ fn parse_user_command<'a>(input: &'a str, command: &str) -> Option<Option<&'a st
     }
     let username = rest.strip_prefix('@').unwrap_or(rest).trim();
     Some((!username.is_empty()).then_some(username))
+}
+
+pub(crate) struct RoomBanRequest<'a> {
+    pub username: &'a str,
+    pub duration: Option<chrono::Duration>,
+    pub reason: String,
+}
+
+/// `/ban @user [duration] [reason...]`, and `/unban @user [reason...]`. The
+/// duration is only read from the slot right after the username and uses the
+/// same `s/m/h/d` syntax the mod surface takes, so there is one place to look
+/// for what a duration means. A word there that is not a duration starts the
+/// reason instead. Returns `None` when the body is not this command at all,
+/// and `Err(usage)` when it is but the arguments are unusable.
+fn parse_room_ban_command<'a>(
+    input: &'a str,
+    command: &str,
+) -> Option<Result<RoomBanRequest<'a>, &'static str>> {
+    let usage = "Usage: /ban @user [duration] [reason]";
+    let rest = input.strip_prefix(command)?;
+    let rest = match rest.chars().next() {
+        None => "",
+        Some(c) if c.is_whitespace() => rest.trim(),
+        Some(_) => return None,
+    };
+    let mut parts = rest.split_whitespace();
+    let Some(username) = parts.next() else {
+        return Some(Err(usage));
+    };
+    let username = username.strip_prefix('@').unwrap_or(username);
+    if username.is_empty() {
+        return Some(Err(usage));
+    }
+    let rest: Vec<&str> = parts.collect();
+    let (duration, reason_from) = match parse_optional_duration(rest.first().copied(), 0) {
+        Ok(parsed) => parsed,
+        Err(_) => return Some(Err("Duration must be positive, like 30m or 7d")),
+    };
+    Some(Ok(RoomBanRequest {
+        username,
+        duration,
+        reason: rest[reason_from..].join(" "),
+    }))
 }
 
 fn short_user_id(user_id: Uuid) -> String {

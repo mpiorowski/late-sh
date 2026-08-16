@@ -385,7 +385,6 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
-const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -594,6 +593,10 @@ impl User {
                           WHEN 'lateania_kaethyr_ascendant' THEN 'LKA'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
+                          WHEN 'dcss_orb' THEN 'DCO'
+                          WHEN 'dcss_win' THEN 'DCW'
+                          WHEN 'brogue_escape' THEN 'BRE'
+                          WHEN 'brogue_mastery' THEN 'BRM'
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           ELSE (
                             CASE category
@@ -621,6 +624,10 @@ impl User {
                                    WHEN 'nethack_amulet' THEN 14
                                    WHEN 'nethack_ascension' THEN 15
                                    WHEN 'greendragon_dragon' THEN 16
+                                   WHEN 'dcss_orb' THEN 17
+                                   WHEN 'dcss_win' THEN 18
+                                   WHEN 'brogue_escape' THEN 19
+                                   WHEN 'brogue_mastery' THEN 20
                                    ELSE 99
                                  END
                     ) AS badges
@@ -629,7 +636,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'greendragon_dragon')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -977,31 +984,6 @@ impl User {
         Ok((true, ids))
     }
 
-    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
-    /// Used to build connect-time birthday alerts.
-    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
-        let ids = Self::friend_user_ids(client, user_id).await?;
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let rows = client
-            .query(
-                "SELECT username, settings FROM users WHERE id = ANY($1)",
-                &[&ids],
-            )
-            .await?;
-        let mut out = Vec::new();
-        for row in &rows {
-            let username: String = row.get("username");
-            let settings: Value = row.get("settings");
-            if let Some(birthday) = extract_birthday(&settings) {
-                out.push((username, birthday));
-            }
-        }
-        out.sort();
-        Ok(out)
-    }
-
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -1120,18 +1102,23 @@ fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
     // Collapse the lesser milestone when its superseding one is present:
     // Kaethyr Ascendant implies Yssgar implies the Frontier King implies the
-    // Archdemon, and an Ascension implies the Amulet. Profile views still show
-    // all; chat author labels show only the highest.
+    // Archdemon, an Ascension implies the Amulet, a DCSS escape implies the
+    // Orb pickup, and a Brogue mastery implies the escape. Profile views
+    // still show all; chat author labels show only the highest.
     let has_kaethyr = raw.split_whitespace().any(|badge| badge == "LKA");
     let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
     let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
+    let has_dcss_win = raw.split_whitespace().any(|badge| badge == "DCW");
+    let has_brogue_mastery = raw.split_whitespace().any(|badge| badge == "BRM");
     let badges = raw
         .split_whitespace()
         .filter(|badge| !(has_kaethyr && matches!(*badge, "LYS" | "LKN" | "LMG")))
         .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
         .filter(|badge| !(has_frontier_king && *badge == "LMG"))
         .filter(|badge| !(has_ascension && *badge == "NHA"))
+        .filter(|badge| !(has_dcss_win && *badge == "DCO"))
+        .filter(|badge| !(has_brogue_mastery && *badge == "BRE"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)
@@ -1156,13 +1143,6 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
         *settings = json!({});
     }
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
-}
-
-pub fn extract_birthday(settings: &Value) -> Option<String> {
-    settings
-        .get(BIRTHDAY_KEY)
-        .and_then(Value::as_str)
-        .and_then(crate::models::birthday::normalize_birthday)
 }
 
 /// The chosen interaction mode, or `None` if the user has never picked one -
