@@ -175,6 +175,21 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (1600..=BROCELIANDE_ZONES * BROCELIANDE_W * BROCELIANDE_H).contains(&broceliande),
         "Broceliande should be ~2000 rooms, got {broceliande}"
     );
+    // Aelunor, the Faewood: a sixth continent of twelve organic fae-glades
+    // (rooms 25000+, cavern-carved only - never a maze, never a grid). Each
+    // zone is sparse, so the total is a sane band rather than an exact count.
+    let aelunor = count_in(
+        AELUNOR_BASE,
+        AELUNOR_BASE + AELUNOR_ZONES as RoomId * AELUNOR_ZONE_STRIDE,
+    );
+    assert!(
+        (250..=AELUNOR_ZONES * AELUNOR_W * AELUNOR_H).contains(&aelunor),
+        "Aelunor should be ~300 rooms, got {aelunor}"
+    );
+    // Silvael: the Faewood's own city (rooms 26000+). A fixed, fully
+    // hand-authored set, so this is an exact count rather than a band.
+    let silvael = count_in(SILVAEL_BASE, SILVAEL_BASE + SILVAEL_ROOM_COUNT);
+    assert_eq!(silvael, 8, "eight Silvael rooms");
     // The Shattered Archipelago: portal villages + maze/cavern islands.
     use super::super::archipelago as arch;
     let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
@@ -213,6 +228,8 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + kaelmyr
             + lakes
             + broceliande
+            + aelunor
+            + silvael
             + villages
             + islands
             + wildbound
@@ -1877,7 +1894,11 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
     let wildbound: Vec<&MobSpawn> = world
         .spawns
         .iter()
-        .filter(|s| s.id >= WILDBOUND_SPAWN_ID_START)
+        // Bounded above by Aelunor's own spawn-id band (1,600,000+), which
+        // now sits just past Wildbound's - an unbounded `>=` here used to
+        // silently sweep Aelunor's dozen zone bosses in as "Wildbound apex
+        // bosses" too.
+        .filter(|s| (WILDBOUND_SPAWN_ID_START..AELUNOR_SPAWN_ID_START).contains(&s.id))
         .collect();
     let distinct_names: std::collections::HashSet<&str> =
         wildbound.iter().map(|s| s.name).collect();

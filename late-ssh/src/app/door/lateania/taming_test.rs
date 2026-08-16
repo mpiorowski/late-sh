@@ -83,14 +83,23 @@ fn tameable_keys_are_unique_and_resolve() {
 #[test]
 fn every_beast_has_a_roaming_spot_in_broceliande() {
     let beasts = wild_beasts();
-    assert_eq!(beasts.len(), TAMEABLE_COUNT, "one roaming spot per beast");
-    // Every spot points at a real species index, and all fifty species appear.
+    assert_eq!(
+        beasts.len(),
+        TAMEABLE_COUNT + AELUNOR_TAMEABLE.len(),
+        "one roaming spot per beast, Broceliande's fifty-five plus Aelunor's five"
+    );
+    // Every spot points at a real species index (resolved via `beast_species`,
+    // which covers both pools), and every species in both pools appears.
     let mut seen = std::collections::HashSet::new();
     for b in beasts {
-        assert!(b.species < TAMEABLE_COUNT);
+        assert!(b.species < TAMEABLE_COUNT + AELUNOR_TAMEABLE.len());
         seen.insert(b.species);
     }
-    assert_eq!(seen.len(), TAMEABLE_COUNT, "all fifty beasts are placed");
+    assert_eq!(
+        seen.len(),
+        TAMEABLE_COUNT + AELUNOR_TAMEABLE.len(),
+        "every beast in both pools is placed"
+    );
 }
 
 #[test]
