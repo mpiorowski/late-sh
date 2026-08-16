@@ -185,6 +185,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -270,6 +271,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 // which is the one thing the picture can't say: a zone
                 // boundary is a jump in the coordinate field, not a direction.
                 state.toggle_map_dest();
+                return InputAction::Handled;
+            }
+            b'q' => {
+                // Toggle the active-quest overlay (`!` markers and border
+                // arrows for quest targets). Captured here so a taming room
+                // can't swallow the key while the map is open; `Q` stays
+                // quaff, map open or not.
+                state.toggle_map_quests();
                 return InputAction::Handled;
             }
             _ => {}
@@ -507,7 +516,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        // Manual scroll for cursor-less text panels (character/abilities/quests).
+        // Manual scroll for cursor-less text panels (character/leaderboard).
         // List panels auto-follow their cursor, so these are no-ops there.
         b'[' => {
             state.scroll_text_up();
@@ -566,6 +575,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
     match key {
         b'A' => {

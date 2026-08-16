@@ -584,6 +584,10 @@ fn board_bounty_accepts_then_pays_out_on_claim() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = TASMANIA_SQUARE;
+    // Bounty 1 hunts the Catacombs, which sit behind the Archdemon's gate;
+    // this test exercises the accept/claim flow, so open the gate first
+    // (sealed-posting behavior has its own test).
+    s.award_title(uid(1), FRONTIER_GATE_TITLE.to_string(), 1);
 
     // The board's picker lists bounty 1 as available before it's taken.
     let entries = s.board_entries(uid(1), TASMANIA_SQUARE);
@@ -715,10 +719,23 @@ fn quest_journal_rows_carry_a_real_description() {
         bounty.desc
     );
 
-    let frontier = quests
+    // A fresh character sees no Frontier rows at all - twenty endgame quests
+    // used to drown the journal from level 1. They appear once the gate
+    // titles are held, each with a description.
+    assert!(
+        !quests.iter().any(|q| q.kind == QuestKind::Frontier),
+        "a locked Frontier lists no zone quests"
+    );
+    for title in FRONTIER_REQUIRED_TITLES {
+        s.award_title(uid(1), title.to_string(), 1);
+    }
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(view.frontier_open, "the gate titles open the Frontier");
+    let frontier = view
+        .quests
         .iter()
-        .find(|q| q.frontier)
-        .expect("at least one Frontier quest is always listed");
+        .find(|q| q.kind == QuestKind::Frontier)
+        .expect("an open Frontier lists its zone quests");
     assert!(
         !frontier.desc.is_empty(),
         "Frontier quests get a description too, not just board bounties"
@@ -2238,8 +2255,8 @@ fn combat_tick_logs_player_auto_attack() {
 
     let log = &s.players[&uid(1)].log;
     assert!(
-        log.iter()
-            .any(|line| line.kind == LogKind::Combat && line.text.starts_with("You strike ")),
+        log.iter().any(|line| line.kind == LogKind::Combat
+            && (line.text.starts_with("You strike ") || line.text.starts_with("You crush into "))),
         "auto-attacks should be visible in the combat log"
     );
 }
@@ -3857,4 +3874,242 @@ async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_charact
         Some(Class::Warrior.as_key()),
         "the live character keeps saving to the slot it was loaded from"
     );
+}
+
+#[test]
+fn starter_chain_walks_a_new_player_to_the_first_gate() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Fresh characters start on stage 0 (reach Embergate), and the room panel
+    // always has a next-step line to show.
+    assert_eq!(s.players[&uid(1)].starter_stage, 0);
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(
+        view.next_step.is_some(),
+        "a fresh character always has a next step"
+    );
+    assert!(
+        view.quests.iter().any(|q| q.kind == QuestKind::Starter),
+        "the journal pins the active starter step"
+    );
+
+    let gold_before = s.players[&uid(1)].gold;
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate's square
+    s.describe_room(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        1,
+        "reaching Embergate completes First Steps"
+    );
+    assert!(s.players[&uid(1)].gold > gold_before, "the step pays out");
+
+    // Stage 1: three kills on the King's Road (the scrawny goblin is homed
+    // there). Revive it between kills; only the count matters.
+    s.players.get_mut(&uid(1)).unwrap().room = 6;
+    for _ in 0..3 {
+        s.kill_mob(uid(1), 1);
+        if let Some(m) = s.mobs.get_mut(&1) {
+            m.alive = true;
+            m.hp = m.spawn.max_hp;
+        }
+    }
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        2,
+        "three road kills complete The Open Road"
+    );
+
+    s.players.get_mut(&uid(1)).unwrap().room = 11; // Whisperwood's threshold
+    s.describe_room(uid(1));
+    assert_eq!(s.players[&uid(1)].starter_stage, 3);
+
+    s.players.get_mut(&uid(1)).unwrap().room = 28; // the Treant's grove
+    s.kill_mob(uid(1), 13); // the Elder Treant
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        4,
+        "slaying the Elder Treant completes its step"
+    );
+
+    s.players.get_mut(&uid(1)).unwrap().room = 31; // Duskhollow's first cave
+    s.describe_room(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].starter_stage as usize,
+        STARTER_QUESTS.len(),
+        "descending into Duskhollow completes the chain"
+    );
+
+    // With the chain done the journal drops the starter row and the next-step
+    // line hands over to the Long Road (the Treant is down; the Archdemon is
+    // the current milestone).
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(
+        !view.quests.iter().any(|q| q.kind == QuestKind::Starter),
+        "no starter row once the chain is complete"
+    );
+    let next = view.next_step.expect("the Long Road takes over");
+    assert!(
+        next.contains("Archdemon"),
+        "next step names the Archdemon: {next}"
+    );
+}
+
+#[test]
+fn kills_off_the_road_do_not_advance_the_road_stage() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().starter_stage = 1; // The Open Road
+    // A kill made while standing in Whisperwood is not road work.
+    s.players.get_mut(&uid(1)).unwrap().room = 11;
+    s.kill_mob(uid(1), 10);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.starter_stage, 1);
+    assert_eq!(p.starter_kills, 0, "an off-road kill counts for nothing");
+}
+
+#[test]
+fn veteran_saves_skip_the_starter_chain_on_load() {
+    // A pre-v19 save (version 0) past level 10 has long outgrown the tutorial
+    // chain; one still early keeps it.
+    let mut s = world();
+    s.join(uid(1));
+    let veteran = SavedCharacter::from_json(&serde_json::json!({"class": "warrior", "level": 12}))
+        .expect("parses");
+    s.hydrate(uid(1), &veteran);
+    assert_eq!(
+        s.players[&uid(1)].starter_stage as usize,
+        STARTER_QUESTS.len(),
+        "a veteran is not handed the tutorial chain"
+    );
+
+    // The novice reloads in Wayfarer's Hollow (room 40000): stage 0 ("reach
+    // Embergate") must survive the load. A save sitting in Embergate itself
+    // would - correctly - complete that stage the moment it lands.
+    let mut s = world();
+    s.join(uid(2));
+    let novice = SavedCharacter::from_json(
+        &serde_json::json!({"class": "warrior", "level": 3, "room": 40000}),
+    )
+    .expect("parses");
+    s.hydrate(uid(2), &novice);
+    assert_eq!(
+        s.players[&uid(2)].starter_stage,
+        0,
+        "an early character keeps the chain"
+    );
+}
+
+#[test]
+fn sealed_board_postings_cannot_be_accepted() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+
+    // Quest 1 hunts the Sunken Catacombs, gated on the Archdemon's fall: the
+    // posting reads sealed and accepting it is refused.
+    let entries = s.board_entries(uid(1), super::super::world::TASMANIA_SQUARE);
+    let posting = entries
+        .iter()
+        .find(|e| e.quest_id == 1)
+        .expect("the bounty is posted");
+    assert!(posting.locked, "the posting reads sealed");
+    assert!(posting.suggested_level > 0, "it carries a level hint");
+    assert!(!posting.hint.is_empty(), "it says where the work is");
+    s.accept_board_quest(uid(1), 1);
+    assert!(
+        s.players[&uid(1)].board_progress.is_empty(),
+        "a sealed posting cannot be accepted"
+    );
+
+    // The gate title unseals it.
+    s.award_title(uid(1), FRONTIER_GATE_TITLE.to_string(), 1);
+    let entries = s.board_entries(uid(1), super::super::world::TASMANIA_SQUARE);
+    assert!(
+        entries.iter().any(|e| e.quest_id == 1 && !e.locked),
+        "the gate title unseals the posting"
+    );
+    s.accept_board_quest(uid(1), 1);
+    assert!(
+        s.players[&uid(1)]
+            .board_progress
+            .iter()
+            .any(|(id, _)| *id == 1),
+        "an unsealed posting accepts normally"
+    );
+}
+
+#[test]
+fn the_long_road_matches_the_real_gates_and_tracks_titles() {
+    // Drift guard: every gate title the world actually checks appears on the
+    // Long Road, derived through the same title_for the kill path uses.
+    let road_titles: Vec<String> = LONG_ROAD.iter().map(|m| title_for(m.boss, true)).collect();
+    let gates = [
+        FIRST_DUNGEON_GATE_TITLE,
+        FRONTIER_GATE_TITLE,
+        CATACOMBS_GATE_TITLE,
+        THORNWOOD_GATE_TITLE,
+        CAVERNS_GATE_TITLE,
+        REACHES_GATE_TITLE,
+        KAELMYR_GATE_TITLE,
+    ];
+    for gate in gates {
+        assert!(
+            road_titles.iter().any(|t| t == gate),
+            "the Long Road is missing the gate title {gate}"
+        );
+    }
+    // Every milestone boss is a real spawn, so the road can actually be walked.
+    let w = seed_world();
+    for m in LONG_ROAD {
+        assert!(
+            w.spawns.iter().any(|sp| sp.name == m.boss),
+            "Long Road boss {} does not exist in the world",
+            m.boss
+        );
+    }
+    // Fresh titles: nothing done, exactly the first milestone current.
+    let road = road_view(&[]);
+    assert!(road.iter().all(|s| !s.done));
+    assert!(road[0].current);
+    assert_eq!(road.iter().filter(|s| s.current).count(), 1);
+    // The Treant down: it checks off and the Archdemon becomes current.
+    let road = road_view(&[FIRST_DUNGEON_GATE_TITLE.to_string()]);
+    assert!(road[0].done);
+    assert!(road[1].current);
+}
+
+#[test]
+fn every_quest_target_and_zone_is_real() {
+    let w = seed_world();
+    for q in STARTER_QUESTS {
+        assert!(
+            w.room(q.target).is_some(),
+            "starter target room {} missing",
+            q.target
+        );
+        match q.goal {
+            StarterGoal::Reach { zone } | StarterGoal::SlayIn { zone, .. } => {
+                assert!(
+                    w.rooms.values().any(|r| r.zone == zone),
+                    "starter zone {zone} does not exist"
+                );
+            }
+            StarterGoal::SlayNamed { name_contains } => {
+                assert!(
+                    w.spawns.iter().any(|sp| sp.name.contains(name_contains)),
+                    "no spawn matches {name_contains}"
+                );
+            }
+        }
+    }
+    for z in 0..super::super::world::frontier_zone_count() {
+        assert!(
+            w.room(super::super::world::frontier_zone_entrance(z))
+                .is_some(),
+            "frontier zone {z} entrance missing"
+        );
+    }
 }

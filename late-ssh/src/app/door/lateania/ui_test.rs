@@ -374,6 +374,11 @@ fn room_panel_makes_each_foe_a_clickable_row() {
         rank: "common".to_string(),
         boss: false,
         targeted,
+        school: "physical",
+        weak: None,
+        resist: None,
+        dot_stacks: 0,
+        stunned: false,
     };
     let mut view = empty_player_view();
     view.classed = true;
@@ -520,4 +525,135 @@ fn the_heading_line_names_the_exit_to_take_next() {
         "an unreachable mark admits it rather than showing a confident direction"
     );
     assert!(!panel(None).contains("heading"), "no mark, no line");
+}
+
+#[test]
+fn foe_rows_carry_the_full_name_without_truncation() {
+    use super::super::svc::{MobView, empty_player_view};
+    use crate::usernames::UsernameLookup;
+    use std::collections::HashMap;
+
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.mobs = vec![MobView {
+        id: 7,
+        name: "a scrawny wolf-pup of the King's Road".to_string(),
+        hp: 12,
+        max_hp: 20,
+        level: 2,
+        rank: "common".to_string(),
+        boss: false,
+        targeted: false,
+        school: "physical",
+        weak: None,
+        resist: None,
+        dot_stacks: 0,
+        stunned: false,
+    }];
+    let names: HashMap<uuid::Uuid, String> = HashMap::new();
+    let usernames = UsernameLookup::new(&names, None);
+    let (lines, _hits, _player_hits) = super::room_panel(&view, &usernames, 28, None);
+    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(
+        !all.contains('\u{2026}'),
+        "no ellipsis truncation in the foe roster: {all}"
+    );
+    // The whole name survives, wrapped across lines (whitespace collapses).
+    let flat = all.replace('\n', " ");
+    let squashed = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        squashed.contains("a scrawny wolf-pup of the King's Road"),
+        "the full foe name is readable: {squashed}"
+    );
+    assert!(squashed.contains("12/20"), "the meter carries real numbers");
+}
+
+#[test]
+fn battle_frame_names_the_foe_and_both_sides_vitals() {
+    use super::super::svc::{MobView, empty_player_view};
+
+    let mut view = empty_player_view();
+    view.classed = true;
+    view.hp = 156;
+    view.max_hp = 210;
+    view.resource = 40;
+    view.max_resource = 100;
+    view.resource_name = "Rage".to_string();
+    view.shield = 24;
+    view.mobs = vec![MobView {
+        id: 9,
+        name: "Vulcaranth, the Cinder-Wyrm".to_string(),
+        hp: 1240,
+        max_hp: 2100,
+        level: 44,
+        rank: "epic".to_string(),
+        boss: true,
+        targeted: true,
+        school: "fire",
+        weak: Some("frost"),
+        resist: Some("fire"),
+        dot_stacks: 2,
+        stunned: false,
+    }];
+    let lines = super::battle_context(&view, 60).expect("a targeted foe raises the frame");
+    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(
+        all.contains("Vulcaranth, the Cinder-Wyrm"),
+        "full name: {all}"
+    );
+    assert!(all.contains("weak to frost"), "the tactical opening shows");
+    assert!(all.contains("strikes with fire"), "the attack school shows");
+    assert!(all.contains("1240/2100"), "the foe's real numbers show");
+    assert!(all.contains("156/210"), "the player's vitals show");
+    assert!(all.contains("40/100"), "the resource meter shows");
+    assert!(all.contains("bleeding x2"), "afflictions show");
+    assert!(all.contains("shield 24"), "player effects show");
+
+    // No fight, no frame: the room prose keeps the column.
+    view.mobs.clear();
+    assert!(super::battle_context(&view, 60).is_none());
+}
+
+#[test]
+fn journal_seals_the_frontier_until_its_titles_are_held() {
+    use super::super::svc::{QuestKind, QuestView, RoadStepView, empty_player_view};
+
+    let mut view = empty_player_view();
+    view.quests = vec![QuestView {
+        name: "First Steps".to_string(),
+        desc: "Leave the Hollow.".to_string(),
+        done: false,
+        reward: "25 gold + 20 xp".to_string(),
+        kind: QuestKind::Starter,
+        target: Some(1),
+    }];
+    view.road = vec![RoadStepView {
+        boss: "the Elder Treant".to_string(),
+        place: "Whisperwood",
+        unlocks: "the descent into Duskhollow",
+        done: false,
+        current: true,
+    }];
+    view.frontier_open = false;
+    let (lines, _sel) = super::quests_panel(&view, 0, None);
+    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(all.contains("The Long Road"), "the roadmap section renders");
+    assert!(all.contains("the Elder Treant"), "milestones are named");
+    assert!(
+        all.contains("The Frontier - sealed"),
+        "a locked Frontier collapses to one line: {all}"
+    );
+
+    view.frontier_open = true;
+    let (lines, _sel) = super::quests_panel(&view, 0, None);
+    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(
+        !all.contains("The Frontier - sealed"),
+        "an open Frontier drops the sealed line"
+    );
+
+    // Tracking: the tracked target's row carries the flag.
+    let (lines, _sel) = super::quests_panel(&view, 0, Some(1));
+    let all: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(all.contains("tracked"), "the tracked row is flagged: {all}");
 }

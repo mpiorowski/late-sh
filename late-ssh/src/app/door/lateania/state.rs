@@ -48,7 +48,9 @@ pub enum Panel {
     Examine,
     /// Earned titles: select one and press Enter to display it (or clear it).
     Titles,
-    /// The quest journal: the Frontier zone quests and their status (read-only).
+    /// The quest journal: the active starter step, accepted bounties, the Long
+    /// Road, and (once open) the Frontier zone quests. A list panel: Enter on
+    /// a row tracks its target on the compass/map.
     Quests,
     /// Adventurers in the room: select one and press Enter to auto-follow them.
     Follow,
@@ -168,9 +170,12 @@ pub struct State {
     /// re-centres on them.
     map_camera: MapCamera,
     /// A room the player has marked to travel back to (`x` on the map's
-    /// crosshair). Local to the session and never persisted: it is a note to
-    /// oneself, not world truth.
+    /// crosshair, or Enter on a journal quest row). Local to the session and
+    /// never persisted: it is a note to oneself, not world truth.
     map_dest: Option<RoomId>,
+    /// Whether the world map overlays active-quest targets (`!` markers and
+    /// border arrows). Toggled with `q` while the map is open; on by default.
+    map_quests: bool,
     /// The last route computed, keyed by the (standing in, heading for) pair it
     /// was computed for. A route only changes when one of those two changes, so
     /// caching on that pair keeps the walk off the render path: the panel is
@@ -210,6 +215,7 @@ impl State {
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
             map_dest: None,
+            map_quests: true,
             route_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
@@ -380,6 +386,27 @@ impl State {
         self.map_dest
     }
 
+    /// Whether the map overlays active-quest targets.
+    pub fn map_quests(&self) -> bool {
+        self.map_quests
+    }
+
+    /// Flip the map's quest overlay (`q` while the map is open).
+    pub fn toggle_map_quests(&mut self) {
+        self.map_quests = !self.map_quests;
+    }
+
+    /// Track (or untrack) a quest's target room from the journal: Enter on a
+    /// row with a target marks it exactly like `x` on the map's crosshair, so
+    /// the compass line under the exits starts guiding toward it.
+    fn toggle_quest_track(&mut self, target: RoomId) {
+        self.map_dest = match self.map_dest {
+            Some(current) if current == target => None,
+            _ => Some(target),
+        };
+        self.route_cache.replace(None);
+    }
+
     /// Where the player marked they're going, and how to get there from the
     /// room they're standing in right now. None when nothing is marked.
     pub fn heading(&self) -> Option<Heading> {
@@ -506,6 +533,7 @@ impl State {
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Board => self.view().board.map(|b| b.entries.len()).unwrap_or(0),
+            Panel::Quests => self.view().quests.len(),
             Panel::Appearance => self.view().appearance.len(),
             // These panels' cursors walk headers + visible items, not the raw list.
             Panel::Inventory | Panel::Shop | Panel::Crafting => self.active_rows().len(),
@@ -923,6 +951,14 @@ impl State {
                 }
             }
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
+            Panel::Quests => {
+                // Track the highlighted quest on the compass/map (or untrack
+                // it if it is already the marked destination). Rows without a
+                // single meaningful place stay inert.
+                if let Some(target) = self.view().quests.get(self.cursor).and_then(|q| q.target) {
+                    self.toggle_quest_track(target);
+                }
+            }
             Panel::Follow => self.follow_selected(),
             Panel::Stable => {
                 if let Some(stable) = self.view().stable

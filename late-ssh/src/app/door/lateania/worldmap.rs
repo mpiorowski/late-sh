@@ -902,6 +902,63 @@ pub fn poi_arrows(
         .collect()
 }
 
+/// Border arrows for active-quest target rooms that are off-screen on the
+/// viewed level, honoring the same `PAN_LIMIT` honesty filter as `poi_arrows`:
+/// a target in another reserved block gets no arrow at all, because across
+/// blocks the coordinate delta points nowhere real. The count of targets
+/// dropped that way is returned alongside, so the map can say "N marks lie
+/// beyond this land" instead of silently showing fewer quests than exist.
+pub fn quest_arrows(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+    targets: &[RoomId],
+) -> (Vec<MapArrow>, usize) {
+    if cols <= 0 || rows <= 0 {
+        return (Vec::new(), targets.len());
+    }
+    let cx = cols / 2;
+    let cy = rows / 2;
+    let mut by_cell: BTreeMap<(usize, usize), char> = BTreeMap::new();
+    let mut beyond = 0usize;
+    for room in targets {
+        let Some(&c) = coords.get(room) else {
+            beyond += 1;
+            continue;
+        };
+        if c.z != center.z
+            || (c.x - center.x).abs() > PAN_LIMIT
+            || (c.y - center.y).abs() > PAN_LIMIT
+        {
+            beyond += 1;
+            continue;
+        }
+        let sc = cx + 2 * (c.x - center.x);
+        let sr = cy + 2 * (c.y - center.y);
+        if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
+            continue; // on-screen: the canvas draws the quest marker itself
+        }
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
+        by_cell
+            .entry((
+                sr.clamp(0, rows - 1) as usize,
+                sc.clamp(0, cols - 1) as usize,
+            ))
+            .or_insert(glyph);
+    }
+    let arrows = by_cell
+        .into_iter()
+        .map(|((row, col), glyph)| MapArrow {
+            row,
+            col,
+            glyph,
+            boss: false,
+        })
+        .collect();
+    (arrows, beyond)
+}
+
 /// Every coordinate shared by more than one room, with the room ids that land
 /// there. Sorted for a stable report. An empty map means a perfectly clean
 /// spatial field.

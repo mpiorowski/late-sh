@@ -225,6 +225,10 @@ pub struct World {
     pub start_room: RoomId,
     /// Spawn id -> behavior. Missing entries are [`MobBehavior::Sentinel`].
     pub behaviors: HashMap<u32, MobBehavior>,
+    /// Zone name -> (min, max) displayed level of the mobs homed there, derived
+    /// once at seed time from the spawns themselves so it can never drift from
+    /// the real danger. Zones with no mobs (towns, havens) have no entry.
+    zone_bands: HashMap<&'static str, (i32, i32)>,
 }
 
 /// One region's exploration line in the world atlas.
@@ -243,6 +247,9 @@ pub struct RegionProgress {
     pub here: bool,
     /// Named bosses lairing in the region (where the great loot is).
     pub bosses: usize,
+    /// The (min, max) displayed level of the mobs homed in the region, or None
+    /// where nothing hostile lives.
+    pub levels: Option<(i32, i32)>,
 }
 
 /// The world's major regions for the atlas, each `(name, id-lo, id-hi, tier,
@@ -367,6 +374,13 @@ impl World {
         self.rooms.get(&id)
     }
 
+    /// The (min, max) displayed level of the mobs homed in a zone, or None for
+    /// zones without mobs (towns, havens). One glance answers "do I belong
+    /// here" - the whole world is self-labelling, no authored data to drift.
+    pub fn zone_band(&self, zone: &str) -> Option<(i32, i32)> {
+        self.zone_bands.get(zone).copied()
+    }
+
     /// The whole-world atlas: exploration progress for every major region. For
     /// each region it reports how many of its rooms you've set foot in versus how
     /// many exist, how many named bosses lair there (where the great loot is),
@@ -386,6 +400,15 @@ impl World {
                     .iter()
                     .filter(|s| s.boss && (lo..hi).contains(&s.home))
                     .count();
+                let levels = self
+                    .spawns
+                    .iter()
+                    .filter(|s| (lo..hi).contains(&s.home))
+                    .map(|s| s.level())
+                    .fold(None, |band: Option<(i32, i32)>, l| match band {
+                        Some((min, max)) => Some((min.min(l), max.max(l))),
+                        None => Some((l, l)),
+                    });
                 RegionProgress {
                     name,
                     tier,
@@ -394,6 +417,7 @@ impl World {
                     explored: explored.min(total),
                     here: (lo..hi).contains(&current),
                     bosses,
+                    levels,
                 }
             })
             .collect()
@@ -5678,11 +5702,29 @@ pub fn seed_world() -> World {
 
     tune_spawn_balance(&mut spawns);
 
+    // Per-zone level bands, read off the tuned spawns so the numbers players
+    // see ("King's Road · Lv 2-5") always reflect what actually prowls there.
+    let mut zone_bands: HashMap<&'static str, (i32, i32)> = HashMap::new();
+    for s in &spawns {
+        let Some(room) = rooms.get(&s.home) else {
+            continue;
+        };
+        let level = s.level();
+        zone_bands
+            .entry(room.zone)
+            .and_modify(|(lo, hi)| {
+                *lo = (*lo).min(level);
+                *hi = (*hi).max(level);
+            })
+            .or_insert((level, level));
+    }
+
     World {
         rooms,
         spawns,
         start_room: 1,
         behaviors,
+        zone_bands,
     }
 }
 
@@ -7082,6 +7124,12 @@ const FRONTIER_SPAWN_ID_START: u32 = 900_000;
 /// gateway stair.
 pub fn frontier_entrance_room() -> RoomId {
     FRONTIER_BASE
+}
+
+/// The safe entrance cell of Frontier zone `z` (0-based), for tracking a zone
+/// quest on the world map.
+pub fn frontier_zone_entrance(z: usize) -> RoomId {
+    FRONTIER_BASE + (z as u32) * FRONTIER_W * FRONTIER_H
 }
 
 pub fn is_frontier_room(id: RoomId) -> bool {

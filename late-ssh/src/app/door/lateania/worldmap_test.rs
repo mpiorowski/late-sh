@@ -977,3 +977,36 @@ fn gather_poi_carries_the_nodes_real_level_requirement() {
         "the map's level requirement must match the real gate, not a placeholder"
     );
 }
+
+// Quest-target arrows keep the same honesty rule as POI arrows: a target in
+// another reserved block gets no arrow (the coordinate delta there points
+// nowhere real) and is counted as "beyond this land" instead, so the map can
+// say what it dropped rather than silently under-reporting.
+#[test]
+fn quest_arrows_stay_honest_across_reserved_blocks() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+
+    // A same-block off-screen target: a King's Road room a few steps south.
+    let near = 10;
+    // A cross-block target: the Frontier's first zone entrance sits in its own
+    // reserved block, far outside PAN_LIMIT.
+    let far = 2000;
+    assert!(
+        (coords[&far].x - center.x).abs() > super::PAN_LIMIT
+            || (coords[&far].y - center.y).abs() > super::PAN_LIMIT
+            || coords[&far].z != center.z,
+        "test premise: the Frontier target lies beyond the pan range"
+    );
+
+    let (arrows, beyond) = super::quest_arrows(&coords, center, cols, rows, &[near, far]);
+    assert_eq!(beyond, 1, "the cross-block target is counted, not drawn");
+    for a in &arrows {
+        assert!(a.row < rows as usize && a.col < cols as usize);
+        assert!(
+            "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(a.glyph)
+        );
+    }
+}

@@ -1962,9 +1962,7 @@ fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
     let deepest: Vec<&MobSpawn> = wood
         .iter()
         .copied()
-        .filter(|s| {
-            (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1
-        })
+        .filter(|s| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1)
         .collect();
     assert!(
         share(&deepest) < 25,
@@ -2139,4 +2137,32 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
     }
 }
 
-
+#[test]
+fn zone_level_bands_are_sane_and_cover_the_road() {
+    let world = seed_world();
+    // Every zone that homes a mob gets a band, and every band is ordered.
+    for spawn in &world.spawns {
+        let zone = world.room(spawn.home).expect("mob home exists").zone;
+        let (lo, hi) = world
+            .zone_band(zone)
+            .unwrap_or_else(|| panic!("zone {zone} homes a mob but has no band"));
+        assert!(lo <= hi, "zone {zone} band is inverted: {lo}-{hi}");
+        let level = spawn.level();
+        assert!(
+            (lo..=hi).contains(&level),
+            "zone {zone} band {lo}-{hi} misses its own mob at level {level}"
+        );
+    }
+    // The starting road reads as low-level ground, and a mob-less haven reads
+    // as no band at all rather than a made-up number.
+    let (lo, _) = world.zone_band("King's Road").expect("the road has mobs");
+    assert!(lo <= 3, "the King's Road should read as a starting zone");
+    assert!(world.zone_band("Hearthward Close").is_none());
+    // The atlas carries the same bands per region.
+    let progress = world.region_progress(&std::collections::HashSet::new(), 1);
+    let road = progress
+        .iter()
+        .find(|r| r.name.contains("King's Road"))
+        .expect("home region listed");
+    assert!(road.levels.is_some(), "the home region has hostile levels");
+}
