@@ -30,6 +30,14 @@ tracing-subscriber = { workspace = true }
 
 # Async / Runtime
 tokio = { workspace = true }
+# Streaming file bodies for the publish listener (ReaderStream), so a multi-MB
+# logfile is never buffered in memory.
+tokio-util = { workspace = true, features = ["io"] }
+
+# Read-only HTTP publishing of the crawl server files (see src/publish.rs).
+axum = { workspace = true }
+# HTTP date formatting for Last-Modified and the morgue directory listing.
+chrono = { workspace = true }
 
 # SSH transport
 russh = { workspace = true }
@@ -48,3 +56,9 @@ getrandom = { workspace = true }
 # dgamelaunch servers rely on the same behavior). Linux-only host, so nix is an
 # unconditional dep.
 nix = { workspace = true, features = ["term", "process", "signal"] }
+
+[dev-dependencies]
+# Drive the publish router directly (ServiceExt::oneshot) instead of binding a
+# socket, and build throwaway crawl trees for it.
+tempfile = { workspace = true }
+tower = { workspace = true }

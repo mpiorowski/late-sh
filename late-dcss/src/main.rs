@@ -11,8 +11,10 @@ mod identity;
 #[cfg(test)]
 mod identity_test;
 mod playname;
+mod publish;
 mod rc;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
         data_dir = %config.data_dir,
         listen = %config.listen_addr,
         port = config.port,
+        publish_port = config.publish_port,
         "late-dcss host starting"
     );
 
@@ -61,6 +64,9 @@ async fn main() -> anyhow::Result<()> {
 
     let listen_addr = config.listen_addr.clone();
     let port = config.port;
+    let publish_addr = config.listen_addr.clone();
+    let publish_port = config.publish_port;
+    let publish_data_dir = config.data_dir.clone();
 
     // Broadcast a graceful-shutdown signal to every live PtyHost so a pod SIGTERM
     // SIGHUP-saves in-flight games (crawl saves-and-exits on hangup, same as the
@@ -76,6 +82,13 @@ async fn main() -> anyhow::Result<()> {
             (listen_addr.as_str(), port),
         ) => {
             res.context("ssh server run loop failed")?;
+        }
+        // Read-only publishing of the crawl logs for dcss-stats/Sequell. It
+        // never returns on its own, so reaching this arm means the listener
+        // died: fail the pod rather than serve games with the public files
+        // silently dark.
+        res = publish::serve(&publish_addr, publish_port, &publish_data_dir) => {
+            res.context("crawl publish listener failed")?;
         }
         _ = wait_for_shutdown_signal() => {
             tracing::info!("shutdown signal received; SIGHUP-saving live crawl children");

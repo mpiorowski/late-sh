@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-08-01 (Admin tab deleted with its `admin/` module, tab state, and admin-gated service helpers; reward-template and marketplace edits are direct DB/migration work now. Earlier: Hub modal reduced to the Shop, opened by `/shop`, no chord; Leaderboard tab replaced by the top-level Leaderboards page fed by roster-generated boards; Quests tab replaced by the Arcade-top strip; Events tab deleted)
-- Purpose: local working context for the Hub domain: the Shop modal, the leaderboard data/service behind the top-level Leaderboards page, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
+- Last updated: 2026-08-07 (the leaderboard domain moved out: `LeaderboardService` now lives at `app/leaderboard/svc.rs` and the whole Leaderboard Data section at `app/leaderboard/CONTEXT.md`; hub keeps Shop, quests, and the aquarium)
+- Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the Shop modal (opened with the `/shop` composer command or a locked-feature nudge; there is no global chord) and the cross-product services that outgrew it: `LeaderboardService` feeding the top-level Leaderboards page (`late-ssh/src/app/leaderboard/`, screen `6`) and `QuestService` feeding the quest strip at the top of The Arcade lobby. Former Guide content lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled with the `/aquarium` composer command (alias `/aq`).
+`late-ssh/src/app/hub` owns the Shop modal (opened with the `/shop` composer command or a locked-feature nudge; there is no global chord) and `QuestService` feeding the quest strip at the top of The Arcade lobby. Former Guide content lives in the global `?` guide's Economy topic under `late-ssh/src/app/help_modal/hub_guide.rs`. Hub also owns the Shop-unlocked Aquarium tray toggled with the `/aquarium` composer command (alias `/aq`). The Leaderboards page, its `LeaderboardService`, the board rosters, and monthly profile awards live in their own slice: `late-ssh/src/app/leaderboard/` with `app/leaderboard/CONTEXT.md`.
 
 Hub is a cross-product domain surface. Its services may summarize Arcade, Lobby, economy, and marketplace information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -34,7 +34,6 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `state.rs`: selected category/item, snapshot/event drains, and purchase activation.
   - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases. Mouse left-click on a category sub-tab or item row selects it; scroll wheel moves item selection.
   - `ui.rs`: Shop tab rendering.
-- `svc.rs`: `LeaderboardService`, a shared watch-backed leaderboard refresh task.
 
 ## The modal
 
@@ -64,41 +63,12 @@ Assets live under `late-ssh/assets/aquarium`. The source was adapted from `githu
 
 ## Leaderboard Data
 
-`hub::svc::LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and only while at least one session is subscribed, publishing it through a `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse: the old fourteen-query pass was 13% of all DB execution time at 30s (SCALE.md DB Cost Ranking); the roster rewrite brought the pass down to nine queries while adding the per-game boards, because each board family is one union query ranked with `PARTITION BY game`. Do not make it hot again without re-reading that ranking.
-
-Two rules keep that coarse cadence from reading as a broken screen:
-
-- **Sessions seed, they do not wait.** `App::new` copies the currently published snapshot out of the receiver with `borrow()`. `watch::Sender::subscribe` marks the current value as already seen, so the `has_changed()` gate in `app/tick.rs` is false against a snapshot that is sitting right there — a session that only waited for the gate would render empty panels for up to a full `REFRESH_INTERVAL`. The seed deliberately does not touch `chip_balance`, which is loaded accurately at login and may be newer than the snapshot.
-- **A connect can buy one refresh.** `subscribe` wakes the refresh loop through a `Notify`, and `should_refresh` (a pure function, unit-tested in `svc_test.rs`) grants the pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This covers the quiet-server case, where the subscriber gate skipped every pass and the first session back would otherwise seed from whatever the last session left behind. The age bound is what keeps a connect storm on a busy server from putting the pass back on the hot path.
-
-The data model is roster-generated (`late-core/src/models/leaderboard.rs`):
-- `DailyPuzzle` (Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube) is the daily-puzzle roster. Iterating `ALL` generates the SQL for every derived surface: the per-puzzle monthly/all-time win-count boards, Arcade Wins points, today's champions, and per-user daily completion statuses. Adding a variant enrolls the game in all four at once; the compiler walks you through `key`, `title`, `wins_table`, `points_sql`, and `status_difficulty_sql`.
-- `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic) is the score-game roster: monthly boards union `game_score_events` with legacy best-score rows touched this month; all-time boards read only the legacy tables of record.
-- Both per-game families land in `BoardWindows { monthly, all_time }` maps keyed by roster variant; every roster key is present after a fetch, empty boards included.
-- `Top Chips` (monthly net chip delta from `chip_ledger`, exclusions derived from `ChipMove::excluded_earning_reasons()`) and `Arcade Wins` stay bespoke monthly-only boards.
-- Arcade Wins weights come from `Difficulty::points` in `late-core/src/models/chips.rs` (easy 1 / medium 3 / hard 5; solitaire draw-1 scores Easy points, draw-3 Hard; Le Word fixed Easy, Rubik's fixed Medium). The same enum's `chips()` is the daily-win payout tier display, so points and payouts cannot drift apart in string-matched copies. Unknown difficulty keys score 0, never a default.
-- The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass; every board is now uniformly monthly + all-time).
-
-Monthly windows use UTC calendar months. All-time daily boards read the `daily_win_totals` rollup (migration 131): each win insert bumps its `(game, user_id)` row in the same statement via `leaderboard.rs::bump_daily_win_total_sql`, gated to fresh inserts so same-day replays never double-count, which keeps the refresh O(players) as win history grows. All-time score boards read the legacy best-score tables, one row per player by construction. No refresh query scans full history.
-
-An empty local database renders every panel as "no scores yet", which makes the
-responsive widths impossible to eyeball. `make seed-leaderboard`
-(`scripts/seed_leaderboard_test_data.{sh,sql}`) fills the Compose database with
-48 synthetic players spread across every board. Local development only: it owns
-the `seed:leaderboard:` fingerprints, prefixes their usernames with `lb_` to
-clear the unique index on real handles, and rewrites their stats on every rerun.
-With no argument, the seed also gives the most recently active real user a
-representative deep-rank row on every board. Pass a username to target that
-enrichment explicitly, for example
-`scripts/seed_leaderboard_test_data.sh GleamingUnicycle`.
-
-Monthly profile awards:
-- Migration `077_create_profile_awards.sql` adds `profile_awards`, one permanent row per user/category/month placement. Migration `081_limit_profile_awards_to_top_three.sql` removes old rank 4/5 rows and enforces top-3 awards.
-- `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as a catch-up mechanism. It creates missing previous-UTC-month `profile_awards` rows and leaves existing rows frozen.
-- Awarded categories are `top_chips`, `arcade_wins`, `tetris`, `twenty_forty_eight`, and `snake`; ranks 1 through 3 are persisted. The `tetris` category renders publicly as `Lateris`.
-- Lateania boss achievements also use `profile_awards` as one-time account badges: `lateania_archdemon` renders as `LAD`, and `lateania_frontier_king` renders as `LFK`. Unlike monthly leaderboard badges, these are granted immediately on boss defeat and chat author metadata includes them regardless of award month.
-- Profile modal overview shows a compact earned-awards preview before Showcases when any are earned: up to six badges with period month, then `+N more`. It always appends a compact `Badge Codes` legend after Showcases at the end of the scrollable overview, even when the viewed profile has no awards. There is no separate Badges tab. Top Chips badges render as `CHIP1`/`CHIP2`/`CHIP3`.
-- Chat author labels show every top-3 automatic award badge from the last completed UTC month as one bracketed group immediately after the username, ordered by rank and then category priority. Users do not manually equip these awards.
+Moved to `late-ssh/src/app/leaderboard/CONTEXT.md` (2026-08-07), together
+with `LeaderboardService` itself (now `app/leaderboard/svc.rs`): the
+refresh model, the board rosters and queries, the page, monthly profile
+awards, and the `make seed-leaderboard` script all live there. Hub keeps
+only the Arcade Wins *scoring* note below because its points come from the
+same `Difficulty` enum as the quest/daily payouts hub does own.
 
 ## Economy Rules
 
@@ -207,4 +177,4 @@ Future Events work (the tab is deleted; these hold for whenever events return):
 - Shop has implemented categories for Companions, Chat, Aquarium, Badges, Flags, and Ultimates; keep this context in sync when adding another category or changing unlock gates.
 - Leaderboard refresh is polling-based, so Activity events can appear before the Leaderboards page catches up: a score set at minute 0 shows up on the board within 5 minutes, not at once. Sessions seed from the published snapshot at construction and a connect refreshes a stale one, so the boards are never *empty*, just up to one interval behind. Quest and Shop snapshots refresh on session init, local mutations, and Postgres notifications; the leaderboard has no equivalent notify path.
 - The Leaderboards page has no scrolling inside a board's standings beyond the around-you tail; a board deeper than the pane clips.
-- Door games (DCSS, NetHack attempts, Lateania level, Green Dragon) have no boards yet: each needs its own fact table/ingestion before it can join a roster.
+- DCSS has its board triple via the log pipe (Phase 1 of `devdocs/PLAN-ROGUELIKE-BOARDS.md`); NetHack and Brogue still have none — their phases (xlogfile ingestion + scrape removal, victory-log patch) are next in that plan.

@@ -391,6 +391,47 @@ async fn main() -> anyhow::Result<()> {
         singleton_shutdown.clone(),
     );
 
+    // The door log pipe: tail each door host's append-only log files over the
+    // stats SSH session and land runs/milestones/badges (PLAN-ROGUELIKE-BOARDS
+    // Phases 1-3). One task per door, gated on the same flag as that door's
+    // client; single-replica by the same assumption as every other
+    // process-global singleton here.
+    let door_ingest_service = late_ssh::app::door::ingest::svc::DoorIngestService::new(
+        db.clone(),
+        state.chip_service.clone(),
+        activity_publisher.clone(),
+    );
+    let _dcss_ingest_task = state.config.dcss_enabled.then(|| {
+        door_ingest_service.clone().start_dcss_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.dcss_host.clone(),
+                port: state.config.dcss_port,
+                secret: state.config.dcss_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _nethack_ingest_task = state.config.nethack_enabled.then(|| {
+        door_ingest_service.clone().start_nethack_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.nethack_host.clone(),
+                port: state.config.nethack_port,
+                secret: state.config.nethack_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _brogue_ingest_task = state.config.brogue_enabled.then(|| {
+        door_ingest_service.clone().start_brogue_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.brogue_host.clone(),
+                port: state.config.brogue_port,
+                secret: state.config.brogue_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+
     let mut tasks = JoinSet::new();
     let api_state = state.clone();
     let api_shutdown = session_shutdown.clone();

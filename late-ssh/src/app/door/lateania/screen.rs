@@ -183,6 +183,7 @@ fn leave_active_game(app: &mut App) -> bool {
     }
 
     if app.lateania_state.is_some() {
+        app.lateania_detached_at = None;
         app.leave_lateania();
         true
     } else {
@@ -195,6 +196,9 @@ fn handle_delete_confirm_key(app: &mut App, byte: u8) -> bool {
         b'y' | b'Y' | b'\r' | b'\n' => {
             app.door_delete_confirm = false;
             let slot = app.lateania_slot_cursor as i16;
+            // A reset slot must not stay a backtick stop: hopping back in
+            // would silently start a fresh character there.
+            app.lateania_detached_at = None;
             app.leave_lateania();
             app.lateania_service
                 .delete_character_task(app.user_id, slot);
@@ -222,8 +226,19 @@ fn handle_active_lateania_key(app: &mut App, byte: u8) -> bool {
     let Some(state) = app.lateania_state.as_mut() else {
         return true;
     };
-    if super::input::handle_key(state, byte) == super::input::InputAction::Leave {
-        app.leave_lateania();
+    match super::input::handle_key(state, byte) {
+        super::input::InputAction::Leave => {
+            app.lateania_detached_at = None;
+            app.leave_lateania();
+        }
+        // Arm the recency window that keeps Lateania on the backtick cycle,
+        // then hop: the cycle's screen switch tears the session down
+        // (autosave + world leave), so this must be armed before it runs.
+        super::input::InputAction::Detach => {
+            app.lateania_detached_at = Some(std::time::Instant::now());
+            app.detach_door_game();
+        }
+        super::input::InputAction::Ignored | super::input::InputAction::Handled => {}
     }
     true
 }

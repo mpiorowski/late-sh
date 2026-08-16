@@ -3,10 +3,9 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use super::award::NethackAwards;
-use super::milestone::{self, Milestone};
 use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
-use super::status;
+use crate::app::activity::event::ActivityGame;
+use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
 use crate::render_signal::RenderSignal;
 
@@ -31,13 +30,6 @@ const EXIT_GRACE_TICKS: u8 = 10;
 /// the host, so the run resumes on the next launch.
 const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
 
-/// Post a "descended" feed event only when the deepest level crosses into a new
-/// band of this many dungeon levels. The Amulet sits ~25-30 levels down, so a
-/// per-level event buried the feed; every 5th level keeps ~5-6 beats per run.
-/// Keyed off the band (not `dlvl % 5`) so a multi-level drop (trapdoor chain)
-/// still posts exactly once for the band it lands in.
-const DESCENT_EVENT_STEP: i32 = 5;
-
 pub struct State {
     user_id: uuid::Uuid,
     host: String,
@@ -59,28 +51,11 @@ pub struct State {
     /// while in the Launcher; while non-zero the launcher swallows input so a
     /// game's trailing keystrokes can't fall through to the global quit.
     exit_grace: u8,
-    /// Chip/badge grant sink for screen-scraped milestones. `None` on the
-    /// headless/test path (no DB), which disables milestone awards entirely.
-    awards: Option<NethackAwards>,
-    /// Once-per-session debounce for the Amulet milestone (account-level dedup
-    /// is enforced downstream by the lifetime reward template).
-    amulet_awarded: bool,
-    /// Once-per-session debounce for the Ascension milestone.
-    ascension_awarded: bool,
-    /// Whether an ascension *prelude* line has been seen this session. Required
-    /// before the ascend line is trusted, so a lone engraved/renamed string
-    /// can't spoof the win payout.
-    seen_ascension_prelude: bool,
-    /// Deepest dungeon level seen this session (from the `Dlvl:` status field).
-    /// A new maximum that crosses into a deeper `DESCENT_EVENT_STEP` band posts
-    /// a "descended" activity event. `None` until the first status line is
-    /// parsed (the baseline, posted silently).
-    deepest_dlvl: Option<i32>,
-    /// Most recently parsed dungeon level. The tombstone screen hides the status
-    /// line, so the last value seen before death is the level the player died on.
-    last_dlvl: Option<i32>,
-    /// Once-per-session debounce for the death activity event.
-    death_noted: bool,
+    /// Feed publisher for the connect-based "started a NetHack game" event
+    /// (the one door event that is not log-derived; deaths, wins, and badges
+    /// all come from the log pipe in `app/door/ingest/`). `None` on the
+    /// headless/test path (no DB).
+    activity: Option<ActivityPublisher>,
     /// When the last keystroke was forwarded to the game. A running game idle
     /// past `IDLE_SHUTDOWN` is closed (host SIGHUP-saves), whether the player
     /// is staring at it or has detached to another screen.
@@ -103,7 +78,7 @@ impl State {
         term: String,
         enabled: bool,
         repaint: Option<Arc<RenderSignal>>,
-        awards: Option<NethackAwards>,
+        activity: Option<ActivityPublisher>,
         handle_svc: Option<ArcadeHandleService>,
         rc: String,
     ) -> Self {
@@ -125,13 +100,7 @@ impl State {
             ),
             repaint,
             exit_grace: 0,
-            awards,
-            amulet_awarded: false,
-            ascension_awarded: false,
-            seen_ascension_prelude: false,
-            deepest_dlvl: None,
-            last_dlvl: None,
-            death_noted: false,
+            activity,
             last_input: Instant::now(),
             rc,
         }
@@ -184,17 +153,12 @@ impl State {
         self.mode = Mode::Running;
         self.exit_grace = 0;
         self.last_input = Instant::now();
-        // Fresh launch: re-arm the per-session milestone/event debounce so a new
-        // game/character can earn the (account-gated) awards again and re-post
-        // session events. Account-level dedup still prevents a second payout.
-        self.amulet_awarded = false;
-        self.ascension_awarded = false;
-        self.seen_ascension_prelude = false;
-        self.deepest_dlvl = None;
-        self.last_dlvl = None;
-        self.death_noted = false;
-        if let Some(awards) = &self.awards {
-            awards.note_event(self.user_id, "started a NetHack game".to_string());
+        if let Some(activity) = &self.activity {
+            activity.game_event_task(
+                self.user_id,
+                ActivityGame::Nethack,
+                "started a NetHack game".to_string(),
+            );
         }
     }
 
@@ -219,10 +183,6 @@ impl State {
                 // grace; an idle player has no trailing keystrokes in flight.
                 self.proxy = None;
                 self.mode = Mode::Launcher;
-            } else {
-                // Still in-game: watch the screen for achievement milestones
-                // (Amulet pickup, ascension) plus feed events (descent, death).
-                self.scan_screen();
             }
             return;
         }
@@ -275,79 +235,6 @@ impl State {
             }
             HandleKeyResult::Consumed => true,
             HandleKeyResult::Ignored => false,
-        }
-    }
-
-    /// Scrape the live screen for milestone messages (Amulet pickup, ascension —
-    /// account-gated chip/badge grants) and feed events (new dungeon depth,
-    /// death — visible activity, no reward). Per-session debounce flags stop
-    /// repeats while a `--More--` message lingers across ticks; the ascend line
-    /// is only trusted once a prelude line has been seen this session.
-    fn scan_screen(&mut self) {
-        let Some(awards) = self.awards.as_ref() else {
-            return;
-        };
-        let awards = awards.clone();
-        let Some(text) = self.proxy.as_ref().map(|p| p.with_screen(|s| s.contents())) else {
-            return;
-        };
-
-        // --- account-gated milestones (chips + badge) ---
-        let new_amulet = !self.amulet_awarded && milestone::has_amulet_pickup(&text);
-        if milestone::has_ascension_prelude(&text) {
-            self.seen_ascension_prelude = true;
-        }
-        let new_ascension = !self.ascension_awarded
-            && self.seen_ascension_prelude
-            && milestone::has_ascension_line(&text);
-
-        if new_amulet {
-            self.amulet_awarded = true;
-        }
-        if new_ascension {
-            // Ascension implies the Amulet; mark both so neither re-fires.
-            self.ascension_awarded = true;
-            self.amulet_awarded = true;
-        }
-        // Ascension's grant back-fills the Amulet award, so prefer it when both
-        // land on the same tick.
-        if new_ascension {
-            awards.grant(self.user_id, Milestone::Ascension);
-        } else if new_amulet {
-            awards.grant(self.user_id, Milestone::Amulet);
-        }
-
-        // --- feed events (visible, no reward) ---
-        if let Some(dlvl) = status::parse_dlvl(&text) {
-            self.last_dlvl = Some(dlvl);
-            match self.deepest_dlvl {
-                // First reading is the baseline (start level / resumed depth):
-                // record it silently so a resume doesn't post a fake descent.
-                None => self.deepest_dlvl = Some(dlvl),
-                Some(prev) if dlvl > prev => {
-                    self.deepest_dlvl = Some(dlvl);
-                    // Only announce when the new depth enters a deeper band, so
-                    // a level-by-level dive posts every 5th level, not each one.
-                    if dlvl / DESCENT_EVENT_STEP > prev / DESCENT_EVENT_STEP {
-                        awards.note_event(
-                            self.user_id,
-                            format!("descended to NetHack dungeon level {dlvl}"),
-                        );
-                    }
-                }
-                Some(_) => {}
-            }
-        }
-
-        if !self.death_noted && milestone::has_death(&text) {
-            self.death_noted = true;
-            // The tombstone hides the status line, so the last level parsed
-            // before death is the level the player died on.
-            let action = match self.last_dlvl {
-                Some(dlvl) => format!("died in NetHack on dungeon level {dlvl}"),
-                None => "died in NetHack".to_string(),
-            };
-            awards.note_event(self.user_id, action);
         }
     }
 

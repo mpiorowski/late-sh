@@ -1,3 +1,5 @@
+use late_core::models::leaderboard::DoorGame;
+
 use crate::app::activity::event::ActivityGame;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -35,7 +37,7 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, RenderReason, TranslationResult};
+    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -52,7 +54,9 @@ mod inner {
         match game {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
+            ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
+            ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",
             ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",
@@ -319,11 +323,44 @@ mod inner {
             &[KeyValue::new("result", translation_result_label(result))],
         );
     }
+
+    fn door_ingest_lines_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_ingest_lines_total")
+                .with_description(
+                    "Door host log lines handled by the ingest pipe (cursor advanced) by game",
+                )
+                .build()
+        })
+    }
+
+    fn door_ingest_session_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_ingest_session_failures_total")
+                .with_description(
+                    "Door stats-session failures (connect or mid-stream) before a retry, by game",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_ingest_line(game: DoorGame) {
+        // `DoorGame::key` is the closed roster's own exhaustive label map.
+        door_ingest_lines_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
+    pub fn record_door_ingest_session_failure(game: DoorGame) {
+        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
 }
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::{ActivityGame, RenderReason, TranslationResult};
+    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
 
     pub fn record_ssh_connection() {}
     pub fn record_render(_reason: RenderReason) {}
@@ -340,6 +377,8 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
+    pub fn record_door_ingest_line(_game: DoorGame) {}
+    pub fn record_door_ingest_session_failure(_game: DoorGame) {}
 }
 
 pub use inner::*;

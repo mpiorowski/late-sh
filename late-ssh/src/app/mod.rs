@@ -54,5 +54,5 @@ pub mod voice;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;
-pub use hub::svc::LeaderboardService;
+pub use leaderboard::svc::LeaderboardService;
 pub use ultimates::UltimateService;

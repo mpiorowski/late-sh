@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
@@ -262,9 +262,10 @@ pub struct SessionConfig {
     pub nethack_host: String,
     pub nethack_port: u16,
     pub nethack_secret: String,
-    /// Chip/badge grant sink for NetHack milestones (Amulet, ascension). `None`
-    /// on headless/test paths, which disables milestone awards.
-    pub nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher for the NetHack door's connect-based "started" event
+    /// (badges and death/win events come from the log pipe). `None` on
+    /// headless/test paths.
+    pub nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     /// DCSS door game: reached over SSH like nethack (host `late-dcss`).
     pub dcss_enabled: bool,
     pub dcss_host: String,
@@ -614,6 +615,13 @@ pub struct App {
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    /// When a backtick detach last hopped out of an active Lateania world.
+    /// Unlike the roguelikes, Lateania has no detached session to resume (the
+    /// hop-out autosaves and removes the character), so this recency stamp is
+    /// what keeps the door on the backtick workspace cycle for a quick
+    /// rejoin. Armed only by the backtick detach; an explicit leave (Esc-Esc,
+    /// slot delete) clears it.
+    pub(crate) lateania_detached_at: Option<Instant>,
     pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
     pub(crate) darkroom_state: Option<crate::app::door::darkroom::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
@@ -634,8 +642,9 @@ pub struct App {
     pub(crate) nethack_host: String,
     pub(crate) nethack_port: u16,
     pub(crate) nethack_secret: String,
-    /// Chip/badge grant sink threaded into the per-session NetHack door state.
-    pub(crate) nethack_awards: Option<crate::app::door::nethack::award::NethackAwards>,
+    /// Feed publisher threaded into the per-session NetHack door state for
+    /// its connect-based "started" event.
+    pub(crate) nethack_activity: Option<crate::app::activity::publisher::ActivityPublisher>,
     pub(crate) dcss_state: Option<crate::app::door::dcss::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the DCSS
     /// host so curses gets a real terminfo entry.
@@ -1400,6 +1409,7 @@ impl App {
             greendragon_service: config.greendragon_service,
             darkroom_service: config.darkroom_service,
             lateania_state: None,
+            lateania_detached_at: None,
             greendragon_state: None,
             darkroom_state: None,
             rebels_state: None,
@@ -1414,7 +1424,7 @@ impl App {
             nethack_host: config.nethack_host,
             nethack_port: config.nethack_port,
             nethack_secret: config.nethack_secret,
-            nethack_awards: config.nethack_awards,
+            nethack_activity: config.nethack_activity,
             dcss_state: None,
             dcss_term: config.term.clone(),
             dcss_enabled: config.dcss_enabled,
@@ -1563,6 +1573,14 @@ impl App {
         self.lateania_service.character_slots_task(self.user_id);
     }
 
+    /// A backtick detach hopped out of the Lateania world recently enough
+    /// that the door still counts as a live stop on the workspace cycle.
+    pub(crate) fn lateania_recently_active(&self) -> bool {
+        const LATEANIA_DETACH_WINDOW: Duration = Duration::from_secs(5 * 60);
+        self.lateania_detached_at
+            .is_some_and(|at| at.elapsed() < LATEANIA_DETACH_WINDOW)
+    }
+
     pub(crate) fn enter_greendragon(&mut self) {
         if self.greendragon_state.is_some() {
             return;
@@ -1644,7 +1662,7 @@ impl App {
             self.nethack_term.clone(),
             self.nethack_enabled,
             self.repaint_signal.clone(),
-            self.nethack_awards.clone(),
+            self.nethack_activity.clone(),
             Some(self.arcade_handle_service.clone()),
             self.door_rc(late_core::models::door_rc::DoorRcGame::Nethack),
         ));
@@ -1863,7 +1881,7 @@ impl App {
     /// stop on the backtick workspace cycle (another live dungeon, a waiting
     /// board or seat, or Home chat) while `set_screen` keeps the running door
     /// state alive. Falls back to the Games hub if the cycle has no opinion.
-    fn detach_door_game(&mut self) {
+    pub(crate) fn detach_door_game(&mut self) {
         if !crate::app::lobby::workspace::cycle_game_workspace(self) {
             self.set_screen(Screen::Games);
         }

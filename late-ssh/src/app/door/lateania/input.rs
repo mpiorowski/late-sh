@@ -60,6 +60,10 @@ pub enum InputAction {
     Ignored,
     Handled,
     Leave,
+    /// Backtick: leave the world (autosave, same as a confirmed Esc) and hop
+    /// onward on the backtick workspace cycle, arming the recency window
+    /// that keeps Lateania on the cycle for a quick rejoin.
+    Detach,
 }
 
 /// Route a mouse event to the combat action bar. A left click on a chip runs the
@@ -100,6 +104,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         state.arm_leave_confirm();
         return InputAction::Handled;
+    }
+    // Backtick detaches like the roguelike doors: a single press, no confirm
+    // gate, because it hops between games rather than quitting, and the leave
+    // it performs is the same autosaved leave Esc-Esc already allows (mid
+    // combat included). Runs after the chat capture above so ` still types
+    // into a say line.
+    if byte == b'`' {
+        return InputAction::Detach;
     }
 
     let view = state.view();

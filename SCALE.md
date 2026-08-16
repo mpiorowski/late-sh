@@ -416,7 +416,7 @@ Still open: the other eight queries in the bundle, which are individually cheap 
 
 ### 2. Gate the leaderboard refresh loop
 
-Done 2026-07-26 (`app/hub/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
+Done 2026-07-26 (`app/hub/svc.rs`; the service has since moved to `app/leaderboard/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
 
 ### 3. Add a second node; give `service-ssh` a full node to itself
 

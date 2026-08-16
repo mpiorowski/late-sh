@@ -115,7 +115,9 @@ impl ActivityKind {
 pub enum ActivityGame {
     Asterion,
     Blackjack,
+    Brogue,
     Chess,
+    Dcss,
     GreenDragon,
     LeWord,
     Minesweeper,
@@ -141,7 +143,9 @@ impl ActivityGame {
         match self {
             Self::Asterion => "asterion",
             Self::Blackjack => "blackjack",
+            Self::Brogue => "brogue",
             Self::Chess => "chess",
+            Self::Dcss => "dcss",
             Self::GreenDragon => "greendragon",
             Self::LeWord => "le_word",
             Self::Minesweeper => "minesweeper",
@@ -167,7 +171,9 @@ impl ActivityGame {
         match self {
             Self::Asterion => "Asterion",
             Self::Blackjack => "Blackjack",
+            Self::Brogue => "Brogue",
             Self::Chess => "Chess",
+            Self::Dcss => "DCSS",
             Self::GreenDragon => "Green Dragon",
             Self::LeWord => "Le Word",
             Self::Minesweeper => "Minesweeper",
@@ -239,7 +245,9 @@ impl ActivityEvent {
         let base_action = match game {
             ActivityGame::Asterion => "escaped the Asterion maze",
             ActivityGame::Blackjack => "won Blackjack hand",
+            ActivityGame::Brogue => "conquered Brogue",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::Dcss => "escaped DCSS with the Orb of Zot",
             ActivityGame::GreenDragon => "prevailed in the Green Dragon",
             ActivityGame::LeWord => "solved Le Word",
             ActivityGame::Minesweeper => "cleared Minesweeper",
@@ -300,6 +308,8 @@ impl ActivityEvent {
         let action = match game {
             ActivityGame::Mud => "set out into Lateania".to_string(),
             ActivityGame::Nethack => "descended into NetHack".to_string(),
+            ActivityGame::Dcss => "delved into the Dungeon Crawl".to_string(),
+            ActivityGame::Brogue => "descended into Brogue".to_string(),
             ActivityGame::GreenDragon => "walked into the Green Dragon".to_string(),
             ActivityGame::Asterion
             | ActivityGame::Blackjack

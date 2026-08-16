@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::state::{HubGame, HubGroup};
+use super::state::HubGame;
 use crate::app::common::{primitives::hint_line, theme};
 
 /// The rc config modal, when open: which game's file plus the stored content.
@@ -33,6 +33,9 @@ pub struct HubView<'a> {
     /// This account's character slots, for the landing card's select list.
     pub lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
     pub lateania_slot_cursor: usize,
+    /// Lateania's backtick-detach recency window is live: the sidebar marks
+    /// it as a game in progress (a hop or Enter re-joins the character).
+    pub lateania_live: bool,
     /// Roguelike doors with a live detached game this session: the sidebar
     /// marks them and their landing offers resume instead of launch.
     pub nethack_live: bool,
@@ -43,14 +46,15 @@ pub struct HubView<'a> {
 }
 
 impl HubView<'_> {
-    /// Whether this game has a live (detached) session to resume.
+    /// Whether this game counts as in progress: a detached roguelike session
+    /// to resume, or Lateania inside its backtick-detach recency window.
     fn is_live(&self, game: HubGame) -> bool {
         match game {
+            HubGame::Lateania => self.lateania_live,
             HubGame::Nethack => self.nethack_live,
             HubGame::Dcss => self.dcss_live,
             HubGame::Brogue => self.brogue_live,
-            HubGame::Lateania
-            | HubGame::Rebels
+            HubGame::Rebels
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars
@@ -71,7 +75,8 @@ const MIN_HEIGHT: u16 = 6;
 
 /// One row of the sidebar: a muted group header, a selectable game (index
 /// into [`HubGame::ALL`]), a blank separator between groups, or the faint
-/// always-on backtick hint under the roguelikes (they detach and hop).
+/// always-on backtick hint at the top (the games that detach and hop:
+/// Lateania and the roguelikes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarRow {
     Header(&'static str),
@@ -80,12 +85,11 @@ enum SidebarRow {
     HopHint,
 }
 
-/// The sidebar rows in display order: each group opens with its header,
-/// groups separated by a blank row, and the ` hop hint sits directly under
-/// the roguelike games. Shared by the renderer and the click hit test so
-/// they cannot drift.
+/// The sidebar rows in display order: the ` hop hint leads the whole nav,
+/// then each group opens with its header, groups separated by a blank row.
+/// Shared by the renderer and the click hit test so they cannot drift.
 fn sidebar_rows() -> Vec<SidebarRow> {
-    let mut rows = Vec::new();
+    let mut rows = vec![SidebarRow::HopHint, SidebarRow::Blank];
     let mut current_group = None;
     for (i, game) in HubGame::ALL.iter().enumerate() {
         let group = game.group();
@@ -97,13 +101,6 @@ fn sidebar_rows() -> Vec<SidebarRow> {
             current_group = Some(group);
         }
         rows.push(SidebarRow::Game(i));
-    }
-    let last_roguelike = rows.iter().rposition(|row| {
-        matches!(row, SidebarRow::Game(i)
-            if HubGame::ALL[*i].group() == HubGroup::Roguelikes)
-    });
-    if let Some(idx) = last_roguelike {
-        rows.insert(idx + 1, SidebarRow::HopHint);
     }
     rows
 }
@@ -358,9 +355,10 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, selected: usize, view: &HubView) 
                     Line::from(Span::styled(format!("  {label:<pad$}"), style))
                 }
             }
-            // The standing invitation under the roguelikes: they detach on `
-            // and hop between each other and chat. Faint on purpose; the
-            // green pip carries the "live right now" signal.
+            // The standing invitation atop the nav: Lateania and the
+            // roguelikes detach on ` and hop between each other and chat.
+            // Faint on purpose; the green pip carries the "live right now"
+            // signal.
             SidebarRow::HopHint => Line::from(Span::styled(
                 "  ` hop in & out",
                 Style::default().fg(theme::TEXT_FAINT()),

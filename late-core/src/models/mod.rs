@@ -38,9 +38,12 @@ mod chips_test;
 pub mod cyberspace_account;
 pub mod daily_match;
 pub mod darkroom_save;
+pub mod door_log_cursor;
+pub mod door_milestone;
 pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;
+pub mod door_run;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;

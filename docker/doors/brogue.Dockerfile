@@ -3,7 +3,7 @@
 # brogue door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/brogue.yml as
-# ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3; the root Dockerfile pins that
 # image as its brogue-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm
@@ -18,11 +18,18 @@ ARG DEBIAN_VERSION=bookworm
 # (downloaded + hashed 2026-07-21 from the GitHub tag archive); `sha256sum -c`
 # fails the build closed on any mismatch.
 #
-# One source patch (scripts/brogue_hangup_save.patch): upstream's curses build
-# dies unsaved on SIGHUP (only the SDL window-close path auto-saves), so the
-# patch installs a hangup handler running the same quitImmediately save path.
-# The late-brogue host relies on it for teardown saves; the grep asserts it
-# landed, fail-closed. Re-verify the patch on Brogue CE version bumps.
+# Two source patches, each asserted fail-closed after applying (re-verify both
+# on Brogue CE version bumps):
+# - scripts/brogue_hangup_save.patch: upstream's curses build dies unsaved on
+#   SIGHUP (only the SDL window-close path auto-saves), so the patch installs a
+#   hangup handler running the same quitImmediately save path. The late-brogue
+#   host relies on it for teardown saves; the grep asserts it landed.
+# - scripts/brogue_victory_log.patch: 1.15.1's victory path has the run-history
+#   condition inverted (mode != EASY && mode != NORMAL), so normal victories are
+#   never logged while wizard victories are. The late.sh award pipe reads the
+#   run history for the Escaped/Mastered badge pair, so the fix matters twice
+#   over. GAME_MODE_NORMAL appears exactly once in RogueMain.c (the buggy
+#   line), so asserting its absence proves the patch landed.
 #
 # scripts/brogue_verify_isolation.sh then asserts the upstream properties that
 # per-player save isolation rests on (no path can reach a filename, files keep a
@@ -56,6 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 COPY scripts/brogue_hangup_save.patch /build/brogue_hangup_save.patch
+COPY scripts/brogue_victory_log.patch /build/brogue_victory_log.patch
 COPY scripts/brogue_verify_isolation.sh /build/brogue_verify_isolation.sh
 RUN curl -fsSL -o "${BROGUE_TARBALL}" "${BROGUE_URL}" \
     && echo "${BROGUE_SHA256}  ${BROGUE_TARBALL}" | sha256sum -c - \
@@ -65,6 +73,8 @@ RUN curl -fsSL -o "${BROGUE_TARBALL}" "${BROGUE_URL}" \
 WORKDIR /build/BrogueCE-${BROGUE_VERSION}
 RUN patch -p1 < /build/brogue_hangup_save.patch \
     && grep -q handleHangup src/platform/curses-platform.c \
+    && patch -p1 < /build/brogue_victory_log.patch \
+    && ! grep -q GAME_MODE_NORMAL src/brogue/RogueMain.c \
     && sh /build/brogue_verify_isolation.sh . \
     && make -j"$(nproc)" bin/brogue TERMINAL=YES GRAPHICS=NO RELEASE=YES \
     && test -x bin/brogue \

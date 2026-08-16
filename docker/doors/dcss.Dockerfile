@@ -3,7 +3,7 @@
 # dcss door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/dcss.yml as
-# ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r1; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2; the root Dockerfile pins that
 # image as its dcss-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm
@@ -71,7 +71,26 @@ WORKDIR /build/stone_soup-${DCSS_VERSION}/source
 # default; the Makefile's own comment says to set it "if you have untrusted"
 # users, which a hosted door is. The -version grep fails the build closed if a
 # version bump ever re-enables it (-DWIZARD would reappear in the CFLAGS line).
-RUN make -j"$(nproc)" prefix=${DCSS_PREFIX} NOWIZARD=y install \
+#
+# EXTERNAL_DEFINES turns on three dgamelaunch-server behaviors the plain build
+# leaves off (all normally implied by DGAMELAUNCH, which we deliberately do
+# NOT define wholesale). The late-dcss stats session and the late-ssh
+# ingestion pipe depend on them (devdocs/PLAN-ROGUELIKE-BOARDS.md):
+# - DGL_MILESTONES: write the live $HOME/.crawl/milestones xlog (rune/orb/
+#   branch-entry events, the source of the Orb badge at pickup). Verified
+#   against the pinned source: mark_milestone() writes the file only under
+#   this define.
+# - TIME_FN=gmtime: xlog start/end/time stamps in UTC (the public-server
+#   default; without it crawl falls back to localtime).
+# - DGL_EXTENDED_LOGFILES: the preformatted tmsg death line in the logfile,
+#   used verbatim in feed events.
+# Each is asserted fail-closed via the -version CFLAGS line, same as NOWIZARD.
+RUN make -j"$(nproc)" prefix=${DCSS_PREFIX} NOWIZARD=y \
+        EXTERNAL_DEFINES="-DDGL_MILESTONES -DTIME_FN=gmtime -DDGL_EXTENDED_LOGFILES" \
+        install \
     && test -x ${DCSS_PREFIX}/bin/crawl \
     && test -d ${DCSS_PREFIX}/data/dat \
-    && ! ${DCSS_PREFIX}/bin/crawl -version | grep -q -- -DWIZARD
+    && ! ${DCSS_PREFIX}/bin/crawl -version | grep -q -- -DWIZARD \
+    && ${DCSS_PREFIX}/bin/crawl -version | grep -q -- -DDGL_MILESTONES \
+    && ${DCSS_PREFIX}/bin/crawl -version | grep -q -- '-DTIME_FN=gmtime' \
+    && ${DCSS_PREFIX}/bin/crawl -version | grep -q -- -DDGL_EXTENDED_LOGFILES

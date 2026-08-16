@@ -466,15 +466,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         nethack_host: state.config.nethack_host.clone(),
         nethack_port: state.config.nethack_port,
         nethack_secret: state.config.nethack_secret.clone(),
-        nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
-            state.chip_service.clone(),
-            state.db.clone(),
+        nethack_activity: Some(
             crate::app::activity::publisher::ActivityPublisher::new(
                 state.db.clone(),
                 state.activity_feed.clone(),
             )
             .with_username_directory(state.username_directory.clone()),
-        )),
+        ),
         dcss_enabled: state.config.dcss_enabled,
         dcss_host: state.config.dcss_host.clone(),
         dcss_port: state.config.dcss_port,
