@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-15 (Configuration model documented in §4.5: compiled `dev`/`dev2`/`prod` profiles selected by `LATE_ENV`, dev opt-ins for AI/uploads/YouTube keyed on secret presence, committed `.env.dev`/`.env.dev2` templates copied to `.env` by make, prod env reduced to `LATE_ENV=prod` plus cluster secrets, and the image/template deploy-skew rule)
+- Last updated: 2026-08-15 (Lateania joins the backtick workspace cycle: backtick in the active world detaches with a full autosaved leave and arms a 5-minute recency window that keeps the door a cycle stop for a one-key rejoin of the same character slot; details in `late-ssh/src/app/lobby/CONTEXT.md` and the Lateania context §3)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -45,7 +45,7 @@ Use this root file as the entry point. Before changing a domain, read the matchi
 | `late-ssh/src/app/hub/CONTEXT.md` | The `/shop` Shop modal, the Arcade quest strip's service, marketplace, pet/aquarium unlocks, or chip economy presentation. | Shop modal ownership, reward/economy rules, daily/weekly quest service, marketplace and entitlement projection, aquarium tray behavior, and known gaps. |
 | `late-ssh/src/app/leaderboard/CONTEXT.md` | The Leaderboards page (screen `6`), `LeaderboardService`, the board rosters/queries in `late-core/src/models/leaderboard.rs`, the door/Lateania boards, monthly profile awards, or the leaderboard seed script. | Refresh model (subscriber gate, seed-on-connect, query-count cost rules), roster-generated data model incl. the door board triples, **the cross-door log-pipe contract that fills them** (transport, cursors/idempotency, handle identity, lifetime grants, feed gating, deploy order, settled decisions), page rail/detail behavior, profile award machinery and badge collapse, `make seed-leaderboard`, and known gaps. |
 | `late-ssh/src/app/bonsai_v2/CONTEXT.md` | Dynamic Bonsai branch graph, care modal, sidebar preview, growth simulation, badge scoring, or `dynamic_bonsai` shop selection. | Dynamic Bonsai persistence, renderers, input model, growth/death rules, chat badge scoring, classic Bonsai compatibility bridge, and prototype invariants. |
-| `late-ssh/src/app/lobby/CONTEXT.md` | The Lobby: the `Ctrl+G` modal, `LobbyState`/`LobbyEntry`, or the backtick workspace cycle spanning daily boards, house tables, unfinished Arcade dailies, and live (detached) roguelike door games. | Lobby domain overview and the modal/workspace contracts; routes onward to `lobby/daily/CONTEXT.md` and `lobby/house/CONTEXT.md` for the two game domains. |
+| `late-ssh/src/app/lobby/CONTEXT.md` | The Lobby: the `Ctrl+G` modal, `LobbyState`/`LobbyEntry`, or the backtick workspace cycle spanning daily boards, house tables, unfinished Arcade dailies, live (detached) roguelike door games, and a recently-detached Lateania world. | Lobby domain overview and the modal/workspace contracts; routes onward to `lobby/daily/CONTEXT.md` and `lobby/house/CONTEXT.md` for the two game domains. |
 | `late-ssh/src/app/lobby/house/CONTEXT.md` | House tables (the fixed Poker/Blackjack/Asterion/Tron/Super Snake tables behind the Lobby modal), `Screen::HouseTable`, the five game runtimes, their singleton registry, or seeded table chat/voice. | `HouseTable` roster enum, `HouseTableRegistry` singletons + occupancy + seat activity + blackjack event feed (@dealer), per-session `HouseState`/`HouseTableClient`, screen input/render split, and runtime contracts for the five games. |
 | `late-ssh/src/app/door/lateania/CONTEXT.md` | Lateania top-level screen, landing/launch/leave/reset behavior, active-world key capture, game runtime, world/content, combat, classes, abilities, items, wildlife, Frontier, persistence, or game UI panels. | Single Lateania context: screen lifecycle, module map, gameplay loop, service/runtime model, world and content invariants, progression/combat/economy rules, save schemas, tests, and gotchas. |
 | `late-ssh/src/app/door/greendragon/CONTEXT.md` | Green Dragon door screen, the native LORD-style remake's village/forest/shops/training/dragon flow, combat resolver, character persistence, or its Games-hub landing/launch/leave/reset. | Single Green Dragon context: module map, LoGD balance-data provenance, the pure combat resolver, the Character model and rules, the per-user save schema, integration points, and deferred gaps. |
@@ -874,7 +874,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 **Paired client control + visualizer:**
 1. Trigger: SSH PTY request creates a session token plus the inbound `SessionRegistry` route.
 2. Processing: The CLI or its webview helper connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
-3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
+3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`, persists the reported mute/volume to this device's `user_ssh_keys.settings` row (the one source of truth for both), and, on the session's *first* paired client only, aligns that client to the stored value (the CLI boots silent and needs it to start playing). The alignment is claimed per session token, not per WebSocket: re-applying it on a mid-session pair-WS reconnect is what used to unmute a muted session. See `late-ssh/src/app/audio/CONTEXT.md`, "Mute and volume: one source of truth, stored per device".
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
 5. Failure: If the paired client disconnects, paired state disappears. If the CLI viz source disconnects or goes silent, visualizer bars decay (rms * 0.96 per tick). If SSH disconnects, the session token unregisters on drop.
 
@@ -1245,7 +1245,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `4` | Global | Jump to Artboard |
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
-| `m` | Global | Toggle mute on paired client |
+| `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
 | `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |

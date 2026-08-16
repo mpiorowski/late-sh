@@ -229,8 +229,8 @@ resource "kubernetes_service_v1" "late_dcss_sv" {
 # /crawl out-ranks late-web's "/" catch-all in ingress.tf while the existing DNS
 # record and TLS certificate keep working untouched. That is also why this
 # resource carries no tls block and no cert-manager annotations: the certificate
-# for var.DOMAIN belongs to service-web-ingress, and a second issuer request for
-# the same host would fight it.
+# for local.domain belongs to service-web-ingress, and a second issuer request
+# for the same host would fight it.
 resource "kubernetes_ingress_v1" "late_dcss_crawl" {
   metadata {
     name = "late-dcss-crawl-ingress"
@@ -241,7 +241,7 @@ resource "kubernetes_ingress_v1" "late_dcss_crawl" {
 
   spec {
     rule {
-      host = var.DOMAIN
+      host = local.domain
       http {
         path {
           path      = "/crawl"

@@ -132,6 +132,55 @@ async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
 }
 
 #[tokio::test]
+async fn backtick_hops_out_of_lateania_and_back_in_while_the_window_is_live() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "lateania-detach-flow").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "lateania-detach-flow-it");
+
+    app.set_screen(Screen::Lateania);
+    app.enter_lateania();
+    assert!(app.lateania_state.is_some(), "the world is live");
+
+    // Backtick hops out: unlike the roguelikes the session tears down (the
+    // character autosaves out of the world), but the recency window keeps
+    // Lateania on the cycle. With no other stops the hop wraps to Home chat.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(
+        app.lateania_state.is_none(),
+        "expected the hop-out to drop the per-session world state"
+    );
+    assert!(
+        app.lateania_recently_active(),
+        "expected the detach to arm the recency window"
+    );
+
+    // From Home, the same backtick re-joins the saved character directly,
+    // skipping the character-select landing.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Lateania);
+    assert!(
+        app.lateania_state.is_some(),
+        "expected the hop-in to re-enter the world"
+    );
+
+    // Hop out again, then clear the window: without it Lateania is no longer
+    // a stop, so backtick from Home has nowhere to go.
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.lateania_detached_at = None;
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "expected no hop once the recency window is gone"
+    );
+    assert!(app.lateania_state.is_none());
+}
+
+#[tokio::test]
 async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     use crate::app::common::primitives::Screen;
     use late_core::models::door_rc::{DoorRc, DoorRcGame};
@@ -1685,7 +1734,7 @@ async fn forced_tour_gates_input_until_each_named_key() {
 }
 
 #[tokio::test]
-async fn esc_closes_the_stream_modal_like_any_other_key() {
+async fn only_esc_closes_the_stream_modal() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "stream-qr-esc").await;
     let mut app = make_app(test_db.db.clone(), user.id, "stream-qr-esc-it");
@@ -1699,8 +1748,19 @@ async fn esc_closes_the_stream_modal_like_any_other_key() {
         },
     ));
 
+    // The modal holds a hand-copied capability URL: ordinary keys, Enter, and
+    // a left click all leave it up rather than taking the URL off the screen.
+    app.handle_input(b"x");
+    app.handle_input(b"\r");
+    app.handle_input(b" ");
+    app.handle_input(b"\x1b[<0;10;10M");
+    assert!(
+        app.stream_modal.is_some(),
+        "only esc should close the stream qr modal"
+    );
+
     // A lone Esc dispatches via the pending-escape flush on a later tick,
-    // not through the any-key gate the other keys hit.
+    // not through the swallow-everything gate the other keys hit.
     app.handle_input(b"\x1b");
     wait_for_esc_effect(
         &mut app,

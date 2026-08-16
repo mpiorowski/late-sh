@@ -68,15 +68,22 @@ fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
 }
 
-/// The board rail. The Games boards lead under a "Games" header, the bespoke
-/// boards follow under "Boards", and the roster boards get one header per
-/// group. Returns the built lines and the index of the selected row, so the
-/// caller can keep it scrolled into view.
+/// The board rail. The bespoke boards lead under a "Boards" header, every
+/// game board follows under "Games" (Lateania, then the door triples), and
+/// the roster boards get one header per group. Returns the built lines and the
+/// index of the selected row, so the caller can keep it scrolled into view.
 fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
     let boards = state.boards();
-    let first_bespoke = boards
-        .iter()
-        .position(|board| matches!(board, Board::TopChips | Board::ArcadeWins));
+    let first_game = boards.iter().position(|board| {
+        matches!(
+            board,
+            Board::DoorWins(_)
+                | Board::DoorDepth(_)
+                | Board::DoorScore(_)
+                | Board::LateaniaAdventurers
+                | Board::LateaniaFrontier
+        )
+    });
     let first_daily = boards
         .iter()
         .position(|board| matches!(board, Board::Daily(_)));
@@ -87,14 +94,14 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = 0usize;
     for (index, board) in boards.iter().copied().enumerate() {
-        let header = if Some(index) == first_bespoke {
-            Some("Boards")
+        let header = if Some(index) == first_game {
+            Some("Games")
         } else if Some(index) == first_daily {
             Some("Daily Wins")
         } else if Some(index) == first_score {
             Some("High Scores")
         } else if index == 0 {
-            Some("Games")
+            Some("Boards")
         } else {
             None
         };

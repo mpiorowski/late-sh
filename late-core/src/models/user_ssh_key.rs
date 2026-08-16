@@ -43,6 +43,48 @@ crate::user_scoped_model! {
 
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
+const AUDIO_MUTED_KEY: &str = "audio_muted";
+const AUDIO_VOLUME_KEY: &str = "audio_volume_percent";
+
+/// One device's music mute and volume, and the only source of truth for
+/// either. Both live on the key rather than the account because they belong
+/// to the machine with the speakers: muting on a laptop must not silence the
+/// desktop. The server writes this from what the paired CLI reports after
+/// applying a control (the webview helper's reports are never persisted; the
+/// CLI is the surface of record), so `m`, `+`/`-`, a media key, and `/brb`'s
+/// auto-mute all land here through one path, and a session resumes exactly
+/// where the last one left off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyAudio {
+    pub muted: bool,
+    pub volume_percent: u8,
+}
+
+impl KeyAudio {
+    pub fn to_value(self) -> Value {
+        json!({
+            AUDIO_MUTED_KEY: self.muted,
+            AUDIO_VOLUME_KEY: self.volume_percent,
+        })
+    }
+}
+
+/// This device's stored audio, or `None` when the key has never reported any
+/// and the caller should fall back to its own default. Written as a pair and
+/// read as a pair: a blob missing either half reads as `None` rather than
+/// half-applying, matching [`extract_key_layout`].
+pub fn extract_key_audio(settings: &Value) -> Option<KeyAudio> {
+    let muted = settings.get(AUDIO_MUTED_KEY).and_then(Value::as_bool)?;
+    let volume_percent = settings
+        .get(AUDIO_VOLUME_KEY)
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok())
+        .filter(|v| *v <= 100)?;
+    Some(KeyAudio {
+        muted,
+        volume_percent,
+    })
+}
 
 /// One device's home rail layout. Stored complete or not at all: both rails are
 /// always written together, so there is no half-configured state to reason
@@ -156,6 +198,40 @@ impl UserSshKey {
                      updated = current_timestamp
                  WHERE fingerprint = $2 AND user_id = $3",
                 &[&layout.to_value(), &fingerprint, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("ssh key not found");
+        }
+        Ok(())
+    }
+
+    /// Load just this device's stored mute/volume, or `None` when the key has
+    /// never reported any (or has no row yet).
+    pub async fn audio_for(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+    ) -> Result<Option<KeyAudio>> {
+        let key = Self::find_by_fingerprint(client, user_id, fingerprint).await?;
+        Ok(key.and_then(|key| extract_key_audio(&key.settings)))
+    }
+
+    /// Store this device's mute/volume. Scoped by owner as well as fingerprint
+    /// so a stale fingerprint can never write onto another account's key.
+    pub async fn set_audio(
+        client: &Client,
+        user_id: Uuid,
+        fingerprint: &str,
+        audio: KeyAudio,
+    ) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE user_ssh_keys
+                 SET settings = settings || $1::jsonb,
+                     updated = current_timestamp
+                 WHERE fingerprint = $2 AND user_id = $3",
+                &[&audio.to_value(), &fingerprint, &user_id],
             )
             .await?;
         if updated == 0 {

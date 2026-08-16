@@ -25,9 +25,9 @@ to the doors.
 
 ## Source Map
 
-- `state.rs`: `Board` (the closed page-board enum: two Lateania snapshot boards, the per-door triples, Top Chips, Arcade Wins, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys.
-- `ui.rs`: the board rail (Games group leading, then Boards, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
+- `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
 - `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, and the daily `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
 - Read-only from here, documented below: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`, models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`, migration `136_create_door_ingestion.sql`).
@@ -160,9 +160,10 @@ that the migrations and a few source comments still point at.
 
 ## The page
 
-Screen `6`, board rail + detail view. The rail leads with the Games group
-(Lateania boards, then each door's triple), then Boards (Top Chips, Arcade
-Wins), Daily Wins, and High Scores, in roster order. The detail pane shows
+Screen `6`, board rail + detail view. The rail leads with the Boards group
+(Top Chips, Arcade Wins), then the Games group (the Lateania boards, then
+each door's board triple), Daily Wins, and High Scores, in roster order.
+The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). There is no scrolling inside a
 board's standings beyond that tail; a board deeper than the pane clips.

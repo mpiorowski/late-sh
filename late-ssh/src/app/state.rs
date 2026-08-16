@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
@@ -54,7 +54,8 @@ struct VoiceJoinTaskResult {
 }
 
 /// Full-screen stream handoff overlay, drawn over everything and dismissed
-/// by any key.
+/// by Esc alone: it holds hand-copied capability values, so a stray key must
+/// not clear them off the screen.
 pub(crate) enum StreamModal {
     /// URL + QR (publisher URL from `/golive`, watch URL from `/watch`).
     Qr(StreamQrModal),
@@ -614,6 +615,13 @@ pub struct App {
     /// Games hub (Screen::Games): the dedicated landing for the door games.
     pub(crate) games_hub_state: crate::app::door::hub::state::State,
     pub(crate) lateania_state: Option<crate::app::door::lateania::state::State>,
+    /// When a backtick detach last hopped out of an active Lateania world.
+    /// Unlike the roguelikes, Lateania has no detached session to resume (the
+    /// hop-out autosaves and removes the character), so this recency stamp is
+    /// what keeps the door on the backtick workspace cycle for a quick
+    /// rejoin. Armed only by the backtick detach; an explicit leave (Esc-Esc,
+    /// slot delete) clears it.
+    pub(crate) lateania_detached_at: Option<Instant>,
     pub(crate) greendragon_state: Option<crate::app::door::greendragon::state::State>,
     pub(crate) darkroom_state: Option<crate::app::door::darkroom::state::State>,
     pub(crate) rebels_state: Option<crate::app::door::rebels::state::State>,
@@ -1401,6 +1409,7 @@ impl App {
             greendragon_service: config.greendragon_service,
             darkroom_service: config.darkroom_service,
             lateania_state: None,
+            lateania_detached_at: None,
             greendragon_state: None,
             darkroom_state: None,
             rebels_state: None,
@@ -1562,6 +1571,14 @@ impl App {
         // Refresh the landing's slot list so a level/class change from the
         // adventure just left shows up without needing to leave the screen.
         self.lateania_service.character_slots_task(self.user_id);
+    }
+
+    /// A backtick detach hopped out of the Lateania world recently enough
+    /// that the door still counts as a live stop on the workspace cycle.
+    pub(crate) fn lateania_recently_active(&self) -> bool {
+        const LATEANIA_DETACH_WINDOW: Duration = Duration::from_secs(5 * 60);
+        self.lateania_detached_at
+            .is_some_and(|at| at.elapsed() < LATEANIA_DETACH_WINDOW)
     }
 
     pub(crate) fn enter_greendragon(&mut self) {
@@ -1864,7 +1881,7 @@ impl App {
     /// stop on the backtick workspace cycle (another live dungeon, a waiting
     /// board or seat, or Home chat) while `set_screen` keeps the running door
     /// state alive. Falls back to the Games hub if the cycle has no opinion.
-    fn detach_door_game(&mut self) {
+    pub(crate) fn detach_door_game(&mut self) {
         if !crate::app::lobby::workspace::cycle_game_workspace(self) {
             self.set_screen(Screen::Games);
         }
@@ -3109,12 +3126,18 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        let Some(registry) = self.session_registry.clone() else {
-            return;
-        };
         if self.session_token.is_empty() {
             return;
         }
+        // The paired registry keeps token-scoped state that outlives the
+        // sockets (the once-per-session boot mute claim), so the session end
+        // has to retire it or it accumulates a row per session forever.
+        if let Some(paired) = &self.paired_client_registry {
+            paired.forget_session(&self.session_token);
+        }
+        let Some(registry) = self.session_registry.clone() else {
+            return;
+        };
         let token = self.session_token.clone();
         tokio::spawn(async move {
             registry.unregister(&token).await;

@@ -4341,10 +4341,19 @@ fn stream_header_line(
     let hint = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
-        vec![Span::styled(
-            format!("watch: {}", stream.watch_url),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )]
+        vec![
+            Span::styled(
+                format!("watch: {}", stream.watch_url),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
+            // Load-bearing trailing space: terminal link detection (kitty and
+            // friends) runs over the cell grid, so a URL flush against the
+            // right edge swallows whatever sits in the next cell: the pane
+            // border `│`, or the `────` rule on the row below when the
+            // terminal treats a full row as wrapped. Clicking the link then
+            // opens a 404. One space ends the token where the URL ends.
+            Span::raw(" "),
+        ]
     };
     row_with_hint(left, hint, width)
 }

@@ -217,16 +217,18 @@ async fn orb_milestone_lands_and_pays_once_per_lifetime() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get::<_, &str>("kind"), "orb");
 
-    let badge: i64 = client
-        .query_one(
-            "SELECT COUNT(*)::bigint AS n FROM profile_awards
-             WHERE user_id = $1 AND category = 'dcss_orb'",
-            &[&user.id],
-        )
-        .await
-        .expect("badge row")
-        .get("n");
-    assert_eq!(badge, 1);
+    // The badge insert trails the chip credit inside the grant task, so it
+    // gets its own wait.
+    drop(client);
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { badge_count(&db, user.id, "dcss_orb").await == 1 }
+        },
+        "orb badge granted",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -295,6 +297,21 @@ async fn a_win_grants_both_badges() {
             async move { award_chip_total(&db, user.id).await == 30_000 }
         },
         "win + orb chips granted",
+    )
+    .await;
+
+    // The badge inserts trail the chip credits inside the grant tasks, so
+    // they get their own wait before the exact-rows assertion.
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                badge_count(&db, user.id, "dcss_orb").await == 1
+                    && badge_count(&db, user.id, "dcss_win").await == 1
+            }
+        },
+        "both badges granted",
     )
     .await;
 
@@ -438,6 +455,21 @@ async fn a_nethack_ascension_grants_both_badges() {
     )
     .await;
 
+    // The badge inserts trail the chip credits inside the grant tasks, so
+    // they get their own wait before the exact-rows assertion.
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                badge_count(&db, user.id, "nethack_amulet").await == 1
+                    && badge_count(&db, user.id, "nethack_ascension").await == 1
+            }
+        },
+        "both badges granted",
+    )
+    .await;
+
     let client = test_db.db.get().await.expect("db client");
     let categories: Vec<String> = client
         .query(
@@ -524,16 +556,18 @@ async fn amulet_livelog_milestone_lands_and_pays_once_per_lifetime() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].get::<_, &str>("kind"), "amulet");
 
-    let badge: i64 = client
-        .query_one(
-            "SELECT COUNT(*)::bigint AS n FROM profile_awards
-             WHERE user_id = $1 AND category = 'nethack_amulet'",
-            &[&user.id],
-        )
-        .await
-        .expect("badge row")
-        .get("n");
-    assert_eq!(badge, 1);
+    // The badge insert trails the chip credit inside the grant task, so it
+    // gets its own wait.
+    drop(client);
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move { badge_count(&db, user.id, "nethack_amulet").await == 1 }
+        },
+        "amulet badge granted",
+    )
+    .await;
 }
 
 fn brogue_file() -> String {
@@ -623,6 +657,21 @@ async fn brogue_endings_grant_only_their_own_badge() {
             async move { award_chip_total_for(&db, user.id, "brogue").await == 30_000 }
         },
         "mastery chips granted",
+    )
+    .await;
+
+    // The badge inserts trail the chip credits inside the grant tasks, so
+    // they get their own wait before the exact-rows assertion.
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                badge_count(&db, user.id, "brogue_escape").await == 1
+                    && badge_count(&db, user.id, "brogue_mastery").await == 1
+            }
+        },
+        "both badges granted",
     )
     .await;
 
