@@ -306,6 +306,7 @@ fn drop_items_to_take_heavy_loot() {
         chance: 1.0,
     }];
     static SCENE: Scene = Scene {
+        key: "start",
         loot: &LOOT,
         ..Scene::EMPTY
     };
@@ -392,6 +393,7 @@ fn cancel_drop_restores_spoils_phase_without_changes() {
         chance: 1.0,
     }];
     static SCENE: Scene = Scene {
+        key: "start",
         loot: &LOOT,
         ..Scene::EMPTY
     };
