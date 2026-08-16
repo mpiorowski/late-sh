@@ -19,6 +19,7 @@ pub const DAILY_BATTLESHIP_WIN_REWARD_KEY: &str = "daily_battleship_win_payout";
 pub const DAILY_BRISCOLA_WIN_REWARD_KEY: &str = "daily_briscola_win_payout";
 pub const DAILY_CHECKERS_WIN_REWARD_KEY: &str = "daily_checkers_win_payout";
 pub const DAILY_CHESS_WIN_REWARD_KEY: &str = "daily_chess_win_payout";
+pub const DAILY_CHESS960_WIN_REWARD_KEY: &str = "daily_chess960_win_payout";
 pub const DAILY_CONNECT4_WIN_REWARD_KEY: &str = "daily_connect4_win_payout";
 pub const DAILY_REVERSI_WIN_REWARD_KEY: &str = "daily_reversi_win_payout";
 pub const LATEANIA_ARCHDEMON_REWARD_KEY: &str = "lateania_archdemon_defeat";

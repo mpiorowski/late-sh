@@ -205,8 +205,10 @@ pub struct DailyMoveRecord {
 }
 
 impl DailyChessState {
-    fn new(white: Uuid, black: Uuid) -> Self {
-        let fen = format!("{}", Board::default());
+    /// `start` is the opening position: `Board::default()` for chess, a
+    /// shuffled back rank for chess960. Everything after it is the same game.
+    fn new(white: Uuid, black: Uuid, start: &Board) -> Self {
+        let fen = rules::fen(start);
         Self {
             version: DAILY_STATE_VERSION,
             revision: 0,
@@ -252,6 +254,24 @@ impl DailyChessState {
             label: record.label.clone(),
         })
     }
+}
+
+/// The claim-time state for either chess variant: the colour coin flip, then
+/// the opening position the caller picked. White is on the clock.
+fn claim_chess_state(
+    challenger_id: Uuid,
+    claimer_id: Uuid,
+    start: &Board,
+) -> Result<(Value, Uuid)> {
+    let (white, black) = if rand::random::<bool>() {
+        (challenger_id, claimer_id)
+    } else {
+        (claimer_id, challenger_id)
+    };
+    Ok((
+        serde_json::to_value(DailyChessState::new(white, black, start))?,
+        white,
+    ))
 }
 
 impl DailyService {
@@ -487,17 +507,16 @@ impl DailyService {
         // Fair-start coin flip per game: chess randomizes colors (White
         // moves first), battleship randomizes who fires first.
         let (state_value, first_turn_user) = match game {
+            // The only thing chess960 changes is where the pieces start; the
+            // shuffle is rolled once, here, and lives on in the stored FEN.
             DailyGame::Chess => {
-                let (white, black) = if rand::random::<bool>() {
-                    (challenge.challenger_id, user_id)
-                } else {
-                    (user_id, challenge.challenger_id)
-                };
-                (
-                    serde_json::to_value(DailyChessState::new(white, black))?,
-                    white,
-                )
+                claim_chess_state(challenge.challenger_id, user_id, &Board::default())?
             }
+            DailyGame::Chess960 => claim_chess_state(
+                challenge.challenger_id,
+                user_id,
+                &rules::random_chess960_board(),
+            )?,
             DailyGame::Battleship => {
                 let state = DailyBattleshipState::new(challenge.challenger_id, user_id);
                 let first = if rand::random::<bool>() {
@@ -646,7 +665,10 @@ impl DailyService {
         let client = self.db.get().await?;
         let (row, game) = self.move_prelude(&client, user_id, match_id).await?;
         match game {
-            DailyGame::Chess => self.play_chess_move(&client, row, user_id, from, to).await,
+            DailyGame::Chess | DailyGame::Chess960 => {
+                self.play_chess_move(&client, row, game, user_id, from, to)
+                    .await
+            }
             // A battleship "move" is one square; `to` carries the target cell.
             DailyGame::Battleship => self.play_battleship_shot(&client, row, user_id, to).await,
             // A connect-four "move" is one column; `to` carries it.
@@ -723,6 +745,7 @@ impl DailyService {
         &self,
         client: &tokio_postgres::Client,
         row: DailyMatch,
+        game: DailyGame,
         user_id: Uuid,
         from: usize,
         to: usize,
@@ -749,7 +772,7 @@ impl DailyService {
         board.play(mv);
         let base_revision = state.revision as i64;
         state.revision = state.revision.saturating_add(1);
-        state.fen = format!("{}", board);
+        state.fen = rules::fen(&board);
         state.position_history.push(state.fen.clone());
         // The resolved move's own squares, not the pair the client sent: a
         // castle played as a two-square king push stores as the
@@ -798,7 +821,7 @@ impl DailyService {
                 });
                 self.finish_events(
                     match_id,
-                    DailyGame::Chess,
+                    game,
                     row.challenger_id,
                     row.opponent_id,
                     winner,
@@ -1552,7 +1575,7 @@ impl DailyService {
                 let opponent_id = row.opponent_id?;
                 let game = DailyGame::from_kind(&row.game_kind)?;
                 let (white_id, black_id, move_count) = match game {
-                    DailyGame::Chess => {
+                    DailyGame::Chess | DailyGame::Chess960 => {
                         let state = DailyChessState::parse(&row.state).ok();
                         (
                             state.as_ref().map(|state| state.colors.white),

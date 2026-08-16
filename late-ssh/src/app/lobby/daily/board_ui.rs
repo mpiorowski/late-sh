@@ -22,9 +22,12 @@ use crate::app::{
         board_ui::{self, BoardCtx, pick_tier},
         types::{ChessColor, ChessPiece, ChessPieceKind, ChessPieceRenderMode, piece_glyph},
     },
-    lobby::daily::state::{
-        ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
-        format_deadline,
+    lobby::daily::{
+        games::DailyGame,
+        state::{
+            ChessDetail, DailyBoardState, DailyGameDetail, DailyMatchDetail, DailyState,
+            format_deadline,
+        },
     },
 };
 
@@ -208,7 +211,7 @@ fn draw_match(
     }
 
     let chess = match &detail.game {
-        DailyGameDetail::Chess(chess) => chess,
+        DailyGameDetail::Chess(chess) | DailyGameDetail::Chess960(chess) => chess,
         DailyGameDetail::Battleship(battleship) => {
             super::battleship_ui::draw(frame, area, daily, board, detail, battleship);
             return;
@@ -240,7 +243,7 @@ fn draw_match(
         let cols =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(INFO_SIDEBAR_WIDTH)])
                 .split(area);
-        draw_info_rail(frame, cols[1], chess);
+        draw_info_rail(frame, cols[1], detail.game.kind(), chess);
         cols[0]
     } else {
         area
@@ -675,7 +678,7 @@ fn key_line(board: &DailyBoardState, detail: &DailyMatchDetail) -> Line<'static>
     Line::from(spans)
 }
 
-fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
+fn draw_info_rail(frame: &mut Frame, area: Rect, game: DailyGame, chess: &ChessDetail) {
     let block = Block::default()
         .borders(Borders::LEFT)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
@@ -693,13 +696,13 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, chess: &ChessDetail) {
     // nowhere else to live: the full move list.
     let mut lines = vec![
         Line::from(Span::styled(
-            "Chess".to_string(),
+            game.display_name().to_string(),
             Style::default()
                 .fg(theme::TEXT_DIM())
                 .add_modifier(Modifier::ITALIC),
         )),
         Line::from(Span::styled(
-            "one move per day".to_string(),
+            game.tagline().to_string(),
             Style::default()
                 .fg(theme::TEXT_FAINT())
                 .add_modifier(Modifier::ITALIC),
