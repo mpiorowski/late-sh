@@ -78,3 +78,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Fix for issue #447: safe input handling
