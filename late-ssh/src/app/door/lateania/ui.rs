@@ -2039,6 +2039,16 @@ fn room_panel(
         };
         lines.extend(side_kv_wrap("heading", &text, color, width));
     }
+    // A merchant standing here: called out on its own line, not buried in "Of
+    // note", so a shop room can't be walked past without noticing it.
+    if let Some(shop) = &view.shop {
+        lines.extend(side_kv_wrap(
+            "shop",
+            &format!("{} ({})", shop.shop_name, shop.npc_name),
+            theme::SUCCESS(),
+            width,
+        ));
+    }
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
