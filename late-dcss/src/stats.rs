@@ -2,9 +2,9 @@
 // task. late-ssh connects with the reserved `late_stats` username (inside the
 // reserved `late_*` handle namespace, so no player can ever claim it) and,
 // instead of a crawl child on a PTY, gets a tail of the shared xlog files
-// crawl appends under `$HOME/.crawl`: `logfile` (one line per finished game)
-// and `milestones` (live mid-run events; requires the DGL_MILESTONES define
-// asserted in docker/doors/dcss.Dockerfile).
+// crawl appends under `$HOME/.crawl/saves`: `logfile` (one line per finished
+// game) and `milestones` (live mid-run events; requires the DGL_MILESTONES
+// define asserted in docker/doors/dcss.Dockerfile).
 //
 // Protocol, deliberately dumb:
 // - The client sends its per-file byte offsets in env requests before the
@@ -42,9 +42,16 @@ pub(crate) const CURSORS_ENV_VAR: &str = "LATE_DOOR_STATS_CURSORS";
 /// The files this host streams, by stable frame id. Only the standard-game
 /// files: crawl suffixes other game types (`logfile-sprint`, ...), which
 /// keeps sprint/seeded runs off the boards by construction.
+///
+/// The `saves/` segment is load-bearing and easy to get wrong: this build
+/// leaves SAVEDIR at its default (`$HOME/.crawl`,
+/// docker/doors/dcss.Dockerfile) and passes no `-shared_dir`, so crawl
+/// appends the shared xlogs inside the save directory, not beside it. A
+/// wrong path here fails silently forever, because a missing file is a
+/// legitimate cold start (see `open_and_read`).
 const FILES: &[(&str, &str)] = &[
-    ("logfile", ".crawl/logfile"),
-    ("milestones", ".crawl/milestones"),
+    ("logfile", ".crawl/saves/logfile"),
+    ("milestones", ".crawl/saves/milestones"),
 ];
 
 /// How often to look for new lines once caught up. Coarse on purpose: the

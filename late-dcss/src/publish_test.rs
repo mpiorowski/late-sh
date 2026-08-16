@@ -110,12 +110,22 @@ fn render_listing_links_entries_and_marks_directories() {
 }
 
 /// A throwaway `$HOME` with the crawl tree a live playground would have.
+///
+/// The layout is copied from the real playground, not from what the routes
+/// expect: crawl appends the shared xlogs inside `saves/` while the morgue
+/// sits directly under `.crawl`. A fixture that flattens the two is what let
+/// the published logfile 404 in production.
 fn playground() -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("tempdir");
     let crawl = home.path().join(".crawl");
     std::fs::create_dir_all(crawl.join("morgue/mat")).expect("morgue dir");
-    std::fs::write(crawl.join("logfile"), "v=0.34.1:name=mat:sc=1234\n").expect("logfile");
-    std::fs::write(crawl.join("milestones"), "v=0.34.1:name=mat:type=orb\n").expect("milestones");
+    std::fs::create_dir_all(crawl.join("saves")).expect("saves dir");
+    std::fs::write(crawl.join("saves/logfile"), "v=0.34.1:name=mat:sc=1234\n").expect("logfile");
+    std::fs::write(
+        crawl.join("saves/milestones"),
+        "v=0.34.1:name=mat:type=orb\n",
+    )
+    .expect("milestones");
     std::fs::write(
         crawl.join("morgue/mat/morgue-mat-20260810-120000.txt"),
         "dungeon crawl stone soup version 0.34.1\n",
