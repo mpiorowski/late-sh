@@ -3,13 +3,14 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-15 (Stream owners moderate their own room: `/ban
+- Last updated: 2026-08-16 (Stream owners moderate their own room: `/ban
   @user [duration] [reason]` and `/unban @user` in the stream room run the
   same `ModerationService` room action as staff, authorized by a narrow
   `STREAM_OWNER` cap set resolved from `game_kind='stream'` +
   `created_by`. Ban rather than kick, because a public room is re-enterable.
   A room ban now also refuses a voice ticket, so it takes the microphone and
-  not just the chat. See §6)
+  not just the chat. An active ban placed by staff stays out of the
+  streamer's reach: neither liftable nor overwritable. See §6)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -313,7 +314,11 @@ Cross-domain touchpoints:
   `chat/svc_test.rs` covers the streamer banning and unbanning a regular,
   a viewer holding nothing in someone else's room, staff being out of
   reach, a private room's owner *not* gaining the ban, a non-stream game
-  room having no owner-moderator, and a banned user failing to rejoin;
+  room having no owner-moderator, a banned user failing to rejoin, a
+  streamer being refused both lifting and overwriting an active staff ban
+  (`a_streamer_cannot_lift_or_replace_a_staff_ban_on_their_room`), and a
+  chat `/ban` landing on the room the actor sits in rather than a
+  slug-namesake topic room (chat commands carry the room id);
   `voice/svc_test.rs::a_room_banned_user_is_refused_a_voice_ticket` pins
   the microphone half; `chat/state_internal_test.rs` covers the
   `/ban @user [duration] [reason]` parse (duration slot vs reason).
@@ -388,6 +393,12 @@ unban, `moderation/policy.rs`) when the room is `game_kind='stream'` and
 
 Ownership carries no rank (`Permissions::can` still compares tiers), so a
 streamer cannot touch staff, and the grant is per-action, never standing.
+Staff *decisions* are equally out of reach: when the cap came from ownership
+rather than rank, an active ban placed by another actor refuses both
+`/unban` and a re-`/ban` (`room_action` checks the existing row's
+`actor_user_id`), so a streamer cannot lift a staff ban or overwrite a
+permanent one with a softer one. An expired staff ban is history and does
+not block a fresh streamer ban.
 
 A room ban takes the microphone too: `ensure_user_can_join_voice`
 (`voice/svc.rs`) refuses a banned user a voice ticket. Membership alone

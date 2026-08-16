@@ -62,10 +62,27 @@ struct ArtboardRestoreHandles {
 
 pub(crate) struct RoomModRequest {
     pub action: RoomModAction,
-    pub slug: String,
+    pub room: RoomRef,
     pub username: String,
     pub duration: Option<chrono::Duration>,
     pub reason: String,
+}
+
+/// How a room action names its room. Chat commands run in the room the actor
+/// is sitting in and carry its id: slugs are not globally unique (a public
+/// topic room and a stream room can share one), so the id is the only exact
+/// name. The mod surface has nothing but the typed slug.
+#[derive(Debug)]
+pub(crate) enum RoomRef {
+    Id(Uuid),
+    Slug(String),
+}
+
+/// What a finished room action reports back: the mod surface prints the
+/// messages, the chat path banners the resolved room's slug.
+pub(crate) struct RoomActionDone {
+    pub room_slug: String,
+    pub messages: Vec<String>,
 }
 
 struct SlowModeRequest {
@@ -178,18 +195,20 @@ impl ModerationService {
                 duration,
                 reason,
             } => {
-                self.room_action(
-                    actor_user_id,
-                    permissions,
-                    RoomModRequest {
-                        action,
-                        slug,
-                        username,
-                        duration,
-                        reason,
-                    },
-                )
-                .await
+                let done = self
+                    .room_action(
+                        actor_user_id,
+                        permissions,
+                        RoomModRequest {
+                            action,
+                            room: RoomRef::Slug(slug),
+                            username,
+                            duration,
+                            reason,
+                        },
+                    )
+                    .await?;
+                Ok(done.messages)
             }
             ModCommand::ServerUser {
                 action,
@@ -754,7 +773,7 @@ impl ModerationService {
         actor_user_id: Uuid,
         permissions: Permissions,
         request: RoomModRequest,
-    ) -> Result<Vec<String>> {
+    ) -> Result<RoomActionDone> {
         self.room_action(actor_user_id, permissions, request).await
     }
 
@@ -763,9 +782,12 @@ impl ModerationService {
         actor_user_id: Uuid,
         permissions: Permissions,
         request: RoomModRequest,
-    ) -> Result<Vec<String>> {
+    ) -> Result<RoomActionDone> {
         let mut client = self.db.get().await?;
-        let room = find_room_by_mod_slug(&client, &request.slug).await?;
+        let room = match &request.room {
+            RoomRef::Id(room_id) => find_room_by_mod_id(&client, *room_id).await?,
+            RoomRef::Slug(slug) => find_room_by_mod_slug(&client, slug).await?,
+        };
         let target = find_user_by_mod_name(&client, &request.username).await?;
         ensure_not_self(actor_user_id, target.id)?;
         let target_tier = tier_for_user(&target);
@@ -780,6 +802,21 @@ impl ModerationService {
         let permissions =
             resolve_room_ownership(&client, &room, actor_user_id, permissions).await?;
         ensure_can(permissions, cap, target_tier)?;
+        // Ownership manages the streamer's own bans, never staff's. When rank
+        // did not authorize this action (the actor's tier does not beat the
+        // target's, so the cap came from ownership), an active ban placed by
+        // another actor is out of reach: lifting it, or overwriting it with a
+        // softer one, would reverse a staff decision on the streamer's room.
+        // Expired bans are history and do not stand in the way.
+        if matches!(request.action, RoomModAction::Ban | RoomModAction::Unban)
+            && permissions.tier() <= target_tier
+        {
+            let existing =
+                RoomBan::find_active_for_room_and_user(&client, room.id, target.id).await?;
+            if existing.is_some_and(|ban| ban.actor_user_id != actor_user_id) {
+                anyhow::bail!("this ban was placed by staff; only staff can change it");
+            }
+        }
         let room_slug = room.slug.clone().unwrap_or_else(|| room.kind.clone());
         let affected_voice_channel =
             if matches!(request.action, RoomModAction::Kick | RoomModAction::Ban) {
@@ -877,12 +914,15 @@ impl ModerationService {
             reason: request.reason,
             notified_sessions,
         });
-        Ok(vec![format!(
-            "{} @{} in #{}",
-            request.action.past_tense(),
-            target.username,
-            room_slug
-        )])
+        Ok(RoomActionDone {
+            messages: vec![format!(
+                "{} @{} in #{}",
+                request.action.past_tense(),
+                target.username,
+                room_slug
+            )],
+            room_slug,
+        })
     }
 
     async fn slow_user(
@@ -2089,6 +2129,15 @@ async fn find_room_by_mod_slug(client: &tokio_postgres::Client, slug: &str) -> R
     ChatRoom::find_non_dm_by_slug(client, &slug)
         .await?
         .ok_or_else(|| anyhow::anyhow!("room not found: #{slug}"))
+}
+
+/// The room a chat command named by id. Same contract as the slug lookup:
+/// DMs are not moddable rooms and stay invisible here.
+async fn find_room_by_mod_id(client: &tokio_postgres::Client, room_id: Uuid) -> Result<ChatRoom> {
+    match ChatRoom::get(client, room_id).await? {
+        Some(room) if room.kind != "dm" => Ok(room),
+        _ => Err(anyhow::anyhow!("room not found")),
+    }
 }
 
 struct RoomVoiceTarget {

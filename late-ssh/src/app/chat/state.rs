@@ -41,7 +41,7 @@ use crate::authz::Permissions;
 use crate::moderation::{
     command::{RoomModAction, ServerUserAction, parse_optional_duration},
     event::ModerationEvent,
-    service::RoomModRequest,
+    service::{RoomModRequest, RoomRef},
 };
 use crate::state::{ActiveUser, ActiveUsers};
 use crate::usernames::UsernameResolver;
@@ -3169,15 +3169,17 @@ impl ChatState {
             let Some(target) = target else {
                 return Some(Banner::error("Usage: /kick @user"));
             };
-            let Some(slug) = self.room_slug(room_id) else {
+            // A slug-less room is a DM: nothing to moderate there. The room
+            // itself travels as its id, since slugs are not globally unique.
+            if self.room_slug(room_id).is_none() {
                 return Some(Banner::error("This room has no members to kick"));
-            };
+            }
             self.service.room_mod_task(
                 self.user_id,
                 self.permissions,
                 RoomModRequest {
                     action: RoomModAction::Kick,
-                    slug,
+                    room: RoomRef::Id(room_id),
                     username: target.to_string(),
                     duration: None,
                     reason: String::new(),
@@ -3199,16 +3201,16 @@ impl ChatState {
                 Ok(request) => request,
                 Err(usage) => return Some(Banner::error(usage)),
             };
-            let Some(slug) = self.room_slug(room_id) else {
+            if self.room_slug(room_id).is_none() {
                 return Some(Banner::error("This room has no members to ban"));
-            };
+            }
             let target = request.username.to_string();
             self.service.room_mod_task(
                 self.user_id,
                 self.permissions,
                 RoomModRequest {
                     action: RoomModAction::Ban,
-                    slug,
+                    room: RoomRef::Id(room_id),
                     username: target.clone(),
                     duration: request.duration,
                     reason: request.reason,
@@ -3227,16 +3229,16 @@ impl ChatState {
                 Ok(request) => request,
                 Err(_) => return Some(Banner::error("Usage: /unban @user")),
             };
-            let Some(slug) = self.room_slug(room_id) else {
+            if self.room_slug(room_id).is_none() {
                 return Some(Banner::error("This room has no bans to lift"));
-            };
+            }
             let target = request.username.to_string();
             self.service.room_mod_task(
                 self.user_id,
                 self.permissions,
                 RoomModRequest {
                     action: RoomModAction::Unban,
-                    slug,
+                    room: RoomRef::Id(room_id),
                     username: target.clone(),
                     duration: None,
                     reason: request.reason,

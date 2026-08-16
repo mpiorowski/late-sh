@@ -5,7 +5,7 @@ use crate::authz::Permissions;
 use crate::dartboard;
 use crate::moderation::command::{RoomModAction, ServerUserAction};
 use crate::moderation::event::ModerationEvent;
-use crate::moderation::service::{ModerationInfra, RoomModRequest};
+use crate::moderation::service::{ModerationInfra, RoomModRequest, RoomRef};
 use crate::session::{SessionMessage, SessionRegistry};
 use crate::state::{ActiveSession, ActiveUser};
 use dartboard_core::{Canvas, CanvasOp, Pos, RgbColor};
@@ -4049,11 +4049,12 @@ async fn wait_for_message_containing(
     panic!("no message containing {needle:?} landed in the room");
 }
 
-/// A permanent, reasonless room action against `username` in `slug`.
-fn room_request(action: RoomModAction, slug: &str, username: &str) -> RoomModRequest {
+/// A permanent, reasonless room action against `username` in the room. Chat
+/// commands carry the room id, so these tests do too.
+fn room_request(action: RoomModAction, room_id: Uuid, username: &str) -> RoomModRequest {
     RoomModRequest {
         action,
-        slug: slug.to_string(),
+        room: RoomRef::Id(room_id),
         username: username.to_string(),
         duration: None,
         reason: String::new(),
@@ -4096,7 +4097,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     service.room_mod_task(
         guest.id,
         regular,
-        room_request(RoomModAction::Kick, "study", "kick_owner"),
+        room_request(RoomModAction::Kick, room.id, "kick_owner"),
     );
     expect_room_mod_failed(&mut events, guest.id).await;
     assert!(
@@ -4108,7 +4109,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     service.room_mod_task(
         owner.id,
         regular,
-        room_request(RoomModAction::Kick, "study", "kick_staff"),
+        room_request(RoomModAction::Kick, room.id, "kick_staff"),
     );
     expect_room_mod_failed(&mut events, owner.id).await;
     assert!(
@@ -4120,7 +4121,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     service.room_mod_task(
         owner.id,
         regular,
-        room_request(RoomModAction::Kick, "study", "kick_guest"),
+        room_request(RoomModAction::Kick, room.id, "kick_guest"),
     );
     expect_room_mod_succeeded(&mut events, owner.id).await;
     assert!(
@@ -4134,7 +4135,7 @@ async fn private_room_owner_can_kick_regulars_but_not_staff() {
     service.room_mod_task(
         owner.id,
         regular,
-        room_request(RoomModAction::Ban, "study", "kick_guest"),
+        room_request(RoomModAction::Ban, room.id, "kick_guest"),
     );
     expect_room_mod_failed(&mut events, owner.id).await;
 }
@@ -4162,7 +4163,6 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
     let room = ChatRoom::get_or_create_stream_room(&client, &streamer.username, streamer.id)
         .await
         .expect("create stream room");
-    let slug = room.slug.clone().expect("stream room slug");
     for member in [streamer.id, heckler.id, staff.id] {
         ChatRoomMember::join(&client, room.id, member)
             .await
@@ -4176,7 +4176,7 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
     service.room_mod_task(
         heckler.id,
         regular,
-        room_request(RoomModAction::Ban, &slug, "ban_streamer"),
+        room_request(RoomModAction::Ban, room.id, "ban_streamer"),
     );
     expect_room_mod_failed(&mut events, heckler.id).await;
 
@@ -4184,7 +4184,7 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
     service.room_mod_task(
         streamer.id,
         regular,
-        room_request(RoomModAction::Ban, &slug, "ban_staff"),
+        room_request(RoomModAction::Ban, room.id, "ban_staff"),
     );
     expect_room_mod_failed(&mut events, streamer.id).await;
 
@@ -4194,7 +4194,7 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
         regular,
         RoomModRequest {
             reason: "shouting".to_string(),
-            ..room_request(RoomModAction::Ban, &slug, "ban_heckler")
+            ..room_request(RoomModAction::Ban, room.id, "ban_heckler")
         },
     );
     expect_room_mod_succeeded(&mut events, streamer.id).await;
@@ -4213,7 +4213,7 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
     service.room_mod_task(
         streamer.id,
         regular,
-        room_request(RoomModAction::Unban, &slug, "ban_heckler"),
+        room_request(RoomModAction::Unban, room.id, "ban_heckler"),
     );
     expect_room_mod_succeeded(&mut events, streamer.id).await;
     assert!(
@@ -4221,6 +4221,169 @@ async fn stream_room_owner_can_ban_and_unban_regulars_but_not_staff() {
             .await
             .expect("ban lookup"),
         "unban must clear the row"
+    );
+}
+
+/// A ban placed by staff is not the streamer's to touch. Ownership grants the
+/// caps but no rank, so a streamer must be refused both lifting a staff ban
+/// and overwriting it with a softer one; staff themselves stay unaffected,
+/// and an *expired* staff ban no longer stands in the way of a fresh one.
+#[tokio::test]
+async fn a_streamer_cannot_lift_or_replace_a_staff_ban_on_their_room() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let streamer = create_test_user(&test_db.db, "staffban_streamer").await;
+    let heckler = create_test_user(&test_db.db, "staffban_heckler").await;
+    let staff = create_test_user(&test_db.db, "staffban_staff").await;
+    User::set_moderator(&client, staff.id, true)
+        .await
+        .expect("promote staff");
+
+    let room = ChatRoom::get_or_create_stream_room(&client, &streamer.username, streamer.id)
+        .await
+        .expect("create stream room");
+    for member in [streamer.id, heckler.id, staff.id] {
+        ChatRoomMember::join(&client, room.id, member)
+            .await
+            .expect("join room");
+    }
+
+    let regular = Permissions::new(false, false);
+    let moderator = Permissions::new(false, true);
+    let mut events = service.subscribe_events();
+
+    // Staff ban the heckler in the streamer's room, permanently.
+    service.room_mod_task(
+        staff.id,
+        moderator,
+        room_request(RoomModAction::Ban, room.id, "staffban_heckler"),
+    );
+    expect_room_mod_succeeded(&mut events, staff.id).await;
+
+    // The streamer may not lift it.
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        room_request(RoomModAction::Unban, room.id, "staffban_heckler"),
+    );
+    expect_room_mod_failed(&mut events, streamer.id).await;
+
+    // Nor overwrite it with one that lapses in a second.
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        RoomModRequest {
+            duration: Some(chrono::Duration::seconds(1)),
+            ..room_request(RoomModAction::Ban, room.id, "staffban_heckler")
+        },
+    );
+    expect_room_mod_failed(&mut events, streamer.id).await;
+
+    let ban = RoomBan::find_for_room_and_user(&client, room.id, heckler.id)
+        .await
+        .expect("ban lookup")
+        .expect("staff ban row");
+    assert_eq!(
+        ban.actor_user_id, staff.id,
+        "the staff ban must survive untouched"
+    );
+    assert_eq!(
+        ban.expires_at, None,
+        "the staff ban must stay permanent, not shortened by the streamer"
+    );
+
+    // Staff are unaffected by the guard: they lift their own ban fine.
+    service.room_mod_task(
+        staff.id,
+        moderator,
+        room_request(RoomModAction::Unban, room.id, "staffban_heckler"),
+    );
+    expect_room_mod_succeeded(&mut events, staff.id).await;
+
+    // An expired staff ban is history, not a claim: the streamer may ban over
+    // it.
+    RoomBan::activate(
+        &client,
+        room.id,
+        heckler.id,
+        staff.id,
+        "old trouble",
+        Some(chrono::Utc::now() - chrono::Duration::hours(1)),
+    )
+    .await
+    .expect("seed expired staff ban");
+    service.room_mod_task(
+        streamer.id,
+        regular,
+        room_request(RoomModAction::Ban, room.id, "staffban_heckler"),
+    );
+    expect_room_mod_succeeded(&mut events, streamer.id).await;
+    let ban = RoomBan::find_for_room_and_user(&client, room.id, heckler.id)
+        .await
+        .expect("ban lookup")
+        .expect("streamer ban row");
+    assert_eq!(
+        ban.actor_user_id, streamer.id,
+        "an expired staff ban must not block the streamer's fresh ban"
+    );
+}
+
+/// Slugs are not globally unique: a public topic room may share its slug with
+/// a stream room (stream slugs are just `{username}-live`). Chat commands
+/// therefore name the room by id, so the action lands on the room the actor
+/// is sitting in, never on a namesake.
+#[tokio::test]
+async fn chat_ban_lands_on_the_room_the_actor_is_in_not_a_slug_namesake() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let client = test_db.db.get().await.expect("db client");
+
+    let streamer = create_test_user(&test_db.db, "namesake_streamer").await;
+    let heckler = create_test_user(&test_db.db, "namesake_heckler").await;
+
+    let room = ChatRoom::get_or_create_stream_room(&client, &streamer.username, streamer.id)
+        .await
+        .expect("create stream room");
+    let slug = room.slug.clone().expect("stream room slug");
+    let namesake = ChatRoom::get_or_create_public_room(&client, &slug)
+        .await
+        .expect("create namesake topic room");
+    assert_ne!(
+        namesake.id, room.id,
+        "the namesake must be a distinct room for this test to mean anything"
+    );
+    for member in [streamer.id, heckler.id] {
+        ChatRoomMember::join(&client, room.id, member)
+            .await
+            .expect("join room");
+    }
+
+    let mut events = service.subscribe_events();
+    service.room_mod_task(
+        streamer.id,
+        Permissions::new(false, false),
+        room_request(RoomModAction::Ban, room.id, "namesake_heckler"),
+    );
+    expect_room_mod_succeeded(&mut events, streamer.id).await;
+    assert!(
+        RoomBan::is_active_for_room_and_user(&client, room.id, heckler.id)
+            .await
+            .expect("ban lookup"),
+        "the ban must land on the stream room"
+    );
+    assert!(
+        !RoomBan::is_active_for_room_and_user(&client, namesake.id, heckler.id)
+            .await
+            .expect("ban lookup"),
+        "the namesake topic room must be untouched"
     );
 }
 
@@ -4256,7 +4419,7 @@ async fn a_non_stream_game_room_has_no_owner_moderator() {
     service.room_mod_task(
         creator.id,
         Permissions::new(false, false),
-        room_request(RoomModAction::Ban, "poker-owner-test", "table_player"),
+        room_request(RoomModAction::Ban, room.id, "table_player"),
     );
     expect_room_mod_failed(&mut events, creator.id).await;
     assert!(

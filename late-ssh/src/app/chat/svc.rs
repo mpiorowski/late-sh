@@ -4129,22 +4129,21 @@ impl ChatService {
     ) {
         let service = self.clone();
         let action = request.action;
-        let room_slug = request.slug.clone();
         let target_username = request.username.clone();
         let span = info_span!(
             "chat.room_mod_task",
             user_id = %user_id,
             action = action.past_tense(),
-            room_slug = %room_slug,
+            room = ?request.room,
             target = %target_username
         );
         tokio::spawn(
             async move {
                 let moderation = service.moderation_service();
                 let event = match moderation.room_command(user_id, permissions, request).await {
-                    Ok(_) => ChatEvent::RoomModSucceeded {
+                    Ok(done) => ChatEvent::RoomModSucceeded {
                         user_id,
-                        room_slug,
+                        room_slug: done.room_slug,
                         username: target_username,
                         action,
                     },
