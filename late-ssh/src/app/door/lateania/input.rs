@@ -181,6 +181,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Taming
             | Panel::Housing
             | Panel::Portal
+            | Panel::Board
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
@@ -561,6 +562,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Taming
             | Panel::Housing
             | Panel::Portal
+            | Panel::Board
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities

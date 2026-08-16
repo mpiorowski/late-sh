@@ -1089,7 +1089,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                 parts.push(format!("tame {t}"));
             }
             if let Some(g) = p.gather {
-                parts.push(format!("gather {g}"));
+                parts.push(format!("gather {} (needs Lv{})", g.skill, g.level_req));
             }
             if !p.monsters.is_empty() {
                 parts.push(format!("foes {}", p.monsters.join(", ")));
@@ -1117,7 +1117,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         let (text, color) = match heading {
             Heading::Toward(name, route) => (
                 format!(
-                    "\u{2691} heading for {name} · {} room{} · take {}",
+                    "{} compass: {name} · {} room{} · take {}",
+                    route.next.compass_glyph(),
                     route.rooms,
                     if route.rooms == 1 { "" } else { "s" },
                     route.next.label()
@@ -1126,7 +1127,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             ),
             Heading::Arrived(name) => (format!("\u{2691} {name} · you're here"), theme::SUCCESS()),
             Heading::Unreachable(name) => (
-                format!("\u{2691} {name} · no way there over ground you know"),
+                format!("\u{2715} {name} · no way there over ground you know"),
                 theme::ERROR(),
             ),
         };
@@ -1488,6 +1489,7 @@ fn draw_side(
         Panel::Crafting => crafting_panel(&state.craft_rows(), view, state.cursor()),
         Panel::Map => (atlas_panel(view), None),
         Panel::Leaderboard => (leaderboard_panel(view, usernames), None),
+        Panel::Board => board_panel(view, state.cursor()),
     };
     let off = scroll_offset(
         state.list_scroll(),
@@ -1737,6 +1739,10 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
             format!("{mark} {}", q.name),
             Style::default().fg(color),
         )));
+        lines.push(Line::from(Span::styled(
+            format!("    {}", q.desc),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
     }
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
@@ -1744,7 +1750,7 @@ fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::from(Span::styled(
-        "  Boards: claim ready bounties at their post",
+        "  Boards: examine one to pick a bounty to accept or claim",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
@@ -2024,20 +2030,21 @@ fn room_panel(
         let (text, color) = match heading {
             Heading::Toward(name, route) => (
                 format!(
-                    "{name} · {} room{} · take {}",
+                    "{} {name} · {} room{} · take {}",
+                    route.next.compass_glyph(),
                     route.rooms,
                     if route.rooms == 1 { "" } else { "s" },
                     route.next.label()
                 ),
                 theme::SUCCESS(),
             ),
-            Heading::Arrived(name) => (format!("{name} · you're here"), theme::SUCCESS()),
+            Heading::Arrived(name) => (format!("\u{2691}{name} · you're here"), theme::SUCCESS()),
             Heading::Unreachable(name) => (
                 format!("{name} · no way there over ground you know"),
                 theme::ERROR(),
             ),
         };
-        lines.extend(side_kv_wrap("heading", &text, color, width));
+        lines.extend(side_kv_wrap("compass", &text, color, width));
     }
     // A merchant standing here: called out on its own line, not buried in "Of
     // note", so a shop room can't be walked past without noticing it.
@@ -3088,6 +3095,12 @@ fn inventory_panel(
                 if let Some(cmp) = compare_line(&it.compare) {
                     lines.push(cmp);
                 }
+                if !it.desc.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {}", it.desc),
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    )));
+                }
             }
         }
     }
@@ -3235,6 +3248,12 @@ fn shop_panel(
                     ));
                     lines.push(Line::from(spans));
                 }
+                if !e.desc.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {}", e.desc),
+                        Style::default().fg(theme::TEXT_FAINT()),
+                    )));
+                }
             }
         }
     }
@@ -3346,6 +3365,72 @@ fn crafting_panel(
     lines.push(Line::raw(""));
     lines.push(hint("w/s", "select  Enter craft/fold"));
     lines.push(hint("u", "close"));
+    (lines, sel_line)
+}
+
+/// The quest board's picker: every ready-to-claim and still-open bounty for
+/// this board, so taking or turning in one is a choice, not a blind draw.
+fn board_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let Some(board) = &view.board else {
+        return (
+            vec![Line::from(Span::styled(
+                "No board here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))],
+            None,
+        );
+    };
+    let mut sel_line = None;
+    let mut lines = vec![Line::from(Span::styled(
+        "Quest Board",
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    if board.entries.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No bounties posted right now. Make progress on what you're already \
+             carrying, or come back later.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    for (i, e) in board.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let marker = if selected { ">" } else { " " };
+        let (tag, tag_color) = if e.ready {
+            ("READY", theme::SUCCESS())
+        } else {
+            ("available", theme::AMBER())
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT_BRIGHT())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{marker} {}", e.title), name_style),
+            Span::styled(format!("  [{tag}]"), Style::default().fg(tag_color)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("    {} ({})", e.blurb, e.objective),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    reward: {}", e.reward),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("w/s", "select"));
+    lines.push(hint("Enter", "claim (READY) / accept"));
+    lines.push(hint("o", "back"));
     (lines, sel_line)
 }
 

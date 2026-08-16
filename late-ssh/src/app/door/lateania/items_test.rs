@@ -115,6 +115,7 @@ fn fish_catalog_is_a_clean_band_of_sell_and_edible_species() {
             }
             ItemKind::Valuable => sell_only += 1,
             ItemKind::Equipment(_) => panic!("no fish is equipment"),
+            ItemKind::Utility => panic!("no fish is a utility item"),
         }
     }
     // Roughly a third edible, the rest pure sell loot.
