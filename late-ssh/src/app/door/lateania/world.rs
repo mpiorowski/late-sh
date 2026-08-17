@@ -10920,13 +10920,25 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
 /// The drop table for a Wildbound Waste tier: borrows the Frontier catalog
 /// (which already spans early-endgame through the game's toughest numbers)
 /// rather than authoring a bespoke item set, same shortcut `broceliande_loot`
-/// takes. Bosses always draw from the catalog's top tier.
+/// takes.
+///
+/// Every table here is keyed to the biome's own `loot_base`, the apex boss
+/// included: one affix ladder past its deepest regular, and never the
+/// catalog's top tier (hence the `- 2` clamp, which holds however `loot_base`
+/// is retuned later). The boss branch used to hand all three apexes
+/// `FRONTIER_TIERS - 1`, which paid the ~1500hp Duskmire boss - walked to off
+/// the Sahra Wastes, at gentle overworld multipliers, with no title anywhere
+/// on the road, and dropping guaranteed (`svc::roll_loot` never rolls for a
+/// boss) - exactly what the King Who Was Promised Nothing guards at ~11700hp
+/// behind twenty Frontier zones and four Bane titles. The crown's table stays
+/// the crown's.
 fn wildbound_loot(loot_base: usize, tier: usize, boss: bool) -> &'static [u32] {
-    if boss {
-        super::items::frontier_loot(super::items::FRONTIER_TIERS - 1)
+    let tier = if boss {
+        loot_base + WILDBOUND_TIER_AFFIX.len()
     } else {
-        super::items::frontier_loot((loot_base + tier).min(super::items::FRONTIER_TIERS - 1))
-    }
+        loot_base + tier
+    };
+    super::items::frontier_loot(tier.min(super::items::FRONTIER_TIERS - 2))
 }
 
 /// Build the Wildbound Waste: three chained biomes (rooms 30000+), each a

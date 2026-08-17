@@ -1925,6 +1925,62 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
 }
 
 #[test]
+fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
+    // The Waste is walked into off the Sahra Wastes with no title at all, and
+    // its authored stats sit in `tune_spawn_balance`'s gentle overworld bucket
+    // on purpose, so what its apexes pay has to answer to the biome they
+    // guard. The boss branch of `wildbound_loot` used to hand all three the
+    // catalog's top table, which meant the 1500hp Duskmire boss dropped - on
+    // every kill, since `roll_loot` never rolls for a boss - what the King Who
+    // Was Promised Nothing guards at the end of twenty Frontier zones.
+    use super::super::items::{FRONTIER_TIERS, frontier_loot};
+    let world = seed_world();
+    let tier_of = |loot: &'static [u32]| {
+        (0..FRONTIER_TIERS)
+            .find(|t| frontier_loot(*t) == loot)
+            .expect("the Waste borrows the Frontier catalog, one tier per table")
+    };
+
+    for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
+        let base = WILDBOUND_BASE + (b as u32) * WILDBOUND_BIOME_STRIDE;
+        let mobs: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| (base..base + WILDBOUND_BIOME_STRIDE).contains(&s.home))
+            .collect();
+        let boss = mobs.iter().find(|s| s.boss).expect("one apex per biome");
+        let boss_tier = tier_of(boss.loot);
+        let deepest_regular = mobs
+            .iter()
+            .filter(|s| !s.boss)
+            .map(|s| tier_of(s.loot))
+            .max()
+            .expect("the field is populated");
+
+        assert!(
+            boss_tier > deepest_regular,
+            "{} should out-pay {}'s own deep trash (tier {deepest_regular}), got tier {boss_tier}",
+            boss.name,
+            biome.zone
+        );
+        assert!(
+            boss_tier < FRONTIER_TIERS - 1,
+            "the catalog's top table belongs to the Frontier's crown, not {} (tier {boss_tier})",
+            boss.name
+        );
+        if let Some(next) = WILDBOUND_BIOMES.get(b + 1) {
+            assert!(
+                boss_tier <= next.loot_base,
+                "{} should not out-pay the shallow end of {} (tier {}), got tier {boss_tier}",
+                boss.name,
+                next.zone,
+                next.loot_base
+            );
+        }
+    }
+}
+
+#[test]
 fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
     // Aelunor is a lottery, not a shortcut past the Frontier. Two rules make
     // that true, and both live in `extend_aelunor`/`aelunor_loot`:
