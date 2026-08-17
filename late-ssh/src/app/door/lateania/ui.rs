@@ -349,11 +349,12 @@ fn stair_style() -> Style {
 /// inspector, and footer cost 4 rows before a single cell of map, and the
 /// legend needs the width. Below this, `draw_game` takes over: the text atlas
 /// in the side panel down to 50x9, then compact mode.
-/// The land graph is text, so it needs far less room than the overhead field:
-/// enough width for the deepest branch plus the longest country name and its
-/// depth column, and enough height to be worth scrolling.
+/// The land map needs enough width to hold a branch chip, the trunk, and
+/// another branch chip side by side; narrower than that and the picture clips
+/// instead of informing, so the text atlas serves instead. Height is looser,
+/// since `[` / `]` scroll the map.
 fn lands_fit(area: Rect) -> bool {
-    area.width >= 54 && area.height >= 10
+    area.width >= 76 && area.height >= 12
 }
 
 fn map_fits(area: Rect) -> bool {
@@ -820,148 +821,560 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     );
 }
 
-/// The land graph: every country, the road each one hangs off, and how deep the
-/// chained ones run. It carries no bosses, no gate titles, and no level bands
-/// on purpose. The question it answers is "how do I get there"; what opens a
-/// road is still something you find by walking to it. Every land is named,
-/// explored or not, because the name of a country was never the secret.
+/// The land map: an atlas of the whole realm, every country drawn where it
+/// sits and every road between two countries drawn as a line. The two great
+/// hubs are walled keeps; everything else is a name on the road that reaches
+/// it. It carries no bosses, no gate titles, and no level bands on purpose.
+/// The question it answers is "how do I get there"; what *opens* a road is
+/// still something you find by walking to it. Every land is named, walked or
+/// not, because the name of a country was never the secret.
 fn draw_land_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
-    let map = super::worldmap::land_map();
-    let progress: std::collections::HashMap<&str, &super::world::RegionProgress> =
-        view.atlas.iter().map(|r| (r.name, r)).collect();
+    let mut lines = land_map_lines(&view.atlas, area.height as usize);
+    // `[` / `]` scroll, clamped so the last line can reach the top but no
+    // further; on a short terminal the map is taller than the body.
+    let max_off = lines.len().saturating_sub(area.height as usize);
+    let off = state.list_scroll().min(max_off);
+    state.set_list_scroll(off);
+    frame.render_widget(Paragraph::new(lines.split_off(off)), area);
+}
 
-    // One column for every branch and name, so the depth bars line up whatever
-    // shape the tree turns out to be.
-    let label_width = map
-        .walked
-        .iter()
-        .map(|r| r.prefix.chars().count() + r.region.chars().count())
-        .max()
-        .unwrap_or(0);
+// ---- The atlas: where each land sits, and which roads join them ----------
+//
+// The picture is *drawn*, not derived. A map that lays itself out is a graph,
+// and a graph of an eighteen-country world with two ten-road hubs reads as a
+// list however it is arranged - three earlier attempts (an indented tree, a
+// fan of unattached columns, a trunk with spurs) all failed the same way. So
+// the placement below is cartography: hand-set rows and columns, chosen so
+// gentle country sits north of the road and the deep dark sits south of it.
+//
+// What is *not* authored is which lands touch. `ROADS` may only name pairs
+// that `worldmap::land_links` derives from the room graph, and must name all
+// of them; `the_atlas_draws_every_road_in_the_world_and_invents_none` fails
+// the build if the map and the world ever disagree. Adding a country means
+// finding it a place here - which is the point, since a map nobody placed it
+// on is a map that quietly lost it.
 
-    let total = view.atlas.len();
-    let walked = view.atlas.iter().filter(|r| r.explored > 0).count();
+/// The canvas the atlas is drawn on. Wider than this and `lands_fit` would
+/// have to refuse more terminals; the layout is built to end at column 74.
+const MAP_W: usize = 76;
+const MAP_H: usize = 13;
+
+/// How a land's label meets the road that reaches it. Left-hand lands *end* at
+/// their anchor and grow leftward, right-hand ones *start* at it, so a depth
+/// counter gaining a digit pushes the name away from the road instead of
+/// shoving the road it is attached to.
+#[derive(Clone, Copy)]
+enum At {
+    Ends(usize),
+    Starts(usize),
+    Centered(usize),
+}
+
+/// A land drawn as a name on the map.
+struct Place {
+    region: &'static str,
+    row: usize,
+    at: At,
+}
+
+/// A land drawn as a walled keep: the two hubs every road runs through.
+struct Keep {
+    region: &'static str,
+    top: usize,
+    left: usize,
+    bottom: usize,
+    right: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Leg {
+    Up(usize),
+    Down(usize),
+    Left(usize),
+    Right(usize),
+}
+
+/// One road: the two lands it joins, where it leaves, and how it runs. It
+/// starts on the keep wall (or beside a name) and each leg carries it that
+/// many cells; corners and wall junctions are worked out from the turns.
+struct Road {
+    a: &'static str,
+    b: &'static str,
+    from: (usize, usize),
+    legs: &'static [Leg],
+}
+
+const KEEPS: &[Keep] = &[
+    Keep {
+        region: "The Overworld & Capitals",
+        top: 3,
+        left: 20,
+        bottom: 5,
+        right: 42,
+    },
+    Keep {
+        region: "Embergate & the King's Road",
+        top: 3,
+        left: 56,
+        bottom: 5,
+        right: 74,
+    },
+];
+
+const PLACES: &[Place] = &[
+    // North of the road: the countries a living adventurer walks to.
+    Place {
+        region: "Aelunor, the Faewood",
+        row: 0,
+        at: At::Ends(16),
+    },
+    Place {
+        region: "Silvael",
+        row: 0,
+        at: At::Ends(27),
+    },
+    Place {
+        region: "The Wildbound Waste",
+        row: 1,
+        at: At::Ends(23),
+    },
+    Place {
+        region: "Wayfarer's Hollow",
+        row: 1,
+        at: At::Ends(63),
+    },
+    Place {
+        region: "The Sunderlakes",
+        row: 2,
+        at: At::Ends(19),
+    },
+    // Between the two keeps, because it opens off both of them.
+    Place {
+        region: "City Districts",
+        row: 2,
+        at: At::Starts(43),
+    },
+    Place {
+        region: "Broceliande, the Greenwood",
+        row: 4,
+        at: At::Ends(17),
+    },
+    // South of the road: the dark, and the way down into it.
+    Place {
+        region: "The Sunken Catacombs",
+        row: 6,
+        at: At::Ends(19),
+    },
+    Place {
+        region: "The Frontier",
+        row: 6,
+        at: At::Ends(55),
+    },
+    Place {
+        region: "Thornwood Hollows",
+        row: 7,
+        at: At::Ends(23),
+    },
+    Place {
+        region: "Hearthward Close",
+        row: 7,
+        at: At::Ends(63),
+    },
+    Place {
+        region: "The Drowned Caverns",
+        row: 8,
+        at: At::Ends(27),
+    },
+    Place {
+        region: "The Sundered Reaches",
+        row: 9,
+        at: At::Centered(39),
+    },
+    Place {
+        region: "Kaelmyr, the Ashen Reach",
+        row: 12,
+        at: At::Centered(39),
+    },
+];
+
+const ROADS: &[Road] = &[
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Embergate & the King's Road",
+        from: (4, 42),
+        legs: &[Leg::Right(14)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sunderlakes",
+        from: (3, 23),
+        legs: &[Leg::Up(1), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Wildbound Waste",
+        from: (3, 27),
+        legs: &[Leg::Up(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Silvael",
+        from: (3, 31),
+        legs: &[Leg::Up(3), Leg::Left(2)],
+    },
+    Road {
+        a: "Silvael",
+        b: "Aelunor, the Faewood",
+        from: (0, 18),
+        legs: &[Leg::Right(1)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "City Districts",
+        from: (3, 39),
+        legs: &[Leg::Up(1), Leg::Right(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "City Districts",
+        from: (3, 60),
+        legs: &[Leg::Up(1), Leg::Left(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "Wayfarer's Hollow",
+        from: (3, 67),
+        legs: &[Leg::Up(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Broceliande, the Greenwood",
+        from: (4, 20),
+        legs: &[Leg::Left(1)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sunken Catacombs",
+        from: (5, 23),
+        legs: &[Leg::Down(1), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Thornwood Hollows",
+        from: (5, 27),
+        legs: &[Leg::Down(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Drowned Caverns",
+        from: (5, 31),
+        legs: &[Leg::Down(3), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sundered Reaches",
+        from: (5, 39),
+        legs: &[Leg::Down(3)],
+    },
+    Road {
+        a: "The Sundered Reaches",
+        b: "Kaelmyr, the Ashen Reach",
+        from: (10, 39),
+        legs: &[Leg::Down(1)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "The Frontier",
+        from: (5, 59),
+        legs: &[Leg::Down(1), Leg::Left(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "Hearthward Close",
+        from: (5, 67),
+        legs: &[Leg::Down(2), Leg::Left(2)],
+    },
+];
+
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+const LEFT: u8 = 4;
+const RIGHT: u8 = 8;
+
+/// A styled character grid. Names and walls go down first, roads after, so a
+/// road arriving at a keep can read the wall it lands on and turn it into the
+/// right junction rather than punching a hole through it.
+struct Canvas {
+    cells: Vec<(char, Style)>,
+}
+
+impl Canvas {
+    fn new() -> Self {
+        Canvas {
+            cells: vec![(' ', Style::default()); MAP_W * MAP_H],
+        }
+    }
+
+    fn ch(&self, row: usize, col: usize) -> char {
+        self.cells[row * MAP_W + col].0
+    }
+
+    fn set(&mut self, row: usize, col: usize, ch: char, style: Style) {
+        if row < MAP_H && col < MAP_W {
+            self.cells[row * MAP_W + col] = (ch, style);
+        }
+    }
+
+    fn write(&mut self, row: usize, col: usize, text: &str, style: Style) {
+        for (i, ch) in text.chars().enumerate() {
+            self.set(row, col + i, ch, style);
+        }
+    }
+
+    /// A land's label: its short name, then how many of its zones you have
+    /// walked. Depth is in zones rather than rooms because a country can be
+    /// three zones deep on 2% of its rooms, and depth is the number that says
+    /// how far in you are.
+    fn label(&mut self, region: &str, row: usize, at: At, progress: &Progress) -> usize {
+        let name = land_chip_name(region);
+        let entered = progress.get(region).copied().and_then(|p| p.chain);
+        let depth = entered.map(|(walked, zones)| format!("  {walked}/{zones}"));
+        let width = name.chars().count() + depth.as_ref().map_or(0, |d| d.chars().count());
+        let col = match at {
+            At::Ends(end) => (end + 1).saturating_sub(width),
+            At::Starts(start) => start,
+            At::Centered(mid) => mid.saturating_sub(width / 2),
+        };
+        self.write(row, col, &name, land_style(progress.get(region).copied()));
+        if let Some(depth) = depth {
+            let dim = match entered {
+                Some((walked, _)) if walked > 0 => theme::AMBER_DIM(),
+                _ => theme::TEXT_DIM(),
+            };
+            self.write(
+                row,
+                col + name.chars().count(),
+                &depth,
+                Style::default().fg(dim),
+            );
+        }
+        col
+    }
+
+    fn keep(&mut self, keep: &Keep, progress: &Progress) {
+        let wall = Style::default().fg(theme::BORDER());
+        for col in keep.left + 1..keep.right {
+            self.set(keep.top, col, '\u{2500}', wall);
+            self.set(keep.bottom, col, '\u{2500}', wall);
+        }
+        for row in keep.top + 1..keep.bottom {
+            self.set(row, keep.left, '\u{2502}', wall);
+            self.set(row, keep.right, '\u{2502}', wall);
+        }
+        self.set(keep.top, keep.left, '\u{256D}', wall);
+        self.set(keep.top, keep.right, '\u{256E}', wall);
+        self.set(keep.bottom, keep.left, '\u{2570}', wall);
+        self.set(keep.bottom, keep.right, '\u{256F}', wall);
+        let name = land_chip_name(keep.region).to_uppercase();
+        let mid = (keep.left + keep.right) / 2;
+        let col = mid - name.chars().count() / 2;
+        self.write(
+            (keep.top + keep.bottom) / 2,
+            col,
+            &name,
+            land_style(progress.get(keep.region).copied()).add_modifier(Modifier::BOLD),
+        );
+    }
+
+    /// A road runs in the wall colour once both the lands it joins are walked,
+    /// and faint until then, so the picture separates the roads you know from
+    /// the ones you have only been told about.
+    fn road(&mut self, road: &Road, progress: &Progress) {
+        let known = |region: &str| {
+            progress
+                .get(region)
+                .is_some_and(|p: &&super::world::RegionProgress| p.explored > 0)
+        };
+        let ink = match known(road.a) && known(road.b) {
+            true => theme::BORDER(),
+            false => theme::TEXT_FAINT(),
+        };
+        let mut cells: Vec<((usize, usize), u8)> = vec![(road.from, 0)];
+        let (mut row, mut col) = road.from;
+        for leg in road.legs {
+            let (out, back, n) = match *leg {
+                Leg::Up(n) => (UP, DOWN, n),
+                Leg::Down(n) => (DOWN, UP, n),
+                Leg::Left(n) => (LEFT, RIGHT, n),
+                Leg::Right(n) => (RIGHT, LEFT, n),
+            };
+            for _ in 0..n {
+                if let Some(last) = cells.last_mut() {
+                    last.1 |= out;
+                }
+                match *leg {
+                    Leg::Up(_) => row -= 1,
+                    Leg::Down(_) => row += 1,
+                    Leg::Left(_) => col -= 1,
+                    Leg::Right(_) => col += 1,
+                }
+                cells.push(((row, col), back));
+            }
+        }
+        for ((row, col), dirs) in cells {
+            self.stroke(row, col, dirs, ink);
+        }
+    }
+
+    /// One cell of road. A cell that lands on a keep wall becomes the junction
+    /// where that road leaves the city; anywhere else it is a straight run or
+    /// the corner the two directions make.
+    fn stroke(&mut self, row: usize, col: usize, dirs: u8, ink: Color) {
+        let ch = match self.ch(row, col) {
+            '\u{2500}' if dirs & DOWN != 0 => '\u{252C}', // ─ + down  = ┬
+            '\u{2500}' => '\u{2534}',                     // ─ + up    = ┴
+            '\u{2502}' if dirs & RIGHT != 0 => '\u{251C}', // │ + right = ├
+            '\u{2502}' => '\u{2524}',                     // │ + left  = ┤
+            _ => match dirs {
+                d if d == UP | LEFT => '\u{256F}',    // ╯
+                d if d == UP | RIGHT => '\u{2570}',   // ╰
+                d if d == DOWN | LEFT => '\u{256E}',  // ╮
+                d if d == DOWN | RIGHT => '\u{256D}', // ╭
+                d if d & (UP | DOWN) != 0 => '\u{2502}',
+                _ => '\u{2500}',
+            },
+        };
+        self.set(row, col, ch, Style::default().fg(ink));
+    }
+
+    /// The grid as lines, each run of same-styled cells one span, trailing
+    /// blanks dropped so a short row costs nothing.
+    fn lines(&self) -> Vec<Line<'static>> {
+        (0..MAP_H)
+            .map(|row| {
+                let cells = &self.cells[row * MAP_W..(row + 1) * MAP_W];
+                let end = cells
+                    .iter()
+                    .rposition(|(c, _)| *c != ' ')
+                    .map_or(0, |i| i + 1);
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                for &(ch, style) in &cells[..end] {
+                    match spans.last_mut() {
+                        Some(last) if last.style == style => last.content.to_mut().push(ch),
+                        _ => spans.push(Span::styled(ch.to_string(), style)),
+                    }
+                }
+                Line::from(spans)
+            })
+            .collect()
+    }
+}
+
+type Progress<'a> = std::collections::HashMap<&'a str, &'a super::world::RegionProgress>;
+
+/// The whole picture. Its width is fixed by the layout, and `lands_fit`
+/// refuses to draw it into anything narrower, so `height` is the only thing
+/// the terminal decides here: whether the scroll key is worth mentioning.
+/// Split from the render so the layout can be read in a test rather than only
+/// on a screen.
+fn land_map_lines(atlas: &[super::world::RegionProgress], height: usize) -> Vec<Line<'static>> {
+    let progress: Progress = atlas.iter().map(|r| (r.name, r)).collect();
+    let mut canvas = Canvas::new();
+    for keep in KEEPS {
+        canvas.keep(keep, &progress);
+    }
+    for place in PLACES {
+        canvas.label(place.region, place.row, place.at, &progress);
+    }
+    for road in ROADS {
+        canvas.road(road, &progress);
+    }
+
+    let total = atlas.len();
+    let walked = atlas.iter().filter(|r| r.explored > 0).count();
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
-                "The Lands of Lateania",
+                "THE LANDS OF LATEANIA",
                 Style::default()
                     .fg(theme::AMBER_GLOW())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("   {walked} of {total} set foot in"),
+                format!("   {walked} of {total} walked"),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
         Line::from(Span::styled(
-            "Which country hangs off which road. Walk one once and the Ways will carry you back.",
+            "Every line is a road you can walk. Numbers are zones you have entered.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::raw(""),
     ];
-    for row in &map.walked {
-        lines.push(land_line(
-            &row.prefix,
-            row.region,
-            &row.also,
-            label_width,
-            progress.get(row.region).copied(),
+    lines.extend(canvas.lines());
+    lines.push(Line::raw(""));
+
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let mut ways = vec![Span::styled("Only the Ways reach:  ", dim)];
+    for (i, region) in super::worldmap::portal_lands().iter().enumerate() {
+        if i > 0 {
+            ways.push(Span::styled(
+                " \u{00B7} ",
+                Style::default().fg(theme::BORDER()),
+            ));
+        }
+        ways.push(Span::styled(
+            land_chip_name(region),
+            land_style(progress.get(region).copied()),
         ));
     }
+    lines.push(Line::from(ways));
+    // The Ways line is the only place the portal-only lands appear at all, so
+    // it gets air around it rather than reading as the legend's first row.
     lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        "  No road runs to these; only the Ways",
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    for region in &map.portal_only {
-        lines.push(land_line(
-            "  ",
-            region,
-            &[],
-            label_width,
-            progress.get(region).copied(),
-        ));
-    }
-    lines.push(Line::raw(""));
-    lines.push(hint("m", "back to the room  [ ] scroll"));
-
-    // `[` / `]` scroll, clamped so the last line can reach the top but no
-    // further; the map is taller than a short terminal.
-    let height = area.height as usize;
-    let max_off = lines.len().saturating_sub(height);
-    let off = state.list_scroll().min(max_off);
-    state.set_list_scroll(off);
-    frame.render_widget(Paragraph::new(lines.split_off(off.min(lines.len()))), area);
-}
-
-/// One land: its branch of the tree, its name, and (for a land built as a chain
-/// of zones) how many of those zones the player has actually walked into. Depth,
-/// not room count: a country can be three zones deep on a handful of its rooms,
-/// and depth is the number that says how far in you are.
-fn land_line(
-    prefix: &str,
-    region: &str,
-    also: &[&'static str],
-    label_width: usize,
-    progress: Option<&super::world::RegionProgress>,
-) -> Line<'static> {
-    let explored = progress.is_some_and(|p| p.explored > 0);
-    let here = progress.is_some_and(|p| p.here);
-    let name_style = if here {
-        Style::default()
-            .fg(theme::MENTION())
-            .add_modifier(Modifier::BOLD)
-    } else if explored {
-        Style::default().fg(theme::TEXT_BRIGHT())
-    } else {
-        Style::default().fg(theme::TEXT_FAINT())
-    };
-    let pad = label_width.saturating_sub(prefix.chars().count() + region.chars().count());
-    let mut spans = vec![
+    // Colour is the only thing separating a land you have seen from one you
+    // have not, so say what it means rather than leaving it to be guessed.
+    lines.push(Line::from(vec![
+        Span::styled("walked", Style::default().fg(theme::TEXT_BRIGHT())),
+        Span::styled("  \u{00B7}  ", Style::default().fg(theme::BORDER())),
+        Span::styled("not yet", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled("  \u{00B7}  ", Style::default().fg(theme::BORDER())),
         Span::styled(
-            format!("  {prefix}"),
-            Style::default().fg(theme::BORDER()),
+            "where you stand",
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(region.to_string(), name_style),
-        Span::raw(" ".repeat(pad + 2)),
-    ];
-    if let Some((entered, zones)) = progress.and_then(|p| p.chain) {
-        let filled = (entered * CHAIN_BAR) / zones.max(1);
-        spans.push(Span::styled(
-            format!(
-                "{}{}",
-                "\u{2593}".repeat(filled),
-                "\u{2591}".repeat(CHAIN_BAR - filled)
-            ),
-            Style::default().fg(if entered > 0 {
-                theme::AMBER_DIM()
-            } else {
-                theme::TEXT_FAINT()
-            }),
-        ));
-        spans.push(Span::styled(
-            format!("  {entered}/{zones}"),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
-    if here {
-        spans.push(Span::styled(
-            "  \u{25C8} you are here",
-            Style::default().fg(theme::MENTION()),
-        ));
-    }
-    for other in also {
-        spans.push(Span::styled(
-            format!("  \u{2194} {other}"),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-    }
-    Line::from(spans)
+    ]));
+    lines.push(Line::raw(""));
+    // Only offer the scroll key when there is something below the fold.
+    let label = match lines.len() + 1 > height {
+        true => "back to the room  [ ] scroll",
+        false => "back to the room",
+    };
+    lines.push(hint("m", label));
+    lines
 }
 
-/// Cells in a chained land's depth bar.
-const CHAIN_BAR: usize = 10;
+/// A land name as the map labels it: the atlas title without its trailing
+/// clause and without a leading "The", so "Kaelmyr, the Ashen Reach" reads as
+/// "Kaelmyr" and the picture fits a terminal.
+fn land_chip_name(region: &str) -> String {
+    land_label(region)
+        .strip_prefix("The ")
+        .unwrap_or(land_label(region))
+        .to_string()
+}
+
+fn land_style(progress: Option<&super::world::RegionProgress>) -> Style {
+    match progress {
+        Some(p) if p.here => Style::default()
+            .fg(theme::MENTION())
+            .add_modifier(Modifier::BOLD),
+        Some(p) if p.explored > 0 => Style::default().fg(theme::TEXT_BRIGHT()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
 
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;

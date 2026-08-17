@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-16 (the overhead compass now always renders a `compass_glyph` direction + room count for a marked destination, and off-screen POI arrows are `PAN_LIMIT`-filtered rather than pointing at meaningless cross-block deltas; Aelunor, the Faewood - a twelve-zone, cavern-only forest continent of elves/high elves/druids/fae, 100 named creatures across five rarity tiers - and its own city Silvael are new, along with five more tameable beasts each carrying their own auto-skill ladder; see §1, §5.1, §6, §9, §11)
+- Last updated: 2026-08-17 (the land map is now a drawn atlas rather than a derived trunk: every country sits at a hand-set place, the Overworld and Embergate are walled keeps each road leaves by its own wall junction, and `ROADS` is checked against `worldmap::land_links` so the picture can neither invent a road nor lose one; see §5.2 and the new gotcha in §11; the overhead compass now always renders a `compass_glyph` direction + room count for a marked destination, and off-screen POI arrows are `PAN_LIMIT`-filtered rather than pointing at meaningless cross-block deltas; Aelunor, the Faewood - a twelve-zone, cavern-only forest continent of elves/high elves/druids/fae, 100 named creatures across five rarity tiers - and its own city Silvael are new, along with five more tameable beasts each carrying their own auto-skill ladder; see §1, §5.1, §6, §9, §11)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -185,7 +185,7 @@ Before class choice:
 - `Character`: class, trait, scores, stats, titles, resurrection charges.
 - `Abilities`: unlocked abilities, cost/readiness/effect.
 - `Inventory`: pack items plus equipped items as rows. Enter on a row is context-sensitive via `state::inv_action`: worn gear comes **off** (`unequip_task`), loose gear goes on, a consumable is used. Selling checks the `equipped` row specifically, not the item id: a worn item refuses with a reason, but a loose duplicate of that same item id sells fine while the worn copy stays on (`svc::sell`).
-- `Map`: two pages on one key, chosen by `state::MapMode`. `Field` is the graphical overhead world map (§5.1); `Lands` is the land map (§5.2). Either page falls back to the text atlas in the side panel when the body is too small (`map_fits` is 50x14, `lands_fit` is 54x10).
+- `Map`: two pages on one key, chosen by `state::MapMode`. `Field` is the graphical overhead world map (§5.1); `Lands` is the land map (§5.2). Either page falls back to the text atlas in the side panel when the body is too small (`map_fits` is 50x14, `lands_fit` is 76x12).
 - `Shop`: merchant stock if `shop_at(room)` exists.
 - `Examine`: room features; fountains can restore vitals.
 - `Titles`: earned titles; selecting active title again clears it.
@@ -229,34 +229,50 @@ In the Room panel, the minimap is rendered in a separate bottom-aligned side-pan
 Room-panel variable text rows (zone, exits, features, foes, occupants, wildlife) should use the side wrapping helpers in `ui.rs` so long labels wrap within the side column instead of clipping against the border.
 Non-Room side panels are rendered through `side_paragraph`, which enables Ratatui wrapping for long quest, inventory, shop, title, and ability rows.
 
-### 5.2 The land map (`worldmap::land_map`, `ui::draw_land_map`) [VOLATILE]
+### 5.2 The land map (`worldmap::land_links`, `ui::land_map_lines`) [VOLATILE]
 
 The map's second page, and the only view that answers **"how do I get there"**. The overhead field (§5.1) is deliberately local: `COMPONENT_MARGIN` is wider than any terminal, so two regions can never share a screen. The text atlas is a flat list with no links. Neither draws a road.
 
-The land map is a tree of the eighteen atlas regions, rooted where `World::start_room` sits, with the lands no road reaches listed under "No road runs to these; only the Ways":
+The eighteen atlas regions are drawn as an **atlas**: every country sits at a hand-set place on a character grid, the two hubs every road runs through are walled keeps, and each road between two lands is a line joining them.
 
 ```
-  Embergate & the King's Road
-  ├─ The Overworld & Capitals          ↔ City Districts
-  │  ├─ The Sunken Catacombs
-  │  ├─ The Sundered Reaches         ▓░░░░░░░░░  3/20
-  │  │  └─ Kaelmyr, the Ashen Reach  ░░░░░░░░░░  0/20
-  │  ├─ Silvael
-  │  │  └─ Aelunor, the Faewood      ░░░░░░░░░░  0/12
-  │  └─ The Wildbound Waste          ░░░  0/3
-  ├─ The Frontier                    ▓░░░░░░░░░  3/20  ◈ you are here
-  └─ Wayfarer's Hollow
+THE LANDS OF LATEANIA   5 of 18 walked
+Every line is a road you can walk. Numbers are zones you have entered.
+
+    Aelunor  0/12 ── Silvael ──╮
+    Wildbound Waste  0/3 ──╮   │               Wayfarer's Hollow ──╮
+   Sunderlakes  0/14 ──╮   │   │       ╭── City Districts ──╮      │
+                    ╭──┴───┴───┴───────┴──╮             ╭───┴──────┴──────╮
+ Broceliande  0/20 ─┤      OVERWORLD      ├─────────────┤    EMBERGATE    │
+                    ╰──┬───┬───┬───────┬──╯             ╰──┬───────┬──────╯
+    Sunken Catacombs ──╯   │   │       │  Frontier  3/20 ──╯       │
+       Thornwood Hollows ──╯   │       │        Hearthward Close ──╯
+             Drowned Caverns ──╯       │
+                            Sundered Reaches  0/20
+                                       │
+                                       │
+                                 Kaelmyr  0/20
+
+Only the Ways reach:  Portal Villages · Shattered Archipelago
+walked  ·  not yet  ·  where you stand
 ```
+
+Three earlier attempts are worth knowing about, because all three failed the same way and the next one will too. An **indented tree** was correct and unreadable: the Overworld's ten roads out rendered as a vertical list, exactly what the picture exists to avoid. A **fan** drew a bare `|` down the middle with unattached names either side, which reads as three unrelated columns. A **trunk with spurs** attached each name to the trunk with its own rule, which fixed the attachment but still stacked the Overworld's spurs into a column. The lesson: *a layout algorithm cannot draw this world*. One node holds ten of the sixteen roads, so any generic arrangement collapses into a list. The map is therefore drawn by hand and checked by machine.
 
 Load-bearing decisions, all of them deliberate:
 
-- **It reads the room graph and region membership, and nothing else.** `derive_land_links` records an edge wherever one room's exit lands in another region (`region_atlas_entry`). It never looks at a title, a boss, or a level band, so it **cannot drift out of step with `can_cross_progression_gate`**, and it cannot leak a gate rule. Kaelmyr simply hangs under the Sundered Reaches; a player who walks to the Sundering Deep and finds Yssgar in the doorway draws their own conclusion. Naming the gate would answer the question before it was asked.
-- **Every land is named, walked or not.** The name of a country was never the secret; the road to it is. Undiscovered lands render faint, not as `???`.
-- **Depth is in zones, not rooms.** `RegionProgress.chain` counts zones with at least one visited room, from `LAND_CHAINS` (names written out, every number read from the generator's own consts). A country can be three zones deep on 2% of its rooms, and depth is the number that says how far in you are. A land absent from `LAND_CHAINS` draws as a single node with no bar.
-- **The tree cannot hide a road.** A land can touch more than its parent and children; those extra edges render as `↔ Other Land`, deduplicated so each road is mentioned by exactly one of its two ends.
-- Layout is fixed, so `LAND_TREE` and `LAND_LINKS` are `LazyLock`s forced by `worldmap::warm()` alongside the coordinate field and the POI index; a player never pays for them on the render thread.
-- Pinned by `the_land_graph_covers_every_region_and_is_read_off_the_room_graph` and `silvael_stands_between_the_overworld_and_aelunor` (`worldmap_test.rs`), plus two row-rendering tests in `ui_test.rs`.
-
+- **The placement is authored; which lands touch is not.** `KEEPS`/`PLACES`/`ROADS` in `ui.rs` are a hand-set picture: rows, columns, and the legs each road runs. But `ROADS` may only name a pair `worldmap::land_links` derives from the room graph, and must name every such pair. `the_atlas_draws_every_road_in_the_world_and_invents_none` compares the two sets and fails the build if they ever disagree, so the map can neither invent a road nor lose one. **Adding a country means finding it a place in `PLACES` and a road in `ROADS`** - which is the point: a map nobody placed it on is a map that quietly dropped it.
+- **It reads the room graph and region membership, and nothing else.** `derive_land_links` records an edge wherever one room's exit lands in another region (`region_atlas_entry`). It never looks at a title, a boss, or a level band, so it **cannot drift out of step with `can_cross_progression_gate`**, and it cannot leak a gate rule. Kaelmyr simply sits at the bottom of the long road south under the Sundered Reaches; a player who walks to the Sundering Deep and finds Yssgar in the doorway draws their own conclusion. Naming the gate would answer the question before it was asked.
+- **The two hubs are keeps, and that is what makes the shape drawable.** The Overworld carries ten roads and Embergate five. A bare name has one row above and one below; a box has a whole wall, so each road leaves at its own junction (`┬`/`┴`/`├`/`┤`, worked out in `Canvas::stroke` from whatever the road lands on) and no two spurs share a line. `City Districts` sits between the two keeps because it opens off both of them - the one cycle in an otherwise tree-shaped world.
+- **North of the road is the country you walk to; south of it is the dark.** The living-dark dungeons, the Frontier, the Reaches and Kaelmyr all hang below; the Sunderlakes, Broceliande, Silvael/Aelunor, the Wildbound Waste, Wayfarer's Hollow and the Close sit above. Nothing enforces it but the layout, and `the_atlas_lays_the_realm_out_the_way_it_is_walked` pins it.
+- **A chain reads outward from the hub.** Aelunor is reached through Silvael, so it is drawn the far side of it (`Aelunor ── Silvael ──╮`, the road arriving on Silvael's side); the Reaches and Kaelmyr stack downward for the same reason. Distance on the page is distance from the hub, not reading order.
+- **Every land is named, walked or not.** The name of a country was never the secret; the road to it is. Undiscovered lands render faint, not as `???`, and a road runs faint until both lands it joins are walked. The footer legend says what the three colours mean, since colour is the only thing carrying it.
+- **Depth is in zones, not rooms, and is a number rather than a bar.** `RegionProgress.chain` counts zones with at least one visited room, from `LAND_CHAINS` (names written out, every number read from the generator's own consts). A country can be three zones deep on 2% of its rooms, and depth is the number that says how far in you are. A land absent from `LAND_CHAINS` draws with no depth at all. A shaded `▓░░░` bar was tried and removed: a run of block glyphs renders as one solid rectangle in plenty of terminal fonts, so it read as noise rather than progress.
+- **Labels are anchored to their road, not to a column.** `At::Ends`/`Starts`/`Centered` fix the end that meets the road, so a counter gaining a digit (`3/20` -> `20/20`) pushes the name *away* from the road rather than shoving the road it is attached to. Both `the_land_map_stays_inside_the_narrowest_terminal_it_draws_into` and `no_land_on_the_atlas_is_written_over_by_another` render the fully-walked atlas as well as the fresh one, so a two-digit counter cannot silently overflow or overwrite a neighbour.
+- **Names are shortened to fit** (`land_chip_name`: `land_label` plus a leading `The` stripped). The picture is a fixed 76x13 grid ending at column 74, so `lands_fit` (76x12) refuses to draw it into anything narrower and the text atlas serves instead, the same way the overhead field falls back below 50x14.
+- **The scroll hint is only shown when there is something below the fold**, since a hint for a key that does nothing is worse than no hint. That is the only thing `land_map_lines` uses its `height` argument for.
+- `LAND_LINKS` is a `LazyLock` forced by `worldmap::warm()` alongside the coordinate field and the POI index; a player never pays for it on the render thread.
+- `land_map_lines` is split from `draw_land_map` so the layout is read in tests rather than only on a screen. Pinned by `the_land_graph_is_read_off_the_room_graph_and_covers_every_region` (`worldmap_test.rs`) plus six in `ui_test.rs`.
 ---
 
 ## 6. World And Content [VOLATILE]
@@ -732,6 +748,7 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 
 - **(Resolved)** Off-screen POI border arrows used to point in a meaningless direction once the POI was in another reserved block, and were unfiltered. Fixed: `worldmap::poi_arrows` now drops any POI further than `PAN_LIMIT` from the player before projecting it (see §5.1) - the exact fix this entry used to describe as future work.
 - A splice that discovers "the room that links to X" by scanning `room.exits` for a matching target must exclude any room that is itself inside the region X belongs to, or it can match one of X's own in-region neighbours instead of the real external anchor - `HashMap` iteration order then makes the match (and everything hung off it) silently nondeterministic between boots. `extend_silvael`'s anchor search does this (`is_aelunor_room` excluded) after `worldmap_test::world_coords_is_cached_and_complete` caught the case where it didn't.
+- Adding a region to `REGIONS` also means placing it on the land map: a `Place` (or `Keep`) and a `Road` per real link, in `ui.rs`. `the_atlas_draws_every_road_in_the_world_and_invents_none` fails until you do, on purpose - the picture is authored, so a new country has to be drawn in rather than laid out for you (see §5.2).
 - Some comments in `world.rs` may lag current content scale. Trust current tests/data: ~2600 rooms across base/overworld/Frontier, the three living-world regions, housing, city districts, and the ~900-room Sundered Reaches (see the room-count test's per-region ranges).
 - `follow_task` still exists as an old toggle service command, but current input opens the Follow panel and uses `follow_to_task` / `stop_follow_task`.
 - `say_task` exists, but active Lateania has no typed command prompt yet.

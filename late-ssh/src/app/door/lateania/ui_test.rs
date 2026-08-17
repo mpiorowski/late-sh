@@ -1,6 +1,6 @@
 use super::{
-    compare_span, fit, hug_poi_arrows, inventory_item_tag, land_line, line_rows, meter,
-    rarity_color, scroll_offset, star_rating, wrapped_rows,
+    compare_span, fit, hug_poi_arrows, inventory_item_tag, land_chip_name, land_map_lines,
+    line_rows, meter, rarity_color, scroll_offset, star_rating, wrapped_rows,
 };
 use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
@@ -776,7 +776,7 @@ fn journal_seals_the_frontier_until_its_titles_are_held() {
     );
 }
 
-/// A land row for the land map, with only the fields that view reads set.
+/// An atlas row for the land map, with only the fields that view reads set.
 fn land(name: &'static str, explored: usize, chain: Option<(usize, usize)>) -> RegionProgress {
     RegionProgress {
         name,
@@ -791,40 +791,244 @@ fn land(name: &'static str, explored: usize, chain: Option<(usize, usize)>) -> R
     }
 }
 
-fn land_text(region: &'static str, progress: &RegionProgress) -> String {
-    land_line("\u{2514}\u{2500} ", region, &[], 30, Some(progress))
-        .spans
-        .iter()
-        .map(|s| s.content.as_ref())
+/// The whole atlas as a fresh-ish character sees it: a few lands walked, the
+/// Frontier three zones deep and underfoot, everything else untouched.
+fn sample_atlas() -> Vec<RegionProgress> {
+    atlas_with(3)
+}
+
+/// The same atlas, but every chained land walked end to end, so every depth
+/// counter carries its widest possible text.
+fn walked_atlas() -> Vec<RegionProgress> {
+    atlas_with(usize::MAX)
+}
+
+fn atlas_with(depth: usize) -> Vec<RegionProgress> {
+    use crate::app::door::lateania::world::region_names;
+    let chained = [
+        ("The Frontier", 20usize),
+        ("The Sundered Reaches", 20),
+        ("Kaelmyr, the Ashen Reach", 20),
+        ("The Sunderlakes", 14),
+        ("Broceliande, the Greenwood", 20),
+        ("Aelunor, the Faewood", 12),
+        ("The Wildbound Waste", 3),
+    ];
+    let walked = [
+        "The Frontier",
+        "The Overworld & Capitals",
+        "Embergate & the King's Road",
+        "City Districts",
+        "Wayfarer's Hollow",
+    ];
+    region_names()
+        .into_iter()
+        .map(|n| {
+            let deep = depth == usize::MAX || walked.contains(&n);
+            let mut r = land(
+                n,
+                if deep { 40 } else { 0 },
+                chained
+                    .iter()
+                    .find(|(c, _)| *c == n)
+                    .map(|&(_, z)| (if deep { depth.min(z) } else { 0 }, z)),
+            );
+            r.here = n == "The Frontier";
+            r
+        })
         .collect()
 }
 
-#[test]
-fn a_land_row_reads_depth_in_zones_not_rooms() {
-    // Three zones into a twenty-zone country on 2% of its rooms: the row says
-    // 3/20, because depth is what tells a player how far in they are.
-    let deep = land("The Sundered Reaches", 20, Some((3, 20)));
-    assert!(land_text("The Sundered Reaches", &deep).contains("3/20"));
-    assert!(
-        !land_text("The Sundered Reaches", &deep).contains("20/1000"),
-        "room counts belong to the atlas list, not the land map"
-    );
-    // A land with no chain gets no depth column at all.
-    let flat = land("City Districts", 12, None);
-    let text = land_text("City Districts", &flat);
-    assert!(!text.contains('/'), "an unchained land shows no depth: {text}");
+fn lines_of(atlas: &[RegionProgress]) -> Vec<String> {
+    land_map_lines(atlas, 200)
+        .into_iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect()
+}
+
+fn plain_lines() -> Vec<String> {
+    lines_of(&sample_atlas())
 }
 
 #[test]
-fn a_land_row_names_a_country_you_have_never_entered() {
-    // The name of a country was never the secret; the road to it is. An
-    // unwalked land renders its real name and an empty depth bar, and says
-    // nothing about bosses or levels even though the atlas row carries both.
-    let unseen = land("Kaelmyr, the Ashen Reach", 0, Some((0, 20)));
-    let text = land_text("Kaelmyr, the Ashen Reach", &unseen);
-    assert!(text.contains("Kaelmyr, the Ashen Reach"), "{text}");
-    assert!(!text.contains('?'), "no fog over the name: {text}");
-    assert!(text.contains("0/20"), "{text}");
-    assert!(!text.contains("100"), "no level band on the land map: {text}");
-    assert!(!text.contains('9'), "no boss count on the land map: {text}");
+fn the_atlas_draws_every_road_in_the_world_and_invents_none() {
+    use crate::app::door::lateania::worldmap::land_links;
+
+    // The picture is hand-drawn, but which lands it joins is not: a road may
+    // only be drawn where the room graph has one, and every road the room
+    // graph has must be on the map. This is the test that fails when a new
+    // country is wired into the world and nobody found it a place.
+    let pair = |a: &'static str, b: &'static str| if a <= b { (a, b) } else { (b, a) };
+    let mut drawn: Vec<(&str, &str)> = super::ROADS.iter().map(|r| pair(r.a, r.b)).collect();
+    drawn.sort_unstable();
+    let before = drawn.len();
+    drawn.dedup();
+    assert_eq!(before, drawn.len(), "a road is drawn twice");
+
+    let mut real: Vec<(&str, &str)> = land_links()
+        .iter()
+        .flat_map(|(&here, theres)| theres.iter().map(move |&there| pair(here, there)))
+        .collect();
+    real.sort_unstable();
+    real.dedup();
+    assert_eq!(drawn, real);
+
+    // And every land is somewhere: a keep, a name on a road, or called out as
+    // reachable only by waystone. Exactly once, so none is drawn twice either.
+    let mut placed: Vec<&str> = super::KEEPS
+        .iter()
+        .map(|k| k.region)
+        .chain(super::PLACES.iter().map(|p| p.region))
+        .chain(crate::app::door::lateania::worldmap::portal_lands())
+        .collect();
+    let before = placed.len();
+    placed.sort_unstable();
+    placed.dedup();
+    assert_eq!(before, placed.len(), "a land is drawn twice");
+    let mut names = crate::app::door::lateania::world::region_names();
+    names.sort_unstable();
+    assert_eq!(placed, names);
+}
+
+#[test]
+fn the_atlas_lays_the_realm_out_the_way_it_is_walked() {
+    let lines = plain_lines();
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no row for {needle} in {lines:#?}"))
+    };
+    let col = |needle: &str| lines[row(needle)].find(needle).expect("column");
+
+    // Two walled keeps side by side, with the road between them running from
+    // one to the other, and the districts that open off both drawn between.
+    assert!(col("OVERWORLD") < col("EMBERGATE"));
+    assert_eq!(row("OVERWORLD"), row("EMBERGATE"));
+    assert!(col("OVERWORLD") < col("City Districts"));
+    assert!(col("City Districts") < col("EMBERGATE"));
+
+    // The deep road runs south: the Reaches below the overworld, Kaelmyr below
+    // the Reaches. Nothing on the map says why; that is the point.
+    assert!(row("OVERWORLD") < row("Sundered Reaches"));
+    assert!(row("Sundered Reaches") < row("Kaelmyr"));
+    // The gentle countries sit north of the road, the dark ones south of it.
+    for north in ["Aelunor", "Silvael", "Wildbound Waste", "Sunderlakes"] {
+        assert!(row(north) < row("OVERWORLD"), "{north} belongs north");
+    }
+    for south in ["Sunken Catacombs", "Thornwood Hollows", "Drowned Caverns"] {
+        assert!(row(south) > row("OVERWORLD"), "{south} belongs south");
+    }
+    // Aelunor is reached through Silvael, so it is drawn the far side of it.
+    assert!(col("Aelunor") < col("Silvael"));
+
+    // The lands no road reaches are named as such rather than drawn adrift.
+    let ways = &lines[row("Only the Ways reach:")];
+    assert!(ways.contains("Portal Villages"), "{ways}");
+    assert!(ways.contains("Shattered Archipelago"), "{ways}");
+}
+
+#[test]
+fn the_atlas_says_how_deep_you_have_walked_in_zones_not_rooms() {
+    // Three zones into a twenty-zone country on 4% of its rooms: the map says
+    // 3/20, because depth is what tells a player how far in they are. It says
+    // nothing about bosses or levels even though the atlas rows carry both.
+    let lines = plain_lines();
+    assert!(
+        lines.iter().any(|l| l.contains("Frontier  3/20")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("Kaelmyr  0/20")),
+        "an unwalked land is named, not hidden: {lines:#?}"
+    );
+    // A land with no zone chain shows no depth at all.
+    let districts = lines
+        .iter()
+        .find(|l| l.contains("City Districts"))
+        .expect("districts");
+    assert!(!districts.contains("City Districts  "), "{districts}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("20/1000") || l.contains("90")),
+        "room counts and level bands belong to the text atlas: {lines:#?}"
+    );
+}
+
+#[test]
+fn the_land_map_stays_inside_the_narrowest_terminal_it_draws_into() {
+    // `lands_fit` refuses to draw the map below 76 columns, so every row has to
+    // fit that - with every depth counter at its widest, since the picture is
+    // anchored on the roads and a name grows away from them as you explore.
+    // This is the test that fails when a land is renamed to something too long.
+    for atlas in [sample_atlas(), walked_atlas()] {
+        for line in lines_of(&atlas) {
+            assert!(
+                line.chars().count() <= 76,
+                "row overflows the 76-column floor: {line:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_land_on_the_atlas_is_written_over_by_another() {
+    // Names and roads share one character grid, so a layout mistake shows up as
+    // a name with a road punched through it. Every land has to survive whole,
+    // at both ends of the exploration range.
+    for atlas in [sample_atlas(), walked_atlas()] {
+        let text = lines_of(&atlas).join("\n");
+        for region in crate::app::door::lateania::world::region_names() {
+            let name = land_chip_name(region);
+            let name = match region == "The Overworld & Capitals"
+                || region == "Embergate & the King's Road"
+            {
+                true => name.to_uppercase(),
+                false => name,
+            };
+            assert!(text.contains(&name), "{name} is not readable on the map");
+        }
+        for depth in ["12/12", "3/3", "14/14", "20/20"] {
+            assert!(
+                !atlas.iter().any(|r| r
+                    .chain
+                    .is_some_and(|(w, z)| { format!("{w}/{z}") == depth }))
+                    || text.contains(depth),
+                "a depth counter was clipped: {depth}"
+            );
+        }
+    }
+}
+
+#[test]
+fn map_labels_drop_the_atlas_titles_tail_and_leading_the() {
+    // The picture has to fit a terminal, so a label carries the short name.
+    assert_eq!(land_chip_name("Kaelmyr, the Ashen Reach"), "Kaelmyr");
+    assert_eq!(land_chip_name("Embergate & the King's Road"), "Embergate");
+    assert_eq!(land_chip_name("The Overworld & Capitals"), "Overworld");
+    assert_eq!(land_chip_name("Wayfarer's Hollow"), "Wayfarer's Hollow");
+}
+
+#[test]
+fn the_land_map_only_offers_the_scroll_key_when_it_overflows() {
+    // A hint for a key that does nothing is worse than no hint.
+    let tall: String = land_map_lines(&sample_atlas(), 200)
+        .last()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .unwrap_or_default();
+    assert!(!tall.contains("scroll"), "{tall}");
+    let short: String = land_map_lines(&sample_atlas(), 8)
+        .last()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .unwrap_or_default();
+    assert!(short.contains("[ ] scroll"), "{short}");
+}
+
+#[test]
+fn tmp_dump_atlas() {
+    for l in lines_of(&sample_atlas()) {
+        println!("|{l}");
+    }
+    panic!("dump");
 }

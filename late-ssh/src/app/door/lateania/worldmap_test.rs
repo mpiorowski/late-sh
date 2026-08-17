@@ -1012,59 +1012,42 @@ fn quest_arrows_stay_honest_across_reserved_blocks() {
 }
 
 #[test]
-fn the_land_graph_covers_every_region_and_is_read_off_the_room_graph() {
-    let map = super::land_map();
+fn the_land_graph_is_read_off_the_room_graph_and_covers_every_region() {
     let links = super::land_links();
 
-    // Every atlas region lands somewhere, exactly once: walked to by road, or
-    // reachable only by the Ways. The map can never quietly drop a country.
-    let mut listed: Vec<&str> = map.walked.iter().map(|r| r.region).collect();
-    listed.extend(map.portal_only.iter().copied());
-    listed.sort_unstable();
+    // Every atlas region has an entry, so a new country can never be silently
+    // missing from the graph the map is drawn from.
+    let mut named: Vec<&str> = links.keys().copied().collect();
     let mut names = super::super::world::region_names();
+    named.sort_unstable();
     names.sort_unstable();
-    assert_eq!(listed, names, "every region appears exactly once");
+    assert_eq!(named, names);
+
+    // Roads are two-way, because they are read off real exits in both rooms.
+    for (&here, theres) in links {
+        for &there in theres {
+            assert!(
+                links[there].contains(&here),
+                "{here} -> {there} has no road back"
+            );
+        }
+    }
 
     // The two portal-only regions are portal-only because their rooms hold no
     // directional exits at all, not because a table says so.
     assert_eq!(
-        map.portal_only,
+        super::portal_lands(),
         vec!["Portal Villages", "The Shattered Archipelago"]
     );
-    for region in &map.portal_only {
-        assert!(links[region].is_empty(), "{region} has no walking road");
-    }
 
-    // Kaelmyr's only door is the one inside Yssgar's chamber, so the only land
-    // it touches is the Reaches - and the tree draws it hanging under them,
-    // which is the whole point of the view.
+    // Kaelmyr's only door is the one inside Yssgar's chamber, and nothing walks
+    // from the overworld straight into the Faewood: `extend_silvael` splices
+    // the city into the road, so the walk goes savanna -> Silvael -> Aelunor.
     assert_eq!(
         links["Kaelmyr, the Ashen Reach"],
         vec!["The Sundered Reaches"]
     );
-    let reaches = map
-        .walked
-        .iter()
-        .position(|r| r.region == "The Sundered Reaches")
-        .expect("the Reaches are on the map");
-    let kaelmyr = &map.walked[reaches + 1];
-    assert_eq!(kaelmyr.region, "Kaelmyr, the Ashen Reach");
-    assert!(
-        kaelmyr.prefix.chars().count() > map.walked[reaches].prefix.chars().count(),
-        "Kaelmyr is drawn one branch deeper than the Reaches"
-    );
-}
-
-#[test]
-fn silvael_stands_between_the_overworld_and_aelunor() {
-    let links = super::land_links();
-    // `extend_silvael` splices the city into the road rather than hanging it
-    // off the end, so the Faewood is not reached from the overworld directly:
-    // the walk goes savanna -> Silvael -> Aelunor.
     assert_eq!(links["Aelunor, the Faewood"], vec!["Silvael"]);
     assert!(links["Silvael"].contains(&"The Overworld & Capitals"));
-    assert!(
-        !links["The Overworld & Capitals"].contains(&"Aelunor, the Faewood"),
-        "nothing walks from the overworld straight into the Faewood"
-    );
+    assert!(!links["The Overworld & Capitals"].contains(&"Aelunor, the Faewood"));
 }
