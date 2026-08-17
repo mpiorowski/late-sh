@@ -45,25 +45,100 @@ pub(crate) fn preview_lines(awards: &[ProfileAward]) -> Vec<Line<'static>> {
     lines
 }
 
-pub(crate) fn legend_lines() -> Vec<Line<'static>> {
+/// The full badge guide: what each code means, how it is earned, and whether
+/// it pays chips. Lives here because the badges themselves are `ProfileAward`
+/// data (`late_core::models::profile_award`); rendered on the Leaderboards
+/// page (`leaderboard::ui::draw_detail`), which has the room a one-line
+/// profile legend never did.
+pub(crate) fn guide_lines() -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    vec![
-        Line::from(Span::styled("CHIP1-3 Top Chips  AW1-3 Arcade Wins", dim)),
-        Line::from(Span::styled("LA1-3 Lateris  24#1-3 2048  SN1-3 Snake", dim)),
+    let heading = Style::default()
+        .fg(theme::AMBER())
+        .add_modifier(Modifier::BOLD);
+    let code = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text = Style::default().fg(theme::TEXT());
+
+    let mut lines = vec![
         Line::from(Span::styled(
-            "LMG Lateania Archdemon  LKN Lateania Frontier King",
+            "Every code below also shows in your profile's Badges list and in your chat username stack.",
             dim,
         )),
+        Line::from(""),
+        Line::from(Span::styled("Monthly awards", heading)),
         Line::from(Span::styled(
-            "LYS Lateania Sundering Deep  LKA Kaethyr Ascendant",
+            "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
+             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own.",
             dim,
         )),
-        Line::from(Span::styled(
-            "NHA NetHack Amulet  NHY NetHack Ascension",
-            dim,
-        )),
-        Line::from(Span::styled("DCO DCSS Orb of Zot  DCW DCSS Escape", dim)),
-        Line::from(Span::styled("BRE Brogue Escape  BRM Brogue Mastery", dim)),
-        Line::from(Span::styled("GDS Green Dragon Slayer", dim)),
-    ]
+        Line::from(""),
+    ];
+    for (item_code, name, source) in [
+        ("CHIP", "Top Chips", "last month's net chip earnings (Top Chips board, shop spend ignored)"),
+        ("AW", "Arcade Wins", "last month's daily-puzzle points (Arcade Wins board)"),
+        ("LA", "Lateris", "best Tetris score last month"),
+        ("24#", "2048", "best 2048 score last month"),
+        ("SN", "Snake", "best Snake score last month"),
+    ] {
+        lines.push(entry_line(item_code, name, source, code, text, dim));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("One-off feats", heading)));
+    lines.push(Line::from(Span::styled(
+        "Earned once per account and kept forever, no rank digit. Each pays a one-time chip \
+         reward on first grant, except Lateania's two deepest crowns, which are prestige only.",
+        dim,
+    )));
+    lines.push(Line::from(""));
+    for (item_code, name, source) in [
+        ("LMG", "Lateania Archdemon", "slay the Archdemon Mal'gareth (pays chips)"),
+        (
+            "LKN",
+            "Lateania Frontier King",
+            "slay the King Who Was Promised Nothing (pays chips)",
+        ),
+        (
+            "LYS",
+            "Lateania Sundering Deep",
+            "slay Yssgar, the Sundering Deep (no chips, badge only)",
+        ),
+        (
+            "LKA",
+            "Kaethyr Ascendant",
+            "slay Kaethyr Ascendant in Kaelmyr (no chips, badge only)",
+        ),
+        ("NHA", "NetHack Amulet", "pick up the Amulet of Yendor (pays chips)"),
+        ("NHY", "NetHack Ascension", "ascend to demigodhood (pays chips)"),
+        ("DCO", "DCSS Orb of Zot", "pick up the Orb of Zot (pays chips)"),
+        ("DCW", "DCSS Escape", "escape the dungeon with the Orb (pays chips)"),
+        ("BRE", "Brogue Escape", "escape the Dungeons of Doom (pays chips)"),
+        (
+            "BRM",
+            "Brogue Mastery",
+            "the Dungeons of Doom's super-victory (pays chips)",
+        ),
+        ("GDS", "Green Dragon Slayer", "slay the green dragon, first kill only (pays chips)"),
+    ] {
+        lines.push(entry_line(item_code, name, source, code, text, dim));
+    }
+
+    lines
+}
+
+fn entry_line(
+    item_code: &'static str,
+    name: &'static str,
+    source: &'static str,
+    code_style: Style,
+    name_style: Style,
+    dim_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(format!("{item_code:<4}"), code_style),
+        Span::styled(format!(" {name} "), name_style),
+        Span::styled(format!("— {source}"), dim_style),
+    ])
 }

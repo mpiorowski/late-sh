@@ -19,13 +19,14 @@ fn board_list_follows_the_rosters() {
     let door_boards = 3 * DoorGame::ALL.len();
     assert_eq!(
         boards.len(),
-        4 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len()
+        4 + door_boards + DailyPuzzle::ALL.len() + ScoreGame::ALL.len() + 1
     );
     assert_eq!(boards[4 + door_boards], Board::Daily(DailyPuzzle::ALL[0]));
     assert_eq!(
         boards[4 + door_boards + DailyPuzzle::ALL.len()],
         Board::Score(ScoreGame::ALL[0])
     );
+    assert_eq!(boards.last(), Some(&Board::BadgeGuide), "guide trails every board");
 }
 
 #[test]
