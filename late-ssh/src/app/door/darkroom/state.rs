@@ -1076,10 +1076,11 @@ impl State {
                 .map(|loot| format!("{} [{}]", loot.item.label(), loot.left))
                 .unwrap_or_default(),
             event::Row::TakeAll => "take everything".to_string(),
+            event::Row::Drop { item, count } => format!("drop {count} {}", item.label()),
+            event::Row::DropCancel => "cancel".to_string(),
             event::Row::Leave => "leave".to_string(),
         }
     }
-
     /// Seconds until a row's cooldown expires, if it is on one.
     pub fn row_cooldown(&self, row: Row) -> u32 {
         let Some(game) = self.game.as_ref() else {

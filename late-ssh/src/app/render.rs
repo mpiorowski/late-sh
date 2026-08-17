@@ -2267,12 +2267,15 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
             " thanks for hanging out ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
-        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+        spans.push(Span::styled("☕", Style::default().fg(theme::AMBER())));
     }
+    // The link carries its own blank cell on each side: this line is drawn
+    // over the bottom border, so without them the `─` glyphs on either side
+    // get swallowed into the URL by terminals that linkify what they see.
     let url = if include_protocol {
-        "https://ko-fi.com/mateuszpiorowski "
+        " https://ko-fi.com/mateuszpiorowski "
     } else {
-        "ko-fi.com/mateuszpiorowski "
+        " ko-fi.com/mateuszpiorowski "
     };
     spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
     Line::from(spans).right_aligned()

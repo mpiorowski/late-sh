@@ -4308,36 +4308,19 @@ impl RoomHeader<'_> {
 
 /// The stream row of the header: `● LIVE title · 3 watching` on the left,
 /// the watch URL flushed right.
+///
+/// The link is the point of the row, so it is measured first and everything
+/// else is fitted around it: the title clips to what is left, and the watcher
+/// count drops when even that is not enough. A budget guessed ahead of the
+/// hint would let the rest of the row push the URL off entirely, since
+/// `row_with_hint` drops a hint it cannot fit rather than wrapping it, and
+/// here the hint *is* the URL. A live stream's `watch: https://…/live/<id>`
+/// runs 51 cells, so at ordinary chat-pane widths something has to give for
+/// the link to show at all.
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
     width: usize,
 ) -> Line<'static> {
-    let mut left = Vec::new();
-    if stream.live {
-        left.push(Span::styled(
-            "● LIVE ",
-            Style::default()
-                .fg(theme::ERROR())
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else {
-        left.push(Span::styled(
-            "○ starting… ",
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
-    if !stream.title.trim().is_empty() {
-        left.push(Span::styled(
-            truncate_cells(stream.title.trim(), width.saturating_sub(30)),
-            Style::default().fg(theme::TEXT()),
-        ));
-    }
-    if stream.live {
-        left.push(Span::styled(
-            format!(" · {} watching", stream.watching),
-            Style::default().fg(theme::TEXT_DIM()),
-        ));
-    }
     let hint = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
@@ -4355,6 +4338,44 @@ fn stream_header_line(
             Span::raw(" "),
         ]
     };
+
+    let status = if stream.live {
+        Span::styled(
+            "● LIVE ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("○ starting… ", Style::default().fg(theme::TEXT_DIM()))
+    };
+    let watching = stream.live.then(|| {
+        Span::styled(
+            format!(" · {} watching", stream.watching),
+            Style::default().fg(theme::TEXT_DIM()),
+        )
+    });
+
+    // What the rest of the row may not eat into: the hint (its own trailing
+    // cell included) plus the two cells `row_with_hint` keeps between the two
+    // sides. Nothing to reserve when there is no hint to flush right.
+    let hint_width: usize = hint.iter().map(Span::width).sum();
+    let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
+    let status_width = status.width();
+    let watching = watching.filter(|count| status_width + count.width() + reserved <= width);
+    let title_budget =
+        width.saturating_sub(status_width + watching.as_ref().map_or(0, Span::width) + reserved);
+
+    let mut left = vec![status];
+    let title = stream.title.trim();
+    if !title.is_empty() && title_budget > 0 {
+        left.push(Span::styled(
+            truncate_cells(title, title_budget),
+            Style::default().fg(theme::TEXT()),
+        ));
+    }
+    left.extend(watching);
+
     row_with_hint(left, hint, width)
 }
 

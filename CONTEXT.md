@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-15 (Lateania joins the backtick workspace cycle: backtick in the active world detaches with a full autosaved leave and arms a 5-minute recency window that keeps the door a cycle stop for a one-key rejoin of the same character slot; details in `late-ssh/src/app/lobby/CONTEXT.md` and the Lateania context §3)
+- Last updated: 2026-08-17 (Stream capability ids are 22-char base64url instead of 32-char hex, so the room header's watch link fits the row it used to be dropped from; the stream header row now fits its title and watcher count around the measured link instead of a hardcoded guess. Details in `late-ssh/src/app/stream/CONTEXT.md` §2 and `late-ssh/src/app/chat/CONTEXT.md` §11)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

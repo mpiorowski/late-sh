@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-16 (the overhead compass now always renders a `compass_glyph` direction + room count for a marked destination, and off-screen POI arrows are `PAN_LIMIT`-filtered rather than pointing at meaningless cross-block deltas; Aelunor, the Faewood - a twelve-zone, cavern-only forest continent of elves/high elves/druids/fae, 100 named creatures across five rarity tiers - and its own city Silvael are new, along with five more tameable beasts each carrying their own auto-skill ladder; see §1, §5.1, §6, §9, §11)
+- Last updated: 2026-08-17 (the land map is now a drawn atlas rather than a derived trunk: every country sits at a hand-set place, the Overworld and Embergate are walled keeps each road leaves by its own wall junction, and `ROADS` is checked against `worldmap::land_links` so the picture can neither invent a road nor lose one; see §5.2 and the new gotcha in §11; the Ways no longer carry gate titles of their own - `CONTINENT_WAYSTONES` lost its third field and `svc::travel` its duplicate title check, so every title check now lives in `can_cross_progression_gate` and a waystone is offered on `waystone_is_known` alone, see §6; the overhead compass now always renders a `compass_glyph` direction + room count for a marked destination, and off-screen POI arrows are `PAN_LIMIT`-filtered rather than pointing at meaningless cross-block deltas; Aelunor, the Faewood - a twelve-zone, cavern-only forest continent of elves/high elves/druids/fae, 100 named creatures across five rarity tiers - and its own city Silvael are new, along with five more tameable beasts each carrying their own auto-skill ladder; see §1, §5.1, §6, §9, §11)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -81,9 +81,16 @@ Current game scale:
 
 ### Board quests [VOLATILE]
 
-`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh) plus the **Kaelmyr ash-cairn board** at the Cinderfall Shore ash-gate (room `12000`, quests 17–22: reach the ash-gate, cull the cinder-dead/Emberkin/Choir, salvage shore relics, reach the Ashen King). Each has an `Objective`: `Bounty{name_contains,count}`, `Collect{item,count}`, `Reach{zone}`, or `Escort{npc,dest_zone}`, and a `Repeat` (`Once`/`Daily`/`Weekly`). Per-player state: `board_progress` (accepted counters), `board_done` (one-offs claimed), `quest_cooldowns` (id→Unix seconds when a repeatable was last claimed), all persisted; plus a transient `escort: Option<EscortState>` (not persisted).
+`BOARD_QUESTS` (in `svc.rs`) is a static table of bounties posted on a `FeatureKind::Board` in each capital square (Tasmania/Melvanala/Matlatesh) plus the **Kaelmyr ash-cairn board** at the Cinderfall Shore ash-gate (room `12000`, quests 17–22: reach the ash-gate, cull the cinder-dead/Emberkin/Choir, salvage shore relics, reach the Ashen King). Each has an `Objective`: `Bounty{name_contains,count}`, `Collect{item,count}`, `Reach{zone}`, or `Escort{npc,dest_zone}`, a `Repeat` (`Once`/`Daily`/`Weekly`), plus a `hint` (where the work is and how to walk there, shown on the board and in the journal), a `suggested_level` (a fair-fight estimate, `~LvN` on the posting), and `requires` (gate titles its hunting ground sits behind; empty = open country). A posting whose `requires` the player doesn't hold reads **sealed** (dim, `[sealed]` tag, via `board_quest_locked`) and `accept_board_quest` refuses it with the missing titles - a fresh adventurer can no longer carry bounties for ground that refuses them at the door. Per-player state: `board_progress` (accepted counters), `board_done` (one-offs claimed), `quest_cooldowns` (id→Unix seconds when a repeatable was last claimed), all persisted; plus a transient `escort: Option<EscortState>` (not persisted).
 
-A board is a **picker menu** (`Panel::Board`, `BoardView`/`BoardEntryView`), not an auto-assign: selecting the board feature in Examine opens it (`state.rs`'s `Panel::Examine` arm still runs `interact_task` on a `kind == "board"` row, so the board reads out its description like every other feature, and then also calls `set_panel(Panel::Board)` - there's no key left to spare for a dedicated binding, every letter and the sensible symbols are taken, see §9). `WorldState::board_entries` lists every ready-to-claim counter-bounty for the room first, then every still-open one (`board_quest_available`); Enter on a row calls `claim_board_task`/`accept_board_task` depending on `entry.ready`. This replaced "examine silently posts the next available quest in static-list order" - a fresh adventurer could get handed a bounty for a foe several zones above them with no preview or way to decline. One-offs claim into `board_done`, repeatables into `quest_cooldowns` (re-available after `DAY_SECS`/×7 via `board_quest_available_at`). Counter progress still ticks via `bump_quests` from the kill / loot / room-enter paths, unaffected by any of this. **Escorts** spawn a transient escortee that travels with the player; it is wounded by chance when the player is struck (`wound_escort`) and lost immediately on player death; reaching `dest_zone` with it alive completes the quest (`check_escort_arrival`, in `describe_room_context`). The escortee and active board quests surface in the room panel / quest journal, each quest-journal row now with a `desc` line (`blurb` + `Objective::describe()`) so what a bounty actually asks for is never lost once the one-time accept-time log line scrolls off.
+A board is a **picker menu** (`Panel::Board`, `BoardView`/`BoardEntryView`), not an auto-assign: selecting the board feature in Examine opens it (`state.rs`'s `Panel::Examine` arm still runs `interact_task` on a `kind == "board"` row, so the board reads out its description like every other feature, and then also calls `set_panel(Panel::Board)` - there's no key left to spare for a dedicated binding, every letter and the sensible symbols are taken, see §9). `WorldState::board_entries` lists every ready-to-claim counter-bounty for the room first, then every still-open one (`board_quest_available`); Enter on a row calls `claim_board_task`/`accept_board_task` depending on `entry.ready`. This replaced "examine silently posts the next available quest in static-list order" - a fresh adventurer could get handed a bounty for a foe several zones above them with no preview or way to decline. One-offs claim into `board_done`, repeatables into `quest_cooldowns` (re-available after `DAY_SECS`/×7 via `board_quest_available_at`). Counter progress still ticks via `bump_quests` from the kill / loot / room-enter paths, unaffected by any of this. **Escorts** spawn a transient escortee that travels with the player; it is wounded by chance when the player is struck (`wound_escort`) and lost immediately on player death; reaching `dest_zone` with it alive completes the quest (`check_escort_arrival`, in `describe_room_context`). The escortee and active board quests surface in the room panel / quest journal, each quest-journal row now with a `desc` line (`blurb` + `Objective::describe()` + `hint`) so what a bounty actually asks for is never lost once the one-time accept-time log line scrolls off.
+
+### Starter chain, the Long Road, and the next-step line [VOLATILE]
+
+- **Starter chain** (`STARTER_QUESTS`/`StarterGoal`/`bump_starter` in `svc.rs`): an auto-granted, strictly sequential five-step new-player line - reach Embergate → slay 3 on the King's Road → reach Whisperwood → slay the Elder Treant → reach Duskhollow - that hands a fresh character from Wayfarer's Hollow to the first real gate title. No board involved: `bump_starter_reach` fires from the room-enter path (beside the `Objective::Reach` bump) and `bump_starter_kill` from the kill path (matching `SlayIn` by the player's current zone, `SlayNamed` by the foe's name). Completing a step pays gold+xp and logs the next step; completing the chain points at the Long Road and the boards. State is `starter_stage: u8` + `starter_kills: u32` on `PlayerState`, persisted (schema v19, `#[serde(default)]`); on hydrate, pre-v19 saves at level ≥ 10 get the chain marked complete so veterans never see it.
+- **The Long Road** (`LONG_ROAD`/`RoadMilestone`/`road_view`): the realm's nine-boss spine (Elder Treant → Archdemon → the three living-dark seals → the Frontier King → Yssgar → Kaethyr the Unquenched → Kaethyr Ascendant), rendered in the journal as `[x]`/`[>]`/`[ ]` rows. Purely derived from `player.titles` via `title_for(boss, true)` - no save state - so it can never disagree with what a kill actually grants; the drift test `the_long_road_matches_the_real_gates_and_tracks_titles` pins every gate const to the table. `boss` strings must match spawn names exactly.
+- **The next-step line** (`next_step_for`): the active starter step, else the Long Road's first unconquered milestone. Logged as a `Next - ...` line on every join/class-choice. It was briefly also a standing `next` row in the room side panel, but a multi-sentence goal wrapped to five rows there and drowned the panel - the durable answer now lives in the journal, and the join log re-orients returning players.
+- **The journal is gated by progression**: `PlayerView.quests` holds the starter step (`QuestKind::Starter`), accepted bounties (`Board`), and the twenty Frontier zone quests (`Frontier`) *only when* `frontier_open` (the four `FRONTIER_REQUIRED_TITLES`); sealed, the panel shows a single "The Frontier - sealed" line instead of twenty endgame rows drowning a level-2 journal.
 
 ---
 
@@ -161,12 +168,12 @@ Before class choice:
 - The Town Square Frontier descent requires `Bane of the Archdemon Mal'gareth`, `Bane of The Bonewright Lich`, `Bane of the Elder Dryad`, and `Bane of the Abyss-Thing`; after those title gates, it still uses a transient two-step warning: the first `>` logs that the Frontier is older, meaner country for seasoned adventurers, and the next `>` confirms descent. Service-backed non-movement actions clear the pending warning.
 - Combat: `space`, `x`, or Enter attacks when not in a list panel; `z` flees.
 - Abilities: `1-9` use unlocked ability slots unless a list panel is open; `0` uses slot 10. The Abilities panel is a list panel: Enter casts the highlighted ability, which is the only way to reach rosters deeper than ten (the classic classes' late slots).
-- World actions: `y` works a resource node in the room (chop/mine/fish/forage/skin - the highest tier you qualify for); `u` opens the crafting panel where a craft station stands; `i` opens "the Ways" fast-travel menu when standing on a waystone portal (moved off `y`, which gather uses); `m` toggles the **World Map** (the graphical overhead map, see §5.1; while it is open `x` marks the crosshair room as a destination and the room panel carries a `heading` line naming the next exit to take until you arrive; below 50x14 it falls back to the text **World Atlas**: `World::region_progress` scores each of the `REGIONS` for visited/total rooms + boss count and flags the region the player stands in (`RegionProgress.here`, a `◈ you are here` marker), rendered as meters + `◆N` loot markers by `ui.rs::atlas_panel`); `r` recalls to Embergate's Town Square when out of combat; `;` **retreats to the nearest safe haven** (`svc::retreat_to_haven`: a BFS over walkable exits to the closest `safe` room, refusing mid-combat and never expanding through a progression gate the player's titles wouldn't pass, via the silent `gate_blocks` twin of `can_cross_progression_gate`) - deep in a maze it reads as "back to this zone's gate"; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `q` opens the **Animal Taming** panel where a tameable wild beast roams (Enter attempts the tame); `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder; `o` (Examine) on a quest board reads it out and opens its picker (`Panel::Board`, see the Board quests section above) instead of assigning a bounty blind. In the Inventory panel `A`/`C`/`J` batch-sell all loose gear / commons / non-upgrades (keeping worn gear and every `Consumable`/`Utility` item - poisons included, not just potions); inventory and shop rows show both a stat-delta line and a coloured `▲+N%` / `▼-N%` upgrade tag vs. what's worn, plus the item's own description line.
+- World actions: `y` works a resource node in the room (chop/mine/fish/forage/skin - the highest tier you qualify for); `u` opens the crafting panel where a craft station stands; `i` opens "the Ways" fast-travel menu when standing on a waystone portal (moved off `y`, which gather uses); `m` cycles the **map**: closed -> the graphical overhead field (§5.1) -> the **land map** (§5.2) -> closed, via `state::cycle_map` and `state::MapMode`; on the field page `x` marks the crosshair room as a destination and the room panel carries a `heading` line naming the next exit to take until you arrive, and `q` toggles the active-quest overlay (see §5.1); below 50x14 it falls back to the text **World Atlas**: `World::region_progress` scores each of the `REGIONS` for visited/total rooms + boss count and flags the region the player stands in (`RegionProgress.here`, a `◈ you are here` marker), rendered as meters + `◆N` loot markers by `ui.rs::atlas_panel`); `r` recalls to Embergate's Town Square when out of combat; `;` **retreats to the nearest safe haven** (`svc::retreat_to_haven`: a BFS over walkable exits to the closest `safe` room, refusing mid-combat and never expanding through a progression gate the player's titles wouldn't pass, via the silent `gate_blocks` twin of `can_cross_progression_gate`) - deep in a maze it reads as "back to this zone's gate"; `f` toggles the Follow panel; `g` casts the Resurrection rite on the nearest fallen adventurer in the room (Cleric/Paladin/Druid only); `p` opens the Stable (companion vendor) where one stands; `q` opens the **Animal Taming** panel where a tameable wild beast roams (Enter attempts the tame); `n` opens the housing ledger (at the clerk, or inside a home you own); `e` opens the appearance/bio builder; `o` (Examine) on a quest board reads it out and opens its picker (`Panel::Board`, see the Board quests section above) instead of assigning a bounty blind. In the Inventory panel `A`/`C`/`J` batch-sell all loose gear / commons / non-upgrades (keeping worn gear and every `Consumable`/`Utility` item - poisons included, not just potions); inventory and shop rows show both a stat-delta line and a coloured `▲+N%` / `▼-N%` upgrade tag vs. what's worn, plus the item's own description line.
 - Local chat: `'` opens a **say** compose line (`state.chat_buffer`; input capture runs at the top of `handle_key`, before the Esc-leaves check, so Esc cancels compose). Enter sends via the existing world-local `say` (room occupants, `LogKind::Say`); backspace edits; the prompt renders on a reserved bottom row in `draw_page`. **Lateania chat is world-local and never reaches late.sh's global feed** (`say` only `log_to`s in-world players; it does not publish to activity/#lounge).
 - While dead (a corpse): all normal keys are suppressed; only `r`/Enter (release to the temple) and `Esc` (leave) respond, until a resurrection or the auto-release deadline.
-- Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal, `f` follow, `!` leaderboard.
+- Panels: `c` character, `v` abilities, `t` inventory, `b` shop where a merchant exists, `o` examine/look, `k` titles, `j` quest journal (a list panel: Enter tracks/untracks the highlighted quest's target - it sets the same `map_dest` the map's `x` does, so the compass line guides to it), `f` follow, `!` leaderboard.
 - List panels: `w/s` or up/down move cursor; `1-9` jump and activate; Enter activates. The view auto-scrolls to keep the highlighted row within a small scroll-off margin (top and bottom).
-- Cursor-less text panels (character/quests): `[` / `]` scroll. Both scroll offsets share one interior-mutable `list_scroll` on `state::State`, clamped to content by the render pass and reset on panel change.
+- Cursor-less text panels (character/leaderboard): `[` / `]` scroll. Both scroll offsets share one interior-mutable `list_scroll` on `state::State`, clamped to content by the render pass and reset on panel change.
 - Inventory panel: `x` sells the selected inventory row when a shop is present.
 - Follow panel: Enter follows/stops the selected in-room adventurer; `x` stops following whoever is currently followed, including absent/separated targets.
 - `Esc` leaves active Lateania and returns to the Games hub.
@@ -174,15 +181,16 @@ Before class choice:
 ### Panels
 
 `state::Panel` variants:
-- `Room`: current room, vitals, exits, mobs, occupants, wildlife, features, minimap, hints.
+- `Room`: current room, vitals, exits, mobs, occupants, wildlife, features, minimap, hints. The zone line carries the zone's derived mob-level band (`zone_with_band`, from `World::zone_band` - computed at seed time from the spawns, so it can't drift). Foe rows wrap the full name (no more `a scrawny …`) with a wider meter + numbers (plus `bleed xN`/`stunned` tags) on their own line. **In the field layout, while a fight is on** (a targeted mob or duel occupant), `draw_room_side` swaps the room summary for `battle_side_panel`: vitals, a Battle section (the locked foe's full name, wide meter, rank · attack school · weak/resist, afflictions), your `shield/empowered/stunned` effects, your companion with its auto-skills, the **full ability roster** (slot key, name, cost, effect, ready/dim - the detail the bottom action bar's 7-char chips have no room for), the room's other foes under "Also here", and the combat keys. Rows carry their own click actions (`Vec<(usize, ClickAction)>`): foe rows switch the lock, ability rows cast, same as their keys. The classic layout keeps the room summary here because its main column already swaps to `battle_context`.
 - `Character`: class, trait, scores, stats, titles, resurrection charges.
 - `Abilities`: unlocked abilities, cost/readiness/effect.
 - `Inventory`: pack items plus equipped items as rows. Enter on a row is context-sensitive via `state::inv_action`: worn gear comes **off** (`unequip_task`), loose gear goes on, a consumable is used. Selling checks the `equipped` row specifically, not the item id: a worn item refuses with a reason, but a loose duplicate of that same item id sells fine while the worn copy stays on (`svc::sell`).
-- `Map`: the graphical overhead world map (§5.1), or the text atlas on small terminals.
+- `Map`: two pages on one key, chosen by `state::MapMode`. `Field` is the graphical overhead world map (§5.1); `Lands` is the land map (§5.2). Either page falls back to the text atlas in the side panel when the body is too small (`map_fits` is 50x14, `lands_fit` is 76x12).
 - `Shop`: merchant stock if `shop_at(room)` exists.
 - `Examine`: room features; fountains can restore vitals.
 - `Titles`: earned titles; selecting active title again clears it.
-- `Quests`: read-only Frontier zone quest list.
+- `Quests`: the journal - the active starter step, accepted bounties, the Long Road, and (once `frontier_open`) the Frontier zone list. A list panel whose cursor walks the quests *and then the Long Road milestones* (`list_len` = quests + road), so w/s can scroll the whole panel even with a single active quest; Enter tracks the highlighted quest's `target` - or a crown's lair (`RoadStepView.target`, resolved once at world build by `road_targets` from the boss spawn's home room) - on the compass/map. The key hints (`w/s` move, Enter track, `j` close) sit at the *top* of the panel - the Long Road makes it the longest panel in the game, so bottom hints scrolled out of sight. **On terminals ≥ 100x20 the journal expands to a full-screen three-column layout** (`draw_journal_screen`: In progress | The Long Road | The Frontier, each column scrolled to keep the cursor visible) following the character-sheet pattern; the sidebar `quests_panel` serves anything smaller. Same cursor indices and keys in both renderings.
+- `Board`: **on terminals ≥ 100x20 the board expands to a full-screen master-detail layout** (`draw_board_screen`: the postings list left, the highlighted posting's full story - blurb, task, hint, reward, sealed/READY state - right); the sidebar `board_panel` serves anything smaller.
 - `Follow`: current occupants, follow target tag, stop-follow action.
 - `Crafting`: recipes worked at the craft station(s) in the room; select and Enter to craft.
 - `Taming`: the tameable wild beasts roaming the room (Broceliande), each with its required Animal Taming level and your odds; select and Enter to attempt a tame.
@@ -212,15 +220,60 @@ Invariants to keep:
 
 Camera: `worldmap::MapCamera` is a pure value (offset from the player + level offset) held on `state::State`, clamped to the field's `bounds()` so panning cannot walk off into blank. `wasd`/`hjkl`/arrows pan, `<`/`>` change level, `x` marks/unmarks the crosshair room as a destination, Enter re-centres, `m` closes; the header flags a panned camera because it names where you *stand* while the inspector names the crosshair. Fog of war comes from `PlayerView.visited`, shared as an `Arc<HashSet<RoomId>>` because `State::view()` clones a whole `PlayerView` on every keystroke and every frame.
 
-Overlay markers come from `worldmap::pois()`: `★` a zone boss (with its guaranteed drops in the inspector), `♥` a tameable wild beast. The marked destination `⚑` outranks all of them. `worldmap::poi_arrows` additionally projects every *off-screen* boss/tameable onto the map border as a direction arrow (`hug_poi_arrows` pulls them in to hug the explored cluster), but **only within `PAN_LIMIT` of the player** - since `COMPONENT_MARGIN = PAN_LIMIT + MAX_VIEWPORT_COLS`, distinct reserved blocks always sit further apart than that, so a delta within `PAN_LIMIT` is guaranteed to be a POI in the *same* block (a real spatial relationship), and anything farther is dropped rather than pointed at with a meaningless direction - the camera could never pan there anyway, since `MapCamera::pan` clamps to the same limit. **These arrows are global map only** - the live field draws none, so a glyph beside `@` can never masquerade as a movement affordance.
+Overlay markers come from `worldmap::pois()`: `★` a zone boss (with its guaranteed drops in the inspector), `♥` a tameable wild beast. The marked destination `⚑` outranks all of them, and an active quest's target room draws a `!` (below `⚑`, above `★`) when the quest overlay is on (`state.map_quests`, toggled with `q` on the map, default on; targets come from `QuestView.target`). Border arrows carry a deliberate two-color contract: **amber arrows are the world's** (off-screen bosses/tames to go find, always on, `PAN_LIMIT`-honest), **the green arrow is yours** - only the *tracked* destination gets one, drawn by the same straight-line `PAN_LIMIT` rule as the amber ones (`quest_arrows` over `&[dest]`). Deliberately **not** route-based: `worldmap::route` refuses any destination not in `visited` (its first line), so a route-driven arrow would vanish for exactly the case tracking exists to serve - a boss you have not found yet. A straight-line direction needs no `visited` at all and is honest within a land, which is where it is drawn. Beyond this land there is no honest direction, so the journal says so instead: `ui::quest_place_note` names the target's region and whether the player has set foot in it ("in Whisperwood - venture there and the map will point the way"), shown under every quest row and under the tracked crown. Untracked quest targets get in-view `!` markers only - no arrows - and `quest_arrows` over all targets still supplies the count of cross-land ones, which the marker-legend line reports as "N quests beyond this land (track: j)" instead of drawing a dishonest arrow. `worldmap::poi_arrows` additionally projects every *off-screen* boss/tameable onto the map border as a direction arrow (`hug_poi_arrows` pulls them in to hug the explored cluster), but **only within `PAN_LIMIT` of the player** - since `COMPONENT_MARGIN = PAN_LIMIT + MAX_VIEWPORT_COLS`, distinct reserved blocks always sit further apart than that, so a delta within `PAN_LIMIT` is guaranteed to be a POI in the *same* block (a real spatial relationship), and anything farther is dropped rather than pointed at with a meaningless direction - the camera could never pan there anyway, since `MapCamera::pan` clamps to the same limit. **These arrows are global map only** - the live field draws none, so a glyph beside `@` can never masquerade as a movement affordance.
 
 `Tile` has two distinct "there's more this way" stubs, not one - both a plain `─`/`│` half-stub of corridor, never an arrow (arrows read as controls; a line means "walkable path" and nothing else): `Hint` is an exit into genuine fog (unvisited), styled dim; `HintKnown` is a link to a room you've *already visited* that the flat grid can't draw adjacent to you (a scattered hand-authored branch, or a jump into a whole other reserved block - the Sunderlakes hanging off Melvanala is the canonical example), styled brighter/amber so a known non-Euclidean jump reads differently from the true edge of your exploration. This is the map's answer to "I can't tell paths from dead ends" and "the water area only shows up once I'm already there": once discovered, the connecting room now visibly says "goes somewhere you know" every time you look, rather than looking identical to unexplored fog. The footer legend (four lines: controls, symbols, markers, terrain) explains both stubs plus `@`/corridors/stairs/the reversed-cell cursor explicitly - it used to cram controls and markers onto one line and silently omit `@`/corridors/cursor from the legend entirely.
 
-UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`) with a visible divider; the `Now` region wraps the room description naturally and only truncates the whole context as a last resort to preserve recent-event space. Service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been. Consecutive identical recent events are collapsed with an `xN` suffix so repeated blocked-movement warnings do not flood the split.
+UI uses a two-column layout with compact fallback for terminals narrower than 50 columns or shorter than 9 rows. The left column splits current room context (`Now`) from newest-first action scrollback (`Recent`) with a visible divider; **while a fight is on** (a `targeted` mob, or a duel via a `targeted` occupant) the `Now` block is replaced by the **battle frame** (`ui::battle_context`): the foe's full name, its nature line (rank · attack school · weakness/resist, from the new `MobView.school/weak/resist`), wide HP meters for both sides, `afflicted:` (DoT stacks/stun) and the player's `shield/empowered/stunned` effects (new `PlayerView` fields), reverting the moment the fight ends. Note the battle frame lives in the *classic* layout's left column only - the wide-terminal field layout has no `Now` block, so there the fight reads from the side panel's foe roster (the targeted foe's expanded traits line, see the Room panel note in §5). The `Now` region wraps the room description naturally and only truncates the whole context as a last resort to preserve recent-event space. Service room-description lines use `LogKind::Room` and are filtered out of `Recent` so movement does not bury combat, loot, chat, and system events. Arrivals use compact `LogKind::Travel` breadcrumbs so Recent still shows where the player has just been. Consecutive identical recent events are collapsed with an `xN` suffix so repeated blocked-movement warnings do not flood the split.
 In the Room panel, the minimap is rendered in a separate bottom-aligned side-panel region, not appended to the room detail lines; keep it anchored so changing foes/features/hints does not make the map jump vertically.
 Room-panel variable text rows (zone, exits, features, foes, occupants, wildlife) should use the side wrapping helpers in `ui.rs` so long labels wrap within the side column instead of clipping against the border.
 Non-Room side panels are rendered through `side_paragraph`, which enables Ratatui wrapping for long quest, inventory, shop, title, and ability rows.
 
+### 5.2 The land map (`worldmap::land_links`, `ui::land_map_lines`) [VOLATILE]
+
+The map's second page, and the only view that answers **"how do I get there"**. The overhead field (§5.1) is deliberately local: `COMPONENT_MARGIN` is wider than any terminal, so two regions can never share a screen. The text atlas is a flat list with no links. Neither draws a road.
+
+The eighteen atlas regions are drawn as an **atlas**: every country sits at a hand-set place on a character grid, the two hubs every road runs through are walled keeps, and each road between two lands is a line joining them.
+
+```
+THE LANDS OF LATEANIA   5 of 18 walked
+Every line is a road you can walk. Numbers are zones you have entered.
+
+    Aelunor  0/12 ── Silvael ──╮
+    Wildbound Waste  0/3 ──╮   │               Wayfarer's Hollow ──╮
+   Sunderlakes  0/14 ──╮   │   │       ╭── City Districts ──╮      │
+                    ╭──┴───┴───┴───────┴──╮             ╭───┴──────┴──────╮
+ Broceliande  0/20 ─┤      OVERWORLD      ├─────────────┤    EMBERGATE    │
+                    ╰──┬───┬───┬───────┬──╯             ╰──┬───────┬──────╯
+    Sunken Catacombs ──╯   │   │       │  Frontier  3/20 ──╯       │
+       Thornwood Hollows ──╯   │       │        Hearthward Close ──╯
+             Drowned Caverns ──╯       │
+                            Sundered Reaches  0/20
+                                       │
+                                       │
+                                 Kaelmyr  0/20
+
+Only the Ways reach:  Portal Villages · Shattered Archipelago
+
+walked  ·  not yet  ·  where you stand
+```
+
+Three earlier attempts are worth knowing about, because all three failed the same way and the next one will too. An **indented tree** was correct and unreadable: the Overworld's ten roads out rendered as a vertical list, exactly what the picture exists to avoid. A **fan** drew a bare `|` down the middle with unattached names either side, which reads as three unrelated columns. A **trunk with spurs** attached each name to the trunk with its own rule, which fixed the attachment but still stacked the Overworld's spurs into a column. The lesson: *a layout algorithm cannot draw this world*. One node holds ten of the sixteen roads, so any generic arrangement collapses into a list. The map is therefore drawn by hand and checked by machine.
+
+Load-bearing decisions, all of them deliberate:
+
+- **The placement is authored; which lands touch is not.** `KEEPS`/`PLACES`/`ROADS` in `ui.rs` are a hand-set picture: rows, columns, and the legs each road runs. But `ROADS` may only name a pair `worldmap::land_links` derives from the room graph, and must name every such pair. `the_atlas_draws_every_road_in_the_world_and_invents_none` compares the two sets and fails the build if they ever disagree, so the map can neither invent a road nor lose one. **Adding a country means finding it a place in `PLACES` and a road in `ROADS`** - which is the point: a map nobody placed it on is a map that quietly dropped it.
+- **It reads the room graph and region membership, and nothing else.** `derive_land_links` records an edge wherever one room's exit lands in another region (`region_atlas_entry`). It never looks at a title, a boss, or a level band, so it **cannot drift out of step with `can_cross_progression_gate`**, and it cannot leak a gate rule. Kaelmyr simply sits at the bottom of the long road south under the Sundered Reaches; a player who walks to the Sundering Deep and finds Yssgar in the doorway draws their own conclusion. Naming the gate would answer the question before it was asked.
+- **The two hubs are keeps, and that is what makes the shape drawable.** The Overworld carries ten roads and Embergate five. A bare name has one row above and one below; a box has a whole wall, so each road leaves at its own junction (`┬`/`┴`/`├`/`┤`, worked out in `Canvas::stroke` from whatever the road lands on) and no two spurs share a line. `City Districts` sits between the two keeps because it opens off both of them - the one cycle in an otherwise tree-shaped world.
+- **North of the road is the country you walk to; south of it is the dark.** The living-dark dungeons, the Frontier, the Reaches and Kaelmyr all hang below; the Sunderlakes, Broceliande, Silvael/Aelunor, the Wildbound Waste, Wayfarer's Hollow and the Close sit above. Nothing enforces it but the layout, and `the_atlas_lays_the_realm_out_the_way_it_is_walked` pins it.
+- **A chain reads outward from the hub.** Aelunor is reached through Silvael, so it is drawn the far side of it (`Aelunor ── Silvael ──╮`, the road arriving on Silvael's side); the Reaches and Kaelmyr stack downward for the same reason. Distance on the page is distance from the hub, not reading order.
+- **Every land is named, walked or not.** The name of a country was never the secret; the road to it is. Undiscovered lands render faint, not as `???`, and a road runs faint until both lands it joins are walked. The footer legend says what the three colours mean, since colour is the only thing carrying it.
+- **Depth is in zones, not rooms, and is a number rather than a bar.** `RegionProgress.chain` counts zones with at least one visited room, from `LAND_CHAINS` (names written out, every number read from the generator's own consts). A country can be three zones deep on 2% of its rooms, and depth is the number that says how far in you are. A land absent from `LAND_CHAINS` draws with no depth at all. A shaded `▓░░░` bar was tried and removed: a run of block glyphs renders as one solid rectangle in plenty of terminal fonts, so it read as noise rather than progress.
+- **Labels are anchored to their road, not to a column.** `At::Ends`/`Starts`/`Centered` fix the end that meets the road, so a counter gaining a digit (`3/20` -> `20/20`) pushes the name *away* from the road rather than shoving the road it is attached to. Both `the_land_map_stays_inside_the_narrowest_terminal_it_draws_into` and `no_land_on_the_atlas_is_written_over_by_another` render the fully-walked atlas as well as the fresh one, so a two-digit counter cannot silently overflow or overwrite a neighbour.
+- **Names are shortened to fit** (`land_chip_name`: `land_label` plus a leading `The` stripped). The picture is a fixed 76x13 grid ending at column 74, so `lands_fit` (76x12) refuses to draw it into anything narrower and the text atlas serves instead, the same way the overhead field falls back below 50x14.
+- **The scroll hint is only shown when there is something below the fold**, since a hint for a key that does nothing is worse than no hint. That is the only thing `land_map_lines` uses its `height` argument for.
+- `LAND_LINKS` is a `LazyLock` forced by `worldmap::warm()` alongside the coordinate field and the POI index; a player never pays for it on the render thread.
+- `land_map_lines` is split from `draw_land_map` so the layout is read in tests rather than only on a screen. Pinned by `the_land_graph_is_read_off_the_room_graph_and_covers_every_region` (`worldmap_test.rs`) plus six in `ui_test.rs`.
 ---
 
 ## 6. World And Content [VOLATILE]
@@ -305,7 +358,7 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 - **Abilities and pets also reach a `pvp_target` now.** `damage_target` (used by `Strike`/`Finisher`) checks `pvp_target` before `target` and routes through the new `strike_pvp_target` (a thin wrapper around `strike_player` that also handles pvp kill-crediting - shared by the auto-attack pass, abilities, pet bites, and pvp dots, so that logic lives in exactly one place). `DamageOverTime` seeds a `pvp_dots` entry (parallel to `mob_dots`, but keyed by victim id and carrying its own `DamageType` per stack, since a player's `strike_player` needs the real school every tick rather than a resist/weak multiplier baked in once); the tick resolves it the same way as mob dots, just through `strike_pvp_target`. `Stun` inserts into `pvp_stuns` (parallel to `mob_stuns`), checked at the top of each attacker's own turn in the pvp-fighters pass - a stunned adventurer skips their swing that round, same as a stunned mob does. A companion's bite and its unlockable auto-skills (`fire_pet_skills_pvp`, a pvp sibling of `fire_pet_skills`) fire against `pvp_target` too: `SavageBite`/`Pounce`/`Rend` route through `strike_pvp_target`/`seed_pvp_dot`; `Roar`/`Guard` are pure self-buffs and needed no changes. **Still auto-attack-only for mobs, not pvp:** poison-coated weapons (`weapon_poison`) still only seed a `mob_dots` entry - extending that to pvp is the one remaining gap.
 - **Death and spoils.** A real pvp kill (not a death-save or a spent veteran charge) reuses the ordinary death path unchanged - the victim becomes a corpse, keeps `CORPSE_LINGER_SECS` to be resurrected or release, and loses the same `carried_gold_death_loss` cut as any death. The only pvp-specific step is crediting that lost gold to the killer (diffed before/after the `strike_player` call, not a new field) alongside a flat xp bonus, incrementing persisted `pvp_kills: i64` (schema **v18**, `#[serde(default)]`), and awarding the reaver title track (`pvp_title_for`: Blooded → Reaver of the Waste → Dread of the Wildbound → Warlord of the Waste → Deathless Sovereign of the Waste at 1/10/50/150/500 kills) via the existing `award_title`.
 - **UI.** `OccupantView` gained `attackable`/`targeted`; the "Adventurers here" list marks a hostile row (`hostile`/`duel` tag, a `»` marker on your current target) and, only in a `pvp` room, is clickable (`ClickAction::AttackPlayer`) exactly like a foe roster row. `PlayerView.pvp`/`pvp_kills` expose the room flag and lifetime count. `OccupantView` also carries `level` now: both the "Adventurers here" list and the Follow panel prefix the name with `Lv{N}` (`roster_row`, same convention `MobView` already uses) and append a three-letter class abbreviation (`ui::class_abbrev`, hand-picked - not a naive truncation, since e.g. Warrior/Warlock would otherwise both read "WAR") into the status-tag slot, combined with any active status (`hostile·WAR`) rather than replacing it - so a foe's kit is visible before you ever engage.
-- **The continent.** `extend_wildbound` (rooms 30000+) builds three chained biomes - Duskmire Wood (cavern, levels ~13-60), the Hollowdeep (braided maze, ~44-67), the Scorched Flats (cavern, ~65-83) - each ending in one named apex boss (Wychelm Sovereign / Deathless Warden / Apex Sandwyrm, levels 65/78/100), carved with the same `carve_maze`/`carve_cavern` never-a-grid machinery as Broceliande. Every field room is `pvp: true`; the only havens are three small four-room gate towns (Last Watch, Barrowgate, Ashhold), one per biome, chained gate → field → next gate. Regular mobs are 20 base creature names per biome crossed with a shared five-tier affix ladder (`Lesser/·/Greater/Elder/Ancient`) - a 300-entry template pool, ~600 live spawns. Loot borrows `frontier_loot` at an offset tier per biome rather than a bespoke catalog (`broceliande_loot`'s shortcut). Hung off the Sahra Wastes' `WILDBOUND_GATEWAY` (room 751, the Sand-Wyrm's Maw) by a plain walk south; `Last Watch, the Wildbound Waste` is a `CONTINENT_WAYSTONES` entry with no title gate.
+- **The continent.** `extend_wildbound` (rooms 30000+) builds three chained biomes - Duskmire Wood (cavern, levels ~13-60), the Hollowdeep (braided maze, ~44-67), the Scorched Flats (cavern, ~65-83) - each ending in one named apex boss (Wychelm Sovereign / Deathless Warden / Apex Sandwyrm, **levels 62 / 70 / 85** derived from their `boss_stats` through `Spawn::level()`; an earlier note here claimed 65/78/100, which overstated all three and wrongly implied the Sandwyrm was the world's ceiling - Kaelmyr and the deep Reaches are, see §7), carved with the same `carve_maze`/`carve_cavern` never-a-grid machinery as Broceliande. Every field room is `pvp: true`; the only havens are three small four-room gate towns (Last Watch, Barrowgate, Ashhold), one per biome, chained gate → field → next gate. Regular mobs are 20 base creature names per biome crossed with a shared five-tier affix ladder (`Lesser/·/Greater/Elder/Ancient`) - a 300-entry template pool, ~600 live spawns. Loot borrows `frontier_loot` at an offset tier per biome rather than a bespoke catalog (`broceliande_loot`'s shortcut): every table, **the apex boss's included**, is `loot_base + n`, the boss one affix ladder past its own deepest regular (tiers 5 / 12 / 18), and `wildbound_loot` clamps at `FRONTIER_TIERS - 2` so the Waste can never reach the catalog's top table. That clamp is load-bearing - the boss branch used to return `FRONTIER_TIERS - 1` outright, so all three apexes dropped the King Who Was Promised Nothing's own tier, guaranteed (`roll_loot` never rolls for a boss), off a 1500hp Duskmire mob reached by an ungated walk at gentle overworld multipliers. Pinned by `a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown`. Hung off the Sahra Wastes' `WILDBOUND_GATEWAY` (room 751, the Sand-Wyrm's Maw) by a plain walk south; `Last Watch, the Wildbound Waste` is a `CONTINENT_WAYSTONES` entry with no title gate.
 
 ### Wayfarer's Hollow (new-player tutorial) [VOLATILE]
 
@@ -327,6 +380,169 @@ Non-Room side panels are rendered through `side_paragraph`, which enables Ratatu
 ---
 
 ## 7. Progression, Combat, And Economy [VOLATILE]
+
+### The shape of the game [VOLATILE]
+
+One place to look for "where does this land sit, what lives in it, and how do you get there". **Every level below is derived, not authored**: `Spawn::level()` maps `power = max_hp + damage * 4` onto 1..=100, so these numbers are what a player actually meets and they move the moment a spawn's stats do. Re-derive rather than trust if the tuning changes; nothing here is a source of truth, `world.rs` is.
+
+#### The lands
+
+All eighteen `REGIONS`, in the order the ladder below plots them. "Level" is mobs; bosses are listed separately because in several lands they sit far above the trash around them.
+
+| Land | Rooms | Mobs | Bosses |
+| --- | --- | --- | --- |
+| Wayfarer's Hollow | `TUTORIAL_BASE`+5 | none | none (tutorial) |
+| Embergate & the King's Road | 1-600 (spawns to 110) | Lv2-24 | 7, Lv12 to 61 (below) |
+| The Overworld & Capitals | 600-2000 | Lv3-9 | none |
+| City Districts | 3000-3100 | none | none (safe) |
+| Hearthward Close (housing) | 9000+ | none | none (safe) |
+| The Sunken Catacombs | 5000-5200 | Lv6-20 | The Bonewright Lich Lv32 |
+| Thornwood Hollows | 5200-5400 | Lv6-20 | the Elder Dryad Lv32 |
+| The Drowned Caverns | 5400-5600 | Lv6-22 | the Abyss-Thing Lv34 |
+| The Frontier · 20 zones | 2000-3000 | Lv48-70 | 20, Lv61-88; deepest the King Lv88 |
+| The Sundered Reaches · 20 zones | 10000-11000 | Lv67-77 | 20, Lv85-100; deepest Yssgar Lv100 |
+| Kaelmyr, the Ashen Reach · 20 zones | 12000+ | Lv88-99 | 20, **all Lv100**; Kaethyr Ascendant Lv100 |
+| The Sunderlakes · 14 zones | 16000-18000 | peaceful (fishing) | none |
+| Broceliande · 20 zones | 22000-24000 | Lv24-65 | 20, Lv51-75 |
+| Aelunor, the Faewood · 12 zones | 25000+ | Lv17-42 | 12, Lv53-69 |
+| Silvael (Aelunor's city) | 26000+ | none | none (safe) |
+| Portal Villages · 4 | 8000+ | none | none (safe) |
+| The Shattered Archipelago · 20 islands | 20000+ | Lv68-78 | 20, Lv90-100 |
+| The Wildbound Waste · 3 biomes (pvp) | 30000+ | Lv11-79 | 3 apex, Lv62 / 70 / 85 |
+
+The authored core's seven-boss ladder, each boss tuned at ~3x the trash around it and ~1.6x its damage:
+
+| Boss | Lv | Room | Grants |
+| --- | --- | --- | --- |
+| the Elder Treant | 12 | 28 | `FIRST_DUNGEON_GATE_TITLE` |
+| the Bone Tyrant | 17 | 44 | |
+| the Lich Vael | 22 | 62 | |
+| the Magma Colossus | 30 | 77 | |
+| the Wyrm of Frostspire | 39 | 92 | |
+| the Fallen Paladin | 48 | 103 | |
+| the Archdemon Mal'gareth | 61 | 110 | `FRONTIER_GATE_TITLE` |
+
+**The ladder**, weakest to strongest by mob level. Bars are ordinary mobs.
+
+```
+                          1        20        40        60        80        100
+                          +---------+---------+---------+---------+---------+-
+the authored core         ############                                          7 bosses, Lv12 > 61
+the Overworld & capitals   ####                                                 no bosses
+the living dark x3          #########                                           3 seals, Lv32/32/34
+the Wildbound Waste (pvp)      ###################################              3 apex, Lv62/70/85
+Aelunor                           #############                                 12 bosses, Lv53-69
+Broceliande                          ######################                     20 bosses, Lv51-75
+the Frontier                                     ############                   20 bosses, Lv61-88
+the Sundered Reaches                                       ######               20 bosses, Lv85-100
+the Archipelago (portal)                                   ######               20 bosses, Lv90-100
+Kaelmyr                                                              #######    20 bosses, all Lv100
+                                                       ^ the knee at 60
+```
+
+#### The gate spine [VOLATILE]
+
+**Five hard gates, all of them in one function**: `Service::can_cross_progression_gate`. Nothing else in the world checks a title to let you walk somewhere. The seven `*_GATE_TITLE` consts feed those five checks, since the Frontier stair needs four titles at once.
+
+```
+  Elder Treant ──────────────▶ the first dungeon ladder
+                               FIRST_DUNGEON_GATE_FROM -> _TO
+
+  Archdemon Mal'gareth ──────▶ all three living-dark descents
+                               Tasmania's square  -> the Sunken Catacombs
+                               Melvanala's square -> the Thornwood Hollows
+                               Matlatesh's square -> the Drowned Caverns
+                                 |
+                                 |  one seal per zone boss:
+                                 |  Bonewright Lich, Elder Dryad, Abyss-Thing
+                                 v
+  all four of the above ─────▶ the Frontier stair, Embergate's Town Square
+                               THE FRONTIER, 20 zones, nothing gated inside
+                                 zone 20 holds the King Who Was Promised Nothing
+
+  the King's Bane ───────────▶ the Matlatesh sea-gate
+                               THE SUNDERED REACHES, 20 zones, nothing gated inside
+                                 zone 20 "Sundering Deep" holds Yssgar
+
+  Yssgar's Bane ─────────────▶ Down, out of Yssgar's own chamber
+                               KAELMYR, 20 zones, nothing gated inside
+                                 zone 19 Kaethyr the Unquenched
+                                 zone 20 Kaethyr Ascendant  <- the last crown,
+                                         and nothing is gated behind him
+```
+
+Nine named bosses sit on the critical path; five of them hold a key.
+
+- **A hard gate is a title check; the 20-zone realms are not gated at all.** The Frontier, the Reaches, and Kaelmyr are each a chain of 20 zones where **each zone's boss room holds the `Down` exit into the next zone** (`extend_frontier`, `extend_reaches`, `extend_kaelmyr`). Reaching Yssgar means walking through 19 prior boss chambers, but no title is checked on any of them, so nothing forces a player to actually kill them. Depth and a boss standing in the doorway are the whole obstacle.
+- **The last two gates each hand over a continent.** One title opens 20 zones. King's Bane -> all of the Reaches, Yssgar's Bane -> all of Kaelmyr. This is deliberate; the gauntlet, not the gate, is what paces the back half.
+- **Kaelmyr has exactly one door and it is inside Yssgar's room.** `kaelmyr_seagate_room` finds the room where `Yssgar, the Sundering Deep` spawns and hangs `Dir::Down` there. There is no second entrance, so Kaethyr is unreachable without the Yssgar title by either walking or the Ways.
+- **The Ways carry no gate rules of their own.** `CONTINENT_WAYSTONES` used to hold a third field naming the title each far gate wanted, and `svc::travel` enforced it a second time - the same rule in two places, free to drift. Both are gone: a waystone destination is now offered on `world::waystone_is_known` (have you stood there) and nothing else, so **every title check in the game lives in `can_cross_progression_gate`**. Fast travel still cannot skip a gate, because it only ever returns you somewhere you already walked.
+
+#### The connections
+
+Three link kinds and no others: a **plain walk**, a **title gate** (see the gate spine above), and a **waystone portal** (`i` at a waystone, `portal_destinations()`). Everything that is not on the spine hangs off the Overworld as an ungated branch.
+
+```
+  Wayfarer's Hollow
+    | walk (Embergate's square)
+    v
+  EMBERGATE & THE KING'S ROAD ---walk--- Hearthward Close (housing)
+    |  the seven-boss ladder ends at the Archdemon, room 110
+    | walk (the Greatroad, west)
+    v
+  THE OVERWORLD ---walk--- Tasmania / Melvanala / Matlatesh ---walk--- City Districts
+    |
+    +== [Archdemon's Bane] ==> the living dark, one seal each:
+    |     the Sunken Catacombs .. the sealed boneyard stair, Tasmania's square
+    |     Thornwood Hollows ..... off Melvanala
+    |     the Drowned Caverns ... off Matlatesh
+    |
+    +--walk--> THE SUNDERLAKES ....... the Melvanala high lake
+    +--walk--> BROCELIANDE ........... the Faerie Hollow, Verdant Highlands (room 688)
+    +--walk--> SILVAEL --walk--> Aelunor .. the Amber Savanna (see below)
+    +--walk--> THE WILDBOUND WASTE ... the Sand-Wyrm's Maw, Sahra Wastes (room 751)
+
+  == [all four Banes] ==> THE FRONTIER ...... the sealed stair, Embergate's Town Square
+       deepest zone: the King Who Was Promised Nothing Lv88
+  == [the King's Bane] ==> THE SUNDERED REACHES ... the Matlatesh sea-gate
+       deepest chamber: Yssgar, the Sundering Deep Lv100
+  == [Yssgar's Bane] ==> KAELMYR ............ the ash-gate below Yssgar's chamber
+       KAETHYR ASCENDANT Lv100  <-- the last crown. Nothing is gated behind him.
+```
+
+The Ways (`portal_destinations()`) run in parallel to all of the above and are the **only** way into the Archipelago:
+
+```
+  CONTINENT_WAYSTONES (6 mainland gates)          opens when
+    Embergate, the Town Square ................... you have stood there
+    the Sunderlakes landing ...................... you have stood there
+    Broceliande, the forest gate ................. you have stood there
+    Last Watch, the Wildbound Waste .............. you have stood there
+    the Sundered Reaches sea-gate ................ you have stood there
+    Cinderfall Shore, Kaelmyr .................... you have stood there
+  + 4 Portal Villages (8000+) and 20 island landings (20000+) .... always
+```
+
+**The Ways carry no progression rules of their own.** `waystone_is_known` (`world.rs`) is the whole rule: a mainland gate answers once `player.visited` holds it, and the archipelago always answers because its rooms have no directional exits and a visited rule would orphan them. `svc::travel` and the panel both filter through it, and the panel reports `known/total` far gates rather than listing what is missing. There is deliberately **no** title check here: the two sealed continents need none, since a visited set cannot hold a Reaches or Kaelmyr room unless `can_cross_progression_gate` already let the player walk in. That keeps every progression rule in one function.
+
+Embergate's square needs no special case despite the visited seed being `tutorial_start_room()`, not room 1: a waystone can only be used by standing on it, and standing in room 1 is what marks it visited, so the home anchor is always known by the time it could matter. Pinned by `the_ways_only_carry_you_where_you_have_already_stood`, `a_gate_title_alone_does_not_open_the_ways`, and `the_archipelago_answers_without_a_title_or_a_prior_visit` in `svc_test.rs`.
+
+Two things fall out of that table and are easy to miss:
+
+- **Aelunor is not on the network, and it sits behind Silvael.** Every other far country has a waystone; Aelunor and Silvael are reachable only by walking from the Amber Savanna. `extend_silvael` splices the city into that road rather than hanging it off the end, so the walk is savanna -> **Silvael** -> Aelunor and nothing steps from the overworld straight into the Faewood. Pinned by `silvael_stands_between_the_overworld_and_aelunor`.
+- **The Archipelago is ungated endgame, and that is intended.** Its islands hold Lv68-78 mobs and Lv90-100 bosses, and every landing is portal-reachable with no title at all, so a low-level character can step directly into content above the Frontier. Nothing in progression routes through it (no island grants a gate title or a Long Road crown), so it stays open on purpose while every mainland gate is visited-gated. The Wildbound Waste has the same property in milder form, running to Lv79 in its third biome behind nothing but a walk.
+
+**Two traps in the level scale.** Both come from `Spawn::level()` and both bite the UI, not the engine:
+
+- **The knee at 60.** Below 840 power it is one level per 14 power; above, one level per 150. A level is worth roughly ten times more past 60, and a boss sitting just over the knee gets catapulted: the Archdemon is only 1.5x the Fallen Paladin in power but reads 13 levels higher. Useful in practice, since it means a boss's damage can be retuned inside a wide band without moving its displayed level at all.
+- **Saturation at 100.** Level 100 starts at 6,840 power. Thirty-one bosses sit above that line (11 of 20 in the Reaches, all 20 in Kaelmyr) spanning 6,840 to 18,196 power, so they all read `Lv100`. Kaethyr Ascendant (18,196) looks identical to Kaelmyr's first boss (12,800) while being 1.4x its power. The ordering is never wrong, since the function is monotonic, but it stops resolving exactly where the stakes are highest, and that is also where `World::zone_band` stops being useful guidance in the room panel.
+
+**Where the time goes.** `xp_for_level` is cubic to `XP_KNEE_LEVEL` (50) and then a flat `XP_PER_SUMMIT_LEVEL` (75,000) per level to 100. Total climb is 4,967,282 xp: **1,217,282 to reach 50 (24%), then 3,750,000 for 50 to 100 (75%) at a rate that never changes.**
+
+**Known gaps in the shape** (see also §11):
+
+- The authored core holds 6,276 xp in total, which is about Lv11 of progress, while its own last boss wants roughly Lv40 on bare class stats. Players are therefore pushed out into the ungated side countries to level and come back over-levelled, which is why the approach to the Throne plays as trivial even though its trash is correctly placed at ~1/3 of its boss.
+- Quest content clusters hard: 5 starter steps at Lv1-10, then **2 bounties across Lv10-30**, then 32 quests unlocking at once at Lv30-35, then **nothing authored across Lv35-52**, 8 bounties to Lv78, and **nothing past Lv78** but the last two crowns. The five side countries carry no quests at all despite being the de facto bridge from the core to the Archdemon.
 
 ### Classes and scores
 
@@ -363,7 +579,7 @@ Progression:
 
 ### Combat rules
 
-- `engage` targets the first alive mob in the current room unless the room is safe.
+- `engage` targets the first alive mob in the current room unless the room is safe. Engaging a boss opens with a one-line bark; a blow worth ≥25% of the foe's max HP logs as "crush into" instead of "strike"; a foe first dropping below 25% logs a one-time "staggers" line - flavor only, no mechanics.
 - Movement and recall are blocked during combat; flee clears target and moves through the first available room exit, or only breaks combat if no exit exists.
 - Rogue opening strike doubles the first auto-attack after engaging.
 - Mage offensive spell damage is boosted by `Arcane Mastery`.
@@ -404,7 +620,7 @@ Progression:
 
 Character persistence uses `late_core::models::mud_character` / `mud_characters`.
 
-Saved character schema version: `14`.
+Saved character schema version: `19`.
 
 Durable fields:
 - class key, XP, level, carried gold, banked gold, current HP;
@@ -420,7 +636,8 @@ Durable fields:
 - appearance/bio trait indices (`Vec<u8>`, clamped to valid options on load);
 - gathering-skill xp as (skill key, total xp) pairs (unknown keys dropped on load);
 - crafting-skill xp as (skill key, total xp) pairs;
-- Animal Taming xp as a single `taming_xp` value (schema v14; `#[serde(default)]`, so pre-v14 saves start the trade untrained).
+- Animal Taming xp as a single `taming_xp` value (schema v14; `#[serde(default)]`, so pre-v14 saves start the trade untrained);
+- starter-chain progress as `starter_stage` + `starter_kills` (schema v19; `#[serde(default)]`, and hydration marks the chain complete for pre-v19 saves at level ≥ 10).
 
 Transient by design:
 - current target;
@@ -532,6 +749,8 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 
 - **(Resolved)** Off-screen POI border arrows used to point in a meaningless direction once the POI was in another reserved block, and were unfiltered. Fixed: `worldmap::poi_arrows` now drops any POI further than `PAN_LIMIT` from the player before projecting it (see §5.1) - the exact fix this entry used to describe as future work.
 - A splice that discovers "the room that links to X" by scanning `room.exits` for a matching target must exclude any room that is itself inside the region X belongs to, or it can match one of X's own in-region neighbours instead of the real external anchor - `HashMap` iteration order then makes the match (and everything hung off it) silently nondeterministic between boots. `extend_silvael`'s anchor search does this (`is_aelunor_room` excluded) after `worldmap_test::world_coords_is_cached_and_complete` caught the case where it didn't.
+- Adding a region to `REGIONS` also means placing it on the land map: a `Place` (or `Keep`) and a `Road` per real link, in `ui.rs`. `the_atlas_draws_every_road_in_the_world_and_invents_none` fails until you do, on purpose - the picture is authored, so a new country has to be drawn in rather than laid out for you (see §5.2).
+- **Do not cite line numbers in this file.** They rot on the next edit and there is nothing to catch it: of the eight `file.rs:NNNN` references the gate-spine section once carried, seven were already pointing at unrelated lines before anyone noticed, and a comment-only banner pass moved the last correct one. Name the symbol instead - `can_cross_progression_gate`, `extend_kaelmyr` - which greps and survives.
 - Some comments in `world.rs` may lag current content scale. Trust current tests/data: ~2600 rooms across base/overworld/Frontier, the three living-world regions, housing, city districts, and the ~900-room Sundered Reaches (see the room-count test's per-region ranges).
 - `follow_task` still exists as an old toggle service command, but current input opens the Follow panel and uses `follow_to_task` / `stop_follow_task`.
 - `say_task` exists, but active Lateania has no typed command prompt yet.
@@ -541,3 +760,5 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 - Boon perks apply on room entry and can spam log lines if movement loops through boon rooms.
 - Hunted game cooldowns are not persisted across process restart.
 - World content is authored as Rust data. A future data-file loader should preserve the existing `World`, `Room`, `MobSpawn`, `Feature`, and `CritterSpawn` shapes.
+- **The authored core cannot level a player through itself.** Its 31 spawns hold 6,276 xp in total (about Lv11) while the Archdemon at its end wants roughly Lv40 on bare class stats, so players are pushed into the ungated side countries to level and return over-levelled. The consequence is that the run up to the Obsidian Throne plays as trivial even though its trash is correctly tuned at ~1/3 of its boss, matching every other boss on that ladder. Fixing this means raising the core's xp budget (or its late trash), not re-tuning the boss: the Archdemon's damage was already lifted 48 -> 58 to match the ladder's own ~1.6x boss-to-trash damage ratio, which he alone was missing at 1.33x. See §7 for the whole shape.
+- **No quest content bridges Lv15-30, Lv35-52, or anything past Lv78**, and none of the five side countries has a single quest, despite Aelunor and Broceliande being the de facto route from the authored core to the Archdemon. Boards exist only in the three capitals and at the Kaelmyr ash-cairn. This is the emptiest part of the game for a new player and the most likely place to lose them.

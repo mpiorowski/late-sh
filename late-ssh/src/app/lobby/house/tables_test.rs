@@ -37,6 +37,5 @@ fn fixed_settings_match_the_locked_decisions() {
 
     let ssnake = HouseTable::ssnake_settings();
     assert_eq!(ssnake.speed, SsnakeSpeed::Relaxed);
-    assert_eq!(ssnake.level, None);
-    assert_eq!(ssnake.seats, 4);
+    assert_eq!(ssnake.seats, 5);
 }

@@ -3,14 +3,36 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-16 (Stream owners moderate their own room: `/ban
-  @user [duration] [reason]` and `/unban @user` in the stream room run the
-  same `ModerationService` room action as staff, authorized by a narrow
+- Last updated: 2026-08-17 (Capability ids are base64url over the same v4
+  UUID bytes instead of 32-char hex: 122 bits either way, 22 characters
+  instead of 32, so a watch link fits a chat room header that used to drop
+  it. `late-web`'s `valid_capability_id` now accepts `_` along with `-`.
+  See §2 `registry.rs`. Previously: stream owners moderate their own room:
+  `/ban @user [duration] [reason]` and `/unban @user` in the stream room run
+  the same `ModerationService` room action as staff, authorized by a narrow
   `STREAM_OWNER` cap set resolved from `game_kind='stream'` +
   `created_by`. Ban rather than kick, because a public room is re-enterable.
   A room ban now also refuses a voice ticket, so it takes the microphone and
   not just the chat. An active ban placed by staff stays out of the
-  streamer's reach: neither liftable nor overwritable. See §6)
+  streamer's reach: neither liftable nor overwritable. See §6. Previously:
+  watch-page reconnect: the viewer's
+  LiveKit identity is now `viewer-{watcher_id}` from the page's stable id
+  instead of a fresh random per grant fetch, connect failures back off
+  instead of retrying every 10s forever, a failed `Room` is disposed instead
+  of abandoned, and a dropped connection reconnects in place instead of
+  dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
+  path per sound: the CLI voice runtime
+  now plays human microphones only — program audio (the OBS ingress mix,
+  the console's screen-share audio) and every `stream-*` publisher are
+  unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
+  users eating the game mix. Both consumers classify program audio by the
+  `stream-*` identity; the `SCREEN_SHARE_AUDIO` label set at CreateIngress
+  is advisory only, since it may not survive transcoding-off passthrough.
+  The watch page defaults audio ON (autoplay permitting), grows a separate
+  voices on/off toggle for CLI viewers, a volume slider, and fullscreen.
+  The go-live console's browser mic and its whole `mic_live`/on-air
+  pipeline were removed — macOS CLI voice landed, so voice is CLI-only
+  with zero exceptions. See §4)
 - Status: Active (v1)
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../voice/CONTEXT.md` (LiveKit grants, the ONE-room audio model), `../../../../late-web/CONTEXT.md` (watch + go-live pages), `STREAM.md` at the repo root (the design seed)
@@ -30,7 +52,13 @@ one activity line.
 Owned by this domain:
 - `registry.rs` — the process-global `StreamRegistry`: one stream per user,
   phase machine (`Pending -> Live -> Grace`), watcher heartbeats, publisher
-  heartbeats/grace, capability ids, and the `StreamPublisher` kind
+  heartbeats/grace, capability ids (`capability_id()`: base64url over a v4
+  UUID's 16 bytes — 122 bits in 22 characters. Unguessable *is* the access
+  model, so the entropy is non-negotiable; the encoding is not, and the short
+  form exists because a 32-char hex id made the watch link too wide for the
+  chat room header to render at all. The alphabet is `[A-Za-z0-9_-]`, which
+  `late-web`'s `valid_capability_id` gate must keep accepting — dropping `_`
+  would 404 roughly half of all streams), and the `StreamPublisher` kind
   (`Console` vs `Obs(ObsIngress)` — the publisher kinds conflict instead of
   silently rewiring; `/golive stop` switches). In-memory only, single
   replica, dies with the process (scratchpad-registry tier).

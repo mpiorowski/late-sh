@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 pub const MAX_WIDTH: usize = 63;
 pub const MAX_HEIGHT: usize = 36;
 
-const LEVEL_SOURCES: [&str; 20] = [
+const LEVEL_SOURCES: [&str; 55] = [
     include_str!("../../../../../assets/ssnake_levels/level_01.txt"),
     include_str!("../../../../../assets/ssnake_levels/level_02.txt"),
     include_str!("../../../../../assets/ssnake_levels/level_03.txt"),
@@ -26,6 +26,41 @@ const LEVEL_SOURCES: [&str; 20] = [
     include_str!("../../../../../assets/ssnake_levels/level_18.txt"),
     include_str!("../../../../../assets/ssnake_levels/level_19.txt"),
     include_str!("../../../../../assets/ssnake_levels/level_20.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_21.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_22.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_23.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_24.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_25.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_26.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_27.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_28.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_29.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_30.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_31.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_32.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_33.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_34.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_35.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_36.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_37.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_38.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_39.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_40.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_41.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_42.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_43.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_44.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_45.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_46.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_47.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_48.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_49.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_50.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_51.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_52.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_53.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_54.txt"),
+    include_str!("../../../../../assets/ssnake_levels/level_55.txt"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,13 +72,15 @@ pub enum Cell {
     Warp,
 }
 
+/// One arena. The original `.LEV` files also carried `lives`, `lives-bonus`
+/// and `points-bonus`; the perpetual arena has no lives and pays chips from
+/// its own constants, so those keys were dropped from the assets rather than
+/// parsed and ignored.
 #[derive(Clone, Debug)]
 pub struct SsnakeLevel {
     pub name: String,
-    pub lives: i32,
+    /// Food on this arena; eating the last one clears it and reshuffles.
     pub points_needed: i32,
-    pub lives_bonus: i32,
-    pub points_bonus: i64,
     pub tick_millis: u64,
     pub initial_length: i32,
     pub growth_factor: i32,
@@ -94,10 +131,7 @@ pub fn open_test_arena(width: usize, height: usize) -> SsnakeLevel {
     }
     SsnakeLevel {
         name: "Test Arena".to_string(),
-        lives: 3,
         points_needed: 5,
-        lives_bonus: 1,
-        points_bonus: 100,
         tick_millis: 100,
         initial_length: 4,
         growth_factor: 3,
@@ -109,10 +143,7 @@ pub fn open_test_arena(width: usize, height: usize) -> SsnakeLevel {
 
 fn parse_level(source: &str) -> Result<SsnakeLevel> {
     let mut name = None;
-    let mut lives = None;
     let mut points_needed = None;
-    let mut lives_bonus = None;
-    let mut points_bonus = None;
     let mut tick_millis = None;
     let mut initial_length = None;
     let mut growth_factor = None;
@@ -129,10 +160,7 @@ fn parse_level(source: &str) -> Result<SsnakeLevel> {
         let value = value.trim();
         match key.trim() {
             "name" => name = Some(value.to_string()),
-            "lives" => lives = Some(value.parse().context("bad lives")?),
             "points-needed" => points_needed = Some(value.parse().context("bad points-needed")?),
-            "lives-bonus" => lives_bonus = Some(value.parse().context("bad lives-bonus")?),
-            "points-bonus" => points_bonus = Some(value.parse().context("bad points-bonus")?),
             "tick-millis" => tick_millis = Some(value.parse().context("bad tick-millis")?),
             "initial-length" => {
                 initial_length = Some(value.parse().context("bad initial-length")?);
@@ -174,18 +202,14 @@ fn parse_level(source: &str) -> Result<SsnakeLevel> {
     if width > MAX_WIDTH || height > MAX_HEIGHT {
         bail!("map {width}x{height} exceeds {MAX_WIDTH}x{MAX_HEIGHT}");
     }
-    let lives = lives.context("missing lives")?;
     let points_needed = points_needed.context("missing points-needed")?;
-    if lives < 0 || points_needed < 1 {
-        bail!("lives must be >= 0 and points-needed >= 1");
+    if points_needed < 1 {
+        bail!("points-needed must be >= 1");
     }
 
     Ok(SsnakeLevel {
         name: name.context("missing name")?,
-        lives,
         points_needed,
-        lives_bonus: lives_bonus.context("missing lives-bonus")?,
-        points_bonus: points_bonus.context("missing points-bonus")?,
         tick_millis: tick_millis.context("missing tick-millis")?,
         initial_length: initial_length.context("missing initial-length")?,
         growth_factor: growth_factor.context("missing growth-factor")?,
