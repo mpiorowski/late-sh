@@ -994,7 +994,7 @@ fn the_atlas_covers_every_continent_including_kaelmyr() {
 #[test]
 fn continent_waystones_stand_in_real_safe_rooms() {
     let world = seed_world();
-    for (label, room, _) in CONTINENT_WAYSTONES {
+    for (label, room) in CONTINENT_WAYSTONES {
         let r = world
             .room(*room)
             .unwrap_or_else(|| panic!("waystone room for {label} exists"));
@@ -1008,7 +1008,7 @@ fn continent_waystones_stand_in_real_safe_rooms() {
     }
     // Destinations are unique across the whole network.
     let dests = waystone_destinations();
-    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r, _)| *r).collect();
+    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r)| *r).collect();
     rooms.sort_unstable();
     rooms.dedup();
     assert_eq!(rooms.len(), dests.len(), "destination rooms are unique");

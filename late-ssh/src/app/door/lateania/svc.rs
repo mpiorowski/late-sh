@@ -846,9 +846,17 @@ pub struct HousingView {
 /// The waystone fast-travel menu, present when standing on a portal.
 #[derive(Clone, Debug)]
 pub struct PortalView {
-    /// Each destination: `(label, room id, is_here, is_sealed)`. Sealed gates
-    /// (a continent whose title the player lacks) render dimmed and refuse.
-    pub entries: Vec<(String, RoomId, bool, bool)>,
+    /// Each offered destination: `(label, room id, is_here)`. A mainland gate
+    /// the player has never stood in is absent entirely rather than dimmed;
+    /// the archipelago is always listed (it has no walking route in).
+    pub entries: Vec<(String, RoomId, bool)>,
+    /// How many leading entries are mainland gates, so the panel can head its
+    /// three blocks (gates, villages, islands) without index arithmetic over a
+    /// list whose first block varies in length.
+    pub known_gates: usize,
+    /// Mainland gates not yet found, so the panel can say the network is larger
+    /// than what it lists without naming what is missing.
+    pub unknown_gates: usize,
 }
 
 /// A quest board's postings, present whenever the player stands where a
@@ -5175,25 +5183,24 @@ impl WorldState {
             );
             return;
         }
-        let Some((_, _, required)) = super::world::waystone_destinations()
+        let Some((label, _)) = super::world::waystone_destinations()
             .into_iter()
-            .find(|(_, r, _)| *r == dest)
+            .find(|(_, r)| *r == dest)
         else {
             return;
         };
         if dest == p.room {
             return;
         }
-        // The Ways honor the same locks as the walking gates: a sealed
-        // continent's waystone refuses until its title is earned.
-        if let Some(title) = required
-            && !self.player_has_title(user_id, title)
-        {
+        // The Ways carry no progression rules of their own; they only shorten a
+        // road the player has already walked. Titles are checked where you walk
+        // in, in `can_cross_progression_gate`.
+        if !super::world::waystone_is_known(dest, &p.visited) {
             self.log_to(
                 user_id,
                 LogKind::System,
                 format!(
-                    "The waystone hums against your palm, then stills. That far gate is sealed to any but a crowned {title}."
+                    "The waystone hums against your palm, then stills. The Ways carry you only where your own feet have already gone, and you have never stood at {label}."
                 ),
             );
             return;
@@ -9419,15 +9426,24 @@ impl WorldState {
             let portal = features_at(player.room)
                 .iter()
                 .any(|f| f.kind == FeatureKind::Portal)
-                .then(|| PortalView {
-                    entries: super::world::waystone_destinations()
-                        .into_iter()
-                        .map(|(label, room, required)| {
-                            let sealed = required
-                                .is_some_and(|t| !player.titles.iter().any(|owned| owned == t));
-                            (label.to_string(), room, room == player.room, sealed)
-                        })
-                        .collect(),
+                .then(|| {
+                    let known_gates = super::world::CONTINENT_WAYSTONES
+                        .iter()
+                        .filter(|(_, room)| player.visited.contains(room))
+                        .count();
+                    PortalView {
+                        entries: super::world::waystone_destinations()
+                            .into_iter()
+                            .filter(|(_, room)| {
+                                super::world::waystone_is_known(*room, &player.visited)
+                            })
+                            .map(|(label, room)| {
+                                (label.to_string(), room, room == player.room)
+                            })
+                            .collect(),
+                        known_gates,
+                        unknown_gates: super::world::CONTINENT_WAYSTONES.len() - known_gates,
+                    }
                 });
 
             let board = features_at(player.room)

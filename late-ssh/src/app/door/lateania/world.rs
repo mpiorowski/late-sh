@@ -2110,37 +2110,42 @@ const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue li
 
 /// The mainland waystones: Embergate's square plus each far country's safe
 /// gate room, so a recall to town never means re-walking a whole gate chain.
-/// The third field names the title the walking gate into that land demands;
-/// the Ways enforce the same lock (`svc::travel` re-checks it and the menu
-/// shows sealed gates dimmed), so fast travel can never skip a progression
-/// gate. A drift test in `svc.rs` keeps these titles equal to the gate consts.
-pub const CONTINENT_WAYSTONES: &[(&str, RoomId, Option<&str>)] = &[
-    ("Embergate, the Town Square", 1, None),
-    ("the Sunderlakes landing", LAKES_BASE, None),
-    ("Broceliande, the forest gate", BROCELIANDE_BASE, None),
-    (
-        "the Sundered Reaches sea-gate",
-        REACHES_BASE,
-        Some("Bane of the King Who Was Promised Nothing"),
-    ),
-    (
-        "Cinderfall Shore, Kaelmyr",
-        KAELMYR_BASE,
-        Some("Bane of Yssgar, the Sundering Deep"),
-    ),
-    ("Last Watch, the Wildbound Waste", WILDBOUND_BASE, None),
+/// These carry no progression rules of their own. A title is permission to
+/// *enter* a land and is checked exactly once, where you walk in
+/// (`svc::can_cross_progression_gate`); a waystone is permission to *skip the
+/// trip*, and opens only once the player has stood in it (`waystone_is_known`).
+/// The sealed continents need no second check here: a visited set cannot hold
+/// a Reaches or Kaelmyr room unless the walking gate already let the player by.
+pub const CONTINENT_WAYSTONES: &[(&str, RoomId)] = &[
+    ("Embergate, the Town Square", 1),
+    ("the Sunderlakes landing", LAKES_BASE),
+    ("Broceliande, the forest gate", BROCELIANDE_BASE),
+    ("the Sundered Reaches sea-gate", REACHES_BASE),
+    ("Cinderfall Shore, Kaelmyr", KAELMYR_BASE),
+    ("Last Watch, the Wildbound Waste", WILDBOUND_BASE),
 ];
 
 /// Every destination the Ways can offer: the mainland continent gates first,
-/// then the archipelago villages and island landings (which need no title).
-pub fn waystone_destinations() -> Vec<(&'static str, RoomId, Option<&'static str>)> {
-    let mut out: Vec<(&'static str, RoomId, Option<&'static str>)> = CONTINENT_WAYSTONES.to_vec();
-    out.extend(
-        super::archipelago::portal_destinations()
-            .into_iter()
-            .map(|(label, room)| (label, room, None)),
-    );
+/// then the archipelago villages and island landings. Filter with
+/// `waystone_is_known` before showing or honouring one.
+pub fn waystone_destinations() -> Vec<(&'static str, RoomId)> {
+    let mut out: Vec<(&'static str, RoomId)> = CONTINENT_WAYSTONES.to_vec();
+    out.extend(super::archipelago::portal_destinations());
     out
+}
+
+/// Whether the Ways will carry this player to `dest`. A mainland gate answers
+/// only once they have stood in it, so fast travel shortens a road already
+/// walked instead of replacing the walk. The archipelago is always open: its
+/// villages and island landings have no directional exits at all, so a
+/// visited rule would orphan the whole region, and nothing in progression
+/// routes through it.
+pub fn waystone_is_known(dest: RoomId, visited: &HashSet<RoomId>) -> bool {
+    if CONTINENT_WAYSTONES.iter().any(|(_, room)| *room == dest) {
+        visited.contains(&dest)
+    } else {
+        true
+    }
 }
 
 /// Portal (and, for the villages, fountain) features for the runtime-generated
@@ -2153,7 +2158,7 @@ fn waystone_features() -> &'static [Feature] {
         let mut v = Vec::new();
         // The mainland gateways into the network: Embergate's square plus each
         // far country's safe gate room.
-        for (_, room, _) in CONTINENT_WAYSTONES {
+        for (_, room) in CONTINENT_WAYSTONES {
             let name = if *room == 1 {
                 "the town waystone"
             } else {
@@ -5587,13 +5592,18 @@ pub fn seed_world() -> World {
                 Some(DamageType::Holy),
             ),
         },
-        // Final boss
+        // Final boss of the authored core (the Frontier and the continents were
+        // hung past him later). Damage sits at ~1.6x the trash of his approach,
+        // matching every other boss on this ladder: at the old 48 he was the
+        // only one you could out-tank rather than out-play, a sponge players
+        // walked through. `Spawn::level()` is unchanged by this (he stays Lv61
+        // until 1140 power, i.e. damage 85), so the ladder's numbers hold.
         MobSpawn {
             id: 73,
             name: "the Archdemon Mal'gareth",
             home: 110,
             max_hp: 800,
-            damage: 48,
+            damage: 58,
             xp: 1500,
             respawn_secs: 600,
             loot: &[1009, 1119, 1205, 1401],

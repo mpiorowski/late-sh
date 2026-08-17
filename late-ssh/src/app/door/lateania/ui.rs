@@ -20,7 +20,7 @@ use super::{
     appearance,
     classes::Class,
     state::{ClickAction, Heading, Panel, State},
-    svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, SectionRow},
+    svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow},
     world::{Dir, MapCell, MiniMap, RoomId},
 };
 
@@ -79,6 +79,19 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // to the narrow side panel on cramped terminals.
     if state.panel() == Panel::Character && area.width >= 72 && area.height >= 18 {
         draw_character_sheet(frame, area, &view);
+        return;
+    }
+
+    // The journal and the board are text-heavy; given a wide terminal they
+    // expand to full-screen column layouts the same way, and fall back to
+    // the side panel when cramped. Cursor, keys, and tracking are identical
+    // in both renderings.
+    if state.panel() == Panel::Quests && area.width >= 100 && area.height >= 20 {
+        draw_journal_screen(frame, area, state, &view);
+        return;
+    }
+    if state.panel() == Panel::Board && area.width >= 100 && area.height >= 20 {
+        draw_board_screen(frame, area, state, &view);
         return;
     }
 
@@ -992,18 +1005,31 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             *cell = (arrow.glyph.to_string(), style);
         }
     }
-    // Quest-target arrows draw after (over) the POI arrows: a border cell can
-    // only say one thing, and where-the-quest-is beats where-a-boss-is.
-    let (q_arrows, quests_beyond) = if quest_targets.is_empty() {
-        (Vec::new(), 0)
-    } else {
-        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets)
-    };
-    for arrow in hug_poi_arrows(q_arrows, &canvas) {
-        if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
-            *cell = (arrow.glyph.to_string(), quest_style);
+    // The green arrow is the one you chose, and it works exactly like the
+    // amber ones: a straight-line direction to the *tracked* destination,
+    // drawn only while it sits within `PAN_LIMIT` (same land, where the
+    // coordinate delta is a real spatial relationship). Crucially this needs
+    // no `visited` at all, so it points at a boss you have never found -
+    // which is the whole job of tracking a quest. Beyond this land there is
+    // no honest direction to draw, so the journal names the region to
+    // venture into instead. Drawn after (over) the amber arrows: a border
+    // cell can only say one thing, and where-you're-going beats
+    // where-a-boss-is.
+    if let Some(dest) = dest_room {
+        let (dest_arrows, _) = super::worldmap::quest_arrows(coords, center, cols, height, &[dest]);
+        for arrow in hug_poi_arrows(dest_arrows, &canvas) {
+            if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+                *cell = (arrow.glyph.to_string(), quest_style);
+            }
         }
     }
+    // Cross-land quest targets are counted in the footer instead of pointed
+    // at with a meaningless direction.
+    let quests_beyond = if quest_targets.is_empty() {
+        0
+    } else {
+        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets).1
+    };
 
     // Land labels: name each explored region once, near the centroid of its
     // rooms in view, so you can see which land is which at a glance. Only lands
@@ -1221,7 +1247,9 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
         Span::styled(" gather  ", dim),
         Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" one of these, off-map", dim),
+        Span::styled(" one of these, off-map  ", dim),
+        Span::styled("\u{2691}\u{2192}", quest_style),
+        Span::styled(" tracked", dim),
     ];
     if quests_beyond > 0 {
         // An honest count instead of a dishonest arrow: these targets sit in
@@ -1847,6 +1875,12 @@ fn quests_panel(
             format!("    {}", q.desc),
             Style::default().fg(theme::TEXT_DIM()),
         )));
+        if let Some(place) = quest_place_note(q.target, view) {
+            lines.push(Line::from(Span::styled(
+                format!("    {place}"),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
         lines.push(Line::from(Span::styled(
             format!("    reward: {}", q.reward),
             Style::default().fg(theme::BADGE_GOLD()),
@@ -1890,6 +1924,18 @@ fn quests_panel(
             ));
         }
         lines.push(Line::from(spans));
+        // Only the tracked crown carries the place note: it is the row where
+        // "why is there no arrow on my map" actually gets asked, and nine of
+        // these would bury the panel.
+        if step.target.is_some()
+            && step.target == tracked
+            && let Some(place) = quest_place_note(step.target, view)
+        {
+            lines.push(Line::from(Span::styled(
+                format!("    {place}"),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
         let mut detail = format!("    {}", step.place);
         if !step.unlocks.is_empty() {
             detail.push_str(&format!(" - opens {}", step.unlocks));
@@ -1929,6 +1975,400 @@ fn quests_panel(
         )));
     }
     (lines, sel_line)
+}
+
+/// Render a full-screen column, skipping enough leading lines to keep the
+/// selection (if any) in view. Lines are pre-wrapped by the caller, so one
+/// logical line is one terminal row and the offset arithmetic is exact.
+fn render_scrolled(frame: &mut Frame, rect: Rect, lines: Vec<Line<'static>>, sel: Option<usize>) {
+    let h = rect.height as usize;
+    let off = match sel {
+        Some(s) if s + 3 > h => (s + 3 - h).min(lines.len()),
+        _ => 0,
+    };
+    let shown: Vec<Line> = lines.into_iter().skip(off).collect();
+    frame.render_widget(Paragraph::new(shown), rect);
+}
+
+/// Where a quest's target lies, for the journal. The green map arrow is a
+/// straight-line direction, so it can only be drawn while the target sits in
+/// the same land (within `PAN_LIMIT`, the one case where a coordinate
+/// direction is a real spatial relationship). A target beyond that gets no
+/// arrow, and this is the line that says why: it names the region to venture
+/// into, and whether the player has ever set foot in it.
+fn quest_place_note(target: Option<RoomId>, view: &PlayerView) -> Option<String> {
+    let target = target?;
+    let (region, _) = super::world::region_atlas_entry(target)?;
+    let coords = super::worldmap::world_coords();
+    let same_land = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
+        (Some(here), Some(there)) => {
+            here.z == there.z
+                && (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
+                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT
+        }
+        _ => false,
+    };
+    let unfound = view
+        .atlas
+        .iter()
+        .find(|r| r.name == region)
+        .is_some_and(|r| r.explored == 0);
+    Some(match (same_land, unfound) {
+        (true, _) => format!("in {region}"),
+        (false, true) => format!("in {region} - venture there and the map will point the way"),
+        (false, false) => {
+            format!("in {region} - too far for the map to point; head that way first")
+        }
+    })
+}
+
+/// One journal quest as its full-view rows: the name row (cursor and tracked
+/// decoration included) with the wrapped description, where it lies, and the
+/// reward under it.
+fn quest_entry_rows(
+    q: &QuestView,
+    view: &PlayerView,
+    selected: bool,
+    tracked: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let (mark, color) = if q.done {
+        ("[x]", theme::SUCCESS())
+    } else {
+        ("[ ]", theme::AMBER())
+    };
+    let mut row_style = Style::default().fg(color);
+    if selected {
+        row_style = row_style
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD);
+    }
+    let marker = if selected { ">" } else { " " };
+    let mut spans = vec![Span::styled(
+        format!("{marker}{mark} {}", q.name),
+        row_style,
+    )];
+    if tracked {
+        spans.push(Span::styled(
+            " \u{2691} tracked".to_string(),
+            Style::default().fg(theme::SUCCESS()),
+        ));
+    }
+    let mut rows = vec![Line::from(spans)];
+    rows.extend(side_text_wrap(&q.desc, theme::TEXT_DIM(), width));
+    if let Some(place) = quest_place_note(q.target, view) {
+        rows.extend(side_text_wrap(&place, theme::AMBER_DIM(), width));
+    }
+    rows.push(Line::from(Span::styled(
+        format!("    reward: {}", q.reward),
+        Style::default().fg(theme::BADGE_GOLD()),
+    )));
+    rows
+}
+
+/// The journal as a full view (wide terminals): the sidebar squeezes three
+/// sections into one thin column; given room they become columns - active
+/// work, the Long Road, the Frontier - with the same cursor, keys, and
+/// tracking as the sidebar `quests_panel`, which still serves cramped
+/// terminals.
+fn draw_journal_screen(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let tracked = state.dest_room();
+    let cursor = state.cursor();
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Quest Journal",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            hint("w/s", "move  Enter track on map  j close"),
+            Line::raw(""),
+        ]),
+        rows[0],
+    );
+    let cols = Layout::horizontal([
+        Constraint::Percentage(38),
+        Constraint::Percentage(34),
+        Constraint::Percentage(28),
+    ])
+    .split(rows[1]);
+
+    // Column 1: active work - the starter step and accepted bounties.
+    let w1 = (cols[0].width as usize).saturating_sub(2);
+    let mut work: Vec<Line> = vec![section("In progress")];
+    let mut work_sel = None;
+    let mut any_active = false;
+    for (i, q) in view.quests.iter().enumerate() {
+        if q.kind == QuestKind::Frontier {
+            continue;
+        }
+        any_active = true;
+        let selected = i == cursor;
+        if selected {
+            work_sel = Some(work.len());
+        }
+        work.extend(quest_entry_rows(
+            q,
+            view,
+            selected,
+            q.target.is_some() && q.target == tracked,
+            w1,
+        ));
+        work.push(Line::raw(""));
+    }
+    if !any_active {
+        work.push(Line::from(Span::styled(
+            "  nothing underway - the boards in each capital post daily work",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    render_scrolled(frame, cols[0], work, work_sel);
+
+    // Column 2: the Long Road, with the ungated side countries below it.
+    let w2 = (cols[1].width as usize).saturating_sub(2);
+    let mut road: Vec<Line> = vec![section("The Long Road")];
+    let mut road_sel = None;
+    road.push(Line::from(Span::styled(
+        "  every crown between you and the realm's end",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    for (ri, step) in view.road.iter().enumerate() {
+        let selected = view.quests.len() + ri == cursor;
+        if selected {
+            road_sel = Some(road.len());
+        }
+        let (mark, mut style) = if step.done {
+            ("[x]", Style::default().fg(theme::SUCCESS()))
+        } else if step.current {
+            (
+                "[>]",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("[ ]", Style::default().fg(theme::TEXT_DIM()))
+        };
+        if selected {
+            style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { ">" } else { " " };
+        let mut spans = vec![Span::styled(format!("{marker}{mark} {}", step.boss), style)];
+        if step.target.is_some() && step.target == tracked {
+            spans.push(Span::styled(
+                " \u{2691} tracked".to_string(),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        road.push(Line::from(spans));
+        // See the sidebar twin: only the tracked crown explains its arrow.
+        if step.target.is_some()
+            && step.target == tracked
+            && let Some(place) = quest_place_note(step.target, view)
+        {
+            road.extend(side_text_wrap(&place, theme::AMBER_DIM(), w2));
+        }
+        let mut detail = step.place.to_string();
+        if !step.unlocks.is_empty() {
+            detail.push_str(&format!(" - opens {}", step.unlocks));
+        }
+        road.extend(side_text_wrap(&detail, theme::TEXT_DIM(), w2));
+    }
+    road.push(Line::raw(""));
+    road.extend(side_text_wrap(
+        "side countries need no crown: the Sunderlakes (fishing), Broceliande \
+         (taming), Aelunor, the Archipelago, the Wildbound Waste (pvp)",
+        theme::TEXT_DIM(),
+        w2,
+    ));
+    render_scrolled(frame, cols[1], road, road_sel);
+
+    // Column 3: the Frontier - its twenty zone quests once open, one sealed
+    // line until then.
+    let w3 = (cols[2].width as usize).saturating_sub(2);
+    let mut frontier: Vec<Line> = vec![section("The Frontier")];
+    let mut frontier_sel = None;
+    if view.frontier_open {
+        let total = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier)
+            .count();
+        let done = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier && q.done)
+            .count();
+        frontier.push(Line::from(Span::styled(
+            format!("  {done}/{total} zones cleared"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        for (i, q) in view.quests.iter().enumerate() {
+            if q.kind != QuestKind::Frontier {
+                continue;
+            }
+            let selected = i == cursor;
+            if selected {
+                frontier_sel = Some(frontier.len());
+            }
+            frontier.extend(quest_entry_rows(
+                q,
+                view,
+                selected,
+                q.target.is_some() && q.target == tracked,
+                w3,
+            ));
+        }
+    } else {
+        frontier.extend(side_text_wrap(
+            "sealed: it opens to the Archdemon's Bane bearing all three \
+             living-dark seals",
+            theme::TEXT_DIM(),
+            w3,
+        ));
+    }
+    render_scrolled(frame, cols[2], frontier, frontier_sel);
+}
+
+/// The board as a full view (wide terminals): a master-detail split - the
+/// postings list on the left, the highlighted posting's full story on the
+/// right. Same cursor and keys as the sidebar `board_panel`, which still
+/// serves cramped terminals.
+fn draw_board_screen(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let Some(board) = &view.board else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "No board here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            area,
+        );
+        return;
+    };
+    let cursor = state.cursor();
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Quest Board",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            hint("w/s", "select  Enter claim (READY) / accept  o back"),
+            Line::raw(""),
+        ]),
+        rows[0],
+    );
+    if board.entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "No bounties posted right now. Make progress on what you're \
+                 already carrying, or come back later.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            rows[1],
+        );
+        return;
+    }
+    let cols =
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(rows[1]);
+
+    // Left: the postings, one row each.
+    let list_w = cols[0].width as usize;
+    let mut list: Vec<Line> = Vec::new();
+    let mut sel = None;
+    for (i, e) in board.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel = Some(list.len());
+        }
+        let (tag, tag_color) = if e.ready {
+            ("READY", theme::SUCCESS())
+        } else if e.locked {
+            ("sealed", theme::ERROR())
+        } else {
+            ("~Lv", theme::AMBER_DIM())
+        };
+        let tag_text = if tag == "~Lv" {
+            format!("  ~Lv{}", e.suggested_level)
+        } else {
+            format!("  [{tag}]")
+        };
+        let base_fg = if e.locked {
+            theme::TEXT_DIM()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(base_fg)
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(base_fg)
+        };
+        let marker = if selected { "> " } else { "  " };
+        let name_w = list_w.saturating_sub(marker.len() + tag_text.chars().count() + 1);
+        list.push(Line::from(vec![
+            Span::styled(
+                format!("{marker}{}", truncate_chars(&e.title, name_w)),
+                name_style,
+            ),
+            Span::styled(tag_text, Style::default().fg(tag_color)),
+        ]));
+    }
+    render_scrolled(frame, cols[0], list, sel);
+
+    // Right: the highlighted posting in full.
+    let detail_w = (cols[1].width as usize).saturating_sub(2);
+    let mut detail: Vec<Line> = Vec::new();
+    if let Some(e) = board.entries.get(cursor) {
+        detail.push(Line::from(Span::styled(
+            e.title.clone(),
+            Style::default()
+                .fg(if e.locked {
+                    theme::TEXT_DIM()
+                } else {
+                    theme::TEXT_BRIGHT()
+                })
+                .add_modifier(Modifier::BOLD),
+        )));
+        detail.push(Line::from(Span::styled(
+            format!("  a fair fight around Lv{}", e.suggested_level),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+        detail.push(Line::raw(""));
+        detail.extend(side_text_wrap(&e.blurb, LAT_TEXT, detail_w));
+        detail.push(Line::raw(""));
+        detail.extend(side_text_wrap(
+            &format!("task: {}", e.objective),
+            theme::AMBER(),
+            detail_w,
+        ));
+        detail.extend(side_text_wrap(&e.hint, theme::TEXT_DIM(), detail_w));
+        detail.push(Line::raw(""));
+        detail.push(Line::from(Span::styled(
+            format!("  reward: {}", e.reward),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+        if e.ready {
+            detail.push(Line::from(Span::styled(
+                "  READY - Enter turns it in",
+                Style::default().fg(theme::SUCCESS()),
+            )));
+        } else if e.locked {
+            detail.extend(side_text_wrap(
+                "sealed - the ground this names refuses you at the door; its \
+                 gate opens further down the Long Road (j)",
+                theme::ERROR(),
+                detail_w,
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(detail), cols[1]);
 }
 
 /// One leaderboard row: rank, level + class abbreviation, name, then the
@@ -4133,13 +4573,26 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
             "Step through to any waystone you know of.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
-        Line::raw(""),
     ];
-    // Continent gates come first in the destination list, then the villages,
-    // then the islands.
-    let continent_count = super::world::CONTINENT_WAYSTONES.len();
+    // A mainland gate you have never stood in is not on the network yet. Say
+    // how many are missing without naming them, so the player learns the Ways
+    // run further than this list and still has to walk to find out where.
+    if portal.unknown_gates > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "The Ways answer to {} of {} far gates; walk to the rest.",
+                portal.known_gates,
+                portal.known_gates + portal.unknown_gates
+            ),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    // Known continent gates come first in the destination list, then the
+    // villages, then the islands.
+    let continent_count = portal.known_gates;
     let village_count = super::archipelago::VILLAGES.len();
-    for (i, (label, _room, here, sealed)) in portal.entries.iter().enumerate() {
+    for (i, (label, _room, here)) in portal.entries.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
@@ -4157,17 +4610,9 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
             )));
         }
         let marker = if selected { ">" } else { " " };
-        let suffix = if *here {
-            "  (here)"
-        } else if *sealed {
-            "  (sealed)"
-        } else {
-            ""
-        };
+        let suffix = if *here { "  (here)" } else { "" };
         let style = if *here {
             Style::default().fg(theme::TEXT_DIM())
-        } else if *sealed {
-            Style::default().fg(theme::TEXT_FAINT())
         } else if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
@@ -4176,7 +4621,7 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
         };
-        let style = if selected && (*here || *sealed) {
+        let style = if selected && *here {
             style.patch(theme::selection_style())
         } else {
             style

@@ -421,8 +421,7 @@ fn room_panel_makes_each_foe_a_clickable_row() {
             name: "War Cry".to_string(),
             cost: 40,
             ready: false,
-            effect: "a long empowering shout that would overflow the panel"
-                .to_string(),
+            effect: "a long empowering shout that would overflow the panel".to_string(),
         },
     ];
     // Stress the width budget: boss-sized HP numbers, a full traits line,
@@ -679,6 +678,38 @@ fn battle_frame_names_the_foe_and_both_sides_vitals() {
     // No fight, no frame: the room prose keeps the column.
     view.mobs.clear();
     assert!(super::battle_context(&view, 60).is_none());
+}
+
+#[test]
+fn journal_full_view_rows_wrap_and_carry_the_tracked_flag() {
+    use super::super::svc::{QuestKind, QuestView, empty_player_view};
+
+    let mut view = empty_player_view();
+    view.classed = true;
+    let q = QuestView {
+        name: "Grave Relics".to_string(),
+        desc: "The chapel will pay for three relics recovered from the depths \
+               of the Sunken Catacombs, entered from Tasmania's square."
+            .to_string(),
+        done: false,
+        reward: "150 gold".to_string(),
+        kind: QuestKind::Board,
+        target: Some(1),
+    };
+    let rows = super::quest_entry_rows(&q, &view, true, true, 30);
+    let all: String = rows.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(all.contains("Grave Relics"), "the name renders: {all}");
+    assert!(all.contains("tracked"), "the tracked flag renders: {all}");
+    assert!(all.contains("150 gold"), "the reward renders: {all}");
+    // The description is pre-wrapped: full-screen columns draw without
+    // terminal wrapping, so an over-wide line would clip at the column edge.
+    for r in &rows[1..] {
+        let text = line_text(r);
+        assert!(
+            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 30,
+            "journal column line overflows: {text:?}"
+        );
+    }
 }
 
 #[test]

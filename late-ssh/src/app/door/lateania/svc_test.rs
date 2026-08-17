@@ -1469,15 +1469,40 @@ fn travel_needs_a_waystone_and_a_real_destination() {
 }
 
 #[test]
-fn continent_waystones_honor_their_walking_gate_titles() {
+fn the_ways_only_carry_you_where_you_have_already_stood() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
-    // stays sealed until the Yssgar crown is earned.
+    // Stand on Embergate's town waystone the way a character walking out of
+    // Wayfarer's Hollow does: arriving is what marks the square visited, and
+    // no waystone can be used without standing on it first.
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    p.room = 1;
+    Arc::make_mut(&mut p.visited).insert(1);
+    s.travel(uid(1), super::super::world::LAKES_BASE);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        1,
+        "an ungated land you have never walked to is not on the network yet"
+    );
+    // Having stood at the landing once, it answers forever after.
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    Arc::make_mut(&mut p.visited).insert(super::super::world::LAKES_BASE);
+    s.travel(uid(1), super::super::world::LAKES_BASE);
+    assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
+    // And the way home is always open, since that is where you began.
+    s.travel(uid(1), 1);
+    assert_eq!(s.players[&uid(1)].room, 1);
+}
+
+#[test]
+fn a_gate_title_alone_does_not_open_the_ways() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = 1;
-    s.travel(uid(1), super::super::world::KAELMYR_BASE);
-    assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
+    // Crowned Bane of Yssgar, but never once through the wound below his
+    // chamber: the title is permission to walk in, not to skip the walk.
     s.players
         .get_mut(&uid(1))
         .unwrap()
@@ -1486,27 +1511,25 @@ fn continent_waystones_honor_their_walking_gate_titles() {
     s.travel(uid(1), super::super::world::KAELMYR_BASE);
     assert_eq!(
         s.players[&uid(1)].room,
-        super::super::world::KAELMYR_BASE,
-        "the crowned traveler passes"
+        1,
+        "the Ways carry no progression rules of their own"
     );
-    // Open lands need no title, and the town waystone routes home again.
-    s.travel(uid(1), super::super::world::LAKES_BASE);
-    assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
-    s.travel(uid(1), 1);
-    assert_eq!(s.players[&uid(1)].room, 1);
 }
 
 #[test]
-fn continent_waystone_titles_match_the_walking_gates() {
-    for (label, room, required) in super::super::world::CONTINENT_WAYSTONES {
-        if super::super::world::is_kaelmyr_room(*room) {
-            assert_eq!(*required, Some(KAELMYR_GATE_TITLE), "{label}");
-        } else if super::super::world::is_reaches_room(*room) {
-            assert_eq!(*required, Some(REACHES_GATE_TITLE), "{label}");
-        } else {
-            assert_eq!(*required, None, "{label} is an open land");
-        }
-    }
+fn the_archipelago_answers_without_a_title_or_a_prior_visit() {
+    use super::super::archipelago::{island_entrance, village_room};
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    // Villages and island landings have no directional exits at all, so a
+    // visited rule would orphan them. They stay open to a level 1, Lv100
+    // island bosses and all.
+    s.travel(uid(1), village_room(0));
+    assert_eq!(s.players[&uid(1)].room, village_room(0));
+    s.travel(uid(1), island_entrance(3));
+    assert_eq!(s.players[&uid(1)].room, island_entrance(3));
 }
 
 #[test]
