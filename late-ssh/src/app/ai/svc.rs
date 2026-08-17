@@ -80,10 +80,67 @@ struct GeminiResponsePart {
     text: Option<String>,
 }
 
+/// How much of an unusable Gemini body to log. Enough to carry `finishReason`,
+/// `promptFeedback`, and the safety ratings; short enough that a response
+/// padded with grounding metadata can't flood the log.
+const RAW_RESPONSE_LOG_LIMIT: usize = 4096;
+
+/// Pull the reply text out of a Gemini response body, logging the raw body
+/// whenever there isn't one.
+///
+/// By the time a `None` reaches a caller it is indistinguishable from "AI is
+/// switched off", so an API-side refusal arrives as silence: the news pipeline
+/// reported `AI failed to return extraction` from eight frames away, naming no
+/// cause. The body holds the answer (`finishReason`, `promptFeedback`) and was
+/// previously parsed and dropped. This is the only place that can still see it.
+fn first_text(call: &str, body_text: &str) -> Result<Option<String>> {
+    let body: GeminiResponse = serde_json::from_str(body_text)?;
+    if let Some(candidates) = body.candidates
+        && let Some(first) = candidates.into_iter().next()
+        && let Some(content) = first.content
+        && let Some(parts) = content.parts
+        && let Some(part) = parts.into_iter().next()
+        && let Some(text) = part.text
+    {
+        return Ok(Some(text));
+    }
+
+    tracing::warn!(
+        call = %call,
+        model = %AI_MODEL,
+        raw_response = %body_text.chars().take(RAW_RESPONSE_LOG_LIMIT).collect::<String>(),
+        "gemini returned no usable text"
+    );
+    Ok(None)
+}
+
+/// Slice the JSON object out of a reply. Grounded calls can't use JSON
+/// response mode (see `generate_json_with_search`), and asked via the prompt
+/// alone the model fences its JSON, prefixes prose, or appends grounding
+/// notes. Taking the first `{` through the last `}` survives all of those;
+/// bare JSON passes through untouched. A reply with no object comes back
+/// trimmed and fails at the caller's parse, which callers must tolerate.
+fn extract_json_object(text: &str) -> &str {
+    let trimmed = text.trim();
+    match (trimmed.find('{'), trimmed.rfind('}')) {
+        (Some(start), Some(end)) if start < end => &trimmed[start..=end],
+        _ => trimmed,
+    }
+}
+
 impl AiService {
     pub fn new(enabled: bool, api_key: Option<String>) -> Self {
+        // Every caller funnels through this one client, and several hold a
+        // scarce resource across the call (the translation API gate, spawned
+        // summary tasks). reqwest has no default timeout, so a hung Gemini
+        // call would pin those forever; 120s is far past any legitimate
+        // generation.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("reqwest client construction cannot fail with these options");
         Self {
-            client: Client::new(),
+            client,
             api_key,
             enabled,
         }
@@ -175,19 +232,18 @@ impl AiService {
             raw_response_len = body_text.len(),
             "received Gemini API response"
         );
-        let body: GeminiResponse = serde_json::from_str(&body_text)?;
-        if let Some(candidates) = body.candidates
-            && let Some(first) = candidates.into_iter().next()
-            && let Some(content) = first.content
-            && let Some(parts) = content.parts
-            && let Some(part) = parts.into_iter().next()
-        {
-            return Ok(part.text);
-        }
-
-        Ok(None)
+        first_text("generate", &body_text)
     }
 
+    /// A grounded (Google Search) call whose reply is expected to be JSON.
+    /// Grounding and JSON response mode don't mix on gemini-3.6-flash:
+    /// attaching the `googleSearch` tool together with
+    /// `responseMimeType: application/json` gets a 200 whose body has no
+    /// `candidates` at all (the model thinks, then emits nothing). So this
+    /// path requests JSON purely through the prompt and slices the object out
+    /// of the fence and prose the model wraps it in despite being told not
+    /// to. The shape is still prompt-enforced only; callers must tolerate a
+    /// parse failure.
     pub async fn generate_json_with_search(
         &self,
         system_prompt: &str,
@@ -215,7 +271,7 @@ impl AiService {
             generation_config: GeminiConfig {
                 temperature: 0.8,
                 max_output_tokens: 8192,
-                response_mime_type: Some("application/json".to_string()),
+                response_mime_type: None,
                 response_schema: None,
             },
             tools: Some(vec![GeminiTool {
@@ -232,17 +288,10 @@ impl AiService {
 
         let body_text = res.text().await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
-        let body: GeminiResponse = serde_json::from_str(&body_text)?;
-        if let Some(candidates) = body.candidates
-            && let Some(first) = candidates.into_iter().next()
-            && let Some(content) = first.content
-            && let Some(parts) = content.parts
-            && let Some(part) = parts.into_iter().next()
-        {
-            return Ok(part.text);
+        match first_text("generate_json_with_search", &body_text)? {
+            Some(text) => Ok(Some(extract_json_object(&text).to_string())),
+            None => Ok(None),
         }
-
-        Ok(None)
     }
 
     /// A JSON reply Gemini must conform to `schema`, ungrounded (no Google
@@ -300,16 +349,10 @@ impl AiService {
 
         let body_text = res.text().await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
-        let body: GeminiResponse = serde_json::from_str(&body_text)?;
-        if let Some(candidates) = body.candidates
-            && let Some(first) = candidates.into_iter().next()
-            && let Some(content) = first.content
-            && let Some(parts) = content.parts
-            && let Some(part) = parts.into_iter().next()
-        {
-            return Ok(part.text);
-        }
-
-        Ok(None)
+        first_text("generate_json", &body_text)
     }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

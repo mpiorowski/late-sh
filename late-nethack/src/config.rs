@@ -8,6 +8,11 @@ pub(crate) struct Config {
     pub(crate) bin: String,
     /// `HOME` for each child (its `.nethackrc` lives here).
     pub(crate) data_dir: String,
+    /// The writable playground (VAR_PLAYGROUND compiled into the binary):
+    /// saves, bones, locks, and the append-only xlogfile/livelog the stats
+    /// session streams. Must match the compile-time path in
+    /// docker/doors/nethack.Dockerfile and the PVC mount in infra/nethack.tf.
+    pub(crate) var_dir: String,
     /// Shared secret. The single authorized client key is derived from this; it
     /// must match late-ssh's `LATE_NETHACK_SECRET`.
     pub(crate) secret: String,
@@ -42,6 +47,8 @@ impl Config {
             bin: optional("LATE_NETHACK_BIN").unwrap_or_else(|| "/usr/games/nethack".to_string()),
             data_dir: optional("LATE_NETHACK_DATA_DIR")
                 .unwrap_or_else(|| "/var/lib/late-nethack".to_string()),
+            var_dir: optional("LATE_NETHACK_VAR_DIR")
+                .unwrap_or_else(|| "/var/games/nethack-var".to_string()),
             secret,
             listen_addr: optional("LATE_NETHACK_LISTEN_ADDR")
                 .unwrap_or_else(|| "0.0.0.0".to_string()),

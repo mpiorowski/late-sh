@@ -222,24 +222,27 @@ fn board_lines(
                 let index = row * checkers::SIZE + col;
                 let playable = !(row + col).is_multiple_of(2);
                 let is_cursor = cursor == Some(index);
-                // Background precedence: cursor, then the picked path, then the
-                // last move, then a legal next square, then the plain dark square.
-                let mut style = Style::default();
-                if playable {
-                    style = style.bg(theme::BG_HIGHLIGHT());
-                }
-                if last.contains(&index) {
-                    style = style.bg(theme::BG_SELECTION());
-                }
-                if next_steps.contains(&index) {
-                    style = style.bg(theme::AMBER_DIM());
-                }
-                if pending.contains(&index) {
-                    style = style.bg(theme::BG_SELECTION());
-                }
-                if is_cursor {
-                    style = style.bg(theme::AMBER_DIM());
-                }
+                // Cell treatment precedence: cursor, then the picked path,
+                // then a legal next square, then the last move, then the
+                // plain dark square. Exactly one branch applies: the
+                // selection swap is a `REVERSED` modifier a later `.bg()`
+                // cannot clear, so treatments must never stack.
+                let base = if playable {
+                    Style::default().bg(theme::BG_HIGHLIGHT())
+                } else {
+                    Style::default()
+                };
+                let style = if is_cursor {
+                    base.bg(theme::AMBER_DIM())
+                } else if pending.contains(&index) {
+                    base.patch(theme::selection_style())
+                } else if next_steps.contains(&index) {
+                    base.bg(theme::AMBER_DIM())
+                } else if last.contains(&index) {
+                    base.patch(theme::selection_style())
+                } else {
+                    base
+                };
                 let span = match *cell {
                     Some(piece) => {
                         // A king is the same square with a gold top half —
@@ -505,3 +508,7 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, state: &DailyCheckersState) {
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
+
+#[cfg(test)]
+#[path = "checkers_ui_test.rs"]
+mod checkers_ui_test;

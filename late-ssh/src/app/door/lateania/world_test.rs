@@ -175,6 +175,21 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (1600..=BROCELIANDE_ZONES * BROCELIANDE_W * BROCELIANDE_H).contains(&broceliande),
         "Broceliande should be ~2000 rooms, got {broceliande}"
     );
+    // Aelunor, the Faewood: a sixth continent of twelve organic fae-glades
+    // (rooms 25000+, cavern-carved only - never a maze, never a grid). Each
+    // zone is sparse, so the total is a sane band rather than an exact count.
+    let aelunor = count_in(
+        AELUNOR_BASE,
+        AELUNOR_BASE + AELUNOR_ZONES as RoomId * AELUNOR_ZONE_STRIDE,
+    );
+    assert!(
+        (250..=AELUNOR_ZONES * AELUNOR_W * AELUNOR_H).contains(&aelunor),
+        "Aelunor should be ~300 rooms, got {aelunor}"
+    );
+    // Silvael: the Faewood's own city (rooms 26000+). A fixed, fully
+    // hand-authored set, so this is an exact count rather than a band.
+    let silvael = count_in(SILVAEL_BASE, SILVAEL_BASE + SILVAEL_ROOM_COUNT);
+    assert_eq!(silvael, 8, "eight Silvael rooms");
     // The Shattered Archipelago: portal villages + maze/cavern islands.
     use super::super::archipelago as arch;
     let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
@@ -187,6 +202,20 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (750..=1000).contains(&islands),
         "the archipelago should be ~900 rooms, got {islands}"
     );
+    // The Wildbound Waste: a fifth, pvp continent of three chained
+    // maze/cavern biomes plus their three small gate towns (rooms 30000+).
+    // Mazes fill their cell field; caverns are sparse, so the total is a sane
+    // band rather than an exact count.
+    let wildbound = count_in(WILDBOUND_BASE, WILDBOUND_BASE + 3 * WILDBOUND_BIOME_STRIDE);
+    assert!(
+        (900..=3 * WILDBOUND_BIOME_STRIDE as usize).contains(&wildbound),
+        "the Wildbound Waste should be ~1000+ rooms, got {wildbound}"
+    );
+    // Wayfarer's Hollow: the five-room new-player tutorial zone (rooms
+    // 40000+), hung off the Gilded Flagon. A fixed, fully hand-authored set,
+    // so this is an exact count rather than a band.
+    let tutorial = count_in(TUTORIAL_BASE, TUTORIAL_BASE + 10);
+    assert_eq!(tutorial, 5, "five tutorial rooms");
     // No stray rooms outside the known groups.
     assert_eq!(
         world.rooms.len(),
@@ -199,8 +228,12 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + kaelmyr
             + lakes
             + broceliande
+            + aelunor
+            + silvael
             + villages
-            + islands,
+            + islands
+            + wildbound
+            + tutorial,
         "every room should belong to a known region"
     );
     for spawn in &world.spawns {
@@ -422,9 +455,11 @@ fn the_sunderlakes_are_reachable_peaceful_and_full_of_fish() {
     );
     // The heart of the region: forty fish, caught at Fishing nodes across the
     // lakes, every node yielding a real fish gated by the Fishing skill.
+    // (The Wildbound tier-6 fishing springs also sit in the lakes but yield
+    // the tiered Abyss Eel material, not a catalog fish - exclude them here.)
     let fish_nodes: Vec<&ResourceNode> = NODES
         .iter()
-        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home))
+        .filter(|nn| nn.skill == GatherSkill::Fishing && is_lakes_room(nn.home) && nn.tier < 5)
         .collect();
     assert_eq!(
         fish_nodes.len(),
@@ -959,7 +994,7 @@ fn the_atlas_covers_every_continent_including_kaelmyr() {
 #[test]
 fn continent_waystones_stand_in_real_safe_rooms() {
     let world = seed_world();
-    for (label, room, _) in CONTINENT_WAYSTONES {
+    for (label, room) in CONTINENT_WAYSTONES {
         let r = world
             .room(*room)
             .unwrap_or_else(|| panic!("waystone room for {label} exists"));
@@ -973,7 +1008,7 @@ fn continent_waystones_stand_in_real_safe_rooms() {
     }
     // Destinations are unique across the whole network.
     let dests = waystone_destinations();
-    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r, _)| *r).collect();
+    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r)| *r).collect();
     rooms.sort_unstable();
     rooms.dedup();
     assert_eq!(rooms.len(), dests.len(), "destination rooms are unique");
@@ -1454,4 +1489,736 @@ fn sunderlakes_mobs_are_peaceful_not_endgame_scaled() {
         lakes_max < kaelmyr_min,
         "toughest Sunderlakes mob ({lakes_max} hp) should be weaker than the softest Kaelmyr mob ({kaelmyr_min} hp)"
     );
+}
+
+// Wildbound doubled the player cap to 100, so the endgame must present a real
+// difficulty gradient across the new band instead of pinning every foe to the
+// clamp (the old single-slope `level()` made the whole Frontier->Kaelmyr arc
+// read as identically max-level). Verify: the displayed level tracks raw power
+// monotonically, the endgame spans a wide band rather than a flat wall, entry
+// endgame sits comfortably below the cap, and the world's toughest foe reaches
+// it - all while the early/mid roster keeps its familiar sub-60 levels.
+#[test]
+fn the_endgame_levels_span_a_gradient_up_to_the_new_cap() {
+    let world = seed_world();
+    let is_endgame = |id: u32| (FRONTIER_SPAWN_ID_START..LAKES_SPAWN_ID_START).contains(&id);
+    let endgame: Vec<&MobSpawn> = world.spawns.iter().filter(|s| is_endgame(s.id)).collect();
+    assert!(
+        endgame.len() > 20,
+        "the endgame regions field a full roster"
+    );
+
+    // Monotonic in raw power: a tougher foe never reads as a lower level.
+    let mut ranked = endgame.clone();
+    ranked.sort_by_key(|s| s.max_hp + s.damage * 4);
+    for w in ranked.windows(2) {
+        assert!(
+            w[1].level() >= w[0].level(),
+            "level must not fall as raw power rises ({} L{} vs {} L{})",
+            w[0].name,
+            w[0].level(),
+            w[1].name,
+            w[1].level()
+        );
+    }
+
+    // A real spread, not a flat clamp: entry endgame well below the cap, the
+    // deepest content at it, and a wide gap between the two.
+    let min_lvl = endgame.iter().map(|s| s.level()).min().unwrap();
+    let max_lvl = endgame.iter().map(|s| s.level()).max().unwrap();
+    assert!(
+        (55..=78).contains(&min_lvl),
+        "entry endgame should read in the 55-78 band, not the cap (got L{min_lvl})"
+    );
+    assert_eq!(
+        max_lvl,
+        super::super::classes::Class::MAX_LEVEL,
+        "the world's toughest foe should read at the level cap"
+    );
+    assert!(
+        max_lvl - min_lvl >= 20,
+        "the endgame should span a wide gradient, got L{min_lvl}..L{max_lvl}"
+    );
+
+    // The early/mid world is untouched: below the knee, the displayed level is
+    // exactly the old single-slope formula, so every foe a sub-60 player meets
+    // keeps its familiar level to the number. Only power past the knee bends
+    // onto the gentler endgame slope.
+    for s in &world.spawns {
+        let power = s.max_hp + s.damage * 4;
+        if power <= 60 * 14 {
+            assert_eq!(
+                s.level(),
+                (power / 14).clamp(1, 60),
+                "{} (power {power}) should keep its pre-Wildbound level",
+                s.name
+            );
+        }
+    }
+}
+
+// The iron rule of the minimap: a drawn line means you can walk it. The old
+// renderer drew a connector for every exit BY DIRECTION, so when the world's
+// non-Euclidean folds laid the destination elsewhere, a phantom corridor
+// appeared joining two rooms with no exit between them ("You can't go north"
+// under a drawn |, as reported at the Cartographers' Loft on the Saltwind
+// Wharves). Sweep every room in the world as the map centre and verify every
+// connector joins rooms that really share an exit on that axis.
+#[test]
+fn every_minimap_line_is_walkable() {
+    use crate::app::door::lateania::world::MapCell;
+    let world = seed_world();
+    let visited: HashSet<RoomId> = world.rooms.keys().copied().collect();
+    let (hr, vr) = (3i32, 2i32);
+    let mut phantoms = 0usize;
+    let mut checked = 0usize;
+    for &current in world.rooms.keys() {
+        let coords = world.minimap_coords(current, &visited, hr, vr);
+        let map = world.minimap(current, None, &visited, hr, vr);
+        // Invert: grid cell -> room id.
+        let mut at: std::collections::HashMap<(usize, usize), RoomId> =
+            std::collections::HashMap::new();
+        for (&rid, &(x, y)) in &coords {
+            at.insert((((y + vr) * 2) as usize, ((x + hr) * 2) as usize), rid);
+        }
+        for (r, row) in map.grid.iter().enumerate() {
+            for (c, &cell) in row.iter().enumerate() {
+                let horizontal = match cell {
+                    MapCell::ConnH | MapCell::TrailH => true,
+                    MapCell::ConnV | MapCell::TrailV => false,
+                    _ => continue,
+                };
+                checked += 1;
+                let ((c1, c2), (d1, d2)) = if horizontal {
+                    (((r, c - 1), (r, c + 1)), (Dir::East, Dir::West))
+                } else {
+                    (((r - 1, c), (r + 1, c)), (Dir::South, Dir::North))
+                };
+                let linked = |from: RoomId, to: RoomId| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.values().any(|&d| d == to))
+                };
+                // `d1` walks from c1 toward c2; `d2` walks back.
+                let has_exit = |from: RoomId, dir: Dir| {
+                    world
+                        .room(from)
+                        .is_some_and(|room| room.exits.contains_key(&dir))
+                };
+                match (at.get(&c1).copied(), at.get(&c2).copied()) {
+                    // Both ends are drawn rooms: they must truly be linked.
+                    (Some(a), Some(b)) => {
+                        if !linked(a, b) && !linked(b, a) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A frontier corridor: truthful only if the drawn room
+                    // really has an exit running that way.
+                    (Some(a), None) => {
+                        if map.grid[c2.0][c2.1] != MapCell::Frontier || !has_exit(a, d1) {
+                            phantoms += 1;
+                        }
+                    }
+                    (None, Some(b)) => {
+                        if map.grid[c1.0][c1.1] != MapCell::Frontier || !has_exit(b, d2) {
+                            phantoms += 1;
+                        }
+                    }
+                    // A line joining nothing to nothing.
+                    (None, None) => phantoms += 1,
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "the sweep drew no connectors at all");
+    assert_eq!(
+        phantoms, 0,
+        "{phantoms} phantom corridors drawn (of {checked} connectors): a map line must always be walkable"
+    );
+}
+
+#[test]
+fn regional_notables_carry_their_own_wildbound_finds() {
+    // Every zone/island's notable-loot table should genuinely include that
+    // zone's two new finds, not just the borrowed fallback catalog.
+    for zone in 0..14 {
+        let loot = lakes_notable_loot(zone);
+        for id in super::super::items::sunderlakes_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Sunderlakes zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for zone in 0..20 {
+        let loot = broceliande_notable_loot(zone);
+        for id in super::super::items::broceliande_find_ids(zone) {
+            assert!(
+                loot.contains(&id),
+                "Broceliande zone {zone}'s notable should carry find {id}"
+            );
+        }
+    }
+    for isle in 0..20 {
+        let loot = archipelago_boss_loot(isle);
+        for id in super::super::items::archipelago_find_ids(isle) {
+            assert!(
+                loot.contains(&id),
+                "Archipelago isle {isle}'s boss should carry find {id}"
+            );
+        }
+    }
+}
+
+// ---- Genesys: a living, breathing world - villagers ----------------------
+
+#[test]
+fn genesys_adds_at_least_a_hundred_villagers() {
+    assert!(
+        VILLAGERS.len() >= 100,
+        "expected at least 100 villagers, got {}",
+        VILLAGERS.len()
+    );
+}
+
+#[test]
+fn every_public_safe_room_has_a_villager() {
+    // Private home interiors (each tier's own hearth/back/upper rooms) are
+    // excluded on purpose - a villager standing inside your own house would
+    // be strange. Every genuinely public safe space gets one.
+    const HOME_INTERIORS: &[RoomId] = &[
+        9010, 9020, 9021, 9030, 9031, 9032, 9040, 9041, 9042, 9043, 9050, 9051, 9052, 9053, 9054,
+    ];
+    let world = seed_world();
+    let missing: Vec<RoomId> = world
+        .rooms
+        .values()
+        .filter(|r| r.safe && !HOME_INTERIORS.contains(&r.id))
+        .filter(|r| !VILLAGERS.iter().any(|v| v.room == r.id))
+        .map(|r| r.id)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these public safe rooms have no villager: {missing:?}"
+    );
+}
+
+#[test]
+fn every_villager_has_real_content_and_a_real_home() {
+    let world = seed_world();
+    let mut seen_rooms = std::collections::HashSet::new();
+    for v in VILLAGERS {
+        assert_eq!(v.kind, FeatureKind::Villager);
+        assert!(!v.name.is_empty());
+        assert!(
+            v.desc.len() >= 20,
+            "{} has a suspiciously short line: {:?}",
+            v.name,
+            v.desc
+        );
+        assert!(
+            world.rooms.contains_key(&v.room),
+            "villager {} references missing room {}",
+            v.name,
+            v.room
+        );
+        // Multiple villagers may share a room only if genuinely distinct people
+        // (never the exact same name twice in the same room).
+        assert!(
+            seen_rooms.insert((v.room, v.name)),
+            "duplicate villager {} in room {}",
+            v.name,
+            v.room
+        );
+    }
+}
+
+// ---- Genesys: birds, mythical creatures, and adoptable strays -------------
+
+#[test]
+fn genesys_adds_real_birds_and_adoptable_creatures() {
+    let birds_with_perch = WILDLIFE.iter().filter(|c| c.perch_note.is_some()).count();
+    let mythical = WILDLIFE.iter().filter(|c| c.mythical).count();
+    let adoptable = WILDLIFE.iter().filter(|c| c.adoptable).count();
+    assert!(
+        birds_with_perch >= 15,
+        "expected at least 15 birds with a perched alternative, got {birds_with_perch}"
+    );
+    assert!(
+        mythical >= 10,
+        "expected at least 10 mythical creatures, got {mythical}"
+    );
+    assert!(
+        adoptable >= 15,
+        "expected at least 15 adoptable strays, got {adoptable}"
+    );
+    // Every adoptable stray must have a real home and a real name; every
+    // perch note must actually differ from the flying note (no copy-paste).
+    let world = seed_world();
+    for c in WILDLIFE {
+        assert!(
+            world.rooms.contains_key(&c.home),
+            "{} has no real home",
+            c.name
+        );
+        if let Some(perch) = c.perch_note {
+            assert_ne!(
+                perch, c.note,
+                "{} - perch note should differ from the flying note",
+                c.name
+            );
+        }
+    }
+}
+
+#[test]
+fn display_note_toggles_between_flying_and_perched() {
+    let bird = WILDLIFE
+        .iter()
+        .find(|c| c.perch_note.is_some())
+        .expect("at least one bird has a perch alternative");
+    let flying = (0..30u64).find(|&t| bird.display_note(t) == bird.note);
+    let perched = (0..30u64).find(|&t| bird.display_note(t) == bird.perch_note.unwrap());
+    assert!(flying.is_some(), "should read as flying at some moment");
+    assert!(perched.is_some(), "should read as perched at some moment");
+}
+
+#[test]
+fn non_flying_critters_never_show_a_perch_note() {
+    for c in WILDLIFE {
+        if c.perch_note.is_none() {
+            for t in 0..10u64 {
+                assert_eq!(c.display_note(t), c.note);
+            }
+        }
+    }
+}
+
+#[test]
+fn wildbound_waste_is_hung_off_the_sand_wyrms_maw() {
+    let world = seed_world();
+    let gateway = world
+        .room(WILDBOUND_GATEWAY)
+        .expect("Sand-Wyrm's Maw exists");
+    let town = gateway
+        .exits
+        .get(&Dir::South)
+        .copied()
+        .expect("the Maw's south exit leads into the Waste");
+    assert_eq!(
+        town, WILDBOUND_BASE,
+        "leads straight to the first gate town"
+    );
+    assert!(
+        world
+            .room(WILDBOUND_BASE)
+            .expect("first town square")
+            .exits
+            .values()
+            .any(|to| *to == WILDBOUND_GATEWAY),
+        "the walk back out is reciprocal"
+    );
+}
+
+#[test]
+fn wildbound_towns_are_safe_islands_in_a_pvp_continent() {
+    let world = seed_world();
+    let mut safe_towns = 0;
+    let mut pvp_fields = 0;
+    for b in 0..3u32 {
+        let base = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE;
+        // The four town rooms (square, shelter, outfitter, gate) are safe
+        // havens, never pvp ground.
+        for offset in 0..4 {
+            let room = world
+                .room(base + offset)
+                .unwrap_or_else(|| panic!("town room {} of biome {b} should exist", base + offset));
+            assert!(
+                room.safe && !room.pvp,
+                "town room {} must be a safe haven",
+                room.id
+            );
+            safe_towns += 1;
+        }
+        // Every other room in the biome's block is contested: pvp, never safe.
+        for id in (base + 10)..(base + WILDBOUND_BIOME_STRIDE) {
+            if let Some(room) = world.room(id) {
+                assert!(
+                    room.pvp && !room.safe,
+                    "field room {id} in biome {b} must be pvp ground, not a haven"
+                );
+                pvp_fields += 1;
+            }
+        }
+    }
+    assert_eq!(safe_towns, 12, "three towns of four rooms each");
+    assert!(pvp_fields >= 900, "a real continent of contested ground");
+}
+
+#[test]
+fn wildbound_biomes_are_mazes_and_caverns_not_grids() {
+    let world = seed_world();
+    for b in 0..3u32 {
+        let base = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE;
+        let field: Vec<&Room> = world
+            .rooms
+            .values()
+            .filter(|r| r.id >= base + 10 && r.id < base + WILDBOUND_BIOME_STRIDE)
+            .collect();
+        let dead_ends = field.iter().filter(|r| r.exits.len() == 1).count();
+        let junctions = field.iter().filter(|r| r.exits.len() >= 3).count();
+        assert!(
+            dead_ends > 0 && junctions > 0,
+            "biome {b} should read as a maze/cavern, not a uniform grid"
+        );
+    }
+}
+
+#[test]
+fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
+    // The *template pool* (20 base creatures x 5 tiers x 3 biomes) is exactly
+    // 300, independent of which combinations this particular seeded world
+    // happens to roll into an actual room (see the variety check below).
+    let pool: usize = WILDBOUND_BIOMES
+        .iter()
+        .map(|b| b.creatures.len() * WILDBOUND_TIER_AFFIX.len())
+        .sum();
+    assert_eq!(pool, 300, "20 creatures x 5 tiers x 3 biomes");
+    assert_eq!(
+        WILDBOUND_BIOMES.len(),
+        3,
+        "three biomes, each with its apex"
+    );
+
+    let world = seed_world();
+    let wildbound: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        // Bounded above by Aelunor's own spawn-id band (1,600,000+), which
+        // now sits just past Wildbound's - an unbounded `>=` here used to
+        // silently sweep Aelunor's dozen zone bosses in as "Wildbound apex
+        // bosses" too.
+        .filter(|s| (WILDBOUND_SPAWN_ID_START..AELUNOR_SPAWN_ID_START).contains(&s.id))
+        .collect();
+    let distinct_names: std::collections::HashSet<&str> =
+        wildbound.iter().map(|s| s.name).collect();
+    let bosses = wildbound.iter().filter(|s| s.boss).count();
+    assert_eq!(bosses, 3, "one apex boss per biome");
+    assert!(
+        distinct_names.len() >= 200,
+        "the seeded world should draw wide variety from the 300-mob pool, got {}",
+        distinct_names.len()
+    );
+    for spawn in &wildbound {
+        assert!(
+            world.rooms.contains_key(&spawn.home),
+            "{} homes to missing room {}",
+            spawn.name,
+            spawn.home
+        );
+    }
+    let levels: Vec<i32> = wildbound.iter().map(|s| s.level()).collect();
+    assert!(
+        levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 90),
+        "the Waste should span from early levels to near the cap, got {levels:?}"
+    );
+}
+
+#[test]
+fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
+    // The Waste is walked into off the Sahra Wastes with no title at all, and
+    // its authored stats sit in `tune_spawn_balance`'s gentle overworld bucket
+    // on purpose, so what its apexes pay has to answer to the biome they
+    // guard. The boss branch of `wildbound_loot` used to hand all three the
+    // catalog's top table, which meant the 1500hp Duskmire boss dropped - on
+    // every kill, since `roll_loot` never rolls for a boss - what the King Who
+    // Was Promised Nothing guards at the end of twenty Frontier zones.
+    use super::super::items::{FRONTIER_TIERS, frontier_loot};
+    let world = seed_world();
+    let tier_of = |loot: &'static [u32]| {
+        (0..FRONTIER_TIERS)
+            .find(|t| frontier_loot(*t) == loot)
+            .expect("the Waste borrows the Frontier catalog, one tier per table")
+    };
+
+    for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
+        let base = WILDBOUND_BASE + (b as u32) * WILDBOUND_BIOME_STRIDE;
+        let mobs: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| (base..base + WILDBOUND_BIOME_STRIDE).contains(&s.home))
+            .collect();
+        let boss = mobs.iter().find(|s| s.boss).expect("one apex per biome");
+        let boss_tier = tier_of(boss.loot);
+        let deepest_regular = mobs
+            .iter()
+            .filter(|s| !s.boss)
+            .map(|s| tier_of(s.loot))
+            .max()
+            .expect("the field is populated");
+
+        assert!(
+            boss_tier > deepest_regular,
+            "{} should out-pay {}'s own deep trash (tier {deepest_regular}), got tier {boss_tier}",
+            boss.name,
+            biome.zone
+        );
+        assert!(
+            boss_tier < FRONTIER_TIERS - 1,
+            "the catalog's top table belongs to the Frontier's crown, not {} (tier {boss_tier})",
+            boss.name
+        );
+        if let Some(next) = WILDBOUND_BIOMES.get(b + 1) {
+            assert!(
+                boss_tier <= next.loot_base,
+                "{} should not out-pay the shallow end of {} (tier {}), got tier {boss_tier}",
+                boss.name,
+                next.zone,
+                next.loot_base
+            );
+        }
+    }
+}
+
+#[test]
+fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
+    // Aelunor is a lottery, not a shortcut past the Frontier. Two rules make
+    // that true, and both live in `extend_aelunor`/`aelunor_loot`:
+    //
+    //   1. A Legendary spawn stays a genuinely rare roll at every depth. The
+    //      affix roll used to climb linearly with the zone, so every spawn
+    //      past zone 8 was Legendary - "rarity" was really just depth.
+    //   2. A plain spawn's table stays in the catalog's lower half. Only the
+    //      rare affixes reach the top bands, so the wood's ~660hp mobs can't
+    //      hand out what the Frontier's ~3280hp mobs guard behind four Bane
+    //      titles, on a walk in from the Amber Savanna with no gate at all.
+    use super::super::items::{Rarity, item};
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    assert!(
+        wood.len() > 100,
+        "the wood should be populated, got {} spawns",
+        wood.len()
+    );
+
+    let legendary = |s: &MobSpawn| s.name.starts_with("Legendary ");
+    let share = |pool: &[&MobSpawn]| match pool.len() {
+        0 => 0,
+        n => pool.iter().filter(|s| legendary(s)).count() * 100 / n,
+    };
+    assert!(
+        share(&wood) < 15,
+        "a Legendary should be a lucky find across the wood, got {}% of spawns",
+        share(&wood)
+    );
+    let deepest: Vec<&MobSpawn> = wood
+        .iter()
+        .copied()
+        .filter(|s| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1)
+        .collect();
+    assert!(
+        share(&deepest) < 25,
+        "even the Deep Heart keeps Legendaries a minority, got {}%",
+        share(&deepest)
+    );
+    assert!(
+        wood.iter().any(|s| legendary(s)),
+        "but the tail is real - some spawns do roll Legendary"
+    );
+
+    // A plain, unaffixed spawn never carries endgame gear, however deep it is.
+    for s in wood.iter().filter(|s| AELUNOR_CREATURES.contains(&s.name)) {
+        for id in s.loot {
+            let it = item(*id).unwrap_or_else(|| panic!("{} drops unknown item {id}", s.name));
+            assert!(
+                !matches!(it.rarity, Rarity::Epic | Rarity::Legendary),
+                "{} is a plain spawn but drops {} ({})",
+                s.name,
+                it.name,
+                it.rarity.label()
+            );
+        }
+    }
+    // The jackpot is real, though: the rare rolls do reach the top bands.
+    assert!(
+        wood.iter().any(|s| s
+            .loot
+            .iter()
+            .any(|id| item(*id).is_some_and(|it| it.rarity == Rarity::Legendary))),
+        "a Legendary spawn should be worth the walk"
+    );
+}
+
+#[test]
+fn a_legendary_aelunor_spawn_is_an_elite_that_guards_its_prize() {
+    // The affix jumps the drop table twelve tiers wherever it lands, so what
+    // carries it has to stand as far above the local floor as the prize does.
+    // Otherwise the lottery is only a shortcut: a first-glade Legendary would
+    // hand a wanderer Epic-band gear off an ordinary fight. The premium is
+    // quadratic in the affix and flat across zones for exactly that reason -
+    // the prize doesn't get smaller near the eaves, so neither does the guard.
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    let zone_of = |s: &MobSpawn| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE;
+    let mut checked = 0;
+    for legend in wood.iter().filter(|s| s.name.starts_with("Legendary ")) {
+        // The toughest ordinary spawn in the same glade, deepest cell included.
+        let Some(plain) = wood
+            .iter()
+            .filter(|s| zone_of(s) == zone_of(legend) && AELUNOR_CREATURES.contains(&s.name))
+            .max_by_key(|s| s.max_hp)
+        else {
+            continue;
+        };
+        assert!(
+            legend.max_hp * 10 >= plain.max_hp * 16,
+            "{} ({} hp) barely outweighs the glade's toughest common {} ({} hp) - \
+             a Legendary should read as a mini-boss",
+            legend.name,
+            legend.max_hp,
+            plain.name,
+            plain.max_hp,
+        );
+        assert!(
+            legend.damage > plain.damage,
+            "{} ({} dmg) hits no harder than the common {} ({} dmg)",
+            legend.name,
+            legend.damage,
+            plain.name,
+            plain.damage,
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "some glade should hold a Legendary to check");
+}
+
+#[test]
+fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
+    let world = seed_world();
+    // All five rooms exist, and every one but the training yard is safe -
+    // the yard needs `safe: false` for its dummy to be fightable at all.
+    for offset in 0..5u32 {
+        let room = world
+            .room(TUTORIAL_BASE + offset)
+            .unwrap_or_else(|| panic!("tutorial room {} should exist", TUTORIAL_BASE + offset));
+        if offset == 1 {
+            assert!(!room.safe, "the Training Yard must allow combat");
+        } else {
+            assert!(room.safe, "room {} should be a haven", room.id);
+        }
+        assert!(!room.pvp, "no tutorial room is contested ground");
+    }
+    // Reachable from the real start room by a normal walk (via the tavern).
+    let can_reach = |from: RoomId, target: RoomId| -> bool {
+        let mut seen = std::collections::HashSet::from([from]);
+        let mut stack = vec![from];
+        while let Some(r) = stack.pop() {
+            if r == target {
+                return true;
+            }
+            if let Some(room) = world.room(r) {
+                for &to in room.exits.values() {
+                    if seen.insert(to) {
+                        stack.push(to);
+                    }
+                }
+            }
+        }
+        false
+    };
+    assert!(
+        can_reach(world.start_room, TUTORIAL_BASE),
+        "Wayfarer's Hollow must be reachable from Embergate"
+    );
+    assert!(
+        can_reach(TUTORIAL_BASE, world.start_room),
+        "and there must be a normal walk back"
+    );
+    // A brand-new join lands here, not at World::start_room directly.
+    assert_eq!(tutorial_start_room(), TUTORIAL_BASE);
+    assert_ne!(
+        tutorial_start_room(),
+        world.start_room,
+        "the tutorial is distinct from Embergate itself"
+    );
+    // Combat: a near-harmless training dummy lives in the Training Yard.
+    let dummy = world
+        .spawns
+        .iter()
+        .find(|s| s.home == TUTORIAL_BASE + 1)
+        .expect("the Training Yard has a dummy");
+    assert!(!dummy.boss);
+    assert!(
+        dummy.damage <= 2,
+        "the dummy must never meaningfully hurt a newcomer"
+    );
+    assert!(dummy.max_hp >= 30, "should survive a few practice rounds");
+    // Gathering: one node per trade, all in the Gathering Glade.
+    let glade_skills: std::collections::HashSet<GatherSkill> = NODES
+        .iter()
+        .filter(|n| n.home == TUTORIAL_BASE + 2)
+        .map(|n| n.skill)
+        .collect();
+    assert_eq!(
+        glade_skills.len(),
+        5,
+        "every gathering trade has a node here"
+    );
+    // Crafting: one station per trade, all in the Tinker's Hall.
+    let stations = craft_stations_at(TUTORIAL_BASE + 3);
+    assert_eq!(stations.len(), 5, "every craft trade has a station here");
+    // Classes: the Tome of the Seventeen Callings stands in the Hall of Callings.
+    assert!(
+        features_at(TUTORIAL_BASE + 4)
+            .iter()
+            .any(|f| f.kind == FeatureKind::Plaque && f.name.contains("Seventeen Callings")),
+        "the Hall of Callings should hold the class tome"
+    );
+    // Every safe tutorial room (all but the yard) has a villager, same
+    // invariant as everywhere else in the world.
+    for offset in [0u32, 2, 3, 4] {
+        let room = TUTORIAL_BASE + offset;
+        assert!(
+            VILLAGERS.iter().any(|v| v.room == room),
+            "safe tutorial room {room} needs a villager"
+        );
+    }
+}
+
+#[test]
+fn zone_level_bands_are_sane_and_cover_the_road() {
+    let world = seed_world();
+    // Every zone that homes a mob gets a band, and every band is ordered.
+    for spawn in &world.spawns {
+        let zone = world.room(spawn.home).expect("mob home exists").zone;
+        let (lo, hi) = world
+            .zone_band(zone)
+            .unwrap_or_else(|| panic!("zone {zone} homes a mob but has no band"));
+        assert!(lo <= hi, "zone {zone} band is inverted: {lo}-{hi}");
+        let level = spawn.level();
+        assert!(
+            (lo..=hi).contains(&level),
+            "zone {zone} band {lo}-{hi} misses its own mob at level {level}"
+        );
+    }
+    // The starting road reads as low-level ground, and a mob-less haven reads
+    // as no band at all rather than a made-up number.
+    let (lo, _) = world.zone_band("King's Road").expect("the road has mobs");
+    assert!(lo <= 3, "the King's Road should read as a starting zone");
+    assert!(world.zone_band("Hearthward Close").is_none());
+    // The atlas carries the same bands per region.
+    let progress = world.region_progress(&std::collections::HashSet::new(), 1);
+    let road = progress
+        .iter()
+        .find(|r| r.name.contains("King's Road"))
+        .expect("home region listed");
+    assert!(road.levels.is_some(), "the home region has hostile levels");
 }

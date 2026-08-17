@@ -140,8 +140,10 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: late_core::models::message_translation::TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         },
     );
 
@@ -213,8 +215,10 @@ async fn edit_profile_normalizes_username_before_persisting() {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: late_core::models::message_translation::TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         },
     );
 
@@ -281,8 +285,10 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: late_core::models::message_translation::TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         },
     );
 
@@ -465,14 +471,13 @@ async fn delete_account_terminates_active_sessions() {
     let (tx, mut rx) = mpsc::channel(1);
 
     registry
-        .register(token.clone(), tx, uuid::Uuid::now_v7())
+        .register(token.clone(), tx, uuid::Uuid::now_v7(), None)
         .await;
     active_users.lock().expect("active users").insert(
         user.id,
         ActiveUser {
             username: user.username.clone(),
             fingerprint: Some(user.fingerprint.clone()),
-            peer_ip: None,
             audio_source: late_core::models::user::AudioSource::default(),
             sessions: vec![ActiveSession {
                 token,
@@ -561,8 +566,10 @@ async fn edit_profile_snapshots_stay_per_user() {
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
+            translate_to: late_core::models::message_translation::TranslateLang::En,
+            auto_translate: false,
+            translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
-            birthday: None,
         },
     );
 

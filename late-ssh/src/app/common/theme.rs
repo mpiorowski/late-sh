@@ -1,4 +1,4 @@
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 use std::{cell::Cell, hash::Hash};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2104,7 +2104,7 @@ const PALETTE_ENA: Palette = Palette {
     border_dim: Color::Rgb(41, 95, 247),
     border: Color::Rgb(253, 231, 1),
     border_active: Color::Rgb(227, 207, 182),
-    text_faint: Color::Rgb(41, 95, 247),
+    text_faint: Color::Rgb(130, 150, 210),
     text_dim: Color::Rgb(253, 231, 1),
     text_muted: Color::Rgb(180, 180, 180),
     text: Color::Rgb(209, 209, 209),
@@ -2134,7 +2134,7 @@ const PALETTE_ENA_DREAM_BBQ: Palette = Palette {
     border_dim: Color::Rgb(91, 134, 148),
     border: Color::Rgb(230, 131, 140),
     border_active: Color::Rgb(241, 230, 198),
-    text_faint: Color::Rgb(21, 94, 85),
+    text_faint: Color::Rgb(130, 180, 170),
     text_dim: Color::Rgb(143, 183, 198),
     text_muted: Color::Rgb(209, 209, 209),
     text: Color::Rgb(209, 209, 209),
@@ -2225,7 +2225,7 @@ const PALETTE_FACEBOOK_DARK: Palette = Palette {
     border: Color::Rgb(8, 102, 255),
     border_active: Color::Rgb(255, 255, 255),
     text_faint: Color::Rgb(0, 76, 194),
-    text_dim: Color::Rgb(8, 102, 255),
+    text_dim: Color::Rgb(140, 180, 255),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
     text_bright: Color::Rgb(255, 255, 255),
@@ -2254,7 +2254,7 @@ const PALETTE_TWITTER_DARK: Palette = Palette {
     border_dim: Color::Rgb(20, 100, 160),
     border: Color::Rgb(29, 155, 240),
     border_active: Color::Rgb(255, 255, 255),
-    text_faint: Color::Rgb(20, 100, 160),
+    text_faint: Color::Rgb(140, 180, 220),
     text_dim: Color::Rgb(29, 155, 240),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
@@ -2284,7 +2284,7 @@ const PALETTE_TELEGRAM_DARK: Palette = Palette {
     border_dim: Color::Rgb(25, 110, 155),
     border: Color::Rgb(36, 161, 222),
     border_active: Color::Rgb(255, 255, 255),
-    text_faint: Color::Rgb(25, 110, 155),
+    text_faint: Color::Rgb(140, 185, 215),
     text_dim: Color::Rgb(36, 161, 222),
     text_muted: Color::Rgb(180, 180, 220),
     text: Color::Rgb(230, 230, 250),
@@ -3990,22 +3990,34 @@ const PALETTE_AMOLED_CERULEAN: Palette = Palette {
     badge_gold: Color::Rgb(152, 180, 212),
 };
 
+/// The one palette that owns none of its colors: every entry is an ANSI slot
+/// or `Color::Reset`, so the session inherits whatever the terminal is
+/// configured with. Two rules keep it readable:
+///
+/// - The primary reading pair (canvas, body text) is `Color::Reset`, the
+///   terminal's own default background and foreground. That pair is legible on
+///   any profile the user has actually configured, and leaving the background
+///   alone is what keeps terminal transparency working.
+/// - Everything quieter than body text assumes a dark profile. A 16-color
+///   palette offers exactly two grays (7 and 8), and no assignment of them
+///   reads on both light and dark backgrounds; 8 is the faint tier, 7 the
+///   quiet-but-legible one.
 const PALETTE_TERMINAL: Palette = Palette {
-    bg_canvas: Color::Indexed(0),      // Black
-    bg_selection: Color::Indexed(8),   // Bright Black (dark gray)
-    bg_highlight: Color::Indexed(8),   // Bright Black
+    bg_canvas: Color::Reset,           // terminal default background
+    bg_selection: Color::Indexed(4),   // Blue
+    bg_highlight: Color::Indexed(4),   // Blue
     border_dim: Color::Indexed(8),     // Bright Black
     border: Color::Indexed(7),         // White (normal gray)
-    border_active: Color::Indexed(4),  // Blue
+    border_active: Color::Indexed(12), // Bright Blue
     text_faint: Color::Indexed(8),     // Bright Black
-    text_dim: Color::Indexed(8),       // Bright Black
+    text_dim: Color::Indexed(7),       // White (gray)
     text_muted: Color::Indexed(7),     // White (gray)
-    text: Color::Indexed(15),          // Bright White
-    text_bright: Color::Indexed(15),   // Bright White
-    amber: Color::Indexed(3),          // Yellow
-    amber_dim: Color::Indexed(11),     // Bright Yellow
+    text: Color::Reset,                // terminal default foreground
+    text_bright: Color::Reset,         // terminal default foreground
+    amber: Color::Indexed(11),         // Bright Yellow
+    amber_dim: Color::Indexed(3),      // Yellow
     amber_glow: Color::Indexed(11),    // Bright Yellow
-    chat_body: Color::Indexed(15),     // Bright White
+    chat_body: Color::Reset,           // terminal default foreground
     chat_author: Color::Indexed(6),    // Cyan
     mention: Color::Indexed(3),        // Yellow
     success: Color::Indexed(2),        // Green
@@ -4301,6 +4313,15 @@ pub fn BG_CANVAS() -> Color {
     current_palette().bg_canvas
 }
 
+/// Style for a glyph cut out of an accent fill: the fill paints the cell and
+/// the glyph shows the canvas through it. `REVERSED` makes the terminal swap
+/// the pair itself instead of painting `BG_CANVAS()` as a foreground, which
+/// keeps the cutout correct on the terminal palette, whose canvas is
+/// `Color::Reset` and has no paintable value.
+pub fn punch_through(fill: Color) -> Style {
+    Style::default().fg(fill).add_modifier(Modifier::REVERSED)
+}
+
 pub fn color_to_hex(color: Color) -> String {
     match color {
         Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
@@ -4336,6 +4357,41 @@ pub fn BG_SELECTION() -> Color {
     current_palette().bg_selection
 }
 
+/// Style for a selected row or cell whose text must stay readable on it.
+/// Palettes with a paintable canvas keep the flat `bg_selection` fill. A
+/// `Color::Reset` canvas means the text follows the terminal's own
+/// foreground, and no fixed fill can guarantee contrast against an unknown
+/// color, so those palettes invert instead: `REVERSED` swaps the terminal's
+/// own fg/bg pair, the one pair the user has already made legible.
+///
+/// The invert arm carries explicit `Reset` colors because call sites compose
+/// via `Style::patch`, which only overwrites `Some` fields: without them a
+/// pre-set accent fg or board fill would survive the patch and the swapped
+/// pair would not be the terminal's own. The tradeoff is that the swap wins
+/// over any color set before the patch; a color that must survive because it
+/// means something (a piece, a suit) goes on after the patch, where it
+/// becomes the fill of the swapped cell.
+pub fn selection_style() -> Style {
+    match BG_CANVAS() {
+        Color::Reset => Style::default()
+            .fg(Color::Reset)
+            .bg(Color::Reset)
+            .add_modifier(Modifier::REVERSED),
+        _ => Style::default().bg(BG_SELECTION()),
+    }
+}
+
+/// Base style for a list row: the selection treatment when selected,
+/// otherwise an explicit default background so unselected rows clear any
+/// inherited fill.
+pub fn row_style(selected: bool) -> Style {
+    if selected {
+        selection_style()
+    } else {
+        Style::default().bg(Color::Reset)
+    }
+}
+
 #[allow(non_snake_case)]
 pub fn BG_HIGHLIGHT() -> Color {
     current_palette().bg_highlight
@@ -4355,7 +4411,7 @@ pub fn DRUNK_WORD_FG(level: u8) -> Color {
         3 => Color::Rgb(200, 110, 30),
         _ => Color::Rgb(190, 45, 40),
     };
-    blend_toward(anchor, BG_CANVAS(), 0.45)
+    blend_toward_canvas(anchor, 0.45)
 }
 
 /// Background tint for the Sudoku cells that share the selected cell's number.
@@ -4364,7 +4420,7 @@ pub fn DRUNK_WORD_FG(level: u8) -> Color {
 /// themes. Derived, so no per-palette field is needed.
 #[allow(non_snake_case)]
 pub fn SUDOKU_SAME_NUM_BG() -> Color {
-    blend_toward(Color::Rgb(210, 180, 90), BG_CANVAS(), 0.72)
+    blend_toward_canvas(Color::Rgb(210, 180, 90), 0.72)
 }
 
 /// Background wash for a chat message that mentions you.
@@ -4383,30 +4439,38 @@ pub fn CHAT_REPLY_BG() -> Color {
 
 /// An accent color blended most of the way to the active canvas, so it reads
 /// as a quiet wash behind body text on dark and light themes alike. Derived,
-/// so no per-palette field is needed. Palettes whose colors are not plain RGB
-/// (the terminal-default theme) fall back to the flat highlight background.
+/// so no per-palette field is needed. When the accent or the canvas has no
+/// RGB reading, the wash is dropped entirely (`Color::Reset`): these washes
+/// sit under body text, and on the terminal palette that text follows the
+/// terminal's own foreground, so no fixed wash color can promise contrast.
+/// The mention/author accents on the text itself carry the emphasis there.
 fn attention_bg(accent: Color) -> Color {
     const TOWARD_CANVAS: f32 = 0.84;
-    let Some((accent_r, accent_g, accent_b)) = color_rgb(accent) else {
-        return BG_HIGHLIGHT();
+    match (color_rgb(accent), color_rgb(BG_CANVAS())) {
+        (Some(_), Some(_)) => blend_toward_canvas(accent, TOWARD_CANVAS),
+        _ => Color::Reset,
+    }
+}
+
+/// Blend `t` of the way from `anchor` to the active canvas. The terminal
+/// palette's canvas is `Color::Reset`: the background belongs to the terminal
+/// and cannot be read back, so its blends anchor on black, matching the dark
+/// ramp that palette carries. Without this every canvas-relative blend would
+/// return its unblended anchor at full strength.
+fn blend_toward_canvas(anchor: Color, t: f32) -> Color {
+    let canvas = match color_rgb(BG_CANVAS()) {
+        Some((r, g, b)) => Color::Rgb(r, g, b),
+        None => Color::Rgb(0, 0, 0),
     };
-    let Some((canvas_r, canvas_g, canvas_b)) = color_rgb(BG_CANVAS()) else {
-        return BG_HIGHLIGHT();
-    };
-    let mix =
-        |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * TOWARD_CANVAS).round() as u8;
-    Color::Rgb(
-        mix(accent_r, canvas_r),
-        mix(accent_g, canvas_g),
-        mix(accent_b, canvas_b),
-    )
+    blend_toward(anchor, canvas, t)
 }
 
 /// Linear blend `t` of the way from `a` to `b` (0.0 = `a`, 1.0 = `b`).
-/// Falls back to `a` for non-RGB colors (the palette backgrounds are RGB).
+/// Both ends resolve through `color_rgb`, so ANSI-indexed palette colors blend
+/// like any other. Falls back to `a` when either end has no RGB reading.
 pub(crate) fn blend_toward(a: Color, b: Color, t: f32) -> Color {
-    match (a, b) {
-        (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) => {
+    match (color_rgb(a), color_rgb(b)) {
+        (Some((ar, ag, ab)), Some((br, bg, bb))) => {
             let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
             Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
         }

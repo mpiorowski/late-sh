@@ -1,7 +1,12 @@
 //! The backtick workspace cycle: Home chat -> each daily board waiting on
 //! your move -> each house table you're seated at -> each Arcade daily
-//! puzzle you've started but not finished -> back to Home chat. The one key
-//! that spans the Lobby game domains and the Arcade dailies.
+//! puzzle you've started but not finished -> each live door game (a
+//! recently-detached Lateania world, then the running roguelikes) -> back
+//! to Home chat. The one key that spans the Lobby game domains, the Arcade
+//! dailies, and the door games: inside a running roguelike the same
+//! backtick detaches (the game keeps running) and hops onward; inside an
+//! active Lateania world it leaves (autosave) and keeps the door on the
+//! cycle for a few minutes so hopping back re-joins the character.
 
 use uuid::Uuid;
 
@@ -13,8 +18,9 @@ use crate::app::{
 };
 
 /// One stop on the backtick cycle: Home chat, a daily board where it's your
-/// move, a house table where you hold a seat, or an Arcade daily puzzle with
-/// moves on it that isn't solved yet. Rooms are gone and real-time Arcade
+/// move, a house table where you hold a seat, an Arcade daily puzzle with
+/// moves on it that isn't solved yet, or a roguelike door game with a live
+/// (running, possibly detached) session. Rooms are gone and real-time Arcade
 /// games (Lateris, Snake, Traffic, NES) never participate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GameWorkspace {
@@ -22,11 +28,18 @@ pub(crate) enum GameWorkspace {
     DailyBoard(Uuid),
     HouseTable(HouseTable),
     Arcade(ArcadeStop),
+    /// A live door game, identified by its live-game screen. For the
+    /// roguelikes (Nethack/Dcss/Brogue) the turn-based child idles on its
+    /// host while detached, so hopping in resumes exactly where the player
+    /// left off. For Lateania "live" means detached recently: hopping in
+    /// re-joins the autosaved character.
+    Door(Screen),
 }
 
 /// Backtick: hop Home chat -> each match waiting on your move (nearest
 /// deadline first) -> each house table you're seated at (roster order) ->
-/// each unfinished Arcade daily (lobby order) -> back to Home chat.
+/// each unfinished Arcade daily (lobby order) -> each live door game
+/// (hub sidebar order) -> back to Home chat.
 pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     let current = match app.screen {
         Screen::Dashboard => GameWorkspace::Dashboard,
@@ -46,6 +59,18 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             Some(stop) => GameWorkspace::Arcade(stop),
             None => return false,
         },
+        // A running roguelike reaches here through the detach path in
+        // `App::handle_input` (backtick is otherwise forwarded raw to the
+        // game); `set_screen` keeps the running state alive on the hop out.
+        Screen::Nethack | Screen::Dcss | Screen::Brogue => GameWorkspace::Door(app.screen),
+        // An active Lateania world reaches here through the detach action in
+        // `lateania::screen::handle_active_lateania_key`, which arms the
+        // recency window first; the hop-out screen switch tears the session
+        // down (autosave + world leave) rather than keeping it running.
+        Screen::Lateania => match app.lateania_state.is_some() {
+            true => GameWorkspace::Door(Screen::Lateania),
+            false => return false,
+        },
         _ => return false,
     };
     let my_turn_ids: Vec<Uuid> = app
@@ -56,6 +81,7 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         .collect();
     let seated_tables = app.house.my_seated_tables();
     let arcade_stops = unfinished_daily_stops(app);
+    let door_stops = live_door_stops(app);
     // Preserve where the first stop in the hop chain was opened from so
     // `q`/`Esc` still returns there after any number of backtick hops.
     // Arcade stops don't record an origin (Esc there always returns to the
@@ -72,7 +98,13 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         Screen::Arcade => Screen::Arcade,
         _ => Screen::Dashboard,
     };
-    let next = next_workspace(&my_turn_ids, &seated_tables, &arcade_stops, current);
+    let next = next_workspace(
+        &my_turn_ids,
+        &seated_tables,
+        &arcade_stops,
+        &door_stops,
+        current,
+    );
     // Hopping out of an active Arcade puzzle closes the view (the board
     // itself is already saved move-by-move), mirroring how a kept seat
     // outlives a closed table view.
@@ -90,7 +122,14 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
                 Screen::HouseTable => {
                     crate::app::lobby::house::input::leave_table(app, Screen::Dashboard);
                 }
-                Screen::Arcade => {
+                // A roguelike door detaches on a plain screen switch; nothing
+                // to close. Lateania's screen switch runs its own teardown
+                // (autosave + world leave) inside `set_screen`.
+                Screen::Arcade
+                | Screen::Nethack
+                | Screen::Dcss
+                | Screen::Brogue
+                | Screen::Lateania => {
                     app.set_screen(Screen::Dashboard);
                 }
                 _ => {
@@ -124,17 +163,68 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             app.set_screen(Screen::Arcade);
             true
         }
+        GameWorkspace::Door(screen) => {
+            // For the roguelikes the running door state is still on the App
+            // (kept by `set_screen`'s detach rule), so switching screens is
+            // the whole resume: the vt100 parser holds the live frame and the
+            // next draw re-sizes the remote PTY if the viewport changed.
+            app.set_screen(screen);
+            // Lateania has no detached session: the hop-out saved and removed
+            // the character, so hopping in re-joins the remembered slot
+            // directly, skipping the character-select landing.
+            if screen == Screen::Lateania {
+                app.enter_lateania();
+            }
+            true
+        }
     }
 }
 
-/// The stop after `current` in `[Home, boards..., tables..., arcade...]`. A
-/// current stop missing from the list (the turn just passed, the seat was
-/// lost, the puzzle got solved) restarts from the front so the hop chain
-/// keeps draining the queue instead of bailing home early.
+/// The door games that count as live stops, in hub sidebar order. For the
+/// roguelikes that means a running (attached or detached) game: a door
+/// sitting on its launcher is not a workspace. Lateania has no detached
+/// session, so its test is the recency window a backtick detach arms: hop
+/// out and the door stays on the cycle for a few minutes, hopping in
+/// re-joins the saved character.
+fn live_door_stops(app: &App) -> Vec<Screen> {
+    let mut stops = Vec::new();
+    if app.lateania_recently_active() {
+        stops.push(Screen::Lateania);
+    }
+    if app
+        .dcss_state
+        .as_ref()
+        .is_some_and(|state| state.is_running())
+    {
+        stops.push(Screen::Dcss);
+    }
+    if app
+        .nethack_state
+        .as_ref()
+        .is_some_and(|state| state.is_running())
+    {
+        stops.push(Screen::Nethack);
+    }
+    if app
+        .brogue_state
+        .as_ref()
+        .is_some_and(|state| state.is_running())
+    {
+        stops.push(Screen::Brogue);
+    }
+    stops
+}
+
+/// The stop after `current` in `[Home, boards..., tables..., arcade...,
+/// doors...]`. A current stop missing from the list (the turn just passed,
+/// the seat was lost, the puzzle got solved, the dungeon run ended) restarts
+/// from the front so the hop chain keeps draining the queue instead of
+/// bailing home early.
 fn next_workspace(
     my_turn_ids: &[Uuid],
     seated_tables: &[HouseTable],
     arcade_stops: &[ArcadeStop],
+    door_stops: &[Screen],
     current: GameWorkspace,
 ) -> GameWorkspace {
     let stops: Vec<GameWorkspace> = my_turn_ids
@@ -143,6 +233,7 @@ fn next_workspace(
         .map(GameWorkspace::DailyBoard)
         .chain(seated_tables.iter().copied().map(GameWorkspace::HouseTable))
         .chain(arcade_stops.iter().copied().map(GameWorkspace::Arcade))
+        .chain(door_stops.iter().copied().map(GameWorkspace::Door))
         .collect();
     let next = match current {
         GameWorkspace::Dashboard => stops.first(),

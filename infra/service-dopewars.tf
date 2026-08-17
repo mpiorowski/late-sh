@@ -15,8 +15,8 @@
 #
 # replicas MUST stay 1: one RWO volume holds the shared score file (see dopewars.tf
 # for the single-node reasoning). The host pod is always deployed (like
-# service-ssh/nethack); the door's enable flag only gates the CLIENT (service-ssh's
-# LATE_DOPEWARS_ENABLED). Keeping the host unconditional means its image always
+# service-ssh/nethack); whether the door shows up in the TUI is a late-ssh
+# config.rs profile literal. Keeping the host unconditional means its image always
 # exists in-cluster, so the deploy workflows can read it with a plain `kubectl get`
 # (no bootstrap fallback) just like the ssh/web/nethack images.
 

@@ -22,7 +22,6 @@ use crate::app::chat::svc::ChatService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::lobby::house::blackjack::player::BlackjackPlayerDirectory;
 use crate::app::pet::svc::PetService;
-use crate::app::pinstar::svc::PinstarServerRegistry;
 use crate::app::profile::svc::ProfileService;
 use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
@@ -121,8 +120,41 @@ fn test_house_registry(db: Db) -> crate::app::lobby::house::registry::HouseTable
     )
 }
 
+/// Inert IRC factory defaults for tests; production profiles spell their
+/// IrcConfig out in `config.rs` and there is no `Default` impl to lean on.
+pub fn test_irc_config() -> crate::config::IrcConfig {
+    crate::config::IrcConfig {
+        enabled: false,
+        port: 6667,
+        tls_cert_path: None,
+        tls_key_path: None,
+        proxy_protocol: false,
+        proxy_trusted_cidrs: Vec::new(),
+        max_conns_global: 200,
+        max_conns_per_user: 3,
+        max_auth_failures_per_ip: 20,
+        auth_failure_window_secs: 300,
+    }
+}
+
+/// Session-scoped `StreamService` for app tests. Every session has one, in
+/// tests as in production; what tests lack is LiveKit, so `/golive` here fails
+/// the voice check inside `prepare_go_live` rather than the service missing.
+fn test_stream_service(
+    db: Db,
+    activity_tx: broadcast::Sender<ActivityEvent>,
+) -> crate::app::stream::svc::StreamService {
+    crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        VoiceService::new(VoiceConfig::disabled()),
+        ActivityPublisher::new(db, activity_tx),
+        "http://localhost:3000".to_string(),
+    )
+}
+
 pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     Config {
+        env: crate::config::Env::Dev,
         ssh_port: 0,
         api_port: 0,
         icecast_url: "http://localhost:8000".to_string(),
@@ -147,11 +179,12 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
-        irc: crate::config::IrcConfig::default(),
+        irc: test_irc_config(),
+        files: None,
         rebels_enabled: true,
         rebels_host: "frittura.org".to_string(),
         rebels_port: 3788,
-        rebels_secret: String::new(),
+        rebels_secret: "test-secret".to_string(),
         nethack_enabled: false,
         nethack_host: String::new(),
         nethack_port: 2323,
@@ -194,6 +227,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone());
     let ai_service = AiService::new(false, None);
+    let translation_service =
+        crate::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -236,12 +271,19 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let shop_service = ShopService::new(db.clone());
     let ultimate_service = crate::app::UltimateService::new(db.clone());
     let voice_service = VoiceService::new(config.voice.clone());
+    let stream_service = crate::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
     State {
         conn_limit: Arc::new(Semaphore::new(config.max_conns_global)),
         conn_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         pair_ws_counts: Arc::new(Mutex::new(HashMap::<IpAddr, usize>::new())),
         active_users,
         clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby::with_seed(7),
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         afk_users,
         username_directory,
@@ -256,11 +298,17 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service,
+        stream_service,
         chat_service,
         notification_service,
         ai_service,
+        translation_service,
         article_service,
         feed_service,
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service,
         work_service,
         profile_service,
@@ -290,6 +338,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ),
         darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -310,7 +359,6 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         paired_client_registry: PairedClientRegistry::new("https://audio.late.sh"),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
@@ -406,7 +454,12 @@ fn make_app_with_chat_service_and_permissions(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: chat_service.clone(),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
@@ -414,6 +467,10 @@ fn make_app_with_chat_service_and_permissions(
             chat_service.clone(),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
@@ -500,8 +557,10 @@ fn make_app_with_chat_service_and_permissions(
         nethack_host: String::new(),
         nethack_port: 2323,
         nethack_secret: String::new(),
-        nethack_awards: None,
+        nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),
         dcss_port: 2325,
@@ -525,7 +584,6 @@ fn make_app_with_chat_service_and_permissions(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: None,
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
@@ -535,6 +593,8 @@ fn make_app_with_chat_service_and_permissions(
         artboard_ban_expires_at: None,
         active_users: world.active_users,
         clubhouse_lobby: None,
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
         scratchpad_registry: world.scratchpad_registry,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
@@ -552,6 +612,7 @@ fn make_app_with_chat_service_and_permissions(
         land_on_home: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
@@ -598,7 +659,12 @@ pub fn make_app_with_paired_client(
             Arc::new(Mutex::new(HashMap::new())),
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
+        stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
         notification_service: notification_service.clone(),
         article_service: ArticleService::new(
             db.clone(),
@@ -606,6 +672,10 @@ pub fn make_app_with_paired_client(
             ChatService::new(db.clone(), NotificationService::new(db.clone())),
         ),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
+        cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
+            db.clone(),
+            "http://127.0.0.1:1".to_string(),
+        ),
         showcase_service: crate::app::chat::showcase::svc::ShowcaseService::new(db.clone()),
         work_service: crate::app::chat::work::svc::WorkService::new(db.clone()),
         profile_service: ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new()))),
@@ -692,8 +762,10 @@ pub fn make_app_with_paired_client(
         nethack_host: String::new(),
         nethack_port: 2323,
         nethack_secret: String::new(),
-        nethack_awards: None,
+        nethack_activity: None,
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
+        door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),
         dcss_port: 2325,
@@ -717,7 +789,6 @@ pub fn make_app_with_paired_client(
         session_token: session_token.to_string(),
         session_registry: None,
         paired_client_registry: Some(registry),
-        pinstar_registry: PinstarServerRegistry::new(Some(db.clone())),
         session_rx: None,
         now_playing_rx: None,
         radio_meta_rx: None,
@@ -727,6 +798,8 @@ pub fn make_app_with_paired_client(
         artboard_ban_expires_at: None,
         active_users: None,
         clubhouse_lobby: None,
+        mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
+        files: None,
         scratchpad_registry: None,
         clubhouse_tutorial_done: true,
         show_aquarium_tray: false,
@@ -746,6 +819,7 @@ pub fn make_app_with_paired_client(
         initial_icecast_stream: late_core::models::user::IcecastStream::default(),
         initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_theme_id: "contrast".to_string(),
+        initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
     })
     .expect("app");

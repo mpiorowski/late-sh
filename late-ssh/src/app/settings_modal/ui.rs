@@ -301,7 +301,7 @@ fn theme_group_line(
     let style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
@@ -309,7 +309,7 @@ fn theme_group_line(
             .add_modifier(Modifier::BOLD)
     };
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -332,7 +332,7 @@ fn theme_option_line(
     let prefix_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -340,7 +340,7 @@ fn theme_option_line(
     let label_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
@@ -348,12 +348,12 @@ fn theme_option_line(
     let id_style = if selected {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -396,7 +396,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // Username row
         Constraint::Length(1), // Country row
         Constraint::Length(1), // Timezone row
-        Constraint::Length(1), // Birthday row
         Constraint::Length(1), // Theme row
         Constraint::Length(1), // breathing room
         Constraint::Length(1), // late.fetch heading
@@ -405,10 +404,16 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
         Constraint::Length(1), // OS row
         Constraint::Length(1), // Languages row
         Constraint::Length(1), // breathing room
+        Constraint::Length(1), // Translation heading
+        Constraint::Length(1), // Target language row
+        Constraint::Length(1), // Auto-translate row
+        Constraint::Length(1), // Translate mine row
+        Constraint::Length(1), // breathing room
         Constraint::Length(1), // Notifications heading
         Constraint::Length(1), // DMs
         Constraint::Length(1), // Mentions
         Constraint::Length(1), // Game events
+        Constraint::Length(1), // Streams
         Constraint::Length(1), // Bell
         Constraint::Length(1), // Cooldown
         Constraint::Length(1), // Format
@@ -473,16 +478,6 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
     frame.render_widget(
         Paragraph::new(row_line(
             state,
-            Row::Birthday,
-            width,
-            "Birthday",
-            system_field_value(state, Row::Birthday, state.draft().birthday.clone()),
-        )),
-        sections[4],
-    );
-    frame.render_widget(
-        Paragraph::new(row_line(
-            state,
             Row::Theme,
             width,
             "Theme",
@@ -498,10 +493,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[5],
+        sections[4],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[7]);
+    frame.render_widget(Paragraph::new(section_heading("late.fetch")), sections[6]);
     frame.render_widget(
         Paragraph::new(row_line(
             state,
@@ -510,7 +505,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "IDE",
             system_field_value(state, Row::Ide, state.draft().ide.clone()),
         )),
-        sections[8],
+        sections[7],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -520,7 +515,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Terminal",
             system_field_value(state, Row::Terminal, state.draft().terminal.clone()),
         )),
-        sections[9],
+        sections[8],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -530,7 +525,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "OS",
             system_field_value(state, Row::Os, state.draft().os.clone()),
         )),
-        sections[10],
+        sections[9],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -544,12 +539,44 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 (!state.draft().langs.is_empty()).then(|| format_lang_tags(&state.draft().langs)),
             ),
         )),
-        sections[11],
+        sections[10],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Translation")), sections[12]);
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::TranslateTo,
+            width,
+            "Target language",
+            translate_to_span(state.draft().translate_to),
+        )),
+        sections[13],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::AutoTranslate,
+            width,
+            "Auto-translate new messages",
+            toggle_span(state.draft().auto_translate),
+        )),
+        sections[14],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::TranslateMine,
+            width,
+            "Translate my messages to English",
+            toggle_span(state.draft().translate_mine_to_en),
+        )),
+        sections[15],
     );
 
     frame.render_widget(
         Paragraph::new(section_heading("Notifications")),
-        sections[13],
+        sections[17],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -559,7 +586,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "DMs",
             toggle_span(has_kind(state, "dms")),
         )),
-        sections[14],
+        sections[18],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -569,7 +596,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "@mentions",
             toggle_span(has_kind(state, "mentions")),
         )),
-        sections[15],
+        sections[19],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -579,7 +606,17 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Game events",
             toggle_span(has_kind(state, "game_events")),
         )),
-        sections[16],
+        sections[20],
+    );
+    frame.render_widget(
+        Paragraph::new(row_line(
+            state,
+            Row::Streams,
+            width,
+            "Streams (friends live, your viewers)",
+            toggle_span(has_kind(state, "streams")),
+        )),
+        sections[21],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -589,7 +626,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
             "Bell",
             toggle_span(state.draft().notify_bell),
         )),
-        sections[17],
+        sections[22],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -606,7 +643,7 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 )
             },
         )),
-        sections[18],
+        sections[23],
     );
     frame.render_widget(
         Paragraph::new(row_line(
@@ -619,10 +656,10 @@ fn draw_settings_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) 
                 theme::TEXT_BRIGHT(),
             ),
         )),
-        sections[19],
+        sections[24],
     );
 
-    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[21]);
+    frame.render_widget(Paragraph::new(shortcuts_hint_line(width)), sections[26]);
 }
 
 fn shortcuts_hint_line(width: usize) -> Line<'static> {
@@ -669,7 +706,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
 
     let sections = Layout::vertical([
         Constraint::Length(1),                // Appearance subsection heading
-        Constraint::Length(1),                // background color row
+        Constraint::Length(1),                // terminal background sync row
         Constraint::Length(1),                // text brightness row
         Constraint::Length(1),                // right sidebar row
         Constraint::Length(1),                // room list row
@@ -678,14 +715,14 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
         Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // Music subsection heading
-        Constraint::Length(1),                // start-with-music-muted row
-        Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Display subsection heading
         Constraint::Length(1),                // flag fallback row
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Startup subsection heading
         Constraint::Length(1),                // land on home row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Input subsection heading
+        Constraint::Length(1),                // interaction mode row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
@@ -699,7 +736,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             state,
             TweakRow::BackgroundColor,
             width,
-            "Background color",
+            "Sync terminal background",
             toggle_span(state.draft().enable_background_color),
         )),
         sections[1],
@@ -757,19 +794,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
-    frame.render_widget(
-        Paragraph::new(tweak_row_line(
-            state,
-            TweakRow::StartWithMusicMuted,
-            width,
-            "Start app with music muted",
-            toggle_span(state.draft().start_with_music_muted),
-        )),
-        sections[11],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -778,10 +803,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[14],
+        sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -789,6 +814,18 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             width,
             "Land on Home page",
             toggle_span(state.draft().land_on_home),
+        )),
+        sections[14],
+    );
+
+    frame.render_widget(Paragraph::new(section_heading("Input")), sections[16]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::InteractionMode,
+            width,
+            "Interaction mode",
+            interaction_mode_span(state.interaction_mode()),
         )),
         sections[17],
     );
@@ -830,7 +867,7 @@ fn tweak_row_line(
     let prefix_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -838,13 +875,13 @@ fn tweak_row_line(
     let label_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
     let value_style = if selected {
-        value.style.bg(theme::BG_SELECTION())
+        value.style.patch(theme::selection_style())
     } else {
         value.style
     };
@@ -858,7 +895,7 @@ fn tweak_row_line(
     let padding = width.saturating_sub(used);
     let trailing = " ".repeat(padding);
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -969,7 +1006,7 @@ fn account_row_line(
     let prefix_style = if selected {
         Style::default()
             .fg(accent)
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -981,7 +1018,7 @@ fn account_row_line(
             } else {
                 theme::TEXT_BRIGHT()
             })
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if destructive {
         Style::default().fg(theme::ERROR())
@@ -989,7 +1026,7 @@ fn account_row_line(
         Style::default().fg(theme::TEXT_DIM())
     };
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -1066,7 +1103,7 @@ fn feed_row_line(
     let prefix_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -1074,7 +1111,7 @@ fn feed_row_line(
     let title_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_BRIGHT())
@@ -1082,19 +1119,19 @@ fn feed_row_line(
     let url_style = if selected {
         Style::default()
             .fg(theme::TEXT_DIM())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let error_style = if selected {
         Style::default()
             .fg(theme::ERROR())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::ERROR())
     };
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -1130,13 +1167,13 @@ fn feed_add_line(
     let prefix_style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
     };
     let trailing_style = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -1153,14 +1190,14 @@ fn feed_add_line(
             display,
             Style::default()
                 .fg(theme::AMBER())
-                .bg(theme::BG_SELECTION()),
+                .patch(theme::selection_style()),
         )
     } else if active {
         (
             "+ Add RSS…".to_string(),
             Style::default()
                 .fg(theme::AMBER_GLOW())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD),
         )
     } else {
@@ -1605,7 +1642,7 @@ fn draw_right_sidebar_components_dialog(frame: &mut Frame, area: Rect, state: &S
         let style = if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
-                .bg(theme::BG_SELECTION())
+                .patch(theme::selection_style())
                 .add_modifier(Modifier::BOLD)
         } else if setting.enabled {
             Style::default().fg(theme::TEXT())
@@ -1873,7 +1910,7 @@ fn link_account_choice_line(
     let style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
@@ -1897,7 +1934,7 @@ fn link_account_generate_line(selected: bool, pending: bool, width: usize) -> Li
     let prefix_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -1905,13 +1942,13 @@ fn link_account_generate_line(selected: bool, pending: bool, width: usize) -> Li
     let label_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::AMBER_DIM())
     };
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };
@@ -1945,7 +1982,7 @@ fn link_account_input_line(
     let prefix_style = if focused {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -1953,13 +1990,13 @@ fn link_account_input_line(
     let style = if typed.is_empty() && focused {
         Style::default()
             .fg(theme::TEXT_FAINT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else if typed.is_empty() {
         Style::default().fg(theme::TEXT_FAINT())
     } else if focused {
         Style::default()
             .fg(theme::AMBER())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::AMBER())
     };
@@ -2284,7 +2321,7 @@ fn irc_token_button_span(
     let style = if selected {
         Style::default()
             .fg(fg)
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else if destructive {
         Style::default().fg(theme::ERROR())
@@ -2455,7 +2492,6 @@ fn system_field_value(state: &SettingsModalState, row: Row, value: Option<String
             .filter(|value| !value.is_empty())
         {
             Some(value) => value_span(value.to_string(), theme::TEXT_BRIGHT()),
-            None if row == Row::Birthday => value_span("MM-DD", theme::TEXT_FAINT()),
             None if row == Row::Langs => value_span("comma sep…", theme::TEXT_FAINT()),
             None => value_span("not set", theme::TEXT_FAINT()),
         }
@@ -2486,6 +2522,28 @@ fn toggle_span(enabled: bool) -> ValueSpan {
     }
 }
 
+fn interaction_mode_span(mode: late_core::models::user::InteractionMode) -> ValueSpan {
+    use late_core::models::user::InteractionMode;
+    match mode {
+        InteractionMode::Keyboard => ValueSpan {
+            text: "○ keyboard".to_string(),
+            style: Style::default().fg(theme::AMBER()),
+        },
+        InteractionMode::Mouse => ValueSpan {
+            text: "● mouse".to_string(),
+            style: Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        },
+        InteractionMode::Hybrid => ValueSpan {
+            text: "◐ hybrid".to_string(),
+            style: Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        },
+    }
+}
+
 fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
     match mode {
         RightSidebarMode::On => ValueSpan {
@@ -2503,6 +2561,15 @@ fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
             text: "◐ auto  ⏎ panels".to_string(),
             style: Style::default().fg(theme::AMBER()),
         },
+    }
+}
+
+fn translate_to_span(lang: late_core::models::message_translation::TranslateLang) -> ValueSpan {
+    ValueSpan {
+        text: lang.label().to_string(),
+        style: Style::default()
+            .fg(theme::SUCCESS())
+            .add_modifier(Modifier::BOLD),
     }
 }
 
@@ -2576,7 +2643,7 @@ fn row_line(
     let prefix_style = if selected {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_FAINT())
@@ -2584,19 +2651,23 @@ fn row_line(
     let label_style = if selected {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
     let value_style = if selected {
-        value.style.bg(theme::BG_SELECTION())
+        value.style.patch(theme::selection_style())
     } else {
         value.style
     };
 
     let prefix = format!(" {marker} ");
-    let label_text = format!("{label:<16}");
+    let label_text = if label.chars().count() >= 16 {
+        format!("{label} ")
+    } else {
+        format!("{label:<16}")
+    };
     let mut used = prefix.chars().count() + label_text.chars().count() + value.text.chars().count();
     if used > width {
         used = width;
@@ -2604,7 +2675,7 @@ fn row_line(
     let padding = width.saturating_sub(used);
     let trailing = " ".repeat(padding);
     let trailing_style = if selected {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };

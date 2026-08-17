@@ -68,6 +68,49 @@ fn author_badge_suffix_keeps_badges_compact() {
     assert_eq!(format_author_badge_suffix(&[], None, None), "");
 }
 
+fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStreamView {
+    crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking on late".to_string(),
+        room_id: Uuid::from_u128(8),
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc123".to_string(),
+        live: true,
+        watching: 3,
+        watch_url: watch_url.to_string(),
+    }
+}
+
+#[test]
+fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
+    let url = "https://late.sh/live/abc123";
+    let width = 80;
+    let line = stream_header_line(&live_stream_view(url), width);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    // Terminals detect links over the cell grid, so a URL flush against the
+    // last column absorbs the pane border `│` and the `────` rule below it.
+    assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+    assert!(text.ends_with(&format!("{url} ")), "got {text:?}");
+}
+
+#[test]
+fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
+    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 30);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    assert!(!text.contains("watch:"), "got {text:?}");
+}
+
 #[test]
 fn chat_composer_layout_keeps_one_blank_row_gap() {
     let area = Rect::new(0, 0, 80, 20);
@@ -100,18 +143,22 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -125,6 +172,8 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     theme::set_current_by_id("late");
@@ -147,12 +196,15 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -165,6 +217,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         versions,
         current_user_id: user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -178,6 +231,8 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let base_key = chat_rows_cache_key(&ctx(base_versions), 80);
@@ -349,17 +404,21 @@ fn mentions_and_replies_paint_a_background_wash() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -373,6 +432,8 @@ fn mentions_and_replies_paint_a_background_wash() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let width = 60;
@@ -424,17 +485,21 @@ fn background_wash_fills_the_whole_row_width() {
     let chat_badges = HashMap::new();
     let friend_user_ids = HashSet::new();
     let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
     let name_styles = HashMap::new();
     let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
     let ctx = ChatRowsContext {
         versions: ChatRowsVersions::default(),
         current_user_id,
         afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
         show_flag_fallback: false,
         usernames: &username_lookup,
         countries: &countries,
@@ -448,6 +513,8 @@ fn background_wash_fills_the_whole_row_width() {
         drunk_levels: &drunk_levels,
         name_styles: &name_styles,
         peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
     };
 
     let width = 60;
@@ -514,6 +581,9 @@ fn chat_view<'a>(
     static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
         OnceLock::new();
     static COLLAPSED_SECTIONS: OnceLock<HashSet<RoomSection>> = OnceLock::new();
+    static TRANSLATIONS: OnceLock<HashMap<Uuid, crate::app::chat::state::TranslationDisplay>> =
+        OnceLock::new();
+    static TRANSLATION_HIDDEN: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static ACTIVE_ROOM_EFFECTS: OnceLock<HashMap<Uuid, Vec<ActiveChatRoomEffect>>> =
         OnceLock::new();
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
@@ -529,6 +599,12 @@ fn chat_view<'a>(
         feeds_selected: false,
         feeds_processing: false,
         feeds_unread_count: 0,
+        cyberspace_selected: false,
+        cyberspace_rooms: &[],
+        cyberspace_room_selected: None,
+        cyberspace_unread_count: 0,
+        cyberspace_unread_saturated: false,
+        cyberspace: None,
         feeds_view: crate::app::chat::feeds::ui::FeedListView {
             entries: &[],
             selected_index: 0,
@@ -556,6 +632,7 @@ fn chat_view<'a>(
         chat_ctx_epoch: 0,
         app_ctx_epoch: 0,
         chat_rooms: rooms,
+        live_streams: &[],
         overlay: None,
         image_modal: None,
         usernames,
@@ -582,7 +659,9 @@ fn chat_view<'a>(
         composing: false,
         current_user_id: Uuid::nil(),
         afk_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
+        live_user_ids: AFK_USER_IDS.get_or_init(HashSet::new),
         ignored_user_ids: IGNORED_USER_IDS.get_or_init(HashSet::new),
+        sticky_unread_dm: None,
         show_flag_fallback: false,
         cursor_visible: false,
         mention_matches: &[],
@@ -596,6 +675,8 @@ fn chat_view<'a>(
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
         name_styles: NAME_STYLES.get_or_init(HashMap::new),
         peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
+        translations: TRANSLATIONS.get_or_init(HashMap::new),
+        translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
         news_composer,
         news_composing: false,
         news_processing: false,
@@ -778,6 +859,37 @@ fn visible_rows_paint_background_for_selected_highlighted_message() {
             .flat_map(|row| row.spans.iter())
             .any(|span| span.style.bg == Some(theme::BG_SELECTION())),
         "expected selected highlighted message to receive background"
+    );
+}
+
+#[test]
+fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
+    // On the terminal palette the highlighted row carries no bg, only
+    // `REVERSED`; the marker must inherit the row's whole treatment, not
+    // just its bg, or it punches a one-cell hole in the inversion.
+    theme::set_current_by_id("terminal");
+    let message_id = Uuid::now_v7();
+    let mut cache = ChatRowsCache {
+        all_rows: vec![Line::from(vec![Span::raw(" "), Span::raw("hello")])],
+        ..Default::default()
+    };
+    cache.selected_ranges.insert(message_id, (0, 1));
+    cache.highlighted_ranges.insert(message_id, (0, 1));
+
+    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 1);
+    let marker_fg = theme::AMBER();
+    theme::set_current_by_id("contrast");
+
+    let marker = &visible.lines[0].spans[0];
+    assert_eq!(marker.content, "▸");
+    assert_eq!(marker.style.fg, Some(marker_fg));
+    assert!(
+        marker
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "marker dropped the row inversion: {:?}",
+        marker.style
     );
 }
 
@@ -966,8 +1078,12 @@ fn empty_composer_placeholder_is_dim_while_composing() {
     let buf = terminal.backend().buffer();
     let rendered: String = (0..17).map(|x| buf[(x, 0)].symbol()).collect();
     assert_eq!(rendered, "Type a message...");
-    assert_eq!(buf[(0, 0)].fg, theme::BG_CANVAS());
-    assert_eq!(buf[(0, 0)].bg, theme::TEXT_DIM());
+    assert_eq!(buf[(0, 0)].fg, theme::TEXT_DIM());
+    assert!(
+        buf[(0, 0)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
     assert_eq!(buf[(1, 0)].fg, theme::TEXT_DIM());
 }
 
@@ -1366,6 +1482,160 @@ fn cozy_room_rail_shows_section_keys_when_fold_prefix_is_armed() {
             "expected {expected:?} in {rendered:?}"
         );
     }
+}
+
+fn rail_dm(id: u128, peer: Uuid) -> ChatRoom {
+    ChatRoom {
+        id: Uuid::from_u128(id),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "dm".to_string(),
+        visibility: "dm".to_string(),
+        auto_join: false,
+        slug: None,
+        permanent: false,
+        language_code: None,
+        dm_user_a: Some(Uuid::nil()),
+        dm_user_b: Some(peer),
+        topic: None,
+        rules: None,
+        created_by: None,
+    }
+}
+
+fn rail_channel(id: u128, slug: &str) -> ChatRoom {
+    ChatRoom {
+        id: Uuid::from_u128(id),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "topic".to_string(),
+        visibility: "public".to_string(),
+        auto_join: false,
+        slug: Some(slug.to_string()),
+        permanent: false,
+        language_code: None,
+        dm_user_a: None,
+        dm_user_b: None,
+        topic: None,
+        rules: None,
+        created_by: None,
+    }
+}
+
+#[test]
+fn cozy_room_rail_lifts_unread_dms_above_channels() {
+    let alice = Uuid::from_u128(101);
+    let bob = Uuid::from_u128(102);
+    let dm_alice = rail_dm(1, alice);
+    let dm_bob = rail_dm(2, bob);
+    let rust = rail_channel(3, "rust");
+    let rooms = vec![
+        (dm_alice.clone(), Vec::new()),
+        (dm_bob.clone(), Vec::new()),
+        (rust.clone(), Vec::new()),
+    ];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(alice, "alice".to_string()), (bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::from([(dm_bob.id, 2)]);
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+    let row_of = |slot: RoomSlot| {
+        room_rows
+            .hit_slots
+            .iter()
+            .position(|hit| *hit == Some(slot))
+            .unwrap_or_else(|| panic!("{slot:?} missing from {rendered:?}"))
+    };
+    let header_of = |label: &str| {
+        rendered
+            .iter()
+            .position(|line| strip_room_section_header_prefix(line) == label)
+            .unwrap_or_else(|| panic!("{label:?} header missing from {rendered:?}"))
+    };
+
+    // The unread DM sits in its own group between Core and Channels; the read
+    // one keeps the bottom of the rail.
+    assert!(header_of("unread dms") < row_of(RoomSlot::Room(dm_bob.id)));
+    assert!(row_of(RoomSlot::Room(dm_bob.id)) < header_of("channels"));
+    assert!(header_of("channels") < row_of(RoomSlot::Room(rust.id)));
+    assert!(header_of("dms") < row_of(RoomSlot::Room(dm_alice.id)));
+}
+
+#[test]
+fn cozy_room_rail_hides_dm_with_ignored_peer() {
+    let bob = Uuid::from_u128(102);
+    let dm_bob = rail_dm(2, bob);
+    let rooms = vec![(dm_bob.clone(), Vec::new())];
+
+    let mut rows_cache = ChatRowsCache::default();
+    let usernames = HashMap::from([(bob, "bob".to_string())]);
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let countries = HashMap::new();
+    let message_reactions = HashMap::new();
+    let unread_counts = HashMap::from([(dm_bob.id, 4)]);
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let composer = TextArea::default();
+    let profile_award_badges = HashMap::new();
+    let news_composer = TextArea::default();
+    let ignored = HashSet::from([bob]);
+    let mut view = chat_view(
+        &mut rows_cache,
+        &rooms,
+        None,
+        &username_lookup,
+        &countries,
+        &message_reactions,
+        &unread_counts,
+        &bonsai_glyphs,
+        &chat_badges,
+        &profile_award_badges,
+        &composer,
+        &news_composer,
+    );
+    view.ignored_user_ids = &ignored;
+
+    let room_list_view = room_list_view_from_render_input(&view);
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
+    let rendered: Vec<String> = room_rows.lines.iter().map(line_text).collect();
+
+    // An ignored peer must not be able to resurface the DM, or its unread
+    // badge, in the rail. Navigation already hides it.
+    assert!(
+        !room_rows
+            .hit_slots
+            .contains(&Some(RoomSlot::Room(dm_bob.id))),
+        "ignored peer's dm rendered in {rendered:?}"
+    );
+    assert!(
+        !rendered.iter().any(|line| line.contains("bob")),
+        "ignored peer's dm rendered in {rendered:?}"
+    );
 }
 
 #[test]
@@ -1847,6 +2117,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
@@ -1887,6 +2158,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),
@@ -1909,6 +2181,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 f,
                 area,
                 super::RoomHeader {
+                    stream: None,
                     voice: None,
                     topic: super::room_topic(&room),
                     has_rules: super::room_has_rules(&room),

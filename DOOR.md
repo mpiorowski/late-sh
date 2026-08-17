@@ -441,6 +441,57 @@ lands harder on an SSH server than it ever did on the web.
 
 MUDs are intentionally **not** in this list anymore - see Parked below.
 
+## NetHack: per-player options via `.nethackrc` (feature idea, not built)
+
+NetHack reads a `.nethackrc` file (or the `NETHACKOPTIONS` env var) out of
+`HOME` at startup for everything from role/race/gender/alignment presets
+(`role:Valkyrie`, `race:human`) to `autopickup`, `pickup_types`, `number_pad`,
+`msg_window`, the symbol set, and color. Full list is in the pinned 5.0.0
+source's `doc/nethack.6` / `doc/options.doc` (`late-nethack/` builds from that
+same verified tarball, see the NetHack `CONTEXT.md` §6).
+
+**Today there is no per-player rcfile at all.** `late-nethack/src/server.rs`
+passes every session the same `HostConfig.data_dir` (`LATE_NETHACK_DATA_DIR`,
+default `/var/lib/late-nethack`) as `HOME` (`host.rs`), and no code ever writes
+a `.nethackrc` into it. So every player gets NetHack's compiled-in defaults and
+its interactive startup prompts (role/race/gender/align, the "Shall I pick a
+character for you?" dance) every single game, with no way to skip or
+customize them. The `Dockerfile` comment calling it "the per-player
+`.nethackrc` HOME" is aspirational, not what the code does yet.
+
+**Step 1: make HOME actually per-player.** Small, contained change: derive
+`HostConfig.data_dir` as `{data_dir}/{playname}` (the same sanitized `-u` name
+that already scopes saves/bones inside the shared HACKDIR playground) and
+`fs::create_dir_all` it on first connect. No PVC/volume shape change, no
+schema, just one path join. This alone unlocks per-player rcfiles; it does not
+by itself give players a way to write one.
+
+**Step 2: an actual way for players to set options.** There is no shell, no
+file transfer, and no exposed path into the host by design (fail-closed,
+`env_clear`d, `SHELL`/`SUSPEND` compiled out) - so "let the user configure
+stuff" needs a real channel, not "ssh in and edit a dotfile". Two shapes worth
+weighing, not mutually exclusive:
+
+1. **A late-ssh options screen for the NetHack launcher.** A small curated
+   form (role/race/gender/align, autopickup, number_pad, symset - a handful of
+   the most player-visible knobs, not the full option surface) that late-ssh
+   collects before `connect` and hands to `late-nethack` (e.g. an extra field
+   alongside the existing `-u`/secret handshake), which writes it out as
+   `{HOME}/.nethackrc` before spawning the child. Keeps the "no shell into the
+   host" invariant intact since the host is still the only thing touching the
+   filesystem.
+2. **NetHack's own in-game options UI.** The `O` command already lets a player
+   view/toggle options live inside a running game, and versions since 3.6 can
+   write the current settings back out to the rcfile from that menu - **verify
+   this against our pinned 5.0.0 source before relying on it**, the same way
+   every other NetHack fact in this doc is checked against the actual tarball,
+   not memory. If it holds, step 1 (per-player HOME) is *all* the plumbing
+   needed - no new late-ssh UI, no side channel, players self-serve entirely
+   inside the game they already know how to drive.
+
+Either path is additive on top of the door as it ships today (§ NetHack
+`CONTEXT.md`); neither is currently planned or built.
+
 ## Open questions before building anything
 
 - For LotGD: native Rust port vs. running the PHP app behind a TUI shim? Port is

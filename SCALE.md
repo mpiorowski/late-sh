@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-07-27 (the leaderboard's 300s cadence exposed a latent seeding bug: sessions rendered *empty* panels rather than stale ones, because `watch::Sender::subscribe` marks the current value seen and the `has_changed()` gate never fired for it. Sessions now seed from `borrow()`, and a connect refreshes a snapshot already older than `REFRESH_INTERVAL`. Cadence and subscriber gate unchanged. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-08-06 (SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -22,11 +22,11 @@ Application deployments:
   - Ports: 2222 SSH, 4000 API
   - Current Terraform/live CPU limit: 8 CPU
   - Current Terraform/live memory limit: 8 GiB, request 2 GiB (raised from 4 GiB / 512 MiB during the 2026-07-22 OOM incident)
-  - Current Terraform/live `LATE_MAX_CONNS_GLOBAL`: 1000
+  - Current live `max_conns_global` (prod profile, late-ssh/src/config.rs): 1000
   - `termination_grace_period_seconds`: 21600, so old pods can linger for up to 6 hours while sessions drain
 - `service-web`: 1 replica
   - Web pages and `/stream` proxy
-  - Current Terraform/live `LATE_AUDIO_URL`: `http://icecast-sv:8000`
+  - Current live `audio_base_url` (prod profile, late-web/src/config.rs): `http://icecast-sv:8000`
   - Public browser users still reach `/stream` through `https://late.sh/stream`; only the web pod's upstream fetch is internal
 - `icecast`: 1 replica
   - Current Terraform/live client limit: 300
@@ -56,7 +56,7 @@ Internal endpoints:
 Applied in Terraform and live Kubernetes:
 
 - Raised `service-ssh` CPU limit from `4000m` to `8000m`
-- Set `LATE_MAX_CONNS_GLOBAL` to `1000`
+- Set `max_conns_global` to `1000` in the prod profile (late-ssh/src/config.rs)
 - Changed `late-web` audio upstream from public `https://audio.late.sh` to internal `http://icecast-sv:8000`
 - Raised Postgres memory limit from `2Gi` to `4Gi`
 - Raised Icecast client cap from `100` to `300`
@@ -93,6 +93,8 @@ Measured in prod 2026-07-24 (v0.41.0, single `service-ssh` pod, 60 live sessions
 - Stall guard never fired (`late_ssh_render_stall_*` has no series); 0 frame drops on this pod.
 
 Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 sessions on the current shared node and about 300 on a dedicated 8-core node** (memory ceiling is ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. The named knob if this reads expensive: move both the eq and the sway to the quarter edge (~3.8 fps), which roughly doubles the ceiling again. Not gating the render edge on audio state: the eq's *content* is now pairing-aware (`EqState`), but the `anim_half` edge itself must stay unconditional while the bonsai sway rides it.
+
+Input latency (moved here from the retired CONTEXT.md §8.5): keystrokes land in a per-session bounded queue and the render loop wakes on input, so ordinary keystrokes never wait on the app mutex before being queued. The remaining risk under high fan-out is that `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`, so a slow tick delays that session's input-to-frame path; the input queue closed the cadence gap, not the lock-held-across-tick stall. Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 ### 2. `service-ssh` cannot safely scale horizontally yet
 
@@ -149,7 +151,7 @@ Separate open bug, seen 2026-07-24: the `service-web -> icecast-sv:8000` upstrea
 
 ### 5. Postgres connections are bounded but not pooled externally
 
-App pools are currently per process through deadpool, with `LATE_DB_POOL_SIZE=16` for both `service-ssh` and `service-web`.
+App pools are currently per process through deadpool, with `max_pool_size: 16` in both prod profiles (`late-ssh/src/config.rs`, `late-web/src/config.rs`).
 
 Postgres `max_connections=100`. This is acceptable while replicas are low, but scaling app replicas will multiply pools. PgBouncer should be introduced before many app replicas.
 
@@ -397,6 +399,7 @@ Source: `late-core/src/models/chat_room.rs`
 
 - Current shape: public topic room discovery uses lateral counts for member count and message count; representative runtime about 300-475 ms, dominated by repeated counts over `chat_room_members`.
 - Confirmed 2026-07-26 at 5.6% of all DB execution time, 510 ms mean over 5,688 calls, plus a 969 ms variant. Now the **largest remaining single query** after the chat-poll fixes, and unlike those it is on demand, so the cost lands as user-facing latency: about half a second to open Discover.
+- Under concurrent fan-out this query can pin the CNPG primary at its CPU limit while the node still has spare CPU (observed 2026-05-14: `pg_stat_activity` showed `service-ssh` running 8 concurrent sessions of the pre-lateral shape, which joined `chat_rooms -> chat_room_members -> chat_messages` with `COUNT(DISTINCT ...)` over an estimated ~4.48M joined rows; that shape drove the rewrite to lateral aggregates). Fix query shape first; raising the CNPG CPU limit from `1` to `2` is headroom only. Triage caveat from the same check: repeated `idx_users_username_lower` duplicate-key errors from profile updates are log noise, not the CPU source, unless active queries point there.
 - Options unchanged: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation with a better index.
 
 ## Immediate Next Work
@@ -413,7 +416,7 @@ Still open: the other eight queries in the bundle, which are individually cheap 
 
 ### 2. Gate the leaderboard refresh loop
 
-Done 2026-07-26 (`app/hub/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
+Done 2026-07-26 (`app/hub/svc.rs`; the service has since moved to `app/leaderboard/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
 
 ### 3. Add a second node; give `service-ssh` a full node to itself
 

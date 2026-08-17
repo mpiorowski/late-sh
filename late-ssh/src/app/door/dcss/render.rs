@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false);
+        draw_landing(frame, area, false, false);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -36,8 +36,15 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 
 /// DCSS landing copy with the classic one-line Launch block, used by the Games
 /// hub when DCSS is selected (the hub has no per-session door state).
-pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool) {
-    let action_line = if enabled {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool) {
+    let action_line = if live {
+        landing::action(
+            ">",
+            "Enter",
+            "resume your game in progress",
+            theme::SUCCESS(),
+        )
+    } else if enabled {
         landing::action(">", "Enter", "descend for the Orb of Zot", theme::SUCCESS())
     } else {
         Line::from(Span::styled(
@@ -97,10 +104,12 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
     ]);
     lines.extend(launch);
     lines.extend([
+        landing::hint("c", "customize your init.txt (paste box)", 8),
         Line::from(""),
         landing::heading("Once Inside"),
         landing::hint("? or F1", "crawl's own in-game help menu", 8),
         landing::hint("S", "save and continue another night", 8),
+        landing::hint("`", "step out to chat; the game keeps running", 8),
         landing::hint("Ctrl-Q", "abandon the character for good", 8),
         Line::from(""),
         Line::from(Span::styled(

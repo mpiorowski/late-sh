@@ -520,7 +520,9 @@ fn rendered_lines(
                         .flatten();
                     let mut style = Style::default().fg(color_for_cell(kind, state));
                     if selected {
-                        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+                        style = style
+                            .patch(theme::selection_style())
+                            .add_modifier(Modifier::BOLD);
                     }
                     Span::styled(ch.to_string(), style)
                 })

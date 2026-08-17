@@ -84,31 +84,111 @@ fn walking_moves_and_respects_walls() {
 }
 
 #[test]
-fn tutorial_runs_welcome_to_done() {
+fn tutorial_tours_every_page_then_comes_home() {
     let mut state = state_with_lobby(true);
     assert_eq!(state.tutorial, Tutorial::Pending);
+    assert_eq!(state.tutorial_forced_step(), None);
     state.enter_screen();
     assert_eq!(state.tutorial, Tutorial::Welcome);
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
 
-    state.walk(0, -1);
-    assert_eq!(state.tutorial, Tutorial::GoToBar);
+    // Every stop forces exactly one input: a page digit whose screen
+    // advances the route, or Enter on the two mid-route interlude boxes
+    // (the music on Home, the lobby on The Arcade).
+    for (step, next_stage) in [
+        (TourStep::Page(b'1', Screen::Dashboard), Tutorial::VisitChat),
+        (TourStep::Enter, Tutorial::VisitMusic),
+        (TourStep::Page(b'2', Screen::Arcade), Tutorial::VisitArcade),
+        (TourStep::Enter, Tutorial::VisitLobby),
+        (TourStep::Page(b'3', Screen::Games), Tutorial::VisitGames),
+        (
+            TourStep::Page(b'4', Screen::Artboard),
+            Tutorial::VisitArtboard,
+        ),
+        (
+            TourStep::Page(b'5', Screen::Profiles),
+            Tutorial::VisitDirectory,
+        ),
+        (
+            TourStep::Page(b'6', Screen::Leaderboard),
+            Tutorial::VisitLeaderboard,
+        ),
+        (
+            TourStep::Page(b'0', Screen::Clubhouse),
+            Tutorial::Homecoming,
+        ),
+    ] {
+        assert_eq!(state.tutorial_forced_step(), Some(step));
+        match step {
+            TourStep::Page(_, screen) => {
+                // A wrong page never advances a stop; the route waits for
+                // its page.
+                let wrong = if screen == Screen::Games {
+                    Screen::Artboard
+                } else {
+                    Screen::Games
+                };
+                state.tutorial_screen_entered(wrong);
+                state.tutorial_screen_entered(screen);
+            }
+            // The interludes advance without finishing the tour.
+            TourStep::Enter => assert!(!state.tutorial_advance()),
+        }
+        assert_eq!(state.tutorial, next_stage);
+    }
 
-    // Not at the bar yet: no transition.
-    assert!(!state.tutorial_reached_bar());
-
-    // Teleport next to the counter (test-only shortcut via the lobby).
-    state.player_x = 28;
-    state.player_y = 12;
-    assert!(state.tutorial_reached_bar());
-    assert_eq!(state.tutorial, Tutorial::BarLesson);
-    // Only fires once.
-    assert!(!state.tutorial_reached_bar());
-
-    assert!(!state.tutorial_advance());
-    assert_eq!(state.tutorial, Tutorial::SendOff);
+    // The homecoming box forces Enter, and it finishes the tour.
+    assert_eq!(state.tutorial_forced_step(), Some(TourStep::Enter));
     assert!(state.tutorial_advance());
     assert_eq!(state.tutorial, Tutorial::Done);
+    assert_eq!(state.tutorial_forced_step(), None);
+}
+
+#[test]
+fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
+    let mut state = state_with_lobby(true);
+    state.enter_screen();
+    // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
+    assert!(!state.welcome_pour_due());
+    assert!(!state.bar_glow());
+    state.tutorial_screen_entered(Screen::Dashboard);
+    assert!(!state.tutorial_advance()); // the music interlude
+    state.tutorial_screen_entered(Screen::Arcade);
+    assert!(!state.tutorial_advance()); // the lobby interlude
+    for screen in [
+        Screen::Games,
+        Screen::Artboard,
+        Screen::Profiles,
+        Screen::Leaderboard,
+        Screen::Clubhouse,
+    ] {
+        state.tutorial_screen_entered(screen);
+    }
+    assert_eq!(state.tutorial, Tutorial::Homecoming);
+    assert!(state.bar_glow());
+    assert!(state.tutorial_advance());
+    // Done, pour unclaimed: the glow keeps pointing at the treasure.
+    assert!(state.bar_glow());
+
+    // Teleport to the edge of the bar's approach apron (test-only
+    // shortcut): three rows off the counter is close enough to pour.
+    state.player_x = 28;
+    state.player_y = 15;
+    assert!(state.welcome_pour_due());
+    // Only fires once per session, and claiming kills the glow.
+    assert!(!state.welcome_pour_due());
+    assert!(!state.bar_glow());
+}
+
+#[test]
+fn returning_users_never_pour_or_glow() {
+    let mut state = state_with_lobby(false);
+    state.enter_screen();
+    assert_eq!(state.tutorial, Tutorial::Off);
+    state.player_x = 28;
+    state.player_y = 12;
+    assert!(!state.welcome_pour_due());
+    assert!(!state.bar_glow());
 }
 
 const BARTENDER: u128 = 9;

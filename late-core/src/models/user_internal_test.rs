@@ -75,6 +75,25 @@ fn chat_profile_award_badges_prefer_ascension_over_amulet() {
 }
 
 #[test]
+fn chat_profile_award_badges_prefer_brogue_mastery_over_escape() {
+    // A mastery implies the escape, so the chat label collapses BRE into BRM.
+    assert_eq!(
+        chat_profile_award_badges(Some("BRE BRM".to_string())).as_deref(),
+        Some("BRM")
+    );
+    // The escape alone stands on its own, and other games' pairs collapse
+    // independently.
+    assert_eq!(
+        chat_profile_award_badges(Some("AW1 BRE".to_string())).as_deref(),
+        Some("AW1 BRE")
+    );
+    assert_eq!(
+        chat_profile_award_badges(Some("NHA BRE BRM DCO".to_string())).as_deref(),
+        Some("NHA BRM DCO")
+    );
+}
+
+#[test]
 fn extract_bio_missing_returns_empty() {
     let settings = json!({});
     assert_eq!(extract_bio(&settings), "");
@@ -244,4 +263,30 @@ fn sanitize_username_input_collapses_repeated_separators() {
 fn truncate_to_boundary_respects_char_boundaries() {
     assert_eq!(truncate_to_boundary("abcdef", 4), "abcd");
     assert_eq!(truncate_to_boundary("żółw", 3), "żół");
+}
+
+#[test]
+fn interaction_mode_absent_signals_first_run() {
+    // No key = never chosen = show the onboarding prompt.
+    assert_eq!(extract_interaction_mode(&json!({})), None);
+}
+
+#[test]
+fn interaction_mode_round_trips_and_gates_the_mouse() {
+    for (stored, mode, mouse) in [
+        ("keyboard", InteractionMode::Keyboard, false),
+        ("mouse", InteractionMode::Mouse, true),
+        ("hybrid", InteractionMode::Hybrid, true),
+    ] {
+        let settings = json!({ "interaction_mode": stored });
+        assert_eq!(extract_interaction_mode(&settings), Some(mode));
+        assert_eq!(mode.as_str(), stored);
+        assert_eq!(mode.mouse_enabled(), mouse, "mouse gate for {stored}");
+    }
+    // Unknown / garbage falls back to the safe both-work default.
+    assert_eq!(
+        extract_interaction_mode(&json!({ "interaction_mode": "wat" })),
+        Some(InteractionMode::Hybrid)
+    );
+    assert!(InteractionMode::default().mouse_enabled());
 }

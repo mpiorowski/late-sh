@@ -1,5 +1,4 @@
 use super::*;
-use std::str::FromStr;
 
 #[test]
 fn reject_publickey_only_advertises_only_publickey() {
@@ -16,31 +15,6 @@ fn reject_publickey_only_advertises_only_publickey() {
         }
         _ => panic!("expected reject auth"),
     }
-}
-
-#[test]
-fn parse_proxy_v1_tcp4_source_addr() {
-    let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 54231 2222\r\n";
-    let addr = parse_proxy_v1_addr(line)
-        .expect("parse")
-        .expect("source addr");
-    assert_eq!(
-        addr,
-        SocketAddr::from_str("203.0.113.10:54231").expect("socket addr")
-    );
-}
-
-#[test]
-fn parse_proxy_v1_unknown_returns_none() {
-    let line = b"PROXY UNKNOWN\r\n";
-    let addr = parse_proxy_v1_addr(line).expect("parse");
-    assert!(addr.is_none());
-}
-
-#[test]
-fn parse_proxy_v1_rejects_malformed_header() {
-    let line = b"PROXY TCP4 203.0.113.10 10.42.0.76 only-one-port\r\n";
-    assert!(parse_proxy_v1_addr(line).is_err());
 }
 
 #[test]

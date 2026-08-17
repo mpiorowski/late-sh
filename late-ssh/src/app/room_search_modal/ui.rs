@@ -144,7 +144,8 @@ fn draw_results(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let rows = result_rows(&items);
     let start = result_view_start(&rows, selected, height);
-    for row in rows.iter().skip(start).take(height) {
+    state.clear_item_rows();
+    for (offset, row) in rows.iter().skip(start).take(height).enumerate() {
         match *row {
             ResultRow::Header(favorite) => {
                 let label = if favorite { "favorites" } else { "rooms" };
@@ -156,6 +157,7 @@ fn draw_results(
                 )));
             }
             ResultRow::Item(index) => {
+                state.record_item_row(area.y + offset as u16, index);
                 lines.push(result_item_line(&items[index], index == selected, width));
             }
         }
@@ -205,7 +207,7 @@ fn result_item_line(
     let style = if active {
         Style::default()
             .fg(theme::AMBER_GLOW())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme::TEXT())
@@ -213,7 +215,7 @@ fn result_item_line(
     let meta_style = if active {
         Style::default()
             .fg(theme::TEXT_BRIGHT())
-            .bg(theme::BG_SELECTION())
+            .patch(theme::selection_style())
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
@@ -225,7 +227,7 @@ fn result_item_line(
     let unread_style = if item.unread_count > 0 {
         let base = Style::default().fg(theme::AMBER_GLOW());
         if active {
-            base.bg(theme::BG_SELECTION())
+            base.patch(theme::selection_style())
         } else {
             base
         }
@@ -341,7 +343,7 @@ fn message_hit_line(
 ) -> Line<'static> {
     let marker = if active { ">" } else { " " };
     let base_bg = if active {
-        Style::default().bg(theme::BG_SELECTION())
+        Style::default().patch(theme::selection_style())
     } else {
         Style::default()
     };

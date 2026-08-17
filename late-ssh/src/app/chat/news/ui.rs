@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
@@ -71,16 +71,10 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                 .map(|last_read_at| article.created > last_read_at)
                 .unwrap_or(true);
 
-            let bg_color = if article_idx == selected_index {
-                theme::BG_SELECTION()
-            } else {
-                Color::Reset
-            };
-
             let item_block = Block::default()
                 .borders(Borders::BOTTOM)
                 .border_style(Style::default().fg(theme::BORDER()))
-                .style(Style::default().bg(bg_color));
+                .style(theme::row_style(article_idx == selected_index));
 
             let content_area = item_block.inner(item_area);
             frame.render_widget(item_block, item_area);

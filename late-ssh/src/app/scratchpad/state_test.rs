@@ -146,3 +146,20 @@ fn cycle_language_is_visible_to_the_partner_without_a_separate_sync_step() {
         "both sides share one buffer, so bob sees alice's cycle immediately"
     );
 }
+
+#[test]
+fn a_click_moves_the_caret_to_that_cell() {
+    use ratatui::layout::Rect;
+    let (mut alice, _bob) = paired(Uuid::new_v4(), Uuid::new_v4());
+    alice.editor.insert_str("abc\ndefgh\nij");
+    // Editor drawn at the origin with no scroll.
+    alice.record_viewport(Rect::new(0, 0, 20, 10), 0, 0);
+    assert!(alice.click_to_cursor(3, 1), "click inside lands");
+    assert_eq!(alice.editor.cursor(), (1, 3), "row 1, col 3");
+    // A click past the content area is ignored.
+    assert!(!alice.click_to_cursor(50, 50));
+    // With a vertical scroll, the click row is offset by it.
+    alice.record_viewport(Rect::new(0, 0, 20, 10), 1, 0);
+    assert!(alice.click_to_cursor(0, 0));
+    assert_eq!(alice.editor.cursor().0, 1, "vscroll shifts the clicked row");
+}

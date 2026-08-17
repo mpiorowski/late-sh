@@ -5,11 +5,34 @@
 //   - Movement: w/a/s/d and arrows (N/S/E/W); < or , up and
 //     > or . down (also shown as a hint in-game when a room has a vertical exit).
 //   - Combat: space/x attack; 1-9 use the ability in that action-bar slot (0 is
-//     slot 10; deeper rosters cast from the Abilities panel); z flee.
+//     slot 10; deeper rosters cast from the Abilities panel); Q quaffs the best
+//     healing potion without leaving the view; z flee.
+//   - Mounts: G mounts/dismounts a rideable companion (one step then strides
+//     several rooms; the best beasts skip 5). Combat puts you back on foot.
+//   - Companion care: ~ feeds and tends your companion from anywhere, no
+//     stable needed - reviving one that went down mid-fight. If a wild
+//     adoptable creature shares the room and your own pet doesn't need
+//     tending, ~ feeds it instead (Genesys) - five days running wins it
+//     over as a stray, kept on top of any pet you already have.
+//   - Villagers (Genesys): press o to talk to one and hear their line back
+//     (sometimes plain colour, sometimes a real clue). Always announced up
+//     front in the room description, never hidden behind a menu.
+//   - Travel: r speaks the word of recall (free, warps to Embergate);
+//     : fixes a personal waypoint here; / warps to it from anywhere (a gold
+//     cost) - the far run back from the Frontier's deep levels doesn't have
+//     to be walked every time.
 //   - Death: while a corpse, r (or Enter) releases to the temple; g casts the
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
+//   - Map: m cycles overhead field (pan around) -> land graph (which country
+//     touches which, and how deep each one runs) -> closed; x marks the crosshair room as
+//     where you're headed, and the room panel then names the next exit to
+//     take until you get there; M toggles RPG mode (the live walk-around
+//     field beside the room) on/off - off is a plain text MUD.
+//   - ! opens the Leaderboard: top adventurers currently online by level,
+//     pvp kills, and gold (read-only). Not `?`, which late.sh reserves
+//     globally for a cross-door help overlay.
 //   - Panels: c character, v abilities, o look, b shop, t inventory ("things"),
 //     p the Stable (companion vendor) where one stands. In the Stable, Enter
 //     buys the selected beast and x feeds/tends the one you have. q opens the
@@ -19,6 +42,10 @@
 //     In a list panel, 1-9 select a row, Enter activates (equip/use/buy),
 //     w/s move the cursor, x sells (inventory). List panels auto-scroll to
 //     follow the cursor; [ / ] scroll the cursor-less text panels.
+//   - Chat: ' opens the say line, sent to the room by default. Lead the
+//     message with "/z " (or "/zone ") for everyone in the same named zone,
+//     or "/w " (or "/world ") for every adventurer in Lateania right now.
+//     Always world-local - none of it reaches late.sh's own chat.
 //   - Esc leaves the world for the Games hub.
 //
 // A full typed command prompt needs an input-capture mode; deferred.
@@ -34,6 +61,21 @@ pub enum InputAction {
     Ignored,
     Handled,
     Leave,
+    /// Backtick: leave the world (autosave, same as a confirmed Esc) and hop
+    /// onward on the backtick workspace cycle, arming the recency window
+    /// that keeps Lateania on the cycle for a quick rejoin.
+    Detach,
+}
+
+/// Route a mouse event to the combat action bar. A left click on a chip runs the
+/// same action its key would; everything else (other buttons, scroll, clicks off
+/// a chip) is ignored so the keyboard-driven view is untouched.
+pub fn handle_mouse(state: &mut State, mouse: crate::app::input::MouseEvent) -> bool {
+    use crate::app::input::{MouseButton, MouseEventKind};
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
+        return false;
+    }
+    state.click_combat(mouse.x, mouse.y)
 }
 
 pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
@@ -50,9 +92,27 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
         }
         return InputAction::Handled;
     }
-    // Lateania reserves Esc for returning to its landing page.
+    // Lateania reserves Esc for returning to its landing page, but a single
+    // stray Esc must never instantly drop a player out of a persistent
+    // world: the first press only arms a short confirmation window (shown
+    // in the title bar); a confirming second Esc within that window is what
+    // actually leaves. `screen::handle_active_lateania_key` must route every
+    // byte through this function (including Esc) for both the chat-cancel
+    // check above and this confirm gate to ever run.
     if byte == 0x1B {
-        return InputAction::Leave;
+        if state.confirm_leave() {
+            return InputAction::Leave;
+        }
+        state.arm_leave_confirm();
+        return InputAction::Handled;
+    }
+    // Backtick detaches like the roguelike doors: a single press, no confirm
+    // gate, because it hops between games rather than quitting, and the leave
+    // it performs is the same autosaved leave Esc-Esc already allows (mid
+    // combat included). Runs after the chat capture above so ` still types
+    // into a say line.
+    if byte == b'`' {
+        return InputAction::Detach;
     }
 
     let view = state.view();
@@ -122,9 +182,11 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Taming
             | Panel::Housing
             | Panel::Portal
+            | Panel::Board
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -204,6 +266,22 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.recenter_map();
                 return InputAction::Handled;
             }
+            b'x' | b'X' => {
+                // Mark the crosshair room as where you're headed. The room
+                // panel then carries the next exit to take until you arrive,
+                // which is the one thing the picture can't say: a zone
+                // boundary is a jump in the coordinate field, not a direction.
+                state.toggle_map_dest();
+                return InputAction::Handled;
+            }
+            b'q' => {
+                // Toggle the active-quest overlay (`!` markers and border
+                // arrows for quest targets). Captured here so a taming room
+                // can't swallow the key while the map is open; `Q` stays
+                // quaff, map open or not.
+                state.toggle_map_quests();
+                return InputAction::Handled;
+            }
             _ => {}
         }
     }
@@ -243,11 +321,25 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'q' | b'Q' => {
+        b'q' => {
             // The Animal Taming panel opens where a tameable wild beast roams.
             if view.taming.is_some() {
                 state.open_taming();
             }
+            InputAction::Handled
+        }
+        b'Q' => {
+            // Quaff the best healing potion in one keystroke - meant for combat,
+            // so you never leave the view (and lose sight of the health bars)
+            // just to drink. Works anywhere; a beast-taming room still tames on
+            // lowercase `q`.
+            state.quaff();
+            InputAction::Handled
+        }
+        b'~' => {
+            // Feed and tend your companion, wherever you stand - no more
+            // walking a downed pet all the way back to a capital's Stable.
+            state.feed_pet();
             InputAction::Handled
         }
         b'i' | b'I' => {
@@ -258,9 +350,16 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             }
             InputAction::Handled
         }
-        b'm' | b'M' => {
-            // Toggle the whole-world atlas.
-            state.toggle_panel(Panel::Map);
+        b'm' => {
+            // Cycle the map: the pan-around overhead field, then the land graph
+            // (every country and the roads between them), then closed.
+            state.cycle_map();
+            InputAction::Handled
+        }
+        b'M' => {
+            // Toggle RPG mode: the live walk-around field beside the room, or a
+            // plain text MUD when off.
+            state.toggle_rpg_mode();
             InputAction::Handled
         }
         b'o' | b'O' => {
@@ -280,6 +379,15 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.toggle_panel(Panel::Quests);
             InputAction::Handled
         }
+        b'!' => {
+            // Leaderboard: top adventurers currently online (read-only).
+            // Not `?` - late.sh reserves that globally across every door
+            // game for a cross-door help overlay
+            // (`app::input::door_games_allows_global_help`), so a Lateania
+            // binding on `?` is intercepted before this function ever runs.
+            state.toggle_panel(Panel::Leaderboard);
+            InputAction::Handled
+        }
         b';' => {
             // Retreat to the nearest safe haven (out of combat only) - the
             // way back to a maze zone's gate without walking it.
@@ -291,14 +399,32 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.recall();
             InputAction::Handled
         }
+        b':' => {
+            // Fix a personal waypoint here - the far run between Embergate and
+            // the Frontier's deep levels for healing/resurrecting shouldn't be
+            // a full re-walk every time.
+            state.set_waypoint();
+            InputAction::Handled
+        }
+        b'/' => {
+            // Warp to the marked waypoint, from anywhere (a gold cost, unlike
+            // the free word of recall).
+            state.warp_to_waypoint();
+            InputAction::Handled
+        }
         b'f' | b'F' => {
             // Toggle auto-following another adventurer in the room.
             state.follow();
             InputAction::Handled
         }
-        b'g' | b'G' => {
+        b'g' => {
             // Resurrection rite: revive the nearest fallen adventurer here.
             state.resurrect();
+            InputAction::Handled
+        }
+        b'G' => {
+            // Giddy-up: mount or dismount a rideable companion (Wildbound).
+            state.toggle_mount();
             InputAction::Handled
         }
         b'e' | b'E' => {
@@ -319,8 +445,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'\'' => {
-            // Open the local chat line (say to the room). World-local; does not
-            // leak into late.sh.
+            // Open the chat line: says to the room by default; lead with
+            // "/z " (zone) or "/w " (world) to reach further. World-local
+            // either way; never leaks into late.sh.
             state.open_chat();
             InputAction::Handled
         }
@@ -391,7 +518,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        // Manual scroll for cursor-less text panels (character/abilities/quests).
+        // Manual scroll for cursor-less text panels (character/leaderboard).
         // List panels auto-follow their cursor, so these are no-ops there.
         b'[' => {
             state.scroll_text_up();
@@ -446,9 +573,11 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Taming
             | Panel::Housing
             | Panel::Portal
+            | Panel::Board
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
     match key {
         b'A' => {

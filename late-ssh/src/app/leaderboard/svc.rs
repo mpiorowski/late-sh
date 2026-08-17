@@ -1,0 +1,184 @@
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use anyhow::Result;
+use late_core::db::Db;
+use late_core::models::leaderboard::{LeaderboardData, fetch_leaderboard_data};
+use late_core::models::profile_award::snapshot_previous_month_profile_awards;
+use tokio::sync::{Notify, watch};
+
+/// How often the leaderboard is rebuilt from the DB while at least one session
+/// is watching it.
+///
+/// `fetch_leaderboard_data` is thirteen aggregate queries (several UNION ALL
+/// over every game's win/score tables; the all-time windows read O(players)
+/// sources, the `daily_win_totals` rollup, the legacy best-score tables, and
+/// the one-row-per-player `mud_characters` blobs, so no query scans full
+/// history), and it is a timer, not a reaction to
+/// anything a user did. At the old 30 s cadence a previous shape of this pass
+/// was 13% of all database execution time in prod (2026-07-26
+/// `pg_stat_statements` ranking, SCALE.md). The data is daily and monthly
+/// standings, so minutes of staleness are invisible. The one
+/// latency-sensitive consumer, the per-session chip balance read in
+/// `app/tick.rs`, does not wait for this loop: chip mutations notify
+/// `chip_user_changed` and `ShopService` pushes the new balance per user.
+///
+/// It doubles as the staleness bound for the connect-triggered refresh in
+/// `start_refresh_loop`: a session that connects to a snapshot older than this
+/// buys one pass, so widening the interval also widens what a returning user is
+/// willing to look at before the server rebuilds it.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+
+#[derive(Clone)]
+pub struct LeaderboardService {
+    db: Db,
+    data_tx: Arc<watch::Sender<Arc<LeaderboardData>>>,
+    /// Woken by `subscribe`, so the refresh loop can top up a snapshot that
+    /// aged out while nobody was connected. See `start_refresh_loop`.
+    connected: Arc<Notify>,
+    /// When the last successful refresh published, or `None` before the first
+    /// one. Read by `snapshot_age`; never held across an await.
+    last_refresh: Arc<Mutex<Option<Instant>>>,
+}
+
+/// What woke the refresh loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wake {
+    Timer,
+    Connect,
+}
+
+/// The refresh loop's entire decision, extracted so it is testable without a
+/// runtime, a DB, or a clock.
+///
+/// `age` is how long ago the last successful refresh published, `None` before
+/// the first one.
+fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> bool {
+    // A refresh nobody is watching is thirteen aggregate queries published to
+    // nobody, whatever woke us.
+    if !has_subscribers {
+        return false;
+    }
+    match wake {
+        Wake::Timer => true,
+        // A connect only earns a pass when the snapshot it just seeded from has
+        // aged out. Without this bound every session connecting to a busy server
+        // would run the pass, which is exactly the timer cost the 300s interval
+        // was chosen to cut.
+        Wake::Connect => age.is_none_or(|age| age >= REFRESH_INTERVAL),
+    }
+}
+
+impl LeaderboardService {
+    pub fn new(db: Db) -> Self {
+        let (tx, _) = watch::channel(Arc::new(LeaderboardData::default()));
+        Self {
+            db,
+            data_tx: Arc::new(tx),
+            connected: Arc::new(Notify::new()),
+            last_refresh: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Hands a session the current snapshot and wakes the refresh loop.
+    ///
+    /// The wake matters because the loop skips its pass whenever nobody is
+    /// subscribed: after a quiet stretch the published snapshot is as old as the
+    /// last session's departure, and the caller seeds from it immediately (see
+    /// `App::new`). `should_refresh` re-checks the age before spending a pass,
+    /// so a connect storm into a warm process costs one wake each, zero queries.
+    pub fn subscribe(&self) -> watch::Receiver<Arc<LeaderboardData>> {
+        let rx = self.data_tx.subscribe();
+        self.connected.notify_one();
+        rx
+    }
+
+    /// How long ago the last successful refresh published, `None` before the
+    /// first one.
+    fn snapshot_age(&self) -> Option<Duration> {
+        self.last_refresh
+            .lock()
+            .expect("last_refresh poisoned")
+            .map(|at| at.elapsed())
+    }
+
+    /// Whether any session is currently watching the leaderboard. Every SSH
+    /// session subscribes at bootstrap, so this is "is anyone connected". A
+    /// refresh with no subscribers is thirteen aggregate queries published to
+    /// nobody, so the loop skips it.
+    fn has_subscribers(&self) -> bool {
+        self.data_tx.receiver_count() > 0
+    }
+
+    pub async fn refresh(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let data = fetch_leaderboard_data(&client).await?;
+        self.publish(data);
+        *self.last_refresh.lock().expect("last_refresh poisoned") = Some(Instant::now());
+        Ok(())
+    }
+
+    fn publish(&self, data: LeaderboardData) {
+        // The initial refresh runs before any SSH session may have subscribed.
+        // `send` discards the value when there are no receivers; `send_replace`
+        // retains it so the first session can seed from the warm snapshot.
+        self.data_tx.send_replace(Arc::new(data));
+    }
+
+    pub fn start_refresh_loop(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            if let Err(e) = self.refresh().await {
+                tracing::error!(error = ?e, "initial leaderboard refresh failed");
+            }
+            let mut interval = tokio::time::interval(REFRESH_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+            loop {
+                // Two ways to wake: the timer, or a session connecting. Both
+                // `Interval::tick` and `Notify::notified` are cancel-safe, so
+                // the losing branch loses nothing.
+                let wake = tokio::select! {
+                    _ = interval.tick() => Wake::Timer,
+                    _ = self.connected.notified() => Wake::Connect,
+                };
+                if !should_refresh(wake, self.has_subscribers(), self.snapshot_age()) {
+                    tracing::debug!(?wake, "skipping leaderboard refresh");
+                    continue;
+                }
+                if let Err(e) = self.refresh().await {
+                    tracing::warn!(error = ?e, "leaderboard refresh failed");
+                }
+            }
+        })
+    }
+
+    pub fn start_profile_award_snapshot_loop(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            if let Err(e) = self.snapshot_profile_awards().await {
+                tracing::error!(error = ?e, "initial profile award snapshot failed");
+            }
+
+            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(e) = self.snapshot_profile_awards().await {
+                    tracing::warn!(error = ?e, "profile award snapshot failed");
+                }
+            }
+        })
+    }
+
+    async fn snapshot_profile_awards(&self) -> Result<()> {
+        let client = self.db.get().await?;
+        let changed = snapshot_previous_month_profile_awards(&client).await?;
+        tracing::debug!(changed, "profile award snapshot refreshed");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

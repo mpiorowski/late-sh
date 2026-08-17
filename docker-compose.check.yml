@@ -2,8 +2,8 @@ services:
   postgres:
     image: postgres:18
     # Durability off: this check DB is recreated and torn down (down -v) every
-    # `make check` / `checkci` run, so its data never needs to survive a crash.
-    # Skipping per-commit WAL fsync roughly halves warm `make checkci` wall time.
+    # `make check` run, so its data never needs to survive a crash.
+    # Skipping per-commit WAL fsync roughly halves warm `make check` wall time.
     # Mirrors the CI test DB (.github/workflows/ci.yml). max_connections headroom
     # for parallel nextest test databases.
     command:

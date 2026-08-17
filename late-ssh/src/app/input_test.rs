@@ -57,7 +57,7 @@ fn blocks_arrow_when_chat_is_composing_on_dashboard() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert!(ctx.blocks_arrow_sequence());
 }
@@ -72,7 +72,7 @@ fn blocks_arrow_when_chat_is_composing_on_chat_screen() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert!(ctx.blocks_arrow_sequence());
 }
@@ -87,7 +87,7 @@ fn allows_arrow_when_idle() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert!(!ctx.blocks_arrow_sequence());
 }
@@ -106,7 +106,7 @@ fn topbar_screen_hit_test_maps_screen_digits() {
     assert_eq!(topbar_screen_hit_test(16, 0), Some(Screen::Arcade));
     assert_eq!(topbar_screen_hit_test(18, 0), Some(Screen::Games));
     assert_eq!(topbar_screen_hit_test(20, 0), Some(Screen::Artboard));
-    assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Pinstar));
+    assert_eq!(topbar_screen_hit_test(22, 0), Some(Screen::Profiles));
     assert_eq!(topbar_screen_hit_test(24, 0), Some(Screen::Leaderboard));
     // The door games are no longer top-level tabs; the column past the last
     // digit and the gaps between digits map to nothing.
@@ -317,7 +317,7 @@ fn paste_target_prefers_chat_composer() {
         news_composing: true,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ChatComposer);
 }
@@ -332,7 +332,7 @@ fn paste_target_routes_to_news_composer() {
         news_composing: true,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert_eq!(paste_target(ctx), PasteTarget::NewsComposer);
 }
@@ -347,7 +347,7 @@ fn paste_target_routes_to_showcase_composer() {
         news_composing: false,
         showcase_composing: true,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert_eq!(paste_target(ctx), PasteTarget::ShowcaseComposer);
 }
@@ -663,8 +663,8 @@ fn room_section_suffixes_map_plain_keys_to_sections() {
     assert_eq!(room_section_suffix(b'f'), Some(RoomSection::Favorites));
     assert_eq!(room_section_suffix(b'o'), Some(RoomSection::Core));
     assert_eq!(room_section_suffix(b'c'), Some(RoomSection::Channels));
-    assert_eq!(room_section_suffix(b'u'), Some(RoomSection::Updates));
     assert_eq!(room_section_suffix(b'd'), Some(RoomSection::Dms));
+    assert_eq!(room_section_suffix(b'u'), None);
     assert_eq!(room_section_suffix(b'x'), None);
 }
 
@@ -680,7 +680,7 @@ fn allows_arrow_when_autocomplete_active() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert!(!ctx.blocks_arrow_sequence());
 }
@@ -695,7 +695,7 @@ fn blocks_arrow_when_composing_without_autocomplete() {
         news_composing: false,
         showcase_composing: false,
         work_composing: false,
-        directory_tab: DirectoryTab::Profiles,
+        door_rc_modal: false,
     };
     assert!(ctx.blocks_arrow_sequence());
 }
@@ -862,4 +862,60 @@ fn chat_click_kind_double_click_followup_only_for_body_and_profile() {
     assert!(!ChatClickKind::StoreBadge.has_double_click_followup());
     assert!(!ChatClickKind::StoreFlag.has_double_click_followup());
     assert!(!ChatClickKind::Image { message_id: mid }.has_double_click_followup());
+}
+
+// A lone Esc in an active Lateania world belongs to the door, not to this
+// dispatcher. `dispatch_escape` runs before screen dispatch, so leaving here
+// unconditionally skipped both of the door's Esc rules: cancelling a chat line
+// you are composing, and requiring a confirming second press. Losing your place
+// in a persistent world to one stray keypress is the worst kind of accident.
+#[tokio::test]
+async fn one_escape_never_drops_you_out_of_an_active_lateania_world() {
+    let db = crate::test_helpers::new_test_db().await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), uuid::Uuid::now_v7(), "esc-confirm");
+    app.set_screen(Screen::Lateania);
+    app.enter_lateania();
+    assert!(app.lateania_state.is_some(), "the world is live");
+
+    dispatch_escape(&mut app);
+    assert!(
+        app.lateania_state.is_some(),
+        "one Esc must only arm the confirmation, never leave"
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Lateania,
+        "and it must not navigate away either"
+    );
+
+    dispatch_escape(&mut app);
+    assert!(
+        app.lateania_state.is_none(),
+        "a confirming second Esc does leave"
+    );
+    assert_eq!(
+        app.screen,
+        Screen::Games,
+        "and lands back on the hub that launched it"
+    );
+}
+
+// A backtick detach keeps Lateania on the workspace cycle for a few minutes,
+// but an explicit Esc-Esc leave means "I'm done": it must drop the door off
+// the cycle immediately, not leave a stale hop-back stop behind.
+#[tokio::test]
+async fn explicit_esc_esc_leave_drops_lateania_off_the_backtick_cycle() {
+    let db = crate::test_helpers::new_test_db().await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), uuid::Uuid::now_v7(), "esc-window");
+    app.set_screen(Screen::Lateania);
+    app.enter_lateania();
+    app.lateania_detached_at = Some(std::time::Instant::now());
+
+    dispatch_escape(&mut app);
+    dispatch_escape(&mut app);
+    assert!(app.lateania_state.is_none(), "esc esc leaves the world");
+    assert!(
+        !app.lateania_recently_active(),
+        "an explicit leave must clear the backtick recency window"
+    );
 }

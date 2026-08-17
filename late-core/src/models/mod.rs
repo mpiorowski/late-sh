@@ -14,9 +14,6 @@ mod article_feed_read_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
-pub mod birthday;
-#[cfg(test)]
-mod birthday_test;
 pub mod blackjack;
 pub mod bonsai;
 pub mod bonsai_decay_protection;
@@ -38,8 +35,15 @@ pub mod chat_slow_mode;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
+pub mod cyberspace_account;
 pub mod daily_match;
 pub mod darkroom_save;
+pub mod door_log_cursor;
+pub mod door_milestone;
+pub mod door_rc;
+#[cfg(test)]
+mod door_rc_test;
+pub mod door_run;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;
@@ -72,6 +76,9 @@ pub mod media_source;
 pub mod mention_feed_read;
 #[cfg(test)]
 mod mention_feed_read_test;
+pub mod message_translation;
+#[cfg(test)]
+mod message_translation_test;
 pub mod minesweeper;
 #[cfg(test)]
 mod minesweeper_test;
@@ -83,9 +90,6 @@ pub mod notification;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;
-pub mod pinstar_diagram;
-pub mod pinstar_diagram_member;
-pub mod pinstar_invite;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
@@ -107,6 +111,7 @@ pub mod showcase;
 pub mod showcase_feed_read;
 pub mod snake;
 pub mod solitaire;
+pub mod stream_ban;
 pub mod sudoku;
 pub mod tetris;
 pub mod traffic;

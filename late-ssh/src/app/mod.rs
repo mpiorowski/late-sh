@@ -29,7 +29,6 @@ pub mod lobby;
 pub(crate) mod mod_modal;
 pub(crate) mod notify;
 pub mod pet;
-pub mod pinstar;
 pub mod profile;
 pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
@@ -46,6 +45,7 @@ mod smoke_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;
+pub mod stream;
 pub mod tick;
 #[cfg(test)]
 mod tick_test;
@@ -54,5 +54,5 @@ pub mod voice;
 
 pub use hub::dailies::svc::QuestService;
 pub use hub::shop::svc::ShopService;
-pub use hub::svc::LeaderboardService;
+pub use leaderboard::svc::LeaderboardService;
 pub use ultimates::UltimateService;

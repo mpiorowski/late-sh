@@ -5,7 +5,7 @@ use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
 };
@@ -153,6 +153,8 @@ struct DrawContext<'a> {
     house: &'a crate::app::lobby::house::state::HouseState,
     house_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     games_hub_selected: usize,
+    /// The open rc config modal (game plus stored content), if any.
+    door_rc_modal: Option<(late_core::models::door_rc::DoorRcGame, Option<&'a str>)>,
     rebels_enabled: bool,
     nethack_enabled: bool,
     dcss_enabled: bool,
@@ -163,6 +165,12 @@ struct DrawContext<'a> {
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
     lateania_online: usize,
+    /// This account's character slots, for the character-select landing.
+    lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
+    lateania_slot_cursor: usize,
+    /// The backtick-detach recency window is live: Lateania counts as a
+    /// game in progress on the hub sidebar.
+    lateania_live: bool,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -189,9 +197,6 @@ struct DrawContext<'a> {
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
-    directory_tab: crate::app::directory::state::DirectoryTab,
-    pinstar_state: Option<&'a mut crate::app::pinstar::state::PinstarState>,
-    pinstar_browser: Option<&'a crate::app::pinstar::browser::DiagramBrowser>,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     /// Resolved 24h username-effect styles for clubhouse name labels.
@@ -237,6 +242,9 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
+    /// The pane state, not just its modal: the room picker checks its rows
+    /// against the pinned rail list, which lives on the pane.
+    cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
     show_bonsai_modal: bool,
     show_bonsai_v2_modal: bool,
     bonsai_care_state: &'a bonsai::care::BonsaiCareState,
@@ -244,6 +252,7 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
+    stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
@@ -296,6 +305,9 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Computed up front: the method borrows all of `self`, which would
+        // collide with the mutable field borrows the view structs hold below.
+        let lateania_live = self.lateania_recently_active();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_strip_pet_rect.set(None);
@@ -337,10 +349,13 @@ impl App {
         } else {
             self.profile_state.profile().enable_background_color
         };
-        let current_bg = if enabled {
-            Some(theme::BG_CANVAS())
-        } else {
-            None
+        // A `Color::Reset` canvas (the terminal-default theme) hands the
+        // background to the terminal on purpose, so it never drives OSC 11:
+        // painting it as a hex would pin the session to black and defeat both
+        // the user's own background and any transparency they run with.
+        let current_bg = match (enabled, theme::BG_CANVAS()) {
+            (false, _) | (true, Color::Reset) => None,
+            (true, canvas) => Some(canvas),
         };
 
         if current_bg != self.last_terminal_bg {
@@ -387,12 +402,7 @@ impl App {
                 .clone()
         };
         let shell_active_room = self.chat.selected_room_id;
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
+        let synthetic_selected = self.chat.synthetic_entry_selected();
         let home_selected = dashboard_home_selected(
             self.chat.lounge_room_id(),
             shell_active_room,
@@ -514,6 +524,7 @@ impl App {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
             messages: dashboard_messages,
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             rows_cache: &mut self.dashboard_chat_rows_cache,
@@ -529,6 +540,7 @@ impl App {
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             message_reactions,
             unread_marker: shell_active_room
                 .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
@@ -556,6 +568,8 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
             peer_pomodoros: &self.peer_pomodoros,
+            translations: &self.chat.translations,
+            translation_hidden: &self.chat.translation_hidden,
             active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             inline_images: &self.chat.inline_image_cache,
@@ -629,6 +643,8 @@ impl App {
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
         let selected_room_active_poll = if !self.chat.feeds_selected
             && !self.chat.news_selected
+            && !self.chat.cyberspace_selected
+            && self.chat.cyberspace_room_selected.is_none()
             && !self.chat.discover_selected
             && !self.chat.notifications_selected
             && !self.chat.showcase_selected
@@ -649,6 +665,12 @@ impl App {
             feeds_processing: self.chat.feeds.processing(),
             feeds_unread_count: self.chat.feeds.unread_count(),
             feeds_view,
+            cyberspace_selected: self.chat.cyberspace_selected,
+            cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace_unread_saturated: self.chat.cyberspace.unread_saturated(),
+            cyberspace_rooms: self.chat.cyberspace.pinned_rooms(),
+            cyberspace_room_selected: self.chat.cyberspace_room_selected,
+            cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
             news_view,
@@ -659,13 +681,16 @@ impl App {
             chat_ctx_epoch: self.chat.context_epoch(),
             app_ctx_epoch: self.chat_ctx_epoch,
             chat_rooms: self.chat.rooms.as_slice(),
+            live_streams: &self.chat.live_streams,
             overlay: self.chat.overlay(),
             image_modal,
             usernames: chat_usernames,
             countries: chat_countries,
             friend_user_ids: self.chat.friend_user_ids(),
             afk_user_ids: self.afk_user_ids.as_ref(),
+            live_user_ids: &self.chat.live_user_ids,
             ignored_user_ids: self.chat.ignored_user_ids(),
+            sticky_unread_dm: self.chat.sticky_unread_dm,
             message_reactions,
             inline_images: &self.chat.inline_image_cache,
             room_unread_markers: &self.chat.room_unread_markers,
@@ -699,6 +724,8 @@ impl App {
             drunk_levels: &self.drunk_levels,
             name_styles: &self.name_styles,
             peer_pomodoros: &self.peer_pomodoros,
+            translations: &self.chat.translations,
+            translation_hidden: &self.chat.translation_hidden,
             news_composer: self.chat.news.composer(),
             news_composing: self.chat.news.composing(),
             news_processing: self.chat.news.processing(),
@@ -744,6 +771,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -780,6 +808,8 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
                     peer_pomodoros: &self.peer_pomodoros,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -804,6 +834,7 @@ impl App {
                     countries: chat_countries,
                     friend_user_ids: self.chat.friend_user_ids(),
                     afk_user_ids: self.afk_user_ids.as_ref(),
+                    live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
@@ -840,6 +871,8 @@ impl App {
                     drunk_levels: &self.drunk_levels,
                     name_styles: &self.name_styles,
                     peer_pomodoros: &self.peer_pomodoros,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
                     keep_composer_focused: self.profile_state.profile().keep_composer_focused,
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -891,6 +924,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -908,6 +942,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
             || self.show_lobby_modal
@@ -930,9 +965,8 @@ impl App {
         }
 
         let terminal = &mut self.terminal;
-        let mut pinstar_state_taken = self.pinstar_state.take();
-        // Taken out (like pinstar_state) so the draw dispatch can hold &mut and
-        // call set_viewport with the exact content_area before blitting.
+        // Taken out so the draw dispatch can hold &mut and call set_viewport
+        // with the exact content_area before blitting.
         let mut rebels_state_taken = self.rebels_state.take();
         let mut nethack_state_taken = self.nethack_state.take();
         let mut dcss_state_taken = self.dcss_state.take();
@@ -941,11 +975,6 @@ impl App {
         let mut dopewars_state_taken = self.dopewars_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
 
-        let pinstar_browser = if screen == Screen::Pinstar {
-            Some(&self.pinstar_browser)
-        } else {
-            None
-        };
         let draw_result = terminal
             .draw(|frame| {
                 Self::draw(
@@ -963,6 +992,9 @@ impl App {
                         house: &self.house,
                         house_chat_view,
                         games_hub_selected: self.games_hub_state.selected(),
+                        door_rc_modal: self
+                            .door_rc_modal
+                            .map(|game| (game, self.door_rcs.get(&game).map(String::as_str))),
                         rebels_enabled: self.rebels_enabled,
                         nethack_enabled: self.nethack_enabled,
                         dcss_enabled: self.dcss_enabled,
@@ -972,6 +1004,9 @@ impl App {
                         codekeep_enabled: self.codekeep_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
+                        lateania_slots: self.lateania_service.character_slots(self.user_id),
+                        lateania_slot_cursor: self.lateania_slot_cursor,
+                        lateania_live,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -995,9 +1030,6 @@ impl App {
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
-                        directory_tab: self.directory_state.tab,
-                        pinstar_state: pinstar_state_taken.as_mut(),
-                        pinstar_browser,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         clubhouse_name_styles: &self.name_styles,
@@ -1036,6 +1068,11 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
+                        cyberspace_modal: self
+                            .chat
+                            .cyberspace
+                            .modal_active()
+                            .then_some(&self.chat.cyberspace),
                         show_bonsai_modal: self.show_bonsai_modal,
                         show_bonsai_v2_modal: self.show_bonsai_v2_modal,
                         bonsai_care_state: &self.bonsai_care_state,
@@ -1047,6 +1084,7 @@ impl App {
                         } else {
                             None
                         },
+                        stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
@@ -1097,7 +1135,6 @@ impl App {
             })
             .context("failed to draw frame");
 
-        self.pinstar_state = pinstar_state_taken;
         self.rebels_state = rebels_state_taken;
         self.nethack_state = nethack_state_taken;
         self.dcss_state = dcss_state_taken;
@@ -1332,6 +1369,24 @@ impl App {
                         dopewars_enabled: ctx.dopewars_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
+                        lateania_slots: ctx.lateania_slots.clone(),
+                        lateania_slot_cursor: ctx.lateania_slot_cursor,
+                        lateania_live: ctx.lateania_live,
+                        nethack_live: ctx
+                            .nethack_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        dcss_live: ctx
+                            .dcss_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        brogue_live: ctx
+                            .brogue_state
+                            .as_deref()
+                            .is_some_and(|state| state.is_running()),
+                        rc_modal: ctx.door_rc_modal.map(|(game, content)| {
+                            crate::app::door::hub::ui::RcModalView { game, content }
+                        }),
                     },
                 );
             }
@@ -1344,6 +1399,8 @@ impl App {
                         state: ctx.lateania_state,
                         usernames: ctx.usernames,
                         online: ctx.lateania_online,
+                        slots: &ctx.lateania_slots,
+                        slot_cursor: ctx.lateania_slot_cursor,
                     },
                     terminal_images,
                 );
@@ -1419,25 +1476,22 @@ impl App {
                     crate::app::door::codekeep::render::draw_page(frame, content_area, state);
                 }
             }
-            Screen::Pinstar => {
+            Screen::Profiles => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
                     content_area,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
-                        tab: ctx.directory_tab,
-                        profiles: ctx.chat_view.work_view,
                         work_state: ctx
                             .chat_view
                             .work_state
                             .expect("directory work state is always present"),
-                        projects: ctx.chat_view.showcase_view,
                         showcase_state: ctx
                             .chat_view
                             .showcase_state
                             .expect("directory showcase state is always present"),
-                        pinstar_state: ctx.pinstar_state,
-                        pinstar_browser: ctx.pinstar_browser,
+                        current_user_id: ctx.chat_view.work_view.current_user_id,
+                        profile_base_url: ctx.chat_view.work_view.profile_base_url,
                     },
                 );
             }
@@ -1545,6 +1599,18 @@ impl App {
             terminal_images.clear();
         }
 
+        // The first-visit tour's page-stop box (top-right). The clubhouse
+        // draws its own tutorial overlays; toasts draw after, so they win
+        // the corner while they last.
+        if screen != Screen::Clubhouse {
+            crate::app::clubhouse::ui::draw_tour_overlay(
+                frame,
+                inner,
+                ctx.clubhouse_state.tutorial,
+                screen,
+            );
+        }
+
         // Toast banner overlay at top of content area
         let banner = if ctx.is_draining {
             Some(Banner {
@@ -1609,6 +1675,10 @@ impl App {
 
         if ctx.show_poll_modal {
             chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
+        }
+
+        if let Some(cyberspace_modal) = ctx.cyberspace_modal {
+            chat::cyberspace::ui::draw_modal(frame, inner, cyberspace_modal);
         }
 
         if ctx.show_bonsai_modal {
@@ -1731,6 +1801,31 @@ impl App {
         {
             icon_picker::picker::render(frame, area, ctx.icon_picker_state, catalog);
         }
+
+        // Stream handoff modal (publisher URL from `/golive`, watch URL
+        // from `/watch`, OBS details from `/golive obs`): topmost, since it
+        // was just explicitly requested.
+        match ctx.stream_modal {
+            Some(crate::app::state::StreamModal::Qr(modal)) => {
+                crate::app::common::qr::draw_qr_overlay(
+                    frame,
+                    inner,
+                    &modal.url,
+                    &modal.title,
+                    &modal.subtitle,
+                );
+            }
+            Some(crate::app::state::StreamModal::Obs(modal)) => {
+                crate::app::stream::ui::draw_obs_overlay(
+                    frame,
+                    inner,
+                    &modal.whip_url,
+                    &modal.stream_key,
+                    &modal.watch_url,
+                );
+            }
+            None => {}
+        }
     }
 }
 
@@ -1741,9 +1836,11 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_hub_modal
         || ctx.show_profile_modal
         || ctx.show_poll_modal
+        || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal
         || ctx.login_announcements.is_some()
+        || ctx.stream_modal.is_some()
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
@@ -1767,7 +1864,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         (Screen::Arcade, "2"),
         (Screen::Games, "3"),
         (Screen::Artboard, "4"),
-        (Screen::Pinstar, "5"),
+        (Screen::Profiles, "5"),
         (Screen::Leaderboard, "6"),
     ];
     for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
@@ -1819,7 +1916,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Pinstar => "Directory",
+        Screen::Profiles => "Profiles",
         Screen::Leaderboard => "Leaderboards",
         Screen::Clubhouse => "Clubhouse",
         Screen::DailyMatch => "Daily Match",
@@ -1863,7 +1960,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-C quit ",
+                "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1883,7 +1980,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "· ? help · S save · Ctrl-Q abandon ",
+                "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -1903,7 +2000,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .is_some_and(|state| state.is_running());
         if in_game {
             spans.push(Span::styled(
-                "\u{b7} ? help \u{b7} S save \u{b7} Q abandon ",
+                "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -2029,32 +2126,12 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
-    if screen == Screen::Pinstar {
-        let hints: &[(&str, &str)] = match ctx.directory_tab {
-            crate::app::directory::state::DirectoryTab::Profiles => &[
-                ("i", "edit mine"),
-                ("e", "edit selected"),
-                ("Enter", "copy link"),
-            ],
-            crate::app::directory::state::DirectoryTab::Projects => {
-                &[("i", "new"), ("e", "edit"), ("Enter", "copy link")]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar if ctx.pinstar_state.is_some() => {
-                &[
-                    ("R-click/a", "menu"),
-                    ("L-drag", "pan"),
-                    ("R-drag", "select"),
-                    ("i", "edit"),
-                    ("Ctrl+P", "help"),
-                ]
-            }
-            crate::app::directory::state::DirectoryTab::Pinstar => &[
-                ("Enter", "open"),
-                ("n", "new"),
-                ("a", "join"),
-                ("Ctrl+P", "help"),
-            ],
-        };
+    if screen == Screen::Profiles {
+        let hints: &[(&str, &str)] = &[
+            ("i", "new project"),
+            ("w", "work card"),
+            ("Enter", "copy link"),
+        ];
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(

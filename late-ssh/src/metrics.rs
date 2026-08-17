@@ -1,3 +1,5 @@
+use late_core::models::leaderboard::DoorGame;
+
 use crate::app::activity::event::ActivityGame;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -11,6 +13,21 @@ pub enum RenderReason {
     WorldTick,
 }
 
+/// How a chat-translation request resolved. `Translated` and `SameLanguage`
+/// are the variants that spent an API call; the others are the cache and the
+/// guardrails doing their job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslationResult {
+    CacheHit,
+    Translated,
+    /// The model judged the message already in the target language; cached,
+    /// renders as nothing.
+    SameLanguage,
+    Failed,
+    CapExhausted,
+    Stale,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -20,7 +37,7 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, RenderReason};
+    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -37,7 +54,9 @@ mod inner {
         match game {
             ActivityGame::Asterion => "asterion",
             ActivityGame::Blackjack => "blackjack",
+            ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
+            ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",
             ActivityGame::LeWord => "le_word",
             ActivityGame::Minesweeper => "minesweeper",
@@ -276,11 +295,72 @@ mod inner {
     pub fn record_game_win(game: ActivityGame) {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
     }
+
+    fn translation_result_label(result: TranslationResult) -> &'static str {
+        match result {
+            TranslationResult::CacheHit => "cache_hit",
+            TranslationResult::Translated => "translated",
+            TranslationResult::SameLanguage => "same_language",
+            TranslationResult::Failed => "failed",
+            TranslationResult::CapExhausted => "cap_exhausted",
+            TranslationResult::Stale => "stale",
+        }
+    }
+
+    fn chat_translations_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_translations_total")
+                .with_description("Chat message translation requests by resolution")
+                .build()
+        })
+    }
+
+    pub fn record_chat_translation(result: TranslationResult) {
+        chat_translations_total().add(
+            1,
+            &[KeyValue::new("result", translation_result_label(result))],
+        );
+    }
+
+    fn door_ingest_lines_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_ingest_lines_total")
+                .with_description(
+                    "Door host log lines handled by the ingest pipe (cursor advanced) by game",
+                )
+                .build()
+        })
+    }
+
+    fn door_ingest_session_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_ingest_session_failures_total")
+                .with_description(
+                    "Door stats-session failures (connect or mid-stream) before a retry, by game",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_ingest_line(game: DoorGame) {
+        // `DoorGame::key` is the closed roster's own exhaustive label map.
+        door_ingest_lines_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
+    pub fn record_door_ingest_session_failure(game: DoorGame) {
+        door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
 }
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::{ActivityGame, RenderReason};
+    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
 
     pub fn record_ssh_connection() {}
     pub fn record_render(_reason: RenderReason) {}
@@ -296,6 +376,9 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_chat_translation(_result: TranslationResult) {}
+    pub fn record_door_ingest_line(_game: DoorGame) {}
+    pub fn record_door_ingest_session_failure(_game: DoorGame) {}
 }
 
 pub use inner::*;

@@ -237,6 +237,12 @@ impl PetState {
             .is_some_and(|roam_until| roam_until > Utc::now())
     }
 
+    /// Cancels an in-progress stroll, if any. Session-local only: `roam_until`
+    /// is never persisted, so there is nothing to write back on hide.
+    pub fn end_roam(&mut self) -> bool {
+        self.roam_until.take().is_some()
+    }
+
     pub fn fed_today(&self) -> bool {
         fed_on(self.last_fed, Utc::now().date_naive())
     }

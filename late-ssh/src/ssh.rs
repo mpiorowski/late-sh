@@ -19,7 +19,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
 use tokio::task::JoinSet;
@@ -32,6 +31,7 @@ use crate::app::{
 };
 use crate::authz::Permissions as AuthzPermissions;
 use crate::metrics;
+use crate::proxy_protocol;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
@@ -39,8 +39,7 @@ use crate::terminal_size::clamp_terminal_size;
 use crate::usernames;
 
 static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-const PROXY_V1_MAX_LEN: usize = 108;
-const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
+use crate::config::PROXY_HEADER_TIMEOUT;
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
@@ -212,14 +211,6 @@ pub async fn run_with_listener(
 
     let server = Server { state };
     let mut session_tasks = JoinSet::new();
-    if server.state.config.ssh_proxy_protocol
-        && server.state.config.ssh_proxy_trusted_cidrs.is_empty()
-    {
-        tracing::warn!(
-            "ssh proxy protocol is enabled but LATE_SSH_PROXY_TRUSTED_CIDRS is empty; \
-             proxy headers will be rejected"
-        );
-    }
 
     loop {
         tokio::select! {
@@ -384,70 +375,11 @@ async fn resolve_proxied_client_addr(
         return Ok(None);
     }
 
-    read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
 }
 
 fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {
-    state
-        .config
-        .ssh_proxy_trusted_cidrs
-        .iter()
-        .any(|cidr| cidr.contains(&ip))
-}
-
-async fn read_proxy_v1_client_addr(
-    stream: &mut TcpStream,
-    timeout_duration: Duration,
-) -> Result<Option<SocketAddr>> {
-    let mut line = Vec::with_capacity(PROXY_V1_MAX_LEN);
-    let mut byte = [0u8; 1];
-
-    let read_future = async {
-        while line.len() < PROXY_V1_MAX_LEN {
-            stream.read_exact(&mut byte).await?;
-            line.push(byte[0]);
-            if line.len() >= 2 && line[line.len() - 2..] == *b"\r\n" {
-                return parse_proxy_v1_addr(&line);
-            }
-        }
-        anyhow::bail!(
-            "proxy protocol v1 header exceeded {} bytes",
-            PROXY_V1_MAX_LEN
-        );
-    };
-
-    match timeout(timeout_duration, read_future).await {
-        Ok(Ok(addr)) => Ok(addr),
-        Ok(Err(e)) => Err(e.context("failed to read proxy protocol header")),
-        Err(_) => anyhow::bail!("timed out waiting for proxy protocol header"),
-    }
-}
-
-fn parse_proxy_v1_addr(line: &[u8]) -> Result<Option<SocketAddr>> {
-    let text = std::str::from_utf8(line).context("proxy v1 header is not valid UTF-8")?;
-    let text = text
-        .strip_suffix("\r\n")
-        .ok_or_else(|| anyhow::anyhow!("proxy v1 header missing CRLF terminator"))?;
-    let parts: Vec<&str> = text.split_whitespace().collect();
-    if parts.len() < 2 || parts[0] != "PROXY" {
-        anyhow::bail!("proxy v1 header malformed");
-    }
-    match parts[1] {
-        "UNKNOWN" => Ok(None),
-        "TCP4" | "TCP6" => {
-            if parts.len() != 6 {
-                anyhow::bail!("proxy v1 TCP header has unexpected field count");
-            }
-            let src_ip: IpAddr = parts[2]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source IP '{}'", parts[2]))?;
-            let src_port: u16 = parts[4]
-                .parse()
-                .with_context(|| format!("invalid proxy v1 source port '{}'", parts[4]))?;
-            Ok(Some(SocketAddr::new(src_ip, src_port)))
-        }
-        fam => anyhow::bail!("unsupported proxy v1 protocol family '{fam}'"),
-    }
+    proxy_protocol::is_trusted_peer(ip, &state.config.ssh_proxy_trusted_cidrs)
 }
 
 impl Drop for ClientHandler {
@@ -455,6 +387,9 @@ impl Drop for ClientHandler {
         if self.app.is_none()
             && let Some(token) = self.session_token.clone()
         {
+            // No App was ever built, so `Drop for App` will not run: retire
+            // the paired registry's token-scoped state from here instead.
+            self.state.paired_client_registry.forget_session(&token);
             let registry = self.state.session_registry.clone();
             tokio::spawn(async move {
                 registry.unregister(&token).await;
@@ -525,7 +460,12 @@ impl ClientHandler {
         let (session_tx, session_rx) = tokio::sync::mpsc::channel(64);
         self.state
             .session_registry
-            .register(session_token.clone(), session_tx, user_id)
+            .register(
+                session_token.clone(),
+                session_tx,
+                user_id,
+                self.auth_fingerprint.clone(),
+            )
             .await;
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);
@@ -642,7 +582,6 @@ impl russh::server::Handler for ClientHandler {
                 active.connection_count += 1;
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
-                active.peer_ip = self.peer_ip;
                 active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
             } else {
@@ -651,7 +590,6 @@ impl russh::server::Handler for ClientHandler {
                     crate::state::ActiveUser {
                         username: user.username.clone(),
                         fingerprint: Some(fingerprint.clone()),
-                        peer_ip: self.peer_ip,
                         audio_source: late_core::models::user::extract_audio_source(&user.settings),
                         sessions: Vec::new(),
                         connection_count: 1,
@@ -893,6 +831,13 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
+        let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
+            Ok(rcs) => rcs,
+            Err(e) => {
+                tracing::warn!(error = ?e, "failed to load door rc files");
+                Vec::new()
+            }
+        };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
@@ -903,10 +848,13 @@ impl russh::server::Handler for ClientHandler {
             // Services / data sources
             audio_service: self.state.audio_service.clone(),
             voice_service: self.state.voice_service.clone(),
+            stream_service: self.state.stream_service.clone(),
             chat_service,
+            translation_service: self.state.translation_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
             feed_service: self.state.feed_service.clone(),
+            cyberspace_service: self.state.cyberspace_service.clone(),
             showcase_service: self.state.showcase_service.clone(),
             work_service: self.state.work_service.clone(),
             profile_service,
@@ -939,6 +887,8 @@ impl russh::server::Handler for ClientHandler {
             greendragon_service: self.state.greendragon_service.clone(),
             darkroom_service: self.state.darkroom_service.clone(),
             arcade_handle_service: self.state.arcade_handle_service.clone(),
+            door_rc_service: self.state.door_rc_service.clone(),
+            initial_door_rcs,
             daily_service: self.state.daily_service.clone(),
             house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
@@ -946,7 +896,6 @@ impl russh::server::Handler for ClientHandler {
             artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
                 self.state.db.clone(),
             ),
-            pinstar_registry: self.state.pinstar_registry.clone(),
             username: user.username.clone(),
             bonsai_service: self.state.bonsai_service.clone(),
             initial_bonsai_tree,
@@ -976,15 +925,13 @@ impl russh::server::Handler for ClientHandler {
             nethack_host: self.state.config.nethack_host.clone(),
             nethack_port: self.state.config.nethack_port,
             nethack_secret: self.state.config.nethack_secret.clone(),
-            nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
-                self.state.chip_service.clone(),
-                self.state.db.clone(),
+            nethack_activity: Some(
                 crate::app::activity::publisher::ActivityPublisher::new(
                     self.state.db.clone(),
                     self.state.activity_feed.clone(),
                 )
                 .with_username_directory(self.state.username_directory.clone()),
-            )),
+            ),
             dcss_enabled: self.state.config.dcss_enabled,
             dcss_host: self.state.config.dcss_host.clone(),
             dcss_port: self.state.config.dcss_port,
@@ -1013,6 +960,8 @@ impl russh::server::Handler for ClientHandler {
             radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
             active_users: Some(self.state.active_users.clone()),
             clubhouse_lobby: Some(self.state.clubhouse_lobby.clone()),
+            mention_ladders: self.state.mention_ladders.clone(),
+            files: self.state.config.files.clone(),
             scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
             clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
                 &user.settings,
@@ -1036,6 +985,9 @@ impl russh::server::Handler for ClientHandler {
 
             // Display config
             initial_theme_id: late_ssh_theme_id(&user.settings),
+            initial_interaction_mode: late_core::models::user::extract_interaction_mode(
+                &user.settings,
+            ),
             initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
             initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
             initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
@@ -1178,7 +1130,10 @@ impl russh::server::Handler for ClientHandler {
                 .await;
             }
 
-            let init = App::enter_alt_screen();
+            // Keyboard-only sessions never turn on mouse reporting, so the
+            // terminal keeps its own selection/copy.
+            let mouse_on = app.lock().await.interaction_mode.mouse_enabled();
+            let init = App::enter_alt_screen(mouse_on);
             let _ = timeout(Duration::from_millis(50), handle.data(channel_id, init)).await;
 
             let app = Arc::clone(app);

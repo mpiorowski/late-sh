@@ -34,7 +34,7 @@ fn connect_is_a_no_op_when_disabled() {
 
 #[test]
 fn forward_input_without_proxy_is_a_no_op() {
-    let state = disabled_state();
+    let mut state = disabled_state();
     // Must not panic when nothing is running.
     state.forward_input(b"hjkl");
 }
@@ -59,7 +59,7 @@ fn strip_input_noise_passes_keys_and_arrows() {
 
 #[test]
 fn f1_is_consumed_and_other_keys_pass_through() {
-    let state = disabled_state();
+    let mut state = disabled_state();
     // F1 (both encodings) is consumed: late.sh remaps it to brogue's `?`
     // help, so it must not also be forwarded as the raw escape.
     assert!(state.intercept_input(b"\x1bOP"));
@@ -172,6 +172,24 @@ fn launcher_keys_are_inert_when_disabled() {
     assert!(!state.launcher_key(b'a'));
     assert!(!state.launcher_key(b'\r'));
     assert_eq!(state.entry_input(), "");
+}
+
+#[tokio::test]
+async fn idle_shutdown_closes_a_stale_running_game_without_grace() {
+    let mut state = disabled_state();
+    state.force_running_for_test();
+    // Fresh input keeps the game alive (the fabricated proxy is Connecting,
+    // not Closed, so the close branch does not fire either).
+    state.tick();
+    assert_eq!(state.mode(), Mode::Running);
+    // Age the input clock past the idle limit: the next tick drops the proxy
+    // (host-side that is a SIGHUP-save) and returns to the Launcher with no
+    // exit grace, since an idle player has no trailing keystrokes.
+    state.last_input = Instant::now() - IDLE_SHUTDOWN;
+    state.tick();
+    assert_eq!(state.mode(), Mode::Launcher);
+    assert!(state.proxy().is_none());
+    assert!(!state.in_exit_grace());
 }
 
 #[test]

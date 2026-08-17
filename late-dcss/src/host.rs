@@ -37,6 +37,11 @@ pub(crate) struct HostConfig {
     pub(crate) cols: u16,
     pub(crate) rows: u16,
     pub(crate) term: String,
+    /// Per-account rc content pushed by the client over the SSH env request.
+    /// `Some(content)` replaces the player's rc file (empty content deletes
+    /// it); `None` (an older client that sent no env request) leaves whatever
+    /// is already on disk.
+    pub(crate) rc: Option<String>,
 }
 
 enum Command {
@@ -148,6 +153,11 @@ async fn run_bridge(
     fs::create_dir_all(&macros)
         .with_context(|| format!("failed to create dcss macro dir {macros}"))?;
 
+    // Materialize the per-account rc pushed by the client. When a file lands,
+    // `-rc` points crawl at it instead of the shared `$HOME/.crawl/init.txt`;
+    // the `-extra-opt-last` display defaults below still apply on top.
+    let rc_path = materialize_rc(&cfg.data_dir, &cfg.playname, cfg.rc.as_deref());
+
     let mut cmd = TokioCommand::new(&cfg.bin);
     // Spawn with a cleared environment and an explicit allowlist. crawl needs a
     // TERM, a writable HOME (everything lives under `$HOME/.crawl`), and a
@@ -155,26 +165,9 @@ async fn run_bridge(
     // window size comes ONLY from the pty (openpty winsize + TIOCSWINSZ):
     // LINES/COLUMNS must NOT be exported, because ncurses treats them as an
     // override of the OS size and then ignores SIGWINCH, freezing crawl at its
-    // spawn-time geometry. The `-name` argument keys the per-player save inside
-    // the shared playground; crawl skips its name prompt when one is given.
+    // spawn-time geometry.
     cmd.env_clear()
-        .arg("-name")
-        .arg(&cfg.playname)
-        .arg("-macro")
-        .arg(&macros)
-        // Server-side display defaults, applied after any rc file (players have
-        // no rc of their own here). The viewport maxima let the map grow with
-        // the terminal instead of crawl's cramped 33x21 default (81x71 are the
-        // hard caps); use_terminal_default_colours makes crawl inherit the
-        // terminal's default background (pair 0 via ncurses use_default_colors)
-        // so the late.sh theme shows through instead of every cell being
-        // painted ANSI black.
-        .arg("-extra-opt-last")
-        .arg("view_max_width=81")
-        .arg("-extra-opt-last")
-        .arg("view_max_height=71")
-        .arg("-extra-opt-last")
-        .arg("use_terminal_default_colours=true")
+        .args(crawl_args(&cfg.playname, &macros, rc_path.as_deref()))
         .env("TERM", &cfg.term)
         .env("HOME", &cfg.data_dir)
         .env("LANG", "C.UTF-8")
@@ -356,6 +349,93 @@ fn send_sighup(pid: u32, playname: &str) {
         Err(e) => {
             tracing::debug!(pid, playname, error = ?e, "SIGHUP to crawl failed (already exited?)")
         }
+    }
+}
+
+/// The crawl argument list. `-name` keys the per-player save inside the shared
+/// playground (crawl skips its name prompt when one is given; the second
+/// command-line pass re-applies it AFTER the rc, so an rc `name =` line cannot
+/// open someone else's save). `-macro` sets the per-player macro dir via
+/// `SysEnv.macro_dir`, consumed directly during path init rather than through
+/// the option system, so it is not something an rc line can override (see
+/// `macro_dir` below). The `-extra-opt-last` lines are server-side display
+/// defaults: the viewport maxima let the map grow with the terminal instead of
+/// crawl's cramped 33x21 default (81x71 are the hard caps), and
+/// use_terminal_default_colours makes crawl inherit the terminal's default
+/// background (pair 0 via ncurses use_default_colors) so the late.sh theme
+/// shows through instead of every cell being painted ANSI black.
+///
+/// **Do NOT add `-extra-opt-last macro_dir=...` (or `save_dir=`).** Both are
+/// `DisabledGameOption` on this exact build: our Dockerfile's `make install
+/// prefix=/opt/dcss` matches crawl's Makefile `/opt%` rule, which force-sets
+/// `SAVEDIR := ~/.crawl` and bakes in `-DSAVE_DIR_PATH`; `initfile.cc` then
+/// registers `{"save_dir", "macro_dir"}` as disabled whenever `SAVE_DIR_PATH`
+/// is defined, and `DisabledGameOption::loadFromParseState` returns an
+/// "Option 'X' is disabled in this build" error for ANY source, rc or
+/// command-line extra-opt alike (game-options.cc). A prior attempt to
+/// re-force `macro_dir` this way broke every DCSS launch in prod
+/// (2026-08-05) and was reverted; a pushed rc `macro_dir =`/`save_dir =` line
+/// is equally rejected by the option parser, so there is nothing to guard
+/// against here. Re-verify against the pinned Makefile before ever touching
+/// this again.
+fn crawl_args(playname: &str, macro_dir: &str, rc_path: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "-name".to_string(),
+        playname.to_string(),
+        "-macro".to_string(),
+        macro_dir.to_string(),
+        "-extra-opt-last".to_string(),
+        "view_max_width=81".to_string(),
+        "-extra-opt-last".to_string(),
+        "view_max_height=71".to_string(),
+        "-extra-opt-last".to_string(),
+        "use_terminal_default_colours=true".to_string(),
+    ];
+    if let Some(path) = rc_path {
+        args.push("-rc".to_string());
+        args.push(path.to_string());
+    }
+    args
+}
+
+/// Where a player's pushed rc lives, passed as crawl's `-rc`. Keyed by the
+/// (already sanitized, `[A-Za-z0-9_]`) playname so no two handles can share
+/// config.
+fn rc_path(data_dir: &str, playname: &str) -> String {
+    format!("{}/rc/{}.rc", data_dir.trim_end_matches('/'), playname)
+}
+
+/// Write, delete, or keep the player's rc file from the client-pushed content:
+/// `Some(content)` replaces the file, `Some("")` deletes it (the player
+/// cleared their config), `None` (an older client that sent no env request)
+/// leaves whatever is on disk. Returns the path when a usable file exists
+/// afterwards. Filesystem errors fail soft: warn and launch with defaults.
+fn materialize_rc(data_dir: &str, playname: &str, rc: Option<&str>) -> Option<String> {
+    let path = rc_path(data_dir, playname);
+    match rc {
+        Some("") => {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(path, error = ?e, "failed to delete dcss rc"),
+            }
+            None
+        }
+        Some(content) => {
+            let dir = format!("{}/rc", data_dir.trim_end_matches('/'));
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(dir, error = ?e, "failed to create dcss rc dir");
+                return None;
+            }
+            match std::fs::write(&path, content) {
+                Ok(()) => Some(path),
+                Err(e) => {
+                    tracing::warn!(path, error = ?e, "failed to write dcss rc");
+                    None
+                }
+            }
+        }
+        None => std::fs::metadata(&path).is_ok().then_some(path),
     }
 }
 

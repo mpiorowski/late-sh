@@ -25,6 +25,7 @@ use late_core::{
         chat_room_member::ChatRoomMember,
         chat_slow_mode::ChatSlowMode,
         drinks::UserDrinks,
+        message_translation::{TranslateLang, needs_translation},
         moderation_audit_log::ModerationAuditLog,
         room_ban::RoomBan,
         user::User,
@@ -42,9 +43,11 @@ use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::ircd::registry::IrcRegistry;
 use crate::metrics;
+use crate::moderation::command::RoomModAction;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationInfra, ModerationService, ensure_message_permission, target_tier_for_user_id,
+    ModerationInfra, ModerationService, RoomModRequest, ensure_message_permission,
+    target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
@@ -150,6 +153,10 @@ pub struct ChatService {
     irc_registry: Option<IrcRegistry>,
     moderation_infra: ModerationInfra,
     chip_service: Option<ChipService>,
+    /// Pre-warms the English translation cache for authors who opted into
+    /// "Translate my messages to English" (send and edit paths). `None` only
+    /// in tests that never exercise sending.
+    translation_svc: Option<crate::app::ai::translate::TranslationService>,
     gift_cooldowns: Arc<Mutex<HashMap<Uuid, std::time::Instant>>>,
     /// Last time each user posted a message containing a link. Drives the
     /// account-age link cooldown (blunts fresh-account spam-and-leave). Keyed by
@@ -807,17 +814,18 @@ pub enum ChatEvent {
         room_slug: String,
         username: String,
     },
-    KickSucceeded {
+    RoomModSucceeded {
         user_id: Uuid,
         room_slug: String,
         username: String,
+        action: RoomModAction,
     },
     RoomInfoUpdated {
         user_id: Uuid,
         room_id: Uuid,
         room_slug: String,
     },
-    KickFailed {
+    RoomModFailed {
         user_id: Uuid,
         message: String,
     },
@@ -918,6 +926,7 @@ impl ChatService {
             irc_registry: None,
             moderation_infra: ModerationInfra::default(),
             chip_service: None,
+            translation_svc: None,
             gift_cooldowns: Arc::new(Mutex::new(HashMap::new())),
             link_last_sent: Arc::new(Mutex::new(HashMap::new())),
             username_refresh_started: Arc::new(AtomicBool::new(false)),
@@ -977,6 +986,14 @@ impl ChatService {
 
     pub fn with_chip_service(mut self, chip_service: ChipService) -> Self {
         self.chip_service = Some(chip_service);
+        self
+    }
+
+    pub fn with_translation_service(
+        mut self,
+        translation_svc: crate::app::ai::translate::TranslationService,
+    ) -> Self {
+        self.translation_svc = Some(translation_svc);
         self
     }
 
@@ -2623,8 +2640,39 @@ impl ChatService {
         metrics::record_chat_message_sent();
         self.notification_svc
             .create_mentions_task(user_id, chat.id, room_id, body);
+        self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
         Ok(())
+    }
+
+    /// Translate an opted-in author's message to English up front (send and
+    /// edit paths, after the row exists) and mark it author-shared, so every
+    /// English-reading session shows it without auto mode or a `t`.
+    /// Fire-and-forget on top of a fire-and-forget service: a failed
+    /// settings lookup only means the message goes out unshared (readers
+    /// can still `t` it), so it logs here and never fails the send.
+    async fn pretranslate_for_author(&self, client: &tokio_postgres::Client, chat: &ChatMessage) {
+        let Some(translation_svc) = &self.translation_svc else {
+            return;
+        };
+        if !needs_translation(&chat.body, TranslateLang::En) {
+            return;
+        }
+        let opted_in = match User::translate_mine_to_en(client, chat.user_id).await {
+            Ok(opted_in) => opted_in,
+            Err(error) => {
+                tracing::error!(
+                    error = ?error,
+                    user_id = %chat.user_id,
+                    "author pre-translate settings lookup failed"
+                );
+                return;
+            }
+        };
+        if !opted_in {
+            return;
+        }
+        translation_svc.request_shared(chat.id, chat.room_id, chat.body.clone(), TranslateLang::En);
     }
 
     /// The patron's message after the bar gets a say in it: a drink deep
@@ -2746,6 +2794,11 @@ impl ChatService {
 
         let tx = client.transaction().await?;
         let updated = ChatMessage::edit_after_authorization(&tx, message_id, new_body).await?;
+        // Cached translations describe the pre-edit body; they die with it.
+        late_core::models::message_translation::MessageTranslation::delete_for_message(
+            &tx, message_id,
+        )
+        .await?;
         ModerationAuditLog::record_if(
             &tx,
             permissions.should_audit(is_owner),
@@ -2761,7 +2814,7 @@ impl ChatService {
         let mut author_metadata =
             Self::load_chat_author_metadata(&client, &[existing.user_id]).await?;
         let _ = self.evt_tx.send(ChatEvent::MessageEdited {
-            message: updated,
+            message: updated.clone(),
             target_user_ids,
             author_username: author_metadata.usernames.remove(&existing.user_id),
             author_bonsai_glyph: author_metadata.bonsai_glyphs.remove(&existing.user_id),
@@ -2771,6 +2824,9 @@ impl ChatService {
                 .remove(&existing.user_id),
         });
         metrics::record_chat_message_edited();
+        // The edit's transaction dropped the old cached translations; keep
+        // the author's opt-in warranty alive for the new body.
+        self.pretranslate_for_author(&client, &updated).await;
         Ok(())
     }
 
@@ -3609,7 +3665,7 @@ impl ChatService {
         Ok(room.id)
     }
 
-    async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
+    pub(crate) async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -3626,6 +3682,8 @@ impl ChatService {
         {
             anyhow::bail!("this match chat is players only");
         }
+        // A ban is what keeps someone out of a public game room, and
+        // `ChatRoomMember::join` is where that is enforced for every join path.
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }
@@ -4059,42 +4117,37 @@ impl ChatService {
         );
     }
 
-    /// Remove a user from a room via `/kick`. The work is the moderation
-    /// service's room kick, so ownership, staff rank, the audit log and the
-    /// target's live session all behave exactly as they do from the mod
-    /// surface.
-    pub fn kick_from_room_task(
+    /// Run `/kick`, `/ban` or `/unban` against a room. The work is the
+    /// moderation service's room action, so ownership, staff rank, the audit
+    /// log and the target's live session all behave exactly as they do from
+    /// the mod surface.
+    pub(crate) fn room_mod_task(
         &self,
         user_id: Uuid,
         permissions: Permissions,
-        room_slug: String,
-        target_username: String,
+        request: RoomModRequest,
     ) {
         let service = self.clone();
+        let action = request.action;
+        let target_username = request.username.clone();
         let span = info_span!(
-            "chat.kick_from_room_task",
+            "chat.room_mod_task",
             user_id = %user_id,
-            room_slug = %room_slug,
+            action = action.past_tense(),
+            room = ?request.room,
             target = %target_username
         );
         tokio::spawn(
             async move {
                 let moderation = service.moderation_service();
-                let event = match moderation
-                    .kick_from_room(
+                let event = match moderation.room_command(user_id, permissions, request).await {
+                    Ok(done) => ChatEvent::RoomModSucceeded {
                         user_id,
-                        permissions,
-                        room_slug.clone(),
-                        target_username.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => ChatEvent::KickSucceeded {
-                        user_id,
-                        room_slug,
+                        room_slug: done.room_slug,
                         username: target_username,
+                        action,
                     },
-                    Err(e) => ChatEvent::KickFailed {
+                    Err(e) => ChatEvent::RoomModFailed {
                         user_id,
                         message: e.to_string(),
                     },

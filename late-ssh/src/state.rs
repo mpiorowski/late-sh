@@ -23,7 +23,7 @@ use crate::app::chat::work::svc::WorkService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
-use crate::app::hub::svc::LeaderboardService;
+use crate::app::leaderboard::svc::LeaderboardService;
 use crate::app::pet::svc::PetService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::voice::svc::VoiceService;
@@ -57,7 +57,6 @@ pub struct ActiveSession {
 pub struct ActiveUser {
     pub username: String,
     pub fingerprint: Option<String>,
-    pub peer_ip: Option<IpAddr>,
     pub audio_source: AudioSource,
     pub sessions: Vec<ActiveSession>,
     pub connection_count: usize,
@@ -108,12 +107,15 @@ pub struct State {
     pub config: Config,
     pub db: Db,
     pub ai_service: AiService,
+    pub translation_service: crate::app::ai::translate::TranslationService,
     pub audio_service: AudioService,
     pub voice_service: VoiceService,
+    pub stream_service: crate::app::stream::svc::StreamService,
     pub chat_service: ChatService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: FeedService,
+    pub cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService,
     pub showcase_service: ShowcaseService,
     pub work_service: WorkService,
     pub profile_service: ProfileService,
@@ -135,6 +137,7 @@ pub struct State {
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
+    pub door_rc_service: crate::app::door::rc::DoorRcService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
@@ -151,6 +154,9 @@ pub struct State {
     pub active_users: ActiveUsers,
     /// Process-global clubhouse presence: who sits where, who is walking.
     pub clubhouse_lobby: crate::app::clubhouse::lobby::SharedLobby,
+    /// Process-global ghost-bot mention cooldown ladders: ghost responder
+    /// loops step them, sessions peek for the composer cooldown banner.
+    pub mention_ladders: crate::app::ai::ladder::MentionLadders,
     /// Process-global `/pair` intents and shared scratchpad buffers.
     pub scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry,
     pub afk_users: AfkUsers,
@@ -171,6 +177,5 @@ pub struct State {
     pub irc_registry: crate::ircd::registry::IrcRegistry,
     pub ssh_attempt_limiter: IpRateLimiter,
     pub ws_pair_limiter: IpRateLimiter,
-    pub pinstar_registry: crate::app::pinstar::svc::PinstarServerRegistry,
     pub is_draining: Arc<std::sync::atomic::AtomicBool>,
 }

@@ -5,7 +5,7 @@ async fn register_and_send() {
     let registry = SessionRegistry::new();
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx, Uuid::now_v7())
+        .register("tok1".to_string(), tx, Uuid::now_v7(), None)
         .await;
 
     let sent = registry
@@ -33,7 +33,7 @@ async fn has_session_reflects_registration() {
 
     let (tx, _rx) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx, Uuid::now_v7())
+        .register("tok1".to_string(), tx, Uuid::now_v7(), None)
         .await;
     assert!(registry.has_session("tok1").await);
 
@@ -46,7 +46,7 @@ async fn unregister_removes_session() {
     let registry = SessionRegistry::new();
     let (tx, _rx) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx, Uuid::now_v7())
+        .register("tok1".to_string(), tx, Uuid::now_v7(), None)
         .await;
     registry.unregister("tok1").await;
 
@@ -62,10 +62,10 @@ async fn register_overwrites_existing() {
     let (tx1, _rx1) = tokio::sync::mpsc::channel(10);
     let (tx2, mut rx2) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx1, Uuid::now_v7())
+        .register("tok1".to_string(), tx1, Uuid::now_v7(), None)
         .await;
     registry
-        .register("tok1".to_string(), tx2, Uuid::now_v7())
+        .register("tok1".to_string(), tx2, Uuid::now_v7(), None)
         .await;
 
     let sent = registry
@@ -81,7 +81,7 @@ async fn send_viz_frame() {
     let registry = SessionRegistry::new();
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx, Uuid::now_v7())
+        .register("tok1".to_string(), tx, Uuid::now_v7(), None)
         .await;
 
     let frame = VizFrame {
@@ -108,7 +108,7 @@ async fn send_fails_when_receiver_dropped() {
     let registry = SessionRegistry::new();
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     registry
-        .register("tok1".to_string(), tx, Uuid::now_v7())
+        .register("tok1".to_string(), tx, Uuid::now_v7(), None)
         .await;
     drop(rx);
 

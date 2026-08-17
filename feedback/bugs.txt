@@ -1,0 +1,242 @@
+=== #bugs — 59 messages — last message 2026-08-05 16:40:34 UTC ===
+
+[2026-05-22 20:31:33 UTC] HeadedBranch
+---BUG--- Image uploads don't seem to work on servers with AAAA records
+----------------------------------------------------------------------
+
+[2026-06-05 13:59:35 UTC] botahamec
+---BUG--- The tetris game seems very unresponsive
+----------------------------------------------------------------------
+
+[2026-06-06 13:26:31 UTC] buddi
+---BUG--- current daily nonogram (medium) has multiple solutions or can't be solved.
+----------------------------------------------------------------------
+
+[2026-06-12 08:31:39 UTC] Alliana
+---BUG--- It seems there are some issues with IME input for CJK characters. Do you have any plans to fix them?
+----------------------------------------------------------------------
+
+[2026-06-14 11:02:52 UTC] mat
+---BUG--- - nixos paste from cliboard igm not working
+----------------------------------------------------------------------
+
+[2026-06-15 00:47:17 UTC] lemoncmd
+---BUG--- Hard nonograms often have multiple solutions and are not logically solvable
+----------------------------------------------------------------------
+
+[2026-06-26 13:37:01 UTC] odd
+---BUG--- in news: when an article link is displayed on multiple lines (e.g. small terminal width) only the first line of the link is clickable and it opens up the truncated link on the browser - a dead page normally
+----------------------------------------------------------------------
+
+[2026-06-26 18:24:05 UTC] Jolly
+---BUG--- when you're in a channel and you someone replies to your message or mentions you, the mention doesn't disappear even tho the message was read which is kinda annoying
+----------------------------------------------------------------------
+
+[2026-06-26 23:59:52 UTC] ferryman
+---BUG--- Possibly user error, but I can't see the music player or visualizer when I have the Bonsai enabled. and if I disable the bonsai the music player is so low on the pane that it looks/feels off. Any suggestions?
+----------------------------------------------------------------------
+
+[2026-06-28 10:08:32 UTC] blap
+---BUG--- ignore command doesn't ignore dm's
+----------------------------------------------------------------------
+
+[2026-06-28 14:51:07 UTC] Bambus
+---BUG--- is the cat supposed to drag a black line through enlarged images?
+----------------------------------------------------------------------
+
+[2026-06-29 09:18:47 UTC] Bambus
+---BUG--- picking up the star in snake on the amoled violet theme makes the snake extremely hard to see
+----------------------------------------------------------------------
+
+[2026-06-29 17:34:48 UTC] Monika
+---BUG--- ssh-ing from PowerShell on Windows doesn't show the mug splash screen and I need to press ctrl+C to continue to late.sh after running ssh late.sh
+----------------------------------------------------------------------
+
+[2026-06-29 20:34:15 UTC] WgDimension
+---BUG--- Hi! I have been using the rss a lot. I have been getting some malformed titles (see attached). Is it a me problem or an actual bug? Thanks!
+----------------------------------------------------------------------
+
+[2026-06-30 04:33:21 UTC] blap
+---BUG--- this url wont process for News (i) https://huggingface.co/papers/2606.29814
+----------------------------------------------------------------------
+
+[2026-06-30 11:40:40 UTC] Ol-Aqua
+---BUG--- In lateania, if the shop/inventory goes off the screen you cannot see it
+----------------------------------------------------------------------
+
+[2026-06-30 11:59:41 UTC] Ol-Aqua
+---BUG--- @Tasmania if you go west from the housing ledger you get stuck in the lighthouse, only way to leave is to recall
+----------------------------------------------------------------------
+
+[2026-06-30 12:40:19 UTC] lunar
+---BUG--- Just wrote it in lounge but just so its documented here to: When replying to someone in the chat you can edit the highlighted reply text to something different
+----------------------------------------------------------------------
+
+[2026-06-30 15:17:39 UTC] mat
+---BUG--- rss feed, not loading evey feed ive got
+----------------------------------------------------------------------
+
+[2026-07-01 12:24:16 UTC] cws
+---BUG--- The FIFA tab does not respect user time zone settings for match times in the left pane.
+----------------------------------------------------------------------
+
+[2026-07-01 22:42:00 UTC] qmay654
+---BUG--- Sometimes the music randomly mutes itself even when not focused on window
+----------------------------------------------------------------------
+
+[2026-07-02 10:36:06 UTC] lunar
+---BUG--- not sure if bug or cause of space but: Bonsai preview in bottom right displays '|' only, no other directions
+----------------------------------------------------------------------
+
+[2026-07-03 08:58:16 UTC] lunar
+---BUG--- After solving the Rubiks Cube you can still scramble it
+----------------------------------------------------------------------
+
+[2026-07-03 21:10:52 UTC] 8-prime
+---BUG--- when reacting to a message (f) the option for icon selection (0) now conflicts with the lounge scene.
+----------------------------------------------------------------------
+
+[2026-07-07 20:18:32 UTC] fellshard
+---BUG--- C-q doesn't work?
+----------------------------------------------------------------------
+
+[2026-07-07 20:26:18 UTC] fellshard
+---BUG--- I had an old 'game over' snake game open with a score > the daily requirement. When I started a new snake game, it gave me the daily reward even though I had just started playing the new one today.
+----------------------------------------------------------------------
+
+[2026-07-09 12:04:14 UTC] Anonym3000
+---BUG--- Actions dont render properly in the Clubhouse
+----------------------------------------------------------------------
+
+[2026-07-10 08:41:25 UTC] Anonym3000
+---BUG--- The seats on the right and left of the games table in the Clubhouse are too far away from the table to activate the games
+----------------------------------------------------------------------
+
+[2026-07-13 09:43:54 UTC] Anonym3000
+---BUG--- The classical icecast doesnt work for me
+----------------------------------------------------------------------
+
+[2026-07-13 13:44:24 UTC] cws
+---BUG--- Running a client 24/7, you have to quit and rejoin to get the daily boards on page 2.
+----------------------------------------------------------------------
+
+[2026-07-14 13:13:14 UTC] CosmoDude
+---BUG--- On Mac OS Terminal having issues with image display. Perhaps a color issue that I have to fix locally by using "tiv -2" when using Apple's terminal. Maybe force 256 colors? It works fine on other terminals like Kitty. https://files.late.sh/chat/2026/07/019f60c1-c4ba-7e00-91da-5ef43e7693ff.jpg
+----------------------------------------------------------------------
+
+[2026-07-14 19:05:13 UTC] cws
+---BUG--- Dunno if this counts as "bug" but we've lost the ` to switch back to chat from page 2 games.
+----------------------------------------------------------------------
+
+[2026-07-17 10:32:01 UTC] Anonym3000
+---BUG--- sometimes when switching from chat to arcade, the tree emojis stay
+----------------------------------------------------------------------
+
+[2026-07-17 19:50:43 UTC] Bambus
+---BUG--- running with lower fps or rather input being delayed since a few updates ago on windows shell running late command
+----------------------------------------------------------------------
+
+[2026-07-19 17:39:09 UTC] invictus
+---BUG--- can't make the CLI to send sounds to bluetooth headset using pipewire — I can't even found it in a volume control tool like wiremux or pavucontrol. I can hear music through laptop dynamics though
+----------------------------------------------------------------------
+
+[2026-07-19 19:57:50 UTC] mat
+---BUG--- (edited) msg dont work for second following msg in the same "group"
+----------------------------------------------------------------------
+
+[2026-07-20 22:58:14 UTC] cws
+---BUG--- I just got a suggestion on the loading screen to press 'c' to look at my cat. I think that's dead.
+----------------------------------------------------------------------
+
+[2026-07-22 04:31:32 UTC] dongcarl
+---BUG--- If I connect with ssh compression, it appears to work, but if I move my character (say up), I get "closed by remote host". This doesn't happen if I `-o Compression=no`
+----------------------------------------------------------------------
+
+[2026-07-22 12:17:09 UTC] -rudy-
+---BUG--- The YouTube queue should be kept deduplicated (some people queue up the same thing 10 times).
+----------------------------------------------------------------------
+
+[2026-07-22 22:50:01 UTC] qmay654
+---BUG--- when new messages scroll the screen up some characters get stuck where they were before ("w]" or "o]" at the end of the messages for example)
+----------------------------------------------------------------------
+
+[2026-07-24 03:50:57 UTC] rafael
+---BUG--- "When I copy a link here (e.g. `news` channel or a message), it does not copy the text to my clipboard, even if it says `Copied to Clipboard`. Doing a paste does not paste the one that I copied, and pastes something else. (am using Ghostty + Tmux if it helps)" UPDATE: Fix for using tmux is to add `set -g set-clipboard on` in tmux conf
+----------------------------------------------------------------------
+
+[2026-07-24 14:56:18 UTC] eljeje
+---BUG--- when gifting chips to another user, the 'chips' display on top right (via ssh) are not updated
+----------------------------------------------------------------------
+
+[2026-07-25 16:21:39 UTC] zzril
+---BUG--- Imprecise help text in minesweeper. Says:  
+> *On a revealed cell, press its number to open all adjacent unflagged cells.*
+
+Should be:  
+> [...] hold its number __and press space__ [...]
+----------------------------------------------------------------------
+
+[2026-07-25 18:46:56 UTC] sbr
+---BUG--- can't paste image via /paste-image if copied as file from finder in mac os
+----------------------------------------------------------------------
+
+[2026-07-26 11:35:55 UTC] cws
+---BUG--- I don't seem to be getting any game alerts even though I have the setting turned on for them.
+----------------------------------------------------------------------
+
+[2026-07-26 15:52:57 UTC] mhrstv
+---BUG--- on the right sidebar, when lobby is present, the audio visualizer takes approximately 4 times the vertical space it actually needs, when i hide the lobby, the visualizer takes the appropriate amount of vertical space
+----------------------------------------------------------------------
+
+[2026-07-28 03:17:38 UTC] LordWasd
+---BUG--- Beat all 3 minesweeper daily challanges but did not get the final reward
+----------------------------------------------------------------------
+
+[2026-07-28 19:20:11 UTC] mat (reply to LordWasd: "---BUG--- Beat all 3 minesweeper daily challanges but did no")
+> @LordWasd: 🐛 Beat all 3 minesweeper daily challanges but di...
+there isnt a "final" reward, you just get chips per difficulty
+----------------------------------------------------------------------
+
+[2026-07-28 21:57:58 UTC] mat
+@mat i still don't understand how arrowkeys work in most hosted games... random input in brogue
+----------------------------------------------------------------------
+
+[2026-07-29 18:59:57 UTC] sbr
+---BUG--- can't favorite bugs or mentions sections
+----------------------------------------------------------------------
+
+[2026-07-29 19:20:59 UTC] cws
+---BUG--- if you try to upload an image as a reply, you lose the reply after it uploads.
+----------------------------------------------------------------------
+
+[2026-07-30 10:38:44 UTC] igi.dog
+---BUG--- penciled in numbers in sudoku don't persist after disconnect/reconnect :c
+----------------------------------------------------------------------
+
+[2026-07-30 19:00:50 UTC] Juest
+---BUG--- impossible to scroll through large messages in chat
+----------------------------------------------------------------------
+
+[2026-07-31 03:31:42 UTC] mhrstv
+---BUG--- one of the dailies today is 10000 points in snake. i just died at ~1500 because i held the arrow for too long and collided wit the wall, but still got the daily marked as done. my all-time high-score is 11000, but it was done a week ago.
+----------------------------------------------------------------------
+
+[2026-08-02 20:03:55 UTC] mat
+https://files.late.sh/chat/2026/08/019fc394-ed08-7b60-b713-e8a8337cc90c.png
+----------------------------------------------------------------------
+
+[2026-08-02 22:36:20 UTC] Juest
+---BUG--- on the listen website youtube has a playback error
+----------------------------------------------------------------------
+
+[2026-08-02 22:36:52 UTC] Juest
+---BUG--- errata: says an error has occurred when trying to play it
+----------------------------------------------------------------------
+
+[2026-08-05 14:08:17 UTC] Juest
+---BUG--- music unmutes when server restarts
+----------------------------------------------------------------------
+
+[2026-08-05 16:40:34 UTC] Juest
+---BUG--- actually, whenever the connection breaks the music unmutes and sometimes i keep having a stream of control characters being sent to the terminal until i reset it
+----------------------------------------------------------------------

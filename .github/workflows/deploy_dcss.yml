@@ -170,7 +170,7 @@ jobs:
       brogue_image_tag: ${{ needs.get_images.outputs.brogue_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
-      targets: kubernetes_deployment_v1.late_dcss kubernetes_service_v1.late_dcss_sv
+      targets: kubernetes_deployment_v1.late_dcss kubernetes_service_v1.late_dcss_sv kubernetes_ingress_v1.late_dcss_crawl
 
   deploy:
     name: deploy_dcss_image

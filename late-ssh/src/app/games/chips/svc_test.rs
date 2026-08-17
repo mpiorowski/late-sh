@@ -184,3 +184,66 @@ async fn transfer_chips_leaves_unrelated_users_untouched() {
         .get(0);
     assert_eq!(ledger_rows, 0);
 }
+
+#[tokio::test]
+async fn welcome_pour_comps_only_the_first_drink_ever() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "welcome-pour").await;
+    let chips = ChipService::new(test_db.db.clone());
+
+    let first = chips
+        .grant_free_drink(user.id, late_core::models::drinks::WELCOME_DRINK_POINTS)
+        .await
+        .expect("first comp succeeds")
+        .expect("first comp pours");
+    assert_eq!(
+        first.drunk_points,
+        late_core::models::drinks::WELCOME_DRINK_POINTS
+    );
+    assert_eq!(first.lifetime_spent, 0);
+
+    // A tour rerun after a mid-tour disconnect: the welcome is spent.
+    let second = chips
+        .grant_free_drink(user.id, late_core::models::drinks::WELCOME_DRINK_POINTS)
+        .await
+        .expect("second comp succeeds");
+    assert!(second.is_none());
+
+    // The comp stayed off the tab: one drink, no lifetime spend.
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT drunk_points, lifetime_spent, drink_count
+             FROM user_drinks WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("drinks row");
+    assert_eq!(
+        row.get::<_, i64>("drunk_points"),
+        late_core::models::drinks::WELCOME_DRINK_POINTS
+    );
+    assert_eq!(row.get::<_, i64>("lifetime_spent"), 0);
+    assert_eq!(row.get::<_, i64>("drink_count"), 1);
+}
+
+#[tokio::test]
+async fn welcome_pour_never_comps_a_prior_drinker() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "welcome-pour-veteran").await;
+    let client = test_db.db.get().await.expect("db client");
+    late_core::models::drinks::UserDrinks::record_purchase(&client, user.id, 200)
+        .await
+        .expect("paid drink");
+    drop(client);
+
+    let chips = ChipService::new(test_db.db.clone());
+    let comp = chips
+        .grant_free_drink(user.id, late_core::models::drinks::WELCOME_DRINK_POINTS)
+        .await
+        .expect("comp call succeeds");
+    assert!(
+        comp.is_none(),
+        "a prior drinker never gets the welcome pour"
+    );
+}

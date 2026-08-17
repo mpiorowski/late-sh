@@ -113,68 +113,62 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Shared upsert behind [`Self::record_purchase`] and
-    /// [`Self::record_free_pour`]: decay the stored buzz to now, add `buzz`,
-    /// cap, and bump the tallies. `tab` is the chips actually charged (0 for a
-    /// comped pour), tracked apart from `buzz` so a free round lights the glow
-    /// without inflating `lifetime_spent`. One statement, so concurrent buys
-    /// from two sessions can't double-count the decay window. Every numeric
-    /// parameter is cast to bigint so Postgres never infers a `LEAST`/
-    /// `GREATEST` argument as text.
-    async fn record(
-        client: &impl GenericClient,
-        user_id: Uuid,
-        buzz: i64,
-        tab: i64,
-    ) -> Result<Self> {
-        let row = client
-            .query_one(
-                "INSERT INTO user_drinks
-                    (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
-                 VALUES ($1, LEAST($2::bigint, $5::bigint), $3::bigint, 1, current_timestamp)
-                 ON CONFLICT (user_id) DO UPDATE SET
-                    drunk_points = LEAST(
-                        GREATEST(
-                            user_drinks.drunk_points
-                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $4::bigint / 3600),
-                            0
-                        ) + $2::bigint,
-                        $5::bigint
-                    ),
-                    lifetime_spent = user_drinks.lifetime_spent + $3::bigint,
-                    drink_count = user_drinks.drink_count + 1,
-                    last_drink_at = current_timestamp,
-                    updated = current_timestamp
-                 RETURNING *",
-                &[
-                    &user_id,
-                    &buzz,
-                    &tab,
-                    &DRUNK_DECAY_PER_HOUR,
-                    &MAX_DRUNK_POINTS,
-                ],
-            )
-            .await?;
-        Ok(Self::from(row))
-    }
-
-    /// Record a paid drink: `price` chips become both buzz and tab.
+    /// Record a paid drink: `price` chips become both buzz and tab. Decays
+    /// the stored buzz to now, adds the pour, caps, and bumps the tallies.
+    /// One statement, so concurrent buys from two sessions can't
+    /// double-count the decay window. Every numeric parameter is cast to
+    /// bigint so Postgres never infers a `LEAST`/`GREATEST` argument as text.
     pub async fn record_purchase(
         client: &impl GenericClient,
         user_id: Uuid,
         price: i64,
     ) -> Result<Self> {
-        Self::record(client, user_id, price, price).await
+        let row = client
+            .query_one(
+                "INSERT INTO user_drinks
+                    (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
+                 VALUES ($1, LEAST($2::bigint, $4::bigint), $2::bigint, 1, current_timestamp)
+                 ON CONFLICT (user_id) DO UPDATE SET
+                    drunk_points = LEAST(
+                        GREATEST(
+                            user_drinks.drunk_points
+                                - (EXTRACT(EPOCH FROM (current_timestamp - user_drinks.last_drink_at))::bigint * $3::bigint / 3600),
+                            0
+                        ) + $2::bigint,
+                        $4::bigint
+                    ),
+                    lifetime_spent = user_drinks.lifetime_spent + $2::bigint,
+                    drink_count = user_drinks.drink_count + 1,
+                    last_drink_at = current_timestamp,
+                    updated = current_timestamp
+                 RETURNING *",
+                &[&user_id, &price, &DRUNK_DECAY_PER_HOUR, &MAX_DRUNK_POINTS],
+            )
+            .await?;
+        Ok(Self::from(row))
     }
 
-    /// Comp a drink on the house: `points` of buzz with no chips charged, so
-    /// `lifetime_spent` stays put. Backs the tutorial's welcome round.
-    pub async fn record_free_pour(
+    /// Comp the newcomer's welcome round: `points` of buzz with no chips
+    /// charged, insert-only so it lands at most once per user ever. `None`
+    /// when a `user_drinks` row already exists (they have drunk before, the
+    /// welcome is spent), which lets the caller re-fire safely across
+    /// sessions without double-comping.
+    pub async fn record_welcome_pour(
         client: &impl GenericClient,
         user_id: Uuid,
         points: i64,
-    ) -> Result<Self> {
-        Self::record(client, user_id, points, 0).await
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "INSERT INTO user_drinks
+                    (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
+                 VALUES ($1, LEAST($2::bigint, $3::bigint), 0, 1, current_timestamp)
+                 ON CONFLICT (user_id) DO NOTHING
+                 RETURNING *",
+                &[&user_id, &points, &MAX_DRUNK_POINTS],
+            )
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     pub async fn find(client: &Client, user_id: Uuid) -> Result<Option<Self>> {

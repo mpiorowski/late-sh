@@ -1,0 +1,190 @@
+{% extends "pages/app.html" %}
+
+{% block title %}go live · late.sh{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto pt-4">
+
+    <div class="mb-4">
+        <h1 class="text-2xl text-green-500 tracking-tight">late.sh <span class="text-gray-400">· broadcast
+                console</span></h1>
+        <p class="text-gray-300 mt-2" id="show-line"></p>
+        <p class="text-xs text-gray-400 mt-1">
+            watch link: <span class="text-green-400" id="watch-url"></span>
+        </p>
+    </div>
+
+    <div class="border border-gray-700 rounded overflow-hidden bg-black">
+        <video id="preview" class="w-full block" style="aspect-ratio: 16 / 9; object-fit: contain;" autoplay playsinline
+            muted></video>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 mt-3">
+        <button type="button" id="share-btn"
+            class="text-xs border border-green-700 hover:border-green-500 rounded px-3 py-1 text-green-400 transition-colors">
+            share a screen
+        </button>
+        <button type="button" id="speaker-btn"
+            class="text-xs border border-gray-700 hover:border-green-600 rounded px-3 py-1 text-gray-300 transition-colors">
+            room audio: muted
+        </button>
+        <span class="text-xs text-gray-400 ml-auto" id="status">loading&hellip;</span>
+    </div>
+
+    <div class="text-xs text-gray-500 mt-6 leading-relaxed space-y-2">
+        <p>
+            everything on the shared screen goes out to the room and to anyone with the watch link.
+            close this tab (or stop sharing) to end the stream; a refresh gets a ~30s grace window.
+        </p>
+        <p>
+            talking happens in the <span class="text-green-400">late</span> CLI voice channel
+            (Ctrl+V in your stream room), never through this page: there is no browser mic.
+            viewers hear the shared screen's audio plus everyone in voice.
+        </p>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.15.8/dist/livekit-client.umd.min.js"></script>
+<script>
+    (function () {
+        const publishToken = "{{ publish_token }}";
+        const statusEl = document.getElementById('status');
+        const showLine = document.getElementById('show-line');
+        const watchUrlEl = document.getElementById('watch-url');
+        const preview = document.getElementById('preview');
+        const shareBtn = document.getElementById('share-btn');
+        const speakerBtn = document.getElementById('speaker-btn');
+        let room = null;
+        let publishing = false;
+        let over = false;
+        // Born silent: nothing publishes until the human clicks share, and
+        // room audio starts muted. There is no mic on this page at all;
+        // voice is CLI-only.
+        let speakerOn = false;
+        const audioEls = [];
+
+        function setStatus(text) { statusEl.textContent = text; }
+
+        // The server ended the stream (/golive stop, a moderator, or the
+        // grace timer): this console must stop broadcasting too, even if the
+        // server-side disconnect never reaches LiveKit.
+        function streamOver() {
+            if (over) return;
+            over = true;
+            publishing = false;
+            shareBtn.disabled = true;
+            speakerBtn.disabled = true;
+            setStatus('this stream has ended. run /golive in the terminal to start a new one.');
+            if (room) { room.disconnect(); }
+        }
+
+        function report() {
+            if (over) return;
+            fetch('/golive/' + publishToken + '/state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ publishing: publishing }),
+            }).then(function (res) {
+                // A dead publish token means the stream is gone; a report
+                // that vanished into a non-2xx must not keep the share up.
+                // 403 means another console holds the claim on this link.
+                if (res.status === 404 || res.status === 403) { streamOver(); }
+            }).catch(function () { });
+        }
+
+        function attachTrack(track) {
+            if (track.kind === 'audio') {
+                const el = track.attach();
+                el.muted = !speakerOn;
+                audioEls.push(el);
+                document.body.appendChild(el);
+            }
+        }
+
+        async function boot() {
+            let res;
+            try { res = await fetch('/golive/' + publishToken + '/grant'); } catch (e) {
+                setStatus('could not reach the server - reload to retry.');
+                return;
+            }
+            if (res.status === 403) {
+                // Claim-once: the first browser to open this link owns it.
+                setStatus('this go-live link is already in use by another browser. run /golive stop, then /golive again for a fresh link.');
+                shareBtn.disabled = true;
+                speakerBtn.disabled = true;
+                return;
+            }
+            if (!res.ok) {
+                setStatus('this go-live link is no longer valid. run /golive again in the terminal.');
+                shareBtn.disabled = true;
+                speakerBtn.disabled = true;
+                return;
+            }
+            const grant = await res.json();
+            showLine.textContent = '@' + grant.streamer + (grant.title ? ' · ' + grant.title : '');
+            watchUrlEl.textContent = grant.watch_url;
+            room = new LivekitClient.Room();
+            room.on(LivekitClient.RoomEvent.TrackSubscribed, function (track) { attachTrack(track); });
+            // The browser's own "stop sharing" bar unpublishes the track;
+            // that is a stop, and the server starts the grace timer.
+            room.on(LivekitClient.RoomEvent.LocalTrackUnpublished, function (publication) {
+                if (publication.source === LivekitClient.Track.Source.ScreenShare && publishing) {
+                    publishing = false;
+                    shareBtn.textContent = 'share a screen';
+                    setStatus('stopped sharing.');
+                    report();
+                }
+            });
+            await room.connect(grant.livekit_url, grant.token);
+            room.remoteParticipants.forEach(function (participant) {
+                participant.trackPublications.forEach(function (publication) {
+                    if (publication.track) { attachTrack(publication.track); }
+                });
+            });
+            setStatus('connected. share a screen to go on air.');
+            setInterval(report, 10000);
+            window.addEventListener('pagehide', function () {
+                navigator.sendBeacon(
+                    '/golive/' + publishToken + '/state',
+                    new Blob([JSON.stringify({ publishing: false })], { type: 'application/json' })
+                );
+            });
+        }
+
+        shareBtn.addEventListener('click', async function () {
+            if (!room) return;
+            if (publishing) {
+                await room.localParticipant.setScreenShareEnabled(false);
+                return;
+            }
+            try {
+                await room.localParticipant.setScreenShareEnabled(true, { audio: true });
+            } catch (e) {
+                setStatus('screen share was cancelled.');
+                return;
+            }
+            publishing = true;
+            shareBtn.textContent = 'stop sharing';
+            setStatus('on air.');
+            const publication = room.localParticipant.getTrackPublication(
+                LivekitClient.Track.Source.ScreenShare
+            );
+            if (publication && publication.track) { publication.track.attach(preview); }
+            // The announcement fires off this report, never off the command:
+            // no "live" line ever points at a black screen.
+            report();
+        });
+
+        speakerBtn.addEventListener('click', async function () {
+            speakerOn = !speakerOn;
+            if (speakerOn && room) {
+                try { await room.startAudio(); } catch (e) { }
+            }
+            audioEls.forEach(function (el) { el.muted = !speakerOn; });
+            speakerBtn.textContent = speakerOn ? 'room audio: on' : 'room audio: muted';
+        });
+
+        boot();
+    })();
+</script>
+{% endblock %}

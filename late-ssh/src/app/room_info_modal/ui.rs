@@ -107,6 +107,7 @@ fn draw_field(
     field: Field,
     label: &str,
 ) {
+    state.record_field_rect(field, area);
     let focused = state.focus() == field;
     let [label_row, text_rows] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);

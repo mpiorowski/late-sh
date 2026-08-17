@@ -31,6 +31,9 @@ pub(crate) struct RoomSearchModalState {
     /// The `(scope, text)` of the last fired search, so an unchanged query
     /// never refires.
     last_fired_key: Option<(Option<Uuid>, String)>,
+    /// Screen-y → item index for each result row drawn this frame, so a click
+    /// can select the room under the pointer. Interior-mutable (render has `&`).
+    item_rows: std::cell::RefCell<Vec<(u16, usize)>>,
 }
 
 impl RoomSearchModalState {
@@ -72,6 +75,29 @@ impl RoomSearchModalState {
 
     pub(crate) fn selected(&self) -> usize {
         self.selected
+    }
+
+    pub(crate) fn set_selected(&mut self, index: usize) {
+        self.selected = index;
+    }
+
+    /// Clear last frame's clickable rows (call before recording this frame's).
+    pub(crate) fn clear_item_rows(&self) {
+        self.item_rows.borrow_mut().clear();
+    }
+
+    /// Record that a result row for `index` is drawn at screen row `y`.
+    pub(crate) fn record_item_row(&self, y: u16, index: usize) {
+        self.item_rows.borrow_mut().push((y, index));
+    }
+
+    /// The item index drawn at screen row `y`, if a click landed on one.
+    pub(crate) fn item_at(&self, y: u16) -> Option<usize> {
+        self.item_rows
+            .borrow()
+            .iter()
+            .find(|(row_y, _)| *row_y == y)
+            .map(|(_, index)| *index)
     }
 
     pub(crate) fn push(&mut self, ch: char) {
@@ -156,6 +182,8 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             }
             RoomSlot::Feeds
             | RoomSlot::News
+            | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceRoom(_)
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
@@ -212,9 +240,26 @@ fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
 }
 
 fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
+    // A pinned cyberspace room is the one synthetic entry with a name of its
+    // own rather than a fixed label, so it is resolved before the roster.
+    if let RoomSlot::CyberspaceRoom(index) = slot {
+        let label = match chat.cyberspace.pinned_rooms().get(index) {
+            Some(slug) => format!("#{slug}"),
+            None => "#room".to_string(),
+        };
+        return RoomSearchItem {
+            slot,
+            label,
+            meta: "cyberspace chat".to_string(),
+            unread_count: 0,
+            last_message_at: None,
+            favorite: false,
+        };
+    }
     let (label, meta, unread_count) = match slot {
         RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
+        RoomSlot::Cyberspace => ("feeds", "cyberspace.online", chat.cyberspace.unread_count()),
         RoomSlot::Notifications => (
             "mentions",
             "notifications",
@@ -223,8 +268,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
-        RoomSlot::Room(_) => {
-            unreachable!("real rooms are built from ChatRoom")
+        RoomSlot::Room(_) | RoomSlot::CyberspaceRoom(_) => {
+            unreachable!("real rooms are built from ChatRoom, pinned rooms just above")
         }
     };
 

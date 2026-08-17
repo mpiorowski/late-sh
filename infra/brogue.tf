@@ -15,10 +15,8 @@
 # single-node local-path reasoning as dcss.tf.
 
 locals {
-  # BROGUE_ENABLED arrives as an empty string from CI when the GitHub variable
-  # is unset; default it on. This gates only the CLIENT door (service-ssh's
-  # LATE_BROGUE_ENABLED); the late-brogue host pod is always deployed.
-  brogue_enabled = trimspace(var.BROGUE_ENABLED) != "" ? trimspace(var.BROGUE_ENABLED) : "1"
+  # Whether the brogue door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-brogue host pod is always deployed.
 
   # The playground root on the PVC; each child runs in players/<playname>
   # under it. MUST match LATE_BROGUE_DATA_DIR's default baked into the host

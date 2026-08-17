@@ -21,13 +21,32 @@ fn item_category_maps_kinds_to_panel_sections() {
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Weapon)), "Weapons");
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Chest)), "Armor");
     assert_eq!(item_category(&ItemKind::Equipment(Slot::Ring)), "Armor");
+    // An actual heal/restore consumable groups under "Heals"...
     assert_eq!(
         item_category(&ItemKind::Consumable {
             heal: 30,
             restore: 0
         }),
+        "Heals"
+    );
+    assert_eq!(
+        item_category(&ItemKind::Consumable {
+            heal: 0,
+            restore: 20
+        }),
+        "Heals"
+    );
+    // ...while a non-heal consumable (a zero-heal Consumable, or a Utility
+    // item like a poison) groups under the more general "Consumables",
+    // separate from pure sell-fodder "Valuables".
+    assert_eq!(
+        item_category(&ItemKind::Consumable {
+            heal: 0,
+            restore: 0
+        }),
         "Consumables"
     );
+    assert_eq!(item_category(&ItemKind::Utility), "Consumables");
     assert_eq!(item_category(&ItemKind::Valuable), "Valuables");
 }
 
@@ -464,6 +483,40 @@ fn world_clock_cycles_through_day_phases_and_weather() {
         Weather::from_ticks(0),
         Weather::from_ticks(WEATHER_TICKS * 2)
     );
+    // Every phase gets its own glyph, and "dark" lines up with dusk/night
+    // exactly (the UI colours the clock as a danger cue from this flag).
+    let phases = [
+        TimeOfDay::Dawn,
+        TimeOfDay::Day,
+        TimeOfDay::Dusk,
+        TimeOfDay::Night,
+    ];
+    let glyphs: std::collections::HashSet<&str> = phases.iter().map(|p| p.glyph()).collect();
+    assert_eq!(glyphs.len(), 4, "every phase has a distinct glyph");
+    assert!(!TimeOfDay::Dawn.is_dark());
+    assert!(!TimeOfDay::Day.is_dark());
+    assert!(TimeOfDay::Dusk.is_dark());
+    assert!(TimeOfDay::Night.is_dark());
+}
+
+#[test]
+fn stray_feeding_day_boundary_is_spelled_out_in_real_time() {
+    // The bug: "come back tomorrow" left players guessing when "tomorrow"
+    // actually starts, and easy to confuse with the much faster in-game
+    // Dawn/Day/Dusk/Night clock (a ~16-minute cycle, not a real day).
+    let countdown = time_until_next_utc_day();
+    assert!(
+        countdown.ends_with('m'),
+        "always at least a minutes component: {countdown}"
+    );
+    // Never a full day or more, and never negative/absurd - it counts down
+    // to the *next* midnight, always less than 24h away.
+    if let Some(h) = countdown.split('h').next()
+        && countdown.contains('h')
+    {
+        let hours: i64 = h.trim().parse().expect("leading hours are numeric");
+        assert!((0..24).contains(&hours), "got {countdown}");
+    }
 }
 
 #[test]
@@ -526,27 +579,43 @@ fn world_boss_rises_on_schedule_and_is_announced() {
 
 #[test]
 fn board_bounty_accepts_then_pays_out_on_claim() {
-    use super::super::world::{TASMANIA_SQUARE, features_at};
+    use super::super::world::TASMANIA_SQUARE;
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = TASMANIA_SQUARE;
-    let board = features_at(TASMANIA_SQUARE)
-        .iter()
-        .position(|f| f.kind == FeatureKind::Board)
-        .expect("a board stands in the Tasmania square");
+    // Bounty 1 hunts the Catacombs, which sit behind the Archdemon's gate;
+    // this test exercises the accept/claim flow, so open the gate first
+    // (sealed-posting behavior has its own test).
+    s.award_title(uid(1), FRONTIER_GATE_TITLE.to_string(), 1);
 
-    // First examine accepts the next bounty (id 1).
-    s.interact(uid(1), board);
+    // The board's picker lists bounty 1 as available before it's taken.
+    let entries = s.board_entries(uid(1), TASMANIA_SQUARE);
+    let posting = entries
+        .iter()
+        .find(|e| e.quest_id == 1)
+        .expect("bounty 1 is posted and available");
+    assert!(!posting.ready, "not accepted yet, so not claimable");
+    assert!(!posting.blurb.is_empty(), "the picker shows the blurb");
+    assert!(!posting.objective.is_empty(), "and the objective");
+
+    s.accept_board_quest(uid(1), 1);
     assert!(
         s.players[&uid(1)]
             .board_progress
             .iter()
             .any(|(id, _)| *id == 1),
-        "examining the board accepts the next bounty"
+        "accepting from the picker takes the bounty"
+    );
+    // Once accepted, the picker no longer offers it again as a fresh posting.
+    assert!(
+        !s.board_entries(uid(1), TASMANIA_SQUARE)
+            .iter()
+            .any(|e| e.quest_id == 1 && !e.ready),
+        "an already-accepted bounty isn't offered again"
     );
 
-    // Force it complete, then claim on the next examine.
+    // Force it complete: the picker now shows it as ready to claim.
     for e in s
         .players
         .get_mut(&uid(1))
@@ -558,8 +627,15 @@ fn board_bounty_accepts_then_pays_out_on_claim() {
             e.1 = 99;
         }
     }
+    let ready = s
+        .board_entries(uid(1), TASMANIA_SQUARE)
+        .into_iter()
+        .find(|e| e.quest_id == 1)
+        .expect("the finished bounty is still listed");
+    assert!(ready.ready, "a finished bounty shows as ready to claim");
+
     let gold_before = s.players[&uid(1)].gold;
-    s.interact(uid(1), board);
+    s.claim_board_quest(uid(1), 1);
     // Quest 1 is a Daily, so a claim records a cooldown rather than a
     // permanent done-flag.
     assert!(
@@ -580,6 +656,89 @@ fn board_bounty_accepts_then_pays_out_on_claim() {
             .iter()
             .any(|(id, _)| *id == 1),
         "a claimed bounty leaves the active list"
+    );
+}
+
+#[test]
+fn accepting_a_bounty_not_offered_by_the_picker_is_a_no_op() {
+    // A stale or tampered quest_id (already accepted elsewhere, on cooldown,
+    // or simply never offered) must not be acceptable out of band - only
+    // what the picker actually lists.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players
+        .get_mut(&uid(1))
+        .unwrap()
+        .board_progress
+        .push((1, 0));
+    let before = s.players[&uid(1)].board_progress.clone();
+
+    s.accept_board_quest(uid(1), 1); // already in progress
+    assert_eq!(
+        s.players[&uid(1)].board_progress,
+        before,
+        "accepting an already-active bounty changes nothing"
+    );
+
+    s.claim_board_quest(uid(1), 1); // not yet ready
+    assert_eq!(
+        s.players[&uid(1)].board_progress,
+        before,
+        "claiming an unfinished bounty changes nothing"
+    );
+}
+
+#[test]
+fn quest_journal_rows_carry_a_real_description() {
+    // The bug: a quest's name alone doesn't say what it actually asks for -
+    // players couldn't remember what a bounty was after the one-time
+    // accept-time log line scrolled off. Every row must now say so directly.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players
+        .get_mut(&uid(1))
+        .unwrap()
+        .board_progress
+        .push((1, 0));
+
+    let quests = s.snapshot().players[&uid(1)].quests.clone();
+    let bounty = quests
+        .iter()
+        .find(|q| q.name.starts_with("Still the Restless Dead"))
+        .expect("the accepted bounty appears in the journal");
+    assert!(
+        bounty.desc.contains("Skeletons walk the crypt"),
+        "the bounty's blurb should be in its description: {:?}",
+        bounty.desc
+    );
+    assert!(
+        bounty.desc.contains("slay 5 of Skeleton-kind"),
+        "the mechanical objective should be in its description too: {:?}",
+        bounty.desc
+    );
+
+    // A fresh character sees no Frontier rows at all - twenty endgame quests
+    // used to drown the journal from level 1. They appear once the gate
+    // titles are held, each with a description.
+    assert!(
+        !quests.iter().any(|q| q.kind == QuestKind::Frontier),
+        "a locked Frontier lists no zone quests"
+    );
+    for title in FRONTIER_REQUIRED_TITLES {
+        s.award_title(uid(1), title.to_string(), 1);
+    }
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(view.frontier_open, "the gate titles open the Frontier");
+    let frontier = view
+        .quests
+        .iter()
+        .find(|q| q.kind == QuestKind::Frontier)
+        .expect("an open Frontier lists its zone quests");
+    assert!(
+        !frontier.desc.is_empty(),
+        "Frontier quests get a description too, not just board bounties"
     );
 }
 
@@ -664,17 +823,13 @@ fn daily_bounty_goes_on_cooldown_then_returns_after_a_day() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
-    let board = super::super::world::features_at(super::super::world::TASMANIA_SQUARE)
-        .iter()
-        .position(|f| f.kind == FeatureKind::Board)
-        .expect("board in the square");
     // Take and finish the daily bounty (id 1), then claim it.
     s.players
         .get_mut(&uid(1))
         .unwrap()
         .board_progress
         .push((1, 99));
-    s.interact(uid(1), board);
+    s.claim_board_quest(uid(1), 1);
     assert!(
         s.players[&uid(1)]
             .quest_cooldowns
@@ -937,6 +1092,73 @@ fn recall_returns_to_the_town_square() {
 }
 
 #[test]
+fn waypoint_can_be_set_and_warped_to_from_anywhere() {
+    // Community-reported pain point: the far run between Embergate and the
+    // Frontier's deep levels for healing/resurrecting a downed pet. A player
+    // should be able to mark a spot and warp back to it later, from anywhere.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let deep = super::super::world::frontier_entrance_room() + 400;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = deep;
+        p.gold = 1_000;
+    }
+    s.set_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].waypoint,
+        Some(deep),
+        "the waypoint marks the room it was set in"
+    );
+
+    // Now walk away (back to the square) and warp back.
+    let home = s.world.start_room;
+    s.players.get_mut(&uid(1)).unwrap().room = home;
+    let gold_before = s.players[&uid(1)].gold;
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        deep,
+        "warping returns to the marked waypoint, not just the town square"
+    );
+    assert_eq!(
+        s.players[&uid(1)].gold,
+        gold_before - WAYPOINT_WARP_COST,
+        "warping to a waypoint costs gold, unlike the free word of recall"
+    );
+}
+
+#[test]
+fn warp_to_waypoint_refuses_without_one_set_or_without_enough_gold() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let start = s.players[&uid(1)].room;
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        start,
+        "no waypoint set: nothing happens"
+    );
+
+    let deep = super::super::world::frontier_entrance_room() + 400;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = deep;
+        p.gold = 0;
+    }
+    s.set_waypoint(uid(1));
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
+    s.warp_to_waypoint(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        s.world.start_room,
+        "not enough gold: the warp is refused"
+    );
+}
+
+#[test]
 fn first_dungeon_descent_requires_elder_treant_title() {
     let mut s = world();
     s.join(uid(1));
@@ -1005,6 +1227,7 @@ fn frontier_entrance_requires_archdemon_title_then_confirming_move() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     let home = s.world.start_room;
+    s.players.get_mut(&uid(1)).unwrap().room = home;
 
     s.move_player(uid(1), Dir::Down);
     assert_eq!(
@@ -1074,6 +1297,7 @@ fn frontier_warning_clears_when_moving_elsewhere() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
     grant_frontier_unlock_titles(&mut s, uid(1));
 
     s.move_player(uid(1), Dir::Down);
@@ -1088,6 +1312,7 @@ fn town_square_exit_labels_mark_frontier_as_dangerous() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = s.world.start_room;
 
     let snap = s.snapshot();
     let view = snap.players.get(&uid(1)).expect("player view");
@@ -1165,23 +1390,33 @@ fn hunting_small_game_grants_xp_then_cools_down() {
 
 #[test]
 fn a_boon_creature_mends_on_arrival() {
+    // The bug: Mend used to be a small partial heal, so fully healing meant
+    // walking in and out of the room over and over. It should just heal you
+    // all the way in one visit.
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    let max = s.players[&uid(1)].max_hp();
     if let Some(p) = s.players.get_mut(&uid(1)) {
         p.hp = 1;
+        // Room 1, the town square, is home to the hearth-cat (Mend boon).
+        p.room = 1;
     }
-    // The player starts in the town square, home of the hearth-cat (Mend boon).
     s.apply_critter_perks(uid(1));
-    assert!(s.players[&uid(1)].hp > 1, "the hearth-cat should mend you");
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        max,
+        "the hearth-cat should mend you all the way, not partway"
+    );
 }
 
 #[test]
 fn unclassed_player_cannot_move_or_fight() {
     let mut s = world();
     s.join(uid(1));
+    let start = s.players[&uid(1)].room;
     s.move_player(uid(1), Dir::South);
-    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+    assert_eq!(s.players[&uid(1)].room, start);
     s.engage(uid(1));
     assert!(s.players[&uid(1)].target.is_none());
 }
@@ -1191,6 +1426,7 @@ fn buying_costs_gold_and_adds_item() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Walk to the smith (room 3, east of square).
     s.move_player(uid(1), Dir::East);
     assert_eq!(s.players[&uid(1)].room, 3);
@@ -1208,7 +1444,7 @@ fn waystone_travel_teleports_between_portals() {
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
     // Room 1 (Embergate square) has the town waystone.
-    assert_eq!(s.players[&uid(1)].room, 1);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.travel(uid(1), village_room(0));
     assert_eq!(
         s.players[&uid(1)].room,
@@ -1233,15 +1469,40 @@ fn travel_needs_a_waystone_and_a_real_destination() {
 }
 
 #[test]
-fn continent_waystones_honor_their_walking_gate_titles() {
+fn the_ways_only_carry_you_where_you_have_already_stood() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // Standing on Embergate's town waystone (room 1): Kaelmyr's far gate
-    // stays sealed until the Yssgar crown is earned.
+    // Stand on Embergate's town waystone the way a character walking out of
+    // Wayfarer's Hollow does: arriving is what marks the square visited, and
+    // no waystone can be used without standing on it first.
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    p.room = 1;
+    Arc::make_mut(&mut p.visited).insert(1);
+    s.travel(uid(1), super::super::world::LAKES_BASE);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        1,
+        "an ungated land you have never walked to is not on the network yet"
+    );
+    // Having stood at the landing once, it answers forever after.
+    let p = s.players.get_mut(&uid(1)).unwrap();
+    Arc::make_mut(&mut p.visited).insert(super::super::world::LAKES_BASE);
+    s.travel(uid(1), super::super::world::LAKES_BASE);
+    assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
+    // And the way home is always open, since that is where you began.
+    s.travel(uid(1), 1);
     assert_eq!(s.players[&uid(1)].room, 1);
-    s.travel(uid(1), super::super::world::KAELMYR_BASE);
-    assert_eq!(s.players[&uid(1)].room, 1, "a sealed gate refuses the ways");
+}
+
+#[test]
+fn a_gate_title_alone_does_not_open_the_ways() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    // Crowned Bane of Yssgar, but never once through the wound below his
+    // chamber: the title is permission to walk in, not to skip the walk.
     s.players
         .get_mut(&uid(1))
         .unwrap()
@@ -1250,27 +1511,25 @@ fn continent_waystones_honor_their_walking_gate_titles() {
     s.travel(uid(1), super::super::world::KAELMYR_BASE);
     assert_eq!(
         s.players[&uid(1)].room,
-        super::super::world::KAELMYR_BASE,
-        "the crowned traveler passes"
+        1,
+        "the Ways carry no progression rules of their own"
     );
-    // Open lands need no title, and the town waystone routes home again.
-    s.travel(uid(1), super::super::world::LAKES_BASE);
-    assert_eq!(s.players[&uid(1)].room, super::super::world::LAKES_BASE);
-    s.travel(uid(1), 1);
-    assert_eq!(s.players[&uid(1)].room, 1);
 }
 
 #[test]
-fn continent_waystone_titles_match_the_walking_gates() {
-    for (label, room, required) in super::super::world::CONTINENT_WAYSTONES {
-        if super::super::world::is_kaelmyr_room(*room) {
-            assert_eq!(*required, Some(KAELMYR_GATE_TITLE), "{label}");
-        } else if super::super::world::is_reaches_room(*room) {
-            assert_eq!(*required, Some(REACHES_GATE_TITLE), "{label}");
-        } else {
-            assert_eq!(*required, None, "{label} is an open land");
-        }
-    }
+fn the_archipelago_answers_without_a_title_or_a_prior_visit() {
+    use super::super::archipelago::{island_entrance, village_room};
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    // Villages and island landings have no directional exits at all, so a
+    // visited rule would orphan them. They stay open to a level 1, Lv100
+    // island bosses and all.
+    s.travel(uid(1), village_room(0));
+    assert_eq!(s.players[&uid(1)].room, village_room(0));
+    s.travel(uid(1), island_entrance(3));
+    assert_eq!(s.players[&uid(1)].room, island_entrance(3));
 }
 
 #[test]
@@ -1318,6 +1577,7 @@ fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::East); // to the smithy (room 3), a merchant
     assert_eq!(s.players[&uid(1)].room, 3);
     {
@@ -1341,11 +1601,42 @@ fn sell_batch_dumps_junk_but_keeps_upgrades_and_potions() {
 }
 
 #[test]
+fn poisons_survive_every_batch_sell_mode_and_group_under_consumables() {
+    // The bug: poisons were classified `Valuable`, so any of the three
+    // batch-sell hotkeys (not just "sell all") could wipe them out right
+    // alongside pure sell-fodder gems and raw materials, and they showed up
+    // grouped with junk in the "Valuables" category instead of with the
+    // other pack items you actually use.
+    let poison = super::super::items::poison_id(1);
+    assert_eq!(
+        item_category(&item(poison).unwrap().kind),
+        "Consumables",
+        "a poison should not be grouped with pure sell-fodder valuables"
+    );
+
+    for kind in [SellBatch::All, SellBatch::Common, SellBatch::NonUpgrades] {
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        s.players.get_mut(&uid(1)).unwrap().room = 1;
+        s.move_player(uid(1), Dir::East); // the smithy (room 3), a merchant
+        s.players.get_mut(&uid(1)).unwrap().inventory = vec![poison];
+
+        s.sell_batch(uid(1), kind);
+        assert!(
+            s.players[&uid(1)].inventory.contains(&poison),
+            "{kind:?} must never dump a poison"
+        );
+    }
+}
+
+#[test]
 fn buying_a_companion_costs_gold_and_sets_a_pet() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
-    // A fresh adventurer stands in Embergate's square, which has a stable.
+    // Embergate's square (room 1) has a stable.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.players.get_mut(&uid(1)).unwrap().gold = 1000;
     s.buy_pet(uid(1), "war_hound");
     let p = &s.players[&uid(1)];
@@ -1429,6 +1720,32 @@ fn feeding_at_a_stable_revives_and_strengthens_a_companion() {
     assert_eq!(s.players[&uid(1)].gold, 500 - PET_FEED_COST);
 }
 
+#[test]
+fn feeding_works_anywhere_not_just_at_a_stable() {
+    // Reported pain point: a pet going down mid-fight deep in the Frontier
+    // used to be stuck downed until a long walk back to a capital's Stable.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+    let mut pet = super::super::pets::Pet::new(species, 0);
+    pet.downed = true;
+    pet.hp = 0;
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.pet = Some(pet);
+        p.gold = 500;
+        p.room = super::super::world::frontier_entrance_room() + 400; // deep in the Frontier
+    }
+    s.feed_pet(uid(1));
+    let pet = s.players[&uid(1)].pet.unwrap();
+    assert!(
+        !pet.downed,
+        "feeding revives a downed companion far from any stable"
+    );
+    assert_eq!(pet.hp, pet.max_hp());
+}
+
 // The forest gate (entrance) room of Broceliande zone 0, where the easiest
 // tameable beasts roam.
 fn broceliande_beast_room() -> RoomId {
@@ -1446,7 +1763,7 @@ fn taming_a_beast_makes_it_your_companion_and_trains_the_trade() {
     let beasts = super::super::taming::beasts_at(broceliande_beast_room());
     assert!(!beasts.is_empty(), "beasts roam the first forest gate");
     let beast_index = beasts[0].species;
-    let species = &TAMEABLE[beast_index];
+    let species = super::super::taming::beast_species(beast_index);
     let cooldown_key = (user_id, beast_index);
     let baseline_xp = super::super::skills::xp_for_skill_level(species.tame_level);
     s.players.get_mut(&user_id).unwrap().taming_xp = baseline_xp;
@@ -1713,6 +2030,7 @@ fn bank_toggles_between_deposit_and_withdraw_all_gold() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
 
     // Find the banker's grille by kind - feature indices shift as scenery
     // (e.g. a stable) is added to the square.
@@ -1828,10 +2146,113 @@ fn worn_gear_cannot_be_sold_out_from_under_you() {
 }
 
 #[test]
+fn inventory_and_shop_rows_carry_the_items_own_description() {
+    // Item.desc existed but was never plumbed into any view - inventory and
+    // shop rows showed stats with no flavor/description text at all.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3; // Embergate's merchant
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let expected = item(1006).unwrap().desc;
+    assert!(!expected.is_empty(), "the fixture item has real desc text");
+
+    let view = s.snapshot().players[&uid(1)].clone();
+    let inv_row = view
+        .inventory
+        .iter()
+        .find(|it| it.item_id == 1006)
+        .expect("the item appears in the inventory view");
+    assert_eq!(inv_row.desc, expected);
+
+    let shop_row = view
+        .shop
+        .expect("a merchant stands here")
+        .entries
+        .iter()
+        .find(|e| e.item_id == 1006)
+        .map(|e| e.desc);
+    if let Some(shop_desc) = shop_row {
+        assert_eq!(
+            shop_desc, expected,
+            "the shop row should carry the same desc"
+        );
+    }
+}
+
+#[test]
+fn a_loose_duplicate_of_worn_gear_can_still_be_sold() {
+    // The bug: selling required unequipping first even when a second, loose
+    // copy of the same item sat right there in the pack.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 3;
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    s.equip(uid(1), 1006);
+    // A second copy, still loose in the pack.
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(1006);
+    let gold = s.players[&uid(1)].gold;
+    let price = item(1006).unwrap().sell_price();
+
+    s.sell(uid(1), 1006);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.gold, gold + price, "the loose copy sold");
+    assert!(
+        p.equipped.values().any(|id| *id == 1006),
+        "the worn copy stayed on"
+    );
+    assert!(
+        !p.inventory.contains(&1006),
+        "the loose copy left the pack: {:?}",
+        p.inventory
+    );
+}
+
+// ---- character slots (multiple saved characters per account) -------------
+
+#[test]
+fn empty_slot_summary_reads_as_unoccupied() {
+    let summary = SlotSummary::empty(3);
+    assert_eq!(summary.slot, 3);
+    assert!(!summary.occupied);
+    assert_eq!(summary.class, None);
+    assert_eq!(summary.level, 0);
+}
+
+#[test]
+fn slot_summary_from_a_save_reads_its_class_and_level() {
+    let saved = SavedCharacter::from_json(&serde_json::json!({
+        "class": "warrior",
+        "level": 14,
+    }))
+    .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(2, &saved);
+    assert_eq!(summary.slot, 2);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, Some(Class::Warrior));
+    assert_eq!(summary.level, 14);
+}
+
+#[test]
+fn slot_summary_before_a_class_is_chosen_still_reads_as_occupied() {
+    // A character mid-tutorial (joined, never picked a class) has a real save
+    // to resume or delete, even with no class to show yet.
+    let saved = SavedCharacter::from_json(&serde_json::json!({ "level": 1 }))
+        .expect("well-formed blob parses");
+
+    let summary = SlotSummary::from_saved(0, &saved);
+    assert!(summary.occupied);
+    assert_eq!(summary.class, None);
+}
+
+#[test]
 fn rogue_opening_strike_is_flagged_then_consumed() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Rogue);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1847,6 +2268,7 @@ fn combat_tick_logs_player_auto_attack() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     // Move to a combat room with a mob (room 6, goblin) and engage.
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
@@ -1856,26 +2278,68 @@ fn combat_tick_logs_player_auto_attack() {
 
     let log = &s.players[&uid(1)].log;
     assert!(
-        log.iter()
-            .any(|line| line.kind == LogKind::Combat && line.text.starts_with("You strike ")),
+        log.iter().any(|line| line.kind == LogKind::Combat
+            && (line.text.starts_with("You strike ") || line.text.starts_with("You crush into "))),
         "auto-attacks should be visible in the combat log"
     );
 }
 
 #[test]
-fn movement_keeps_a_compact_travel_line_in_recent_log() {
+fn field_mode_logs_discoveries_only_and_classic_logs_every_arrival() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Mage);
-    s.move_player(uid(1), Dir::North);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1;
+        // Room 1 is "known land" for this test's purposes, same as it was
+        // when a fresh join placed a character there directly.
+        std::sync::Arc::make_mut(&mut p.visited).insert(1);
+    }
 
-    assert!(
+    // First footfall in field mode (rpg on by default): a discovery line plus
+    // the room's prose, which has nowhere else to live on the field layout.
+    s.move_player(uid(1), Dir::North);
+    let flagon_desc = s
+        .world
+        .room(s.players[&uid(1)].room)
+        .expect("player stands in a real room")
+        .desc
+        .to_string();
+    let travel_texts = |s: &WorldState| -> Vec<String> {
         s.players[&uid(1)]
             .log
             .iter()
-            .any(|line| line.kind == LogKind::Travel
-                && line.text == "Arrived at Embergate - The Gilded Flagon."),
-        "movement should leave a compact room-visit breadcrumb"
+            .filter(|l| l.kind == LogKind::Travel)
+            .map(|l| l.text.clone())
+            .collect()
+    };
+    let after_discovery = travel_texts(&s);
+    assert!(
+        after_discovery.contains(&"You find Embergate - The Gilded Flagon.".to_string()),
+        "first footfall should announce the discovery: {after_discovery:?}"
+    );
+    assert!(
+        after_discovery.contains(&flagon_desc),
+        "the discovery should carry the room's prose into the feed"
+    );
+
+    // Stepping back through known land in field mode says nothing: the @ on
+    // the field and the Here panel already tell the story.
+    s.move_player(uid(1), Dir::South);
+    assert_eq!(
+        travel_texts(&s),
+        after_discovery,
+        "a field-mode revisit must not add travel lines"
+    );
+
+    // Classic mode keeps the per-step breadcrumb, discovery or not.
+    s.players.get_mut(&uid(1)).unwrap().rpg_mode = false;
+    s.move_player(uid(1), Dir::North);
+    assert_eq!(
+        travel_texts(&s).last().map(String::as_str),
+        Some("Arrived at Embergate - The Gilded Flagon."),
+        "classic mode should keep its room-visit breadcrumb"
     );
 }
 
@@ -1884,6 +2348,7 @@ fn warrior_does_not_arm_opening_strike() {
     let mut s = world();
     s.join(uid(1));
     s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
     s.move_player(uid(1), Dir::South);
     s.move_player(uid(1), Dir::South);
     s.engage(uid(1));
@@ -2000,6 +2465,43 @@ fn slaying_a_foe_grants_a_themed_title() {
         "boss -> Bane of ..."
     );
     assert_eq!(titles.iter().filter(|t| *t == "Wretchbane").count(), 1);
+}
+
+#[test]
+fn only_bosses_grant_titles_on_a_real_kill() {
+    // 426 distinct regular foes used to each mint their own "...bane" title on
+    // first kill, burying the handful that mean anything under a wall of
+    // trash titles. Only a boss kill should add one now.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let regular_id = *s
+        .mobs
+        .iter()
+        .find(|(_, m)| !m.spawn.boss)
+        .map(|(id, _)| id)
+        .expect("world has a regular mob");
+    s.kill_mob(uid(1), regular_id);
+    assert!(
+        s.players[&uid(1)].titles.is_empty(),
+        "a regular kill should grant no title"
+    );
+    let boss_id = *s
+        .mobs
+        .iter()
+        .find(|(_, m)| m.spawn.boss)
+        .map(|(id, _)| id)
+        .expect("world has a boss");
+    s.kill_mob(uid(1), boss_id);
+    let titles = s.players[&uid(1)].titles.clone();
+    assert!(
+        !titles.is_empty(),
+        "a boss kill should grant at least its themed title"
+    );
+    assert!(
+        titles.iter().any(|t| t.starts_with("Bane of ")),
+        "a boss kill should grant its \"Bane of ...\" title; got {titles:?}"
+    );
 }
 
 #[test]
@@ -2198,6 +2700,42 @@ fn a_capital_fountain_restores_vitals_and_revives() {
 }
 
 #[test]
+fn talking_to_a_villager_speaks_their_line_and_the_room_announces_them() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate's Town Square
+    let idx = super::super::world::features_at(1)
+        .iter()
+        .position(|f| f.kind == FeatureKind::Villager)
+        .expect("the town square has a villager");
+    let name = super::super::world::features_at(1)[idx].name;
+
+    s.interact(uid(1), idx);
+    let log = &s.players[&uid(1)].log;
+    assert!(
+        log.iter()
+            .any(|l| l.text.contains(name) && l.text.contains("says:")),
+        "talking to a villager should speak their line"
+    );
+    assert!(
+        !log.iter().any(|l| l.text.contains("for a moment")),
+        "the vague 'you ask X for a moment' preamble reads as an unfulfilled \
+         action ('...and? that's it?') and should be gone - the dialogue \
+         line above is the whole interaction, not a placeholder for one"
+    );
+
+    // The room description announces them up front, not hidden in a menu.
+    s.describe_room(uid(1));
+    let log = &s.players[&uid(1)].log;
+    assert!(
+        log.iter()
+            .any(|l| l.text.contains(name) && l.text.contains("waiting for a question")),
+        "a villager should always be announced, waiting for a question"
+    );
+}
+
+#[test]
 fn ability_scores_change_derived_stats() {
     let mut s = world();
     s.join(uid(1));
@@ -2217,4 +2755,1391 @@ fn ability_scores_change_derived_stats() {
         "STR raises attack"
     );
     assert!(s.players[&uid(1)].max_hp() > base_hp, "CON raises max HP");
+}
+
+#[test]
+fn quaff_drinks_the_smallest_potion_that_covers_the_wound() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let (small, mid, big) = (potion_id(0), potion_id(2), potion_id(4)); // heal 25 / 75 / 180
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.base_max_hp = 200;
+        p.inventory.extend([small, mid, big]);
+        let max = p.max_hp();
+        p.hp = max - 60; // missing 60: 25 is too small, 75 and 180 both cover
+    }
+    s.quaff_best(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(
+        !p.inventory.contains(&mid),
+        "should drink the 75 potion (smallest that covers 60)"
+    );
+    assert!(
+        p.inventory.contains(&small) && p.inventory.contains(&big),
+        "should leave the too-small and the oversized potion untouched"
+    );
+}
+
+#[test]
+fn quaff_falls_back_to_the_biggest_when_nothing_covers() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let (small, big) = (potion_id(0), potion_id(3)); // heal 25 / 120
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.base_max_hp = 400;
+        p.inventory.extend([small, big]);
+        p.hp = 1; // missing ~399: neither potion covers it, so take the biggest
+    }
+    s.quaff_best(uid(1));
+    let p = &s.players[&uid(1)];
+    assert!(
+        !p.inventory.contains(&big),
+        "should drink the biggest available potion"
+    );
+    assert!(p.inventory.contains(&small), "should keep the small one");
+}
+
+#[test]
+fn quaff_at_full_health_drinks_nothing() {
+    use super::super::items::potion_id;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let potion = potion_id(2);
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(potion);
+    s.quaff_best(uid(1));
+    assert!(
+        s.players[&uid(1)].inventory.contains(&potion),
+        "a full-health quaff must not waste a potion"
+    );
+}
+
+#[test]
+fn clicking_a_foe_locks_onto_that_exact_foe() {
+    const ROOM: RoomId = 2001; // Frontier interior: non-safe, so fighting is allowed
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Put two distinct foes in the room.
+    let ids: Vec<u32> = s.mobs.keys().copied().take(2).collect();
+    assert_eq!(ids.len(), 2, "world seeds at least two mobs to place");
+    for &id in &ids {
+        let m = s.mobs.get_mut(&id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+        m.leash_home = ROOM;
+    }
+    s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+    // A click on the second foe's row locks onto that exact foe, not the first.
+    s.engage_mob(uid(1), ids[1]);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        Some(ids[1]),
+        "targets the clicked foe"
+    );
+}
+
+#[test]
+fn clicking_a_vanished_foe_falls_back_to_whatever_is_here() {
+    const ROOM: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let present = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&present).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+        m.leash_home = ROOM;
+    }
+    s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+    // Clicking a foe id that isn't here (slain, fled, stale row) still engages
+    // whatever is present rather than dead-ending.
+    s.engage_mob(uid(1), 424_242);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        Some(present),
+        "falls back to the foe that's actually here"
+    );
+}
+
+#[test]
+fn no_fighting_in_a_safe_haven_even_by_click() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Start room is a safe haven; a click must not start a fight there.
+    let start = s.players[&uid(1)].room;
+    assert!(s.world.room(start).is_some_and(|r| r.safe), "start is safe");
+    s.engage_mob(uid(1), 424_242);
+    assert_eq!(
+        s.players[&uid(1)].target,
+        None,
+        "no target taken in a safe haven"
+    );
+}
+
+#[test]
+fn nearby_foes_lists_foes_in_neighbouring_rooms() {
+    const HERE: RoomId = 2001; // Frontier interior
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit to a neighbour");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = there;
+    }
+    let snap = s.snapshot();
+    let view = &snap.players[&uid(1)];
+    assert!(
+        view.nearby_foes.contains(&there),
+        "a foe in the next room shows on the live field"
+    );
+    assert!(
+        !view.nearby_foes.contains(&HERE),
+        "your own room is not listed as a nearby foe (that's the @ tile)"
+    );
+}
+
+#[test]
+fn rpg_mode_off_skips_the_field_hint_lists() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = there;
+    }
+    // With the field hidden, the hint lists are dead weight; the snapshot
+    // must not spend the window scan on them.
+    s.players.get_mut(&uid(1)).unwrap().rpg_mode = false;
+    let snap = s.snapshot();
+    let view = &snap.players[&uid(1)];
+    assert!(
+        view.nearby_foes.is_empty() && view.nearby_players.is_empty(),
+        "no field, no nearby hints"
+    );
+    // The room's own mob list is combat UI, not a field hint: still there.
+    assert!(
+        s.players.get_mut(&uid(1)).map(|p| p.room = there).is_some()
+            && !s.snapshot().players[&uid(1)].mobs.is_empty(),
+        "the in-room mob list is unaffected by rpg_mode"
+    );
+}
+
+#[test]
+fn a_hidden_foe_is_not_leaked_onto_the_field() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // Clear the field so the only foe near us is the one we control.
+    for m in s.mobs.values_mut() {
+        m.alive = false;
+    }
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = false; // still hidden in the fog
+        m.current_room = there;
+    }
+    assert!(
+        !s.snapshot().players[&uid(1)].nearby_foes.contains(&there),
+        "an unrevealed foe must not be spoiled on the field"
+    );
+    // Once revealed, it shows.
+    s.mobs.get_mut(&mob_id).unwrap().revealed = true;
+    assert!(
+        s.snapshot().players[&uid(1)].nearby_foes.contains(&there),
+        "a revealed foe next door shows on the field"
+    );
+}
+
+#[test]
+fn nearby_players_lists_adventurers_in_neighbouring_rooms() {
+    const HERE: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let there = s
+        .world
+        .room(HERE)
+        .and_then(|r| r.exits.values().next().copied())
+        .expect("the room has an exit");
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // A second adventurer standing in the next room.
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(2)).unwrap().room = there;
+    let snap = s.snapshot();
+    assert!(
+        snap.players[&uid(1)].nearby_players.contains(&there),
+        "another adventurer next door shows on the field"
+    );
+    assert!(
+        !snap.players[&uid(1)].nearby_players.contains(&HERE),
+        "you don't count yourself"
+    );
+}
+
+// Wildbound riding: mounted movement strides multiple rooms per keypress.
+#[test]
+fn a_mounted_step_strides_the_full_length_of_the_road() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Find a straight 6-room east chain inside one region (no gateways).
+    let chain = {
+        let mut found: Option<Vec<RoomId>> = None;
+        'scan: for &start in s.world.rooms.keys() {
+            let mut chain = vec![start];
+            let mut cur = start;
+            for _ in 0..5 {
+                let Some(&next) = s.world.room(cur).and_then(|r| r.exits.get(&Dir::East)) else {
+                    continue 'scan;
+                };
+                // Stay well inside one id band so no progression gate triggers.
+                if next.abs_diff(start) > 300 {
+                    continue 'scan;
+                }
+                chain.push(next);
+                cur = next;
+            }
+            found = Some(chain);
+            break;
+        }
+        found.expect("the world has a straight six-room east road somewhere")
+    };
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = chain[0];
+        p.base_max_hp = 5000; // survive anything roaming the road
+        p.hp = 5000;
+        let serpent = super::super::taming::tameable_by_key("wb_worldserpent").unwrap();
+        p.pet = Some(Pet::new(serpent, 0));
+    }
+    s.toggle_mount(uid(1));
+    assert!(s.players[&uid(1)].mounted, "saddled up");
+    s.move_player(uid(1), Dir::East);
+    let landed = s.players[&uid(1)].room;
+    assert_eq!(
+        landed, chain[5],
+        "a stride-5 mount covers five rooms in one step"
+    );
+}
+
+#[test]
+fn you_cannot_ride_the_unrideable_and_combat_grounds_you() {
+    const ROOM: RoomId = 2001;
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // No pet at all: refused.
+    s.toggle_mount(uid(1));
+    assert!(!s.players[&uid(1)].mounted);
+    // A hare is not a horse: refused.
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let hare = super::super::taming::tameable_by_key("wt_hare").unwrap();
+        p.pet = Some(Pet::new(hare, 0));
+    }
+    s.toggle_mount(uid(1));
+    assert!(!s.players[&uid(1)].mounted, "a hare cannot carry a rider");
+    // A palfrey can - but starting a fight puts you back on your feet.
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        let palfrey = super::super::taming::tameable_by_key("wb_palfrey").unwrap();
+        p.pet = Some(Pet::new(palfrey, 0));
+        p.room = ROOM;
+    }
+    s.toggle_mount(uid(1));
+    assert!(s.players[&uid(1)].mounted);
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = ROOM;
+    }
+    s.engage(uid(1));
+    assert!(
+        !s.players[&uid(1)].mounted,
+        "combat slides you out of the saddle"
+    );
+}
+
+#[test]
+fn feeding_a_stray_daily_wins_it_over_as_a_companion() {
+    // Genesys: five consecutive days of feeding a wild adoptable critter wins
+    // it over as a stray, alongside any pet already kept - never replacing it.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.room = 1; // Embergate's Town Square, home to "a scruffy stray dog"
+        let species = super::super::pets::pet_species_by_key("war_hound").unwrap();
+        p.pet = Some(super::super::pets::Pet::new(species, 0)); // a healthy owned pet
+        p.gold = 1_000;
+    }
+
+    s.feed_pet(uid(1));
+    assert!(
+        s.players[&uid(1)].stray_bond.is_some(),
+        "the first feeding starts a bond"
+    );
+    assert!(
+        s.players[&uid(1)].stray.is_none(),
+        "not won over on day one"
+    );
+
+    // Roll four more days by rewinding "last fed" a day at a time.
+    for _ in 0..4 {
+        let (idx, streak, day) = s.players[&uid(1)].stray_bond.unwrap();
+        s.players.get_mut(&uid(1)).unwrap().stray_bond = Some((idx, streak, day - 1));
+        s.feed_pet(uid(1));
+    }
+
+    assert!(
+        s.players[&uid(1)].stray.is_some(),
+        "five consecutive days should win the stray over"
+    );
+    assert!(
+        s.players[&uid(1)].stray_bond.is_none(),
+        "the bond clears once adopted"
+    );
+    assert!(
+        s.players[&uid(1)].pet.is_some(),
+        "the stray joins on top of the pet the player already had, not instead of it"
+    );
+}
+
+#[test]
+fn a_stray_bond_resets_if_a_day_is_missed_and_wont_double_feed_same_day() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+
+    s.feed_pet(uid(1));
+    let (idx, streak, day) = s.players[&uid(1)].stray_bond.unwrap();
+    assert_eq!(streak, 1);
+
+    // Same-day re-feed: no change.
+    s.feed_pet(uid(1));
+    assert_eq!(s.players[&uid(1)].stray_bond, Some((idx, 1, day)));
+
+    // Skip two days instead of one: the streak resets to 1, not 2.
+    s.players.get_mut(&uid(1)).unwrap().stray_bond = Some((idx, streak, day - 2));
+    s.feed_pet(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].stray_bond.map(|(_, s, _)| s),
+        Some(1),
+        "missing a day should reset the streak, not continue it"
+    );
+}
+
+#[test]
+fn zone_boss_bounty_stays_pinned_to_the_legacy_level_cap() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let xp_before = s.players[&uid(1)].xp;
+    let gold_before = s.players[&uid(1)].gold;
+    // Wildbound widened DISPLAY levels to 100, promising "no xp or drop
+    // changes". A boss now reading level 100 must still pay the bounty the
+    // old 60-cap paid, or the display change silently inflates 20 one-time
+    // payouts.
+    s.complete_quest(uid(1), 0, 100);
+    let p = &s.players[&uid(1)];
+    assert_eq!(
+        p.xp - xp_before,
+        80 + 60 * 24,
+        "bounty xp pinned to the knee"
+    );
+    assert_eq!(
+        p.gold - gold_before,
+        35 + 60 * 6,
+        "bounty gold pinned to the knee"
+    );
+}
+
+#[test]
+fn say_defaults_to_the_room_and_ignores_other_rooms() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3));
+    s.choose_class(uid(3), Class::Ranger);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(2)).unwrap().room = 1; // same room
+    s.players.get_mut(&uid(3)).unwrap().room = 3; // different room, same zone (Embergate)
+
+    s.say(uid(1), "hello there");
+
+    let log1 = &s.players[&uid(1)].log;
+    assert!(log1.iter().any(|l| l.text == "You say: hello there"));
+    let log2 = &s.players[&uid(2)].log;
+    assert!(log2.iter().any(|l| l.text == "Someone says: hello there"));
+    let log3 = &s.players[&uid(3)].log;
+    assert!(
+        !log3.iter().any(|l| l.text.contains("hello there")),
+        "a bare say should not reach a different room, even in the same zone"
+    );
+}
+
+#[test]
+fn zone_say_reaches_the_whole_zone_but_not_other_zones() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3));
+    s.choose_class(uid(3), Class::Ranger);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 3; // Embergate, a different room
+    s.players.get_mut(&uid(3)).unwrap().room = 620; // Tasmania - a different zone entirely
+
+    s.say(uid(1), "/zone anyone nearby?");
+
+    let log1 = &s.players[&uid(1)].log;
+    assert!(
+        log1.iter()
+            .any(|l| l.text == "You say to the zone: anyone nearby?")
+    );
+    let log2 = &s.players[&uid(2)].log;
+    assert!(
+        log2.iter()
+            .any(|l| l.text == "Someone says to the zone: anyone nearby?"),
+        "a different room in the same zone should hear it"
+    );
+    let log3 = &s.players[&uid(3)].log;
+    assert!(
+        !log3.iter().any(|l| l.text.contains("anyone nearby")),
+        "a different zone should never hear it"
+    );
+
+    // The short "/z" form works the same way (cooldown reset: this test is
+    // about scope parsing, not the broadcast brake).
+    s.players.get_mut(&uid(1)).unwrap().log.clear();
+    s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = None;
+    s.say(uid(1), "/z short form works too");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("short form works too"))
+    );
+}
+
+#[test]
+fn world_say_reaches_every_adventurer_in_lateania() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // Tasmania - a different zone
+
+    s.say(uid(1), "/world hail, all of Lateania");
+
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say to all of Lateania: hail, all of Lateania")
+    );
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text == "Someone says to all of Lateania: hail, all of Lateania"),
+        "world scope should reach every player, any zone"
+    );
+
+    // The short "/w" form works the same way (cooldown reset: this test is
+    // about scope parsing, not the broadcast brake).
+    s.players.get_mut(&uid(1)).unwrap().log.clear();
+    s.players.get_mut(&uid(2)).unwrap().log.clear();
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = None;
+    s.say(uid(1), "/w short form too");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("short form too"))
+    );
+}
+
+#[test]
+fn broadcasts_are_held_by_a_cooldown_but_room_speech_is_not() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // Tasmania, hears world only
+
+    s.say(uid(1), "/world first call");
+    s.say(uid(1), "/world second call");
+    let log2 = &s.players[&uid(2)].log;
+    assert!(log2.iter().any(|l| l.text.contains("first call")));
+    assert!(
+        !log2.iter().any(|l| l.text.contains("second call")),
+        "a second broadcast inside the cooldown window is held"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("give the echo a breath")),
+        "the held speaker is told why nothing went out"
+    );
+
+    // Room speech never trips the broadcast brake.
+    s.say(uid(1), "hello room");
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say: hello room")
+    );
+
+    // Once the window has passed, the next broadcast goes out.
+    s.players.get_mut(&uid(1)).unwrap().last_broadcast = Some(Instant::now() - BROADCAST_COOLDOWN);
+    s.say(uid(1), "/world third call");
+    assert!(
+        s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("third call")),
+        "an expired cooldown lets the next broadcast through"
+    );
+}
+
+#[test]
+fn a_scope_marker_with_no_message_says_nothing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let before = s.players[&uid(1)].log.len();
+    s.say(uid(1), "/zone ");
+    s.say(uid(1), "/world    ");
+    assert_eq!(
+        s.players[&uid(1)].log.len(),
+        before,
+        "an empty message after the scope marker should say nothing"
+    );
+}
+
+#[test]
+fn a_word_that_merely_starts_with_z_or_w_is_not_mistaken_for_a_scope_marker() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(2)).unwrap().room = 620; // a different zone
+
+    s.say(uid(1), "/zealous about this fight");
+
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text == "You say: /zealous about this fight"),
+        "\"/zealous\" is a word, not the /z marker, and should say to the room verbatim"
+    );
+    assert!(
+        !s.players[&uid(2)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("zealous")),
+        "a merely-similar word should never widen the scope past the room"
+    );
+}
+
+/// Any real Wildbound Waste field room, for pvp tests that don't care which.
+fn any_pvp_room(world: &super::super::world::World) -> RoomId {
+    world
+        .rooms
+        .values()
+        .find(|r| r.pvp)
+        .map(|r| r.id)
+        .expect("the Wildbound Waste has at least one pvp room")
+}
+
+#[test]
+fn engage_player_only_works_on_pvp_ground() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Both start in Embergate's safe square: no duelling allowed here.
+    s.players.get_mut(&uid(2)).unwrap().room = s.players[&uid(1)].room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(
+        s.players[&uid(1)].pvp_target,
+        None,
+        "safe ground refuses a duel"
+    );
+
+    // Move both onto real pvp ground: the duel locks on and the victim
+    // auto-retaliates since they weren't already fighting anything.
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert_eq!(s.players[&uid(1)].pvp_target, Some(uid(2)));
+    assert_eq!(
+        s.players[&uid(2)].pvp_target,
+        Some(uid(1)),
+        "an unengaged victim rounds on their attacker"
+    );
+}
+
+#[test]
+fn a_pvp_duel_blocks_movement_and_recall_like_any_fight() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    assert!(s.players[&uid(1)].in_combat());
+
+    let room_before = s.players[&uid(1)].room;
+    s.recall(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].room,
+        room_before,
+        "recall must not work mid-duel"
+    );
+}
+
+#[test]
+fn winning_a_pvp_duel_credits_gold_xp_a_kill_and_a_title() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    // Stack the fight hopelessly in the attacker's favour: a one-shot kill on
+    // the first combat round, no Warrior death-save or veteran charge to
+    // interrupt it.
+    {
+        let victim = s.players.get_mut(&uid(2)).unwrap();
+        victim.hp = 1;
+        victim.death_save_used = true;
+        victim.resurrections_left = 0;
+        victim.gold = 100;
+    }
+    let attacker_xp_before = s.players[&uid(1)].xp;
+    let attacker_gold_before = s.players[&uid(1)].gold;
+    s.engage_player(uid(1), uid(2));
+    s.tick();
+
+    let victim = &s.players[&uid(2)];
+    assert!(victim.dead, "the outmatched victim should have fallen");
+    let lost_gold = 100 - victim.gold;
+    assert!(lost_gold > 0, "a real death loses carried gold");
+
+    let attacker = &s.players[&uid(1)];
+    assert_eq!(attacker.pvp_kills, 1);
+    assert_eq!(
+        attacker.gold,
+        attacker_gold_before + lost_gold,
+        "the victim's lost gold becomes the spoils"
+    );
+    assert!(attacker.xp > attacker_xp_before, "a pvp kill grants xp");
+    assert!(
+        attacker.titles.iter().any(|t| t == "Blooded"),
+        "a first pvp kill earns the Blooded title, got {:?}",
+        attacker.titles
+    );
+}
+
+#[test]
+fn an_offensive_ability_strikes_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    // Slot 1 is Cleave (Strike) for a level-1 Warrior.
+    let before = s.players[&uid(2)].hp;
+    s.use_ability(uid(1), 1);
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "Cleave should damage the pvp target directly, not just the auto-attack"
+    );
+}
+
+#[test]
+fn locking_onto_a_mob_breaks_off_the_duel_so_abilities_hit_the_mob() {
+    let mut s = world();
+    // A Wildbound field room holding a revealed, living foe: contested ground
+    // and the Waste's own roster share the same rooms, so a duel and a mob
+    // fight are both one keypress away at any moment.
+    let (mob_id, pvp_room) = s
+        .mobs
+        .values()
+        .find(|m| m.alive && m.revealed && s.world.room(m.current_room).is_some_and(|r| r.pvp))
+        .map(|m| (m.spawn.id, m.current_room))
+        .expect("the Wildbound Waste fields mobs on contested ground");
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+
+    s.engage_player(uid(1), uid(2));
+    s.engage_mob(uid(1), mob_id);
+
+    let rival_hp = s.players[&uid(2)].hp;
+    let mob_hp = s.mobs[&mob_id].hp;
+    s.use_ability(uid(1), 1); // Cleave: Strike
+
+    assert!(
+        s.mobs[&mob_id].hp < mob_hp,
+        "an ability should land on the foe just targeted"
+    );
+    assert_eq!(
+        s.players[&uid(2)].hp,
+        rival_hp,
+        "and never on the rival the duel was broken off with"
+    );
+}
+
+#[test]
+fn a_damage_over_time_ability_seeds_a_pvp_dot_that_ticks_via_strike_player() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 4; // unlocks Rend (slot 2)
+    s.players.get_mut(&uid(2)).unwrap().hp = 200;
+    s.engage_player(uid(1), uid(2));
+
+    s.use_ability(uid(1), 2); // Rend: DamageOverTime
+    assert!(
+        s.pvp_dots.contains_key(&uid(2)),
+        "Rend should seed a pvp dot on the victim"
+    );
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    assert!(
+        s.players[&uid(2)].hp < before,
+        "the dot should tick real damage into the victim via strike_player"
+    );
+}
+
+#[test]
+fn a_stun_ability_skips_the_stunned_players_next_swing() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(1)).unwrap().resource = 999;
+    s.players.get_mut(&uid(1)).unwrap().level = 12; // unlocks Shield Bash (slot 4)
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.players.get_mut(&uid(2)).unwrap().max_resource = 500;
+    s.engage_player(uid(1), uid(2));
+    // Victim rounds on the attacker too (auto-retaliation), so give them an
+    // ability roster of their own to prove their swing is actually skipped.
+    s.players.get_mut(&uid(2)).unwrap().level = 1;
+
+    s.use_ability(uid(1), 4); // Shield Bash: Stun
+    assert!(
+        s.pvp_stuns.get(&uid(2)).copied().unwrap_or(0) > 0,
+        "Shield Bash should stun the pvp victim"
+    );
+    let attacker_hp_before = s.players[&uid(1)].hp;
+    s.tick();
+    assert_eq!(
+        s.players[&uid(1)].hp,
+        attacker_hp_before,
+        "a stunned adventurer should not land their own swing this round"
+    );
+}
+
+#[test]
+fn a_companions_bite_and_auto_skills_reach_a_pvp_target() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    // Buy the companion at Embergate's stable (room 1) before heading to the
+    // pvp ground, same as any real player would.
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    s.players.get_mut(&uid(1)).unwrap().gold = 1000;
+    s.buy_pet(uid(1), "war_hound");
+    assert!(s.players[&uid(1)].pet.is_some(), "the companion is set");
+
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().hp = 500;
+    s.engage_player(uid(1), uid(2));
+
+    let before = s.players[&uid(2)].hp;
+    s.tick();
+    let after_owner_and_pet = s.players[&uid(2)].hp;
+    assert!(
+        after_owner_and_pet < before,
+        "the owner's own blow should land"
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("tears into your rival")),
+        "the pet's bite against the pvp target should be logged, got {:?}",
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .map(|l| &l.text)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_brand_new_character_spawns_in_the_tutorial_and_can_recall_to_embergate() {
+    let mut s = world();
+    s.join(uid(1));
+    // Joining alone (before a class is chosen) already places the character
+    // in Wayfarer's Hollow, not `World::start_room` directly.
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    s.choose_class(uid(1), Class::Warrior);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        super::super::world::tutorial_start_room()
+    );
+    assert!(
+        s.players[&uid(1)]
+            .log
+            .iter()
+            .any(|l| l.text.contains("Wayfarer's Hollow") && l.text.contains('r')),
+        "the welcome message should mention the tutorial and the recall key"
+    );
+    // The existing recall (r) already works from anywhere: it's the "leave
+    // for town with a key anytime" the tutorial promises.
+    s.recall(uid(1));
+    assert_eq!(s.players[&uid(1)].room, s.world.start_room);
+}
+
+#[test]
+fn a_returning_character_reloads_where_they_saved_not_the_tutorial() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = 1;
+    let saved = s.export_saved(uid(1)).expect("classed character exports");
+    assert_eq!(
+        saved.room, 1,
+        "the saved room is wherever they actually stood"
+    );
+
+    // A fresh session reloads that exact room, not the tutorial.
+    let mut s2 = world();
+    s2.join(uid(1));
+    s2.hydrate(uid(1), &saved);
+    assert_eq!(s2.players[&uid(1)].room, 1);
+}
+
+#[test]
+fn leaderboard_ranks_by_level_pvp_kills_and_gold_and_skips_unclassed() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Mage);
+    s.join(uid(3)); // never classed - must not appear on any board
+
+    {
+        let p1 = s.players.get_mut(&uid(1)).unwrap();
+        p1.level = 10;
+        p1.pvp_kills = 3;
+        p1.gold = 50;
+        p1.banked_gold = 0;
+    }
+    {
+        let p2 = s.players.get_mut(&uid(2)).unwrap();
+        p2.level = 20;
+        p2.pvp_kills = 1;
+        p2.gold = 10;
+        p2.banked_gold = 500;
+    }
+
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 2, "unclassed players are excluded");
+    assert_eq!(
+        board.by_level[0].user_id,
+        uid(2),
+        "higher level ranks first"
+    );
+    assert_eq!(
+        board.by_pvp_kills[0].user_id,
+        uid(1),
+        "more pvp kills ranks first"
+    );
+    assert_eq!(
+        board.by_gold[0].user_id,
+        uid(2),
+        "carried + banked gold ranks first"
+    );
+    assert_eq!(board.by_gold[0].value, 510, "gold is carried plus banked");
+    assert!(
+        board
+            .by_level
+            .iter()
+            .chain(&board.by_pvp_kills)
+            .chain(&board.by_gold)
+            .all(|e| e.user_id != uid(3)),
+        "an unclassed character never appears on any board"
+    );
+}
+
+#[test]
+fn leaderboard_caps_at_ten_entries() {
+    let mut s = world();
+    for i in 0..15u128 {
+        s.join(uid(100 + i));
+        s.choose_class(uid(100 + i), Class::Warrior);
+        s.players.get_mut(&uid(100 + i)).unwrap().level = i as i32;
+    }
+    let board = s.build_leaderboard();
+    assert_eq!(board.by_level.len(), 10, "top ten only, not all fifteen");
+    assert_eq!(board.by_level[0].level, 14, "the highest level leads");
+}
+
+#[test]
+fn a_player_never_gets_dropped_from_the_world_for_going_idle() {
+    // There used to be a 10-minute inactivity kick. It's gone: only an
+    // explicit leave (closing the session) removes a player now.
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    for _ in 0..50 {
+        s.tick();
+    }
+    assert!(
+        s.players.contains_key(&uid(1)),
+        "no amount of ticking without action should ever drop a present player"
+    );
+}
+
+// ---- slot binding (which saved character a session is actually playing) ----
+//
+// These drive the real service against a real database, because the defect
+// they pin lives in the join/leave/persist plumbing, not in `WorldState`.
+
+/// Drive `join_task` and wait for the character to actually materialize.
+async fn join_and_wait(svc: &LateaniaService, user_id: Uuid, session_id: Uuid, slot: i16) {
+    svc.select_slot(user_id, slot);
+    svc.join_task(user_id, session_id);
+    crate::test_helpers::wait_until(
+        || async { svc.is_user_present(user_id) },
+        "the character joins the world",
+    )
+    .await;
+}
+
+/// Pick a class and wait for it to land in the snapshot, so the character is
+/// exportable (unclassed characters are never persisted).
+async fn class_up_and_wait(svc: &LateaniaService, user_id: Uuid, class: Class) {
+    svc.choose_class_task(user_id, class);
+    crate::test_helpers::wait_until(
+        || async {
+            svc.snapshot_rx
+                .borrow()
+                .players
+                .get(&user_id)
+                .is_some_and(|p| p.class_name == class.name())
+        },
+        "the class choice reaches the snapshot",
+    )
+    .await;
+}
+
+/// The class key stored in one character slot, or None if the slot is empty.
+async fn saved_class(db: &late_core::db::Db, user_id: Uuid, slot: i16) -> Option<String> {
+    let client = db.get().await.expect("db client");
+    let blob = MudCharacter::load(&client, user_id, slot)
+        .await
+        .expect("mud_characters loads")?;
+    SavedCharacter::from_json(&blob)
+        .expect("a stored blob parses")
+        .class
+}
+
+#[tokio::test]
+async fn a_second_session_picking_another_slot_cannot_overwrite_the_live_character() {
+    let db = crate::test_helpers::new_test_db().await;
+    // A real account row: `mud_characters.user_id` is a foreign key, so a
+    // synthetic uuid would make every save fail silently.
+    let client = db.db.get().await.expect("db client");
+    let user = late_core::models::user::User::create(
+        &client,
+        late_core::models::user::UserParams {
+            fingerprint: "slot-binding-fp".to_string(),
+            username: "slotbinder".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("test account")
+    .id;
+    let app = crate::test_helpers::make_app(db.db.clone(), user, "slot-binding");
+    let svc = app.lateania_service.clone();
+
+    // Slot 1 gets a Mage, then logs out: that save is what must survive.
+    join_and_wait(&svc, user, uid(11), 1).await;
+    class_up_and_wait(&svc, user, Class::Mage).await;
+    svc.leave_task(user, uid(11));
+    crate::test_helpers::wait_until(
+        || async { saved_class(&db.db, user, 1).await == Some(Class::Mage.as_key().to_string()) },
+        "the Mage's logout save reaches slot 1",
+    )
+    .await;
+
+    // Slot 0 gets a Warrior, and this is the character actually in the world.
+    join_and_wait(&svc, user, uid(10), 0).await;
+    class_up_and_wait(&svc, user, Class::Warrior).await;
+
+    // A second connection on the same account opens the landing and picks
+    // slot 1. It attaches to the live character (one world identity per
+    // account) - it must not redirect that character's saves at slot 1.
+    join_and_wait(&svc, user, uid(12), 1).await;
+
+    svc.flush_all()
+        .await
+        .expect("flush persists live characters");
+
+    assert_eq!(
+        saved_class(&db.db, user, 1).await.as_deref(),
+        Some(Class::Mage.as_key()),
+        "the idle slot's Mage must survive another session merely selecting it"
+    );
+    assert_eq!(
+        saved_class(&db.db, user, 0).await.as_deref(),
+        Some(Class::Warrior.as_key()),
+        "the live character keeps saving to the slot it was loaded from"
+    );
+}
+
+#[test]
+fn starter_chain_walks_a_new_player_to_the_first_gate() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    // Fresh characters start on stage 0 (reach Embergate), and the join log
+    // always has a next-step line to announce.
+    assert_eq!(s.players[&uid(1)].starter_stage, 0);
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(
+        next_step_for(s.players[&uid(1)].starter_stage, &s.players[&uid(1)].titles).is_some(),
+        "a fresh character always has a next step"
+    );
+    assert!(
+        view.quests.iter().any(|q| q.kind == QuestKind::Starter),
+        "the journal pins the active starter step"
+    );
+
+    let gold_before = s.players[&uid(1)].gold;
+    s.players.get_mut(&uid(1)).unwrap().room = 1; // Embergate's square
+    s.describe_room(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        1,
+        "reaching Embergate completes First Steps"
+    );
+    assert!(s.players[&uid(1)].gold > gold_before, "the step pays out");
+
+    // Stage 1: three kills on the King's Road (the scrawny goblin is homed
+    // there). Revive it between kills; only the count matters.
+    s.players.get_mut(&uid(1)).unwrap().room = 6;
+    for _ in 0..3 {
+        s.kill_mob(uid(1), 1);
+        if let Some(m) = s.mobs.get_mut(&1) {
+            m.alive = true;
+            m.hp = m.spawn.max_hp;
+        }
+    }
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        2,
+        "three road kills complete The Open Road"
+    );
+
+    s.players.get_mut(&uid(1)).unwrap().room = 11; // Whisperwood's threshold
+    s.describe_room(uid(1));
+    assert_eq!(s.players[&uid(1)].starter_stage, 3);
+
+    s.players.get_mut(&uid(1)).unwrap().room = 28; // the Treant's grove
+    s.kill_mob(uid(1), 13); // the Elder Treant
+    assert_eq!(
+        s.players[&uid(1)].starter_stage,
+        4,
+        "slaying the Elder Treant completes its step"
+    );
+
+    s.players.get_mut(&uid(1)).unwrap().room = 31; // Duskhollow's first cave
+    s.describe_room(uid(1));
+    assert_eq!(
+        s.players[&uid(1)].starter_stage as usize,
+        STARTER_QUESTS.len(),
+        "descending into Duskhollow completes the chain"
+    );
+
+    // With the chain done the journal drops the starter row and the join-log
+    // next step hands over to the Long Road (the Treant is down; the Archdemon
+    // is the current milestone).
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert!(
+        !view.quests.iter().any(|q| q.kind == QuestKind::Starter),
+        "no starter row once the chain is complete"
+    );
+    let p = &s.players[&uid(1)];
+    let next = next_step_for(p.starter_stage, &p.titles).expect("the Long Road takes over");
+    assert!(
+        next.contains("Archdemon"),
+        "next step names the Archdemon: {next}"
+    );
+}
+
+#[test]
+fn kills_off_the_road_do_not_advance_the_road_stage() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().starter_stage = 1; // The Open Road
+    // A kill made while standing in Whisperwood is not road work.
+    s.players.get_mut(&uid(1)).unwrap().room = 11;
+    s.kill_mob(uid(1), 10);
+    let p = &s.players[&uid(1)];
+    assert_eq!(p.starter_stage, 1);
+    assert_eq!(p.starter_kills, 0, "an off-road kill counts for nothing");
+}
+
+#[test]
+fn veteran_saves_skip_the_starter_chain_on_load() {
+    // A pre-v19 save (version 0) past level 10 has long outgrown the tutorial
+    // chain; one still early keeps it.
+    let mut s = world();
+    s.join(uid(1));
+    let veteran = SavedCharacter::from_json(&serde_json::json!({"class": "warrior", "level": 12}))
+        .expect("parses");
+    s.hydrate(uid(1), &veteran);
+    assert_eq!(
+        s.players[&uid(1)].starter_stage as usize,
+        STARTER_QUESTS.len(),
+        "a veteran is not handed the tutorial chain"
+    );
+
+    // The novice reloads in Wayfarer's Hollow (room 40000): stage 0 ("reach
+    // Embergate") must survive the load. A save sitting in Embergate itself
+    // would - correctly - complete that stage the moment it lands.
+    let mut s = world();
+    s.join(uid(2));
+    let novice = SavedCharacter::from_json(
+        &serde_json::json!({"class": "warrior", "level": 3, "room": 40000}),
+    )
+    .expect("parses");
+    s.hydrate(uid(2), &novice);
+    assert_eq!(
+        s.players[&uid(2)].starter_stage,
+        0,
+        "an early character keeps the chain"
+    );
+}
+
+#[test]
+fn sealed_board_postings_cannot_be_accepted() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = super::super::world::TASMANIA_SQUARE;
+
+    // Quest 1 hunts the Sunken Catacombs, gated on the Archdemon's fall: the
+    // posting reads sealed and accepting it is refused.
+    let entries = s.board_entries(uid(1), super::super::world::TASMANIA_SQUARE);
+    let posting = entries
+        .iter()
+        .find(|e| e.quest_id == 1)
+        .expect("the bounty is posted");
+    assert!(posting.locked, "the posting reads sealed");
+    assert!(posting.suggested_level > 0, "it carries a level hint");
+    assert!(!posting.hint.is_empty(), "it says where the work is");
+    s.accept_board_quest(uid(1), 1);
+    assert!(
+        s.players[&uid(1)].board_progress.is_empty(),
+        "a sealed posting cannot be accepted"
+    );
+
+    // The gate title unseals it.
+    s.award_title(uid(1), FRONTIER_GATE_TITLE.to_string(), 1);
+    let entries = s.board_entries(uid(1), super::super::world::TASMANIA_SQUARE);
+    assert!(
+        entries.iter().any(|e| e.quest_id == 1 && !e.locked),
+        "the gate title unseals the posting"
+    );
+    s.accept_board_quest(uid(1), 1);
+    assert!(
+        s.players[&uid(1)]
+            .board_progress
+            .iter()
+            .any(|(id, _)| *id == 1),
+        "an unsealed posting accepts normally"
+    );
+}
+
+#[test]
+fn the_long_road_matches_the_real_gates_and_tracks_titles() {
+    // Drift guard: every gate title the world actually checks appears on the
+    // Long Road, derived through the same title_for the kill path uses.
+    let road_titles: Vec<String> = LONG_ROAD.iter().map(|m| title_for(m.boss, true)).collect();
+    let gates = [
+        FIRST_DUNGEON_GATE_TITLE,
+        FRONTIER_GATE_TITLE,
+        CATACOMBS_GATE_TITLE,
+        THORNWOOD_GATE_TITLE,
+        CAVERNS_GATE_TITLE,
+        REACHES_GATE_TITLE,
+        KAELMYR_GATE_TITLE,
+    ];
+    for gate in gates {
+        assert!(
+            road_titles.iter().any(|t| t == gate),
+            "the Long Road is missing the gate title {gate}"
+        );
+    }
+    // Every milestone boss is a real spawn, so the road can actually be walked
+    // - and every milestone resolves a lair room, so Enter in the journal can
+    // track it on the compass/map.
+    let w = seed_world();
+    for m in LONG_ROAD {
+        assert!(
+            w.spawns.iter().any(|sp| sp.name == m.boss),
+            "Long Road boss {} does not exist in the world",
+            m.boss
+        );
+    }
+    let targets = road_targets(&w);
+    for (m, t) in LONG_ROAD.iter().zip(&targets) {
+        assert!(t.is_some(), "no lair room resolved for {}", m.boss);
+    }
+    // Fresh titles: nothing done, exactly the first milestone current.
+    let road = road_view(&[], &targets);
+    assert!(road.iter().all(|s| !s.done));
+    assert!(road[0].current);
+    assert_eq!(road.iter().filter(|s| s.current).count(), 1);
+    // The Treant down: it checks off and the Archdemon becomes current.
+    let road = road_view(&[FIRST_DUNGEON_GATE_TITLE.to_string()], &targets);
+    assert!(road[0].done);
+    assert!(road[1].current);
+}
+
+#[test]
+fn every_quest_target_and_zone_is_real() {
+    let w = seed_world();
+    for q in STARTER_QUESTS {
+        assert!(
+            w.room(q.target).is_some(),
+            "starter target room {} missing",
+            q.target
+        );
+        match q.goal {
+            StarterGoal::Reach { zone } | StarterGoal::SlayIn { zone, .. } => {
+                assert!(
+                    w.rooms.values().any(|r| r.zone == zone),
+                    "starter zone {zone} does not exist"
+                );
+            }
+            StarterGoal::SlayNamed { name_contains } => {
+                assert!(
+                    w.spawns.iter().any(|sp| sp.name.contains(name_contains)),
+                    "no spawn matches {name_contains}"
+                );
+            }
+        }
+    }
+    for z in 0..super::super::world::frontier_zone_count() {
+        assert!(
+            w.room(super::super::world::frontier_zone_entrance(z))
+                .is_some(),
+            "frontier zone {z} entrance missing"
+        );
+    }
 }

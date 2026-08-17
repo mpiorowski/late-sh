@@ -75,7 +75,7 @@ fn right_sidebar_is_only_available_on_first_three_pages() {
     ));
     assert!(!resolve_right_sidebar_enabled(
         RightSidebarMode::On,
-        Screen::Pinstar,
+        Screen::Profiles,
         WIDE_TERMINAL,
     ));
 }

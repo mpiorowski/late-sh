@@ -48,6 +48,7 @@ pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
 pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
+    LazyLock::force(&LAND_LINKS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -152,6 +153,9 @@ pub fn derive_coords(world: &World) -> HashMap<RoomId, Coord> {
                 if rel.contains_key(&dest)
                     || coords.contains_key(&dest)
                     || region_layout(dest).is_some()
+                    // A home's doorway: never walked, so each plot's interior
+                    // seeds later as its own island clear of the town grid.
+                    || super::housing::crosses_threshold(rid, dest)
                 {
                     continue;
                 }
@@ -246,16 +250,49 @@ pub fn viewport(
         .collect()
 }
 
+/// Which of two rooms sharing a map cell should be shown. The player's own
+/// room always wins; failing that, a room in the same region as the one the
+/// player currently stands in wins, so a collision reads as "the place I'm
+/// in", not an arbitrary global pick - the hand-authored core stacks whole
+/// regions on shared cells (the Mistfen under Whisperwood, the Obsidian
+/// Throne under Frostspire, every house interior under Embergate), and
+/// resolving those purely by lowest id used to paint the *other* region's
+/// rooms around a player who was clearly standing in one of them. The lowest
+/// id is the final tie-break, kept only for determinism when neither room
+/// matches (or both do).
+fn resolve_collision(
+    current: RoomId,
+    candidate: RoomId,
+    player_room: RoomId,
+    player_region: Option<&'static str>,
+) -> RoomId {
+    if current == player_room {
+        return current;
+    }
+    if candidate == player_room {
+        return candidate;
+    }
+    if let Some(region) = player_region {
+        let region_of = |id: RoomId| super::world::region_atlas_entry(id).map(|(name, _)| name);
+        let current_matches = region_of(current) == Some(region);
+        let candidate_matches = region_of(candidate) == Some(region);
+        if candidate_matches && !current_matches {
+            return candidate;
+        }
+        if current_matches && !candidate_matches {
+            return current;
+        }
+    }
+    current.min(candidate)
+}
+
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
 /// `visited` is the player's explored-room set.
 ///
-/// Cells are resolved with the player's own room first, then the lowest visited
-/// room id. Resolving before the fog (as a plain filter over `viewport` would)
-/// loses to the collision tie-break: the hand-authored core stacks whole regions
-/// on shared cells (the Mistfen under Whisperwood, the Obsidian Throne under
-/// Frostspire, every house interior under Embergate), and a player standing in
-/// the higher-id room of such a pair would watch their own `@` vanish and the
-/// inspector describe somewhere else.
+/// Cells are resolved by `resolve_collision`. Resolving before the fog (as a
+/// plain filter over `viewport` would) loses to the collision tie-break: see
+/// `resolve_collision` for why a player standing in one of a colliding pair
+/// must not lose their own cell (or have it painted as an unrelated region).
 pub fn viewport_explored(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -266,22 +303,15 @@ pub fn viewport_explored(
 ) -> Vec<Vec<Option<RoomId>>> {
     let rx = cols / 2;
     let ry = rows / 2;
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
             continue;
         }
-        match at.entry((c.x, c.y)) {
-            std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(id);
-            }
-            std::collections::hash_map::Entry::Occupied(mut slot) => {
-                let cur = *slot.get();
-                if cur != player_room && (id == player_room || id < cur) {
-                    slot.insert(id);
-                }
-            }
-        }
+        at.entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
     }
     let left = center.x - rx;
     let top = center.y - ry;
@@ -410,8 +440,22 @@ pub struct Poi {
     pub reward: Vec<&'static str>,
     /// Names of the mobs that spawn (can be slain) here.
     pub monsters: Vec<&'static str>,
+    /// A notable non-boss foe lairing here (epic/legendary rank), if any - the
+    /// hunt-worthy targets, distinct from trash spawns.
+    pub elite_foe: Option<&'static str>,
     /// A tameable wild beast roaming here, if any.
     pub tameable: Option<&'static str>,
+    /// A harvestable resource here (the gather trade worked at it), if any.
+    pub gather: Option<GatherPoi>,
+}
+
+/// A gather node's skill and level gate, for the map inspector - previously
+/// the map only ever showed the skill name, with no way to scout whether a
+/// node was even worth the walk before physically standing in its room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherPoi {
+    pub skill: &'static str,
+    pub level_req: i32,
 }
 
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
@@ -431,9 +475,39 @@ fn build_pois() -> HashMap<RoomId, Poi> {
             }
         }
     }
+    // Regional champions: the single toughest non-boss foe in each land. The
+    // endgame is wall-to-wall max-level mobs, so a per-room "elite" marker would
+    // carpet the map; one apex hunt per region stays rare and worth flagging.
+    let mut champ: HashMap<&'static str, (RoomId, &'static str, i32)> = HashMap::new();
+    for spawn in &world.spawns {
+        if spawn.boss {
+            continue;
+        }
+        let Some((region, _)) = super::world::region_atlas_entry(spawn.home) else {
+            continue;
+        };
+        let lvl = spawn.level();
+        champ
+            .entry(region)
+            .and_modify(|best| {
+                if lvl > best.2 {
+                    *best = (spawn.home, spawn.name, lvl);
+                }
+            })
+            .or_insert((spawn.home, spawn.name, lvl));
+    }
+    for (_region, (home, name, _)) in champ {
+        map.entry(home).or_default().elite_foe = Some(name);
+    }
     for beast in super::taming::wild_beasts() {
         map.entry(beast.home).or_default().tameable =
-            Some(super::taming::TAMEABLE[beast.species].name);
+            Some(super::taming::beast_species(beast.species).name);
+    }
+    for n in super::world::NODES {
+        map.entry(n.home).or_default().gather = Some(GatherPoi {
+            skill: n.skill.key(),
+            level_req: n.level_req,
+        });
     }
     map
 }
@@ -449,6 +523,93 @@ pub fn poi(room: RoomId) -> Option<&'static Poi> {
     POIS.get(&room)
 }
 
+/// A room's name, for naming a place the player marked without shipping the
+/// string through a snapshot (the world is static and process-global).
+pub fn room_name(room: RoomId) -> Option<&'static str> {
+    world().rooms.get(&room).map(|r| r.name)
+}
+
+/// The room under one map cell, resolved exactly as the canvas resolves it
+/// (see `resolve_collision`). For answering "what am I pointing at" without
+/// building a whole canvas, so input can act on the crosshair.
+pub fn room_at(
+    coords: &HashMap<RoomId, Coord>,
+    at: Coord,
+    visited: &HashSet<RoomId>,
+    player_room: RoomId,
+) -> Option<RoomId> {
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    visible(coords, at, 0, 0)
+        .into_iter()
+        .filter(|(id, _)| *id == player_room || visited.contains(id))
+        .map(|(id, _)| id)
+        .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
+}
+
+/// The first step of the shortest walk from `from` to `dest`, and how many
+/// rooms that walk is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Route {
+    /// Which exit to take from the room you are standing in right now.
+    pub next: Dir,
+    /// Rooms between here and there, so the line can say how far it still is.
+    pub rooms: usize,
+}
+
+/// Shortest walk from `from` to `dest`, over rooms the player has already
+/// visited.
+///
+/// Restricting to `visited` is what makes this honest rather than a spoiler
+/// machine: it can only ever retrace ground the player has actually walked, so
+/// it never reveals an unexplored shortcut, and it needs no gate check either
+/// (a room can only be in `visited` if the player legitimately walked into it,
+/// which means they passed whatever gate stands in front of it). It is also
+/// why a route always exists when the destination is a known room: having been
+/// there at all means such a path was once walked.
+///
+/// The whole point is the *first step*. The map can show a place and still
+/// leave "so which way do I actually go" unanswered, because a zone boundary
+/// is a jump in the coordinate field rather than a direction. A direction is
+/// the one answer that never needs the picture to be legible.
+pub fn route(from: RoomId, dest: RoomId, visited: &HashSet<RoomId>) -> Option<Route> {
+    if from == dest || !visited.contains(&dest) {
+        return None;
+    }
+    let rooms = &world().rooms;
+    // Each frontier entry carries the direction its walk left `from` by, so
+    // arriving at `dest` names the first step without rebuilding the path.
+    let mut queue: VecDeque<(RoomId, Dir, usize)> = VecDeque::new();
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    for (dir, &next) in rooms.get(&from)?.exits.iter() {
+        if !visited.contains(&next) || !seen.insert(next) {
+            continue;
+        }
+        if next == dest {
+            return Some(Route {
+                next: *dir,
+                rooms: 1,
+            });
+        }
+        queue.push_back((next, *dir, 1));
+    }
+    while let Some((room, first, depth)) = queue.pop_front() {
+        let Some(r) = rooms.get(&room) else { continue };
+        for &next in r.exits.values() {
+            if !visited.contains(&next) || !seen.insert(next) {
+                continue;
+            }
+            if next == dest {
+                return Some(Route {
+                    next: first,
+                    rooms: depth + 1,
+                });
+            }
+            queue.push_back((next, first, depth + 1));
+        }
+    }
+    None
+}
+
 /// One cell of the rendered map. Rooms sit on even offsets from the centre and
 /// the corridors between them on the odd offsets in between, so the map shows
 /// which rooms are actually linked (walkable), not just spatially near.
@@ -460,14 +621,57 @@ pub enum Tile {
     LinkH,
     /// A vertical corridor (north/south exit) between two rooms.
     LinkV,
+    /// An exit into the unexplored: a faint half-stub of corridor (`─`/`│`)
+    /// showing that this room has a walkable exit into fog you haven't
+    /// visited yet. Always a stub, never an arrow - on the field a line means
+    /// "walkable path" and nothing else, and arrows read as controls. So a
+    /// discovered room's unexplored side never reads as a dead end, with no
+    /// spoiler of what's out there.
+    Hint(char),
+    /// A path-continuation hint to a room you've *already* visited that the map
+    /// can't draw right beside it (the hand-authored core doesn't lay perfectly
+    /// flat, so some branches scatter, or the link crosses into a whole other
+    /// reserved block, like the Sunderlakes hanging off Melvanala). Same stub
+    /// glyph as `Hint` (never an arrow), just styled brighter, so a known
+    /// non-Euclidean jump reads distinctly from the true edge of your
+    /// exploration.
+    HintKnown(char),
+    /// A room has a way up, down, or both. Drawn in the room's own up-right
+    /// corner cell (odd column, odd row), a layer nothing else ever touches:
+    /// rooms sit on even/even and corridors on the odd cell between two of
+    /// them, so each room owns exactly one free corner and no two rooms can
+    /// claim the same one.
+    ///
+    /// This is not decoration. A flat level cannot draw a vertical link, so
+    /// the map used to omit them entirely - and in a world where every zone
+    /// chains to the next one by a stair and every continent hangs off
+    /// another by a stair, that meant opening the map to find the way onward
+    /// showed you everything *except* the way onward. The stair says only
+    /// "there is a way through here", never what waits on the far side.
+    Stair(char),
+}
+
+/// Glyph for a room's vertical exits. A room with both ways reads as `▾`
+/// rather than a two-headed arrow: only one cell per room is free (see
+/// `Tile::Stair`), an arrow reads as a control on this map where every other
+/// glyph is terrain, and down is the way onward everywhere in this world. The
+/// room panel's exits line carries the full truth for the rooms with both.
+fn stair_glyph(down: bool, up: bool) -> Option<char> {
+    match (down, up) {
+        (true, _) => Some('\u{25be}'),     // ▾
+        (false, true) => Some('\u{25b4}'), // ▴
+        (false, false) => None,
+    }
 }
 
 /// Build a `cols x rows` map canvas centred on `center`, interleaving rooms
 /// (even cells) with the corridors between linked rooms (odd cells). Fog of
 /// war: a room shows only if visited (or it's the player); a corridor shows
 /// only when BOTH its rooms are visited, so paths into the unknown stay hidden.
-/// Up/down exits are not drawn on a flat level. The player's room wins any
-/// cell collision so `@` never vanishes under a stacked hand-authored room.
+/// A vertical link has no flat direction to run in, so it is flagged on the
+/// room itself as a `Tile::Stair` in that room's corner cell instead. The
+/// player's room wins any cell collision so `@` never vanishes under a stacked
+/// hand-authored room.
 pub fn map_canvas(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -488,7 +692,9 @@ pub fn map_canvas(
         if !(0..cols).contains(&sc) || !(0..rows).contains(&sr) {
             return;
         }
-        // The player's room outranks a collided room on the same cell.
+        // The player's room outranks a collided room on the same cell. Belt
+        // and braces: the resolve pass below already guarantees this, but a
+        // corridor cell placed after it must not clobber a room cell either.
         if let Tile::Room(existing) = canvas[sr as usize][sc as usize]
             && existing == player_room
         {
@@ -501,33 +707,108 @@ pub fn map_canvas(
     // pull a slightly wider window so corridors reaching in are covered.
     let rxw = cols / 4 + 2;
     let ryw = rows / 4 + 2;
+
+    // Resolve which room wins each world coordinate before drawing anything,
+    // so a collision paints the room that matches where the player actually
+    // is (see `resolve_collision`) instead of whichever happened to be last
+    // out of a hash-ordered iterator.
+    let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {
             continue;
         }
-        let sc = cx + 2 * (c.x - center.x);
-        let sr = cy + 2 * (c.y - center.y);
+        winners
+            .entry((c.x, c.y))
+            .and_modify(|cur| *cur = resolve_collision(*cur, id, player_room, player_region))
+            .or_insert(id);
+    }
+
+    for (&(x, y), &id) in &winners {
+        let sc = cx + 2 * (x - center.x);
+        let sr = cy + 2 * (y - center.y);
         put(&mut canvas, sc, sr, Tile::Room(id));
 
         let Some(room) = world().rooms.get(&id) else {
             continue;
         };
+        // Flag the ways up and down before walking the flat exits: the match
+        // below has nowhere to draw them, which is exactly why they need their
+        // own corner cell.
+        if let Some(glyph) = stair_glyph(
+            room.exits.contains_key(&Dir::Down),
+            room.exits.contains_key(&Dir::Up),
+        ) {
+            put(&mut canvas, sc + 1, sr - 1, Tile::Stair(glyph));
+        }
         for (dir, dest) in &room.exits {
             if !seen(*dest) {
+                // An exit into the fog: a faint half-stub of path trailing off
+                // into the unknown, so a discovered room never reads as
+                // stranded. A stub, not an arrow - on the field a line means
+                // "walkable path" and nothing else, and arrows read as
+                // controls. No spoiler of what waits at the far end.
+                let (dx, dy) = match dir {
+                    Dir::East => (1, 0),
+                    Dir::West => (-1, 0),
+                    Dir::North => (0, -1),
+                    Dir::South => (0, 1),
+                    _ => continue, // up/down: no flat direction to point
+                };
+                let (hx, hy) = (sc + dx, sr + dy);
+                if (0..cols).contains(&hx)
+                    && (0..rows).contains(&hy)
+                    && canvas[hy as usize][hx as usize] == Tile::Empty
+                {
+                    let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
+                    canvas[hy as usize][hx as usize] = Tile::Hint(stub);
+                }
                 continue;
             }
             let Some(&dc) = coords.get(dest) else {
                 continue;
             };
-            if dc.z != c.z {
+            if dc.z != center.z {
                 continue; // stairs: not drawn on a flat level
             }
-            match (dir, dc.x - c.x, dc.y - c.y) {
+            match (dir, dc.x - x, dc.y - y) {
                 (Dir::East, 1, 0) => put(&mut canvas, sc + 1, sr, Tile::LinkH),
                 (Dir::West, -1, 0) => put(&mut canvas, sc - 1, sr, Tile::LinkH),
                 (Dir::North, 0, -1) => put(&mut canvas, sc, sr - 1, Tile::LinkV),
                 (Dir::South, 0, 1) => put(&mut canvas, sc, sr + 1, Tile::LinkV),
-                _ => {} // linked but not spatially adjacent (cross-region seam)
+                _ if dc.z == center.z => {
+                    // Linked on the same level but not in the adjacent cell (the
+                    // hand-authored core scatters some branches, or the link
+                    // crosses into a whole other reserved block, like the
+                    // Sunderlakes hanging off Melvanala). This room is already
+                    // known, unlike a plain fog `Hint`, so it becomes a
+                    // `HintKnown` instead - same stub glyph, styled brighter,
+                    // so a discovered non-Euclidean jump reads differently from
+                    // the unexplored edge of the map.
+                    //
+                    // The stub goes on the side the exit is actually walked
+                    // out of, NOT toward where the destination happens to sit
+                    // in the field. Across reserved blocks that coordinate
+                    // delta means nothing - it only records which block was
+                    // laid down first - so siding by it drew paths that were
+                    // not there. A house door facing east onto a close that
+                    // was placed 5,622 cells west drew a west stub, and
+                    // walking west then failed. Inventing a path is the worst
+                    // thing this map can do, so the exit's own direction is
+                    // the only honest answer.
+                    let Some((dx, dy)) = dir.delta_2d() else {
+                        continue; // up/down: flagged as a Stair, not a stub
+                    };
+                    let (hx, hy) = (sc + dx, sr + dy);
+                    if (0..cols).contains(&hx)
+                        && (0..rows).contains(&hy)
+                        && canvas[hy as usize][hx as usize] == Tile::Empty
+                    {
+                        let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
+                        canvas[hy as usize][hx as usize] = Tile::HintKnown(stub);
+                    }
+                }
+                _ => {} // stairs (up/down): not drawn on a flat level
             }
         }
     }
@@ -585,6 +866,17 @@ pub fn poi_arrows(
         if c.z != center.z {
             continue;
         }
+        // Distinct reserved blocks always sit at least `COMPONENT_MARGIN` apart
+        // (see the module doc comment), so a delta within `PAN_LIMIT` guarantees
+        // the POI is in the *same* block as the player - the one case where the
+        // coordinate delta is a real spatial relationship rather than an
+        // accident of which block `derive_coords` laid down first. Anything
+        // farther is dropped rather than pointed at with a meaningless
+        // direction (see CONTEXT.md §11); the camera could never pan there
+        // anyway, since `MapCamera::pan` clamps to the same `PAN_LIMIT`.
+        if (c.x - center.x).abs() > PAN_LIMIT || (c.y - center.y).abs() > PAN_LIMIT {
+            continue;
+        }
         let sc = cx + 2 * (c.x - center.x);
         let sr = cy + 2 * (c.y - center.y);
         if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
@@ -609,6 +901,63 @@ pub fn poi_arrows(
             boss,
         })
         .collect()
+}
+
+/// Border arrows for active-quest target rooms that are off-screen on the
+/// viewed level, honoring the same `PAN_LIMIT` honesty filter as `poi_arrows`:
+/// a target in another reserved block gets no arrow at all, because across
+/// blocks the coordinate delta points nowhere real. The count of targets
+/// dropped that way is returned alongside, so the map can say "N marks lie
+/// beyond this land" instead of silently showing fewer quests than exist.
+pub fn quest_arrows(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+    targets: &[RoomId],
+) -> (Vec<MapArrow>, usize) {
+    if cols <= 0 || rows <= 0 {
+        return (Vec::new(), targets.len());
+    }
+    let cx = cols / 2;
+    let cy = rows / 2;
+    let mut by_cell: BTreeMap<(usize, usize), char> = BTreeMap::new();
+    let mut beyond = 0usize;
+    for room in targets {
+        let Some(&c) = coords.get(room) else {
+            beyond += 1;
+            continue;
+        };
+        if c.z != center.z
+            || (c.x - center.x).abs() > PAN_LIMIT
+            || (c.y - center.y).abs() > PAN_LIMIT
+        {
+            beyond += 1;
+            continue;
+        }
+        let sc = cx + 2 * (c.x - center.x);
+        let sr = cy + 2 * (c.y - center.y);
+        if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
+            continue; // on-screen: the canvas draws the quest marker itself
+        }
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
+        by_cell
+            .entry((
+                sr.clamp(0, rows - 1) as usize,
+                sc.clamp(0, cols - 1) as usize,
+            ))
+            .or_insert(glyph);
+    }
+    let arrows = by_cell
+        .into_iter()
+        .map(|((row, col), glyph)| MapArrow {
+            row,
+            col,
+            glyph,
+            boss: false,
+        })
+        .collect();
+    (arrows, beyond)
 }
 
 /// Every coordinate shared by more than one room, with the room ids that land
@@ -657,6 +1006,70 @@ pub fn dump_level(coords: &HashMap<RoomId, Coord>, center: RoomId, radius: i32) 
         out.push('\n');
     }
     out
+}
+
+// ---- The land graph: which countries touch which -------------------------
+//
+// A schematic, land-level view of the world for the map's second page. Derived
+// from the room graph and the atlas regions and nothing else: an edge exists
+// exactly where one room's exit lands in another region. It therefore knows
+// nothing about titles, bosses, or levels, and so cannot drift out of step
+// with the real gates in `svc::can_cross_progression_gate`. What a player
+// learns from it is where a land hangs, never what opens it.
+
+/// Region name -> the regions its rooms walk into, in atlas order. A region
+/// with no walking neighbours at all (the portal villages and the archipelago
+/// islands, which carry no directional exits) maps to an empty list.
+static LAND_LINKS: LazyLock<BTreeMap<&'static str, Vec<&'static str>>> =
+    LazyLock::new(|| derive_land_links(world()));
+
+pub fn land_links() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
+    &LAND_LINKS
+}
+
+/// The lands no road reaches, in atlas order: the ones whose rooms hold no
+/// directional exit into another region at all, so a waystone is the only way
+/// in. Derived like everything else here, never listed by hand.
+pub fn portal_lands() -> Vec<&'static str> {
+    super::world::region_names()
+        .into_iter()
+        .filter(|name| LAND_LINKS.get(name).is_none_or(Vec::is_empty))
+        .collect()
+}
+
+fn region_order() -> HashMap<&'static str, usize> {
+    super::world::region_names()
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| (name, i))
+        .collect()
+}
+
+fn derive_land_links(world: &World) -> BTreeMap<&'static str, Vec<&'static str>> {
+    let order = region_order();
+    let mut links: BTreeMap<&'static str, HashSet<&'static str>> =
+        order.keys().map(|name| (*name, HashSet::new())).collect();
+    for room in world.rooms.values() {
+        let Some((here, _)) = super::world::region_atlas_entry(room.id) else {
+            continue;
+        };
+        for dest in room.exits.values() {
+            let Some((there, _)) = super::world::region_atlas_entry(*dest) else {
+                continue;
+            };
+            if there != here {
+                links.entry(here).or_default().insert(there);
+            }
+        }
+    }
+    links
+        .into_iter()
+        .map(|(name, set)| {
+            let mut neighbours: Vec<&'static str> = set.into_iter().collect();
+            neighbours.sort_by_key(|n| order.get(n).copied().unwrap_or(usize::MAX));
+            (name, neighbours)
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -81,19 +81,6 @@ async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow
     }
 }
 
-async fn flush_pinstar_diagrams(state: &State, fatal_error: &mut Option<anyhow::Error>) {
-    match state.pinstar_registry.flush_all().await {
-        Ok(()) => tracing::info!("flushed pinstar diagrams during shutdown"),
-        Err(err) => {
-            tracing::error!(error = ?err, "failed to flush pinstar diagrams during shutdown");
-            if fatal_error.is_none() {
-                *fatal_error =
-                    Some(err.context("failed to flush pinstar diagrams during shutdown"));
-            }
-        }
-    }
-}
-
 async fn flush_lateania_characters(state: &State, fatal_error: &mut Option<anyhow::Error>) {
     match state.lateania_service.flush_all().await {
         Ok(()) => tracing::info!("flushed lateania characters during shutdown"),
@@ -113,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to initialize telemetry")?;
 
     // Load configuration from environment
-    let config = Config::from_env().context("failed to load configuration")?;
+    let config = Config::load().context("failed to load configuration")?;
     config.log_startup();
 
     // Init database connection pool
@@ -155,9 +142,18 @@ async fn main() -> anyhow::Result<()> {
         active_users.clone(),
     );
     let voice_service = VoiceService::new(config.voice.clone()).with_db(db.clone());
+    let stream_service = late_ssh::app::stream::svc::StreamService::new(
+        db.clone(),
+        voice_service.clone(),
+        activity_publisher.clone(),
+        config.web_url.clone(),
+    );
     let session_registry = SessionRegistry::new();
     let irc_registry = late_ssh::ircd::registry::IrcRegistry::new();
     let notification_service = NotificationService::new(db.clone());
+    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
+    let translation_service =
+        late_ssh::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
         notification_service.clone(),
@@ -166,7 +162,8 @@ async fn main() -> anyhow::Result<()> {
     .with_username_directory(username_directory.clone())
     .with_session_registry(session_registry.clone())
     .with_irc_registry(irc_registry.clone())
-    .with_force_admin(config.force_admin);
+    .with_force_admin(config.force_admin)
+    .with_translation_service(translation_service.clone());
     let _poll_finalizer_recovery_task = chat_service.start_poll_finalizer_recovery_task();
     let _lounge_feed_task = late_ssh::app::activity::lounge::start_lounge_feed_task(
         db.clone(),
@@ -174,7 +171,6 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         activity_tx.subscribe(),
     );
-    let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
@@ -182,6 +178,11 @@ async fn main() -> anyhow::Result<()> {
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
+    let cyberspace_service = late_ssh::app::chat::cyberspace::svc::CyberspaceService::new(
+        db.clone(),
+        late_ssh::app::chat::cyberspace::api::BASE_URL.to_string(),
+    )
+    .with_activity(activity_publisher.clone());
     let showcase_service = ShowcaseService::new(db.clone());
     let work_service = WorkService::new(db.clone());
     let twenty_forty_eight_service =
@@ -220,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(db.clone());
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
+    let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
         late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
@@ -268,7 +270,8 @@ async fn main() -> anyhow::Result<()> {
             ModerationInfra::default()
                 .with_force_admin(config.force_admin)
                 .with_artboard_handles(dartboard_server.clone(), dartboard_provenance.clone())
-                .with_voice(voice_service.clone()),
+                .with_voice(voice_service.clone())
+                .with_stream(stream_service.clone()),
         )
         .with_chip_service(chip_service.clone());
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
@@ -293,6 +296,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let clubhouse_lobby = late_ssh::app::clubhouse::lobby::SharedLobby::new();
     let scratchpad_registry = late_ssh::app::scratchpad::registry::SharedScratchpadRegistry::new();
+    let mention_ladders = late_ssh::app::ai::ladder::MentionLadders::new();
     let ghost_service = GhostService::new(
         db.clone(),
         chat_service.clone(),
@@ -302,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory.clone(),
         chip_service.clone(),
         clubhouse_lobby.clone(),
+        mention_ladders.clone(),
     );
     let ssh_attempt_limiter = IpRateLimiter::new(
         config.ssh_max_attempts_per_ip,
@@ -311,20 +316,20 @@ async fn main() -> anyhow::Result<()> {
         config.ws_pair_max_attempts_per_ip,
         config.ws_pair_rate_limit_window_secs,
     );
-    let pinstar_registry =
-        late_ssh::app::pinstar::svc::PinstarServerRegistry::new(Some(db.clone()));
-
     // Initialize app state
     let state = State {
         config: config.clone(),
         db: db.clone(),
         ai_service: ai_service.clone(),
+        translation_service: translation_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
+        stream_service,
         chat_service: chat_service.clone(),
         notification_service: notification_service.clone(),
         article_service,
         feed_service,
+        cyberspace_service,
         showcase_service,
         work_service,
         profile_service,
@@ -342,6 +347,7 @@ async fn main() -> anyhow::Result<()> {
         greendragon_service,
         darkroom_service,
         arcade_handle_service,
+        door_rc_service,
         daily_service,
         bonsai_service,
         pet_service,
@@ -359,6 +365,7 @@ async fn main() -> anyhow::Result<()> {
         pair_ws_counts: Arc::new(Mutex::new(HashMap::new())),
         active_users,
         clubhouse_lobby,
+        mention_ladders,
         scratchpad_registry,
         afk_users,
         username_directory: username_directory.clone(),
@@ -372,7 +379,6 @@ async fn main() -> anyhow::Result<()> {
         irc_registry: irc_registry.clone(),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        pinstar_registry,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
@@ -384,6 +390,47 @@ async fn main() -> anyhow::Result<()> {
         username_directory,
         singleton_shutdown.clone(),
     );
+
+    // The door log pipe: tail each door host's append-only log files over the
+    // stats SSH session and land runs/milestones/badges (PLAN-ROGUELIKE-BOARDS
+    // Phases 1-3). One task per door, gated on the same flag as that door's
+    // client; single-replica by the same assumption as every other
+    // process-global singleton here.
+    let door_ingest_service = late_ssh::app::door::ingest::svc::DoorIngestService::new(
+        db.clone(),
+        state.chip_service.clone(),
+        activity_publisher.clone(),
+    );
+    let _dcss_ingest_task = state.config.dcss_enabled.then(|| {
+        door_ingest_service.clone().start_dcss_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.dcss_host.clone(),
+                port: state.config.dcss_port,
+                secret: state.config.dcss_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _nethack_ingest_task = state.config.nethack_enabled.then(|| {
+        door_ingest_service.clone().start_nethack_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.nethack_host.clone(),
+                port: state.config.nethack_port,
+                secret: state.config.nethack_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
+    let _brogue_ingest_task = state.config.brogue_enabled.then(|| {
+        door_ingest_service.clone().start_brogue_task(
+            late_ssh::app::door::ingest::svc::DoorIngestTarget {
+                host: state.config.brogue_host.clone(),
+                port: state.config.brogue_port,
+                secret: state.config.brogue_secret.clone(),
+            },
+            singleton_shutdown.clone(),
+        )
+    });
 
     let mut tasks = JoinSet::new();
     let api_state = state.clone();
@@ -455,15 +502,6 @@ async fn main() -> anyhow::Result<()> {
         Ok(())
     });
 
-    let pinstar_persist_shutdown = session_shutdown.clone();
-    let pinstar_persist_registry = state.pinstar_registry.clone();
-    tasks.spawn(async move {
-        pinstar_persist_registry
-            .run_persist_task(pinstar_persist_shutdown)
-            .await;
-        Ok(())
-    });
-
     let limiter_cleanup_shutdown = singleton_shutdown.clone();
     let ssh_limiter = state.ssh_attempt_limiter.clone();
     let ws_limiter = state.ws_pair_limiter.clone();
@@ -492,6 +530,29 @@ async fn main() -> anyhow::Result<()> {
                 _ = voice_prune_shutdown.cancelled() => break,
                 _ = interval.tick() => {
                     voice_prune_service.prune_stale(chrono::Duration::seconds(90));
+                }
+            }
+        }
+        Ok(())
+    });
+
+    let stream_sweep_shutdown = singleton_shutdown.clone();
+    let stream_sweep_service = state.stream_service.clone();
+    tasks.spawn(async move {
+        // A restart wiped the in-memory registry, so any ingress LiveKit
+        // still holds is an orphaned stream key; collect them before the
+        // first poll can see them.
+        stream_sweep_service.reconcile_ingresses().await;
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            tokio::select! {
+                _ = stream_sweep_shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    // The poll feeds the OBS streams' publisher reports; the
+                    // sweep right after acts on whatever state it left.
+                    stream_sweep_service.poll_obs_publishers().await;
+                    stream_sweep_service.sweep();
                 }
             }
         }
@@ -567,7 +628,6 @@ async fn main() -> anyhow::Result<()> {
         finish_ssh_drain(&mut ssh_task, &mut fatal_error).await;
     }
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
-    flush_pinstar_diagrams(&state, &mut fatal_error).await;
     flush_lateania_characters(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 

@@ -376,6 +376,14 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         }
     };
 
+    let initial_door_rcs = match state.door_rc_service.list(user_id).await {
+        Ok(rcs) => rcs,
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load door rc files");
+            Vec::new()
+        }
+    };
+
     let key_layout = load_device_rails(state, user_id, key_fingerprint.as_deref()).await;
 
     SessionConfig {
@@ -386,10 +394,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         key_layout,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
+        stream_service: state.stream_service.clone(),
         chat_service: state.chat_service.clone(),
+        translation_service: state.translation_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
         feed_service: state.feed_service.clone(),
+        cyberspace_service: state.cyberspace_service.clone(),
         showcase_service: state.showcase_service.clone(),
         work_service: state.work_service.clone(),
         profile_service: state.profile_service.clone(),
@@ -422,6 +433,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         greendragon_service: state.greendragon_service.clone(),
         darkroom_service: state.darkroom_service.clone(),
         arcade_handle_service: state.arcade_handle_service.clone(),
+        door_rc_service: state.door_rc_service.clone(),
+        initial_door_rcs,
         daily_service: state.daily_service.clone(),
         house_registry: state.house_registry.clone(),
         dartboard_server: state.dartboard_server.clone(),
@@ -453,15 +466,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         nethack_host: state.config.nethack_host.clone(),
         nethack_port: state.config.nethack_port,
         nethack_secret: state.config.nethack_secret.clone(),
-        nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
-            state.chip_service.clone(),
-            state.db.clone(),
+        nethack_activity: Some(
             crate::app::activity::publisher::ActivityPublisher::new(
                 state.db.clone(),
                 state.activity_feed.clone(),
             )
             .with_username_directory(state.username_directory.clone()),
-        )),
+        ),
         dcss_enabled: state.config.dcss_enabled,
         dcss_host: state.config.dcss_host.clone(),
         dcss_port: state.config.dcss_port,
@@ -490,6 +501,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         radio_meta_rx: Some(state.radio_meta_rx.clone()),
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
+        mention_ladders: state.mention_ladders.clone(),
+        files: state.config.files.clone(),
         scratchpad_registry: Some(state.scratchpad_registry.clone()),
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
             &user.settings,
@@ -510,10 +523,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         land_on_home: late_core::models::user::extract_land_on_home(&user.settings),
         initial_theme_id: late_core::models::user::extract_theme_id(&user.settings)
             .unwrap_or_else(|| theme::DEFAULT_ID.to_string()),
+        initial_interaction_mode: late_core::models::user::extract_interaction_mode(&user.settings),
         initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
         initial_icecast_stream: late_core::models::user::extract_icecast_stream(&user.settings),
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
-        pinstar_registry: state.pinstar_registry.clone(),
         is_draining: state.is_draining.clone(),
     }
 }

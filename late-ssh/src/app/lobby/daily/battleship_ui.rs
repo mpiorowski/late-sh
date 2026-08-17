@@ -233,25 +233,26 @@ fn target_grid_lines(
 
                 if is_cursor && tier.ch == 1 {
                     // The one-row crosshair: brackets around the cell content.
+                    // Each piece takes the selection treatment once, with its
+                    // meaningful color applied after so it survives the swap;
+                    // stacking the swap onto the already-reversed hit tile
+                    // would cancel to nothing.
                     let (mid, style) = match shot {
                         Some(Shot { hit: true, .. }) => {
-                            // The hit tile's dark-on-red inverts to
-                            // red-on-selection so the cross stays legible.
-                            ('X', hit_style().fg(theme::ERROR()))
+                            ('X', theme::selection_style().fg(theme::ERROR()))
                         }
                         Some(Shot { hit: false, .. }) => {
-                            ('x', checker(row, col).fg(theme::TEXT_MUTED()))
+                            ('x', theme::selection_style().fg(theme::TEXT_MUTED()))
                         }
-                        None => (' ', checker(row, col)),
+                        None => (' ', theme::selection_style()),
                     };
-                    let bracket = Style::default()
+                    let bracket = theme::selection_style()
                         .fg(theme::AMBER())
-                        .bg(theme::BG_SELECTION())
                         .add_modifier(Modifier::BOLD);
                     spans.push(Span::styled("[", bracket));
                     spans.push(Span::styled(
                         mid.to_string(),
-                        style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD),
+                        style.add_modifier(Modifier::BOLD),
                     ));
                     spans.push(Span::styled("]", bracket));
                     continue;
@@ -448,12 +449,9 @@ fn checker(row: usize, col: usize) -> Style {
     }
 }
 
-/// A hit: dark cross on a solid error-colored tile.
+/// A hit: canvas cross cut out of a solid error-colored tile.
 fn hit_style() -> Style {
-    Style::default()
-        .fg(theme::BG_CANVAS())
-        .bg(theme::ERROR())
-        .add_modifier(Modifier::BOLD)
+    theme::punch_through(theme::ERROR()).add_modifier(Modifier::BOLD)
 }
 
 /// `hot_col` lights up the cursor's column letter as a crosshair.

@@ -93,6 +93,25 @@ fn generated_zones_are_collision_free_and_the_core_stays_tight() {
 }
 
 #[test]
+fn housing_interiors_never_share_a_cell_with_the_town() {
+    use crate::app::door::lateania::housing::{HOUSING_BASE, is_housing_room};
+
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    for (c, ids) in &clashes {
+        let interior = ids
+            .iter()
+            .any(|&id| id != HOUSING_BASE && is_housing_room(id));
+        assert!(
+            !interior,
+            "house interior collided with the world at {c:?}: rooms {ids:?} - the \
+             field would draw another room's paths around a player standing inside",
+        );
+    }
+}
+
+#[test]
 fn dump_level_draws_the_neighbourhood_around_the_player() {
     let world = seed_world();
     let coords = derive_coords(&world);
@@ -288,6 +307,95 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
             }
         }
     }
+}
+
+// ---- collision resolution favours where the player actually stands -------
+
+#[test]
+fn resolve_collision_prefers_the_players_own_room() {
+    // Out of id order on purpose: the player's own room must win regardless.
+    assert_eq!(super::resolve_collision(5, 100, 100, None), 100);
+    assert_eq!(super::resolve_collision(100, 5, 100, None), 100);
+}
+
+#[test]
+fn resolve_collision_falls_back_to_lowest_id_without_a_region_match() {
+    assert_eq!(super::resolve_collision(50, 20, 999, None), 20);
+    assert_eq!(super::resolve_collision(20, 50, 999, None), 20);
+}
+
+#[test]
+fn a_collision_favours_the_room_that_matches_where_the_player_stands() {
+    // The hand-authored core stacks whole regions on shared cells. When the
+    // player is in neither colliding room, the map must still favour the one
+    // that shares a region with wherever they *are*, not whichever id is
+    // lower - painting an unrelated region around a player who's clearly
+    // standing in one specific land is the bug this guards.
+    use crate::app::door::lateania::world::region_atlas_entry;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (_, ids) = clashes
+        .iter()
+        .find(|(_, ids)| {
+            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
+        })
+        .expect("some collision spans two different regions");
+    let lower = *ids.first().unwrap();
+    let higher = *ids.last().unwrap();
+    let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
+
+    // No region context (or the player is elsewhere with no matching room):
+    // the lowest id still wins, same as before this feature.
+    assert_eq!(
+        super::resolve_collision(lower, higher, 999_999, None),
+        lower
+    );
+    // The player stands somewhere in the higher room's region: that room
+    // wins the cell instead, even though its id is larger.
+    assert_eq!(
+        super::resolve_collision(lower, higher, 999_999, Some(higher_region)),
+        higher
+    );
+}
+
+#[test]
+fn viewport_explored_paints_a_collision_as_the_players_own_region() {
+    use crate::app::door::lateania::world::region_atlas_entry;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let clashes = collisions(&coords);
+    let (&cell, ids) = clashes
+        .iter()
+        .find(|(_, ids)| {
+            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
+        })
+        .expect("some collision spans two different regions");
+    let lower = *ids.first().unwrap();
+    let higher = *ids.last().unwrap();
+    let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
+
+    // Some other room in the higher room's region, not part of the collision
+    // itself, so only the region match can explain the result.
+    let stand_in = world
+        .rooms
+        .keys()
+        .copied()
+        .find(|&id| {
+            id != lower
+                && id != higher
+                && region_atlas_entry(id).map(|(name, _)| name) == Some(higher_region)
+        })
+        .expect("the higher room's region has more than one room");
+
+    let visited: std::collections::HashSet<_> = [lower, higher].into_iter().collect();
+    let (cols, rows) = (21, 11);
+    let grid = super::viewport_explored(&coords, cell, cols, rows, &visited, stand_in);
+    assert_eq!(
+        grid[rows as usize / 2][cols as usize / 2],
+        Some(higher),
+        "standing in {higher_region} should paint the colliding cell as the room in that region"
+    );
 }
 
 #[test]
@@ -565,4 +673,381 @@ fn poi_arrows_point_off_screen_pois_to_the_border() {
             "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(a.glyph)
         );
     }
+}
+
+// A discovered room whose neighbours are all still fog must not read as a
+// stranded island: each exit into the unknown gets a faint half-stub of path
+// so the player can see a trail continues that way (direction only, no
+// spoiler, and never an arrow - arrows read as controls).
+#[test]
+fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
+    use super::Tile;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+
+    // Find a room with at least one flat (N/S/E/W) exit whose neighbour sits in
+    // the adjacent cell, so the hint has an empty cell to land in.
+    let (&anchor, _) = world
+        .rooms
+        .iter()
+        .find(|(id, room)| {
+            let c = coords[*id];
+            room.exits.iter().any(|(_dir, dst)| {
+                coords
+                    .get(dst)
+                    .is_some_and(|dc| dc.z == c.z && (dc.x - c.x).abs() + (dc.y - c.y).abs() == 1)
+            })
+        })
+        .expect("world has a room with a unit-adjacent flat exit");
+
+    // Only the anchor is explored - every neighbour is fog.
+    let visited: std::collections::HashSet<_> = std::iter::once(anchor).collect();
+    let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
+
+    let hints = canvas
+        .iter()
+        .flatten()
+        .filter(|t| matches!(t, Tile::Hint(_)))
+        .count();
+    assert!(
+        hints > 0,
+        "a discovered room surrounded by fog must sprout at least one exit hint"
+    );
+    // Hints are path stubs (the corridor glyphs), never arrows.
+    for row in &canvas {
+        for tile in row {
+            if let Tile::Hint(g) = tile {
+                assert!(
+                    "\u{2500}\u{2502}".contains(*g),
+                    "hint glyph {g:?} is not a path stub"
+                );
+            }
+        }
+    }
+}
+
+// A link to a room the player has *already visited* but that the flat grid
+// can't draw right beside it (a scattered branch, or a jump into a whole
+// other reserved block like the Sunderlakes off Melvanala) must read
+// differently from a plain fog `Hint` - it's a known place, not the edge of
+// exploration.
+#[test]
+fn a_link_to_an_already_visited_scattered_room_shows_a_known_hint() {
+    use super::Tile;
+    let world = seed_world();
+    let coords = derive_coords(&world);
+
+    // Every same-level, non-adjacent link in the world, in a stable order so
+    // the test is deterministic despite `world.rooms` being a HashMap.
+    let mut room_ids: Vec<_> = world.rooms.keys().copied().collect();
+    room_ids.sort_unstable();
+    let mut candidates: Vec<(_, _)> = Vec::new();
+    for id in room_ids {
+        let Some(&c) = coords.get(&id) else { continue };
+        let mut dests: Vec<_> = world.rooms[&id].exits.values().copied().collect();
+        dests.sort_unstable();
+        for dst in dests {
+            if let Some(&dc) = coords.get(&dst)
+                && dc.z == c.z
+                && (dc.x - c.x).abs() + (dc.y - c.y).abs() != 1
+            {
+                candidates.push((id, dst));
+            }
+        }
+    }
+    assert!(
+        !candidates.is_empty(),
+        "world has a same-level link that isn't unit-adjacent"
+    );
+
+    // A candidate's arrow can be shadowed by one of the anchor's own other
+    // exits landing on the same adjacent cell first, so scan for one that
+    // actually renders rather than assuming the first candidate always will.
+    let renders = candidates.into_iter().any(|(anchor, dest)| {
+        let visited: std::collections::HashSet<_> = [anchor, dest].into_iter().collect();
+        let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
+        canvas
+            .iter()
+            .flatten()
+            .any(|t| matches!(t, Tile::HintKnown(_)))
+    });
+    assert!(
+        renders,
+        "at least one already-visited scattered link should show a known hint, not plain fog"
+    );
+}
+
+// The POI index carries every marker kind the map draws, and the "notable foe"
+// marker stays rare: one regional champion per land, never a per-room carpet
+// (the endgame is wall-to-wall max-level mobs, so a level threshold would flood).
+#[test]
+fn poi_index_has_every_marker_kind_and_elite_stays_rare() {
+    let p = super::pois();
+    let has = |f: fn(&super::Poi) -> bool| p.values().filter(|x| f(x)).count();
+    assert!(has(|x| x.boss.is_some()) > 0, "bosses indexed");
+    assert!(has(|x| x.tameable.is_some()) > 0, "tameable beasts indexed");
+    assert!(has(|x| x.gather.is_some()) > 0, "gather nodes indexed");
+
+    let elite = has(|x| x.elite_foe.is_some());
+    assert!(elite > 0, "at least one regional champion");
+    // One apex per region: comfortably under any per-region-count ceiling and
+    // nowhere near the thousands a raw level threshold would mark.
+    assert!(
+        elite < 40,
+        "elite foe markers must stay rare (one per land), got {elite}"
+    );
+    // A champion room is never also a boss room (bosses take precedence).
+    for poi in p.values() {
+        if poi.elite_foe.is_some() {
+            assert!(
+                poi.boss.is_none(),
+                "a champion room must not also be a boss"
+            );
+        }
+    }
+}
+
+// Every zone chains to the next one by a stair, so "which way is onward" is
+// always a vertical exit - the one thing a flat level cannot draw as a
+// corridor. The map has to say so on the room itself, or it hides the only
+// route out of the zone the player is standing in.
+#[test]
+fn a_room_with_a_way_down_shows_a_stair_on_the_map() {
+    let coords = super::world_coords();
+    // Embergate's square carries both: `Down` is the Frontier descent and `Up`
+    // the city districts, each claimed at runtime by its own `extend_*`. So it
+    // exercises the real built world and the both-ways glyph at once.
+    let square = super::world().start_room;
+    let exits = &super::world().rooms[&square].exits;
+    assert!(
+        exits.contains_key(&super::Dir::Down) && exits.contains_key(&super::Dir::Up),
+        "the square keeps its Frontier stair down and its city stair up"
+    );
+    let visited = std::collections::HashSet::from([square]);
+    let canvas = super::map_canvas(coords, coords[&square], 21, 11, &visited, square);
+    let stairs: Vec<char> = canvas
+        .iter()
+        .flatten()
+        .filter_map(|t| match t {
+            super::Tile::Stair(ch) => Some(*ch),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stairs,
+        vec!['\u{25be}'],
+        "a room with both ways reads as one ▾: down is the way onward, and the \
+         exits line carries the up"
+    );
+}
+
+// The stair layer sits in each room's own corner cell. That only works if a
+// corner belongs to exactly one room and to nothing else the canvas draws;
+// otherwise a stair would silently erase a corridor, or two rooms would fight
+// over one marker.
+#[test]
+fn stair_corners_never_collide_with_rooms_corridors_or_each_other() {
+    let coords = super::world_coords();
+    // A dense hand-authored neighbourhood with stairs, houses and roads in it.
+    let here = super::world().start_room;
+    let visited: std::collections::HashSet<_> = super::world().rooms.keys().copied().collect();
+    let canvas = super::map_canvas(coords, coords[&here], 41, 21, &visited, here);
+    for (r, row) in canvas.iter().enumerate() {
+        for (c, tile) in row.iter().enumerate() {
+            // Rooms land on even offsets from the centre cell, corridors on the
+            // odd cell between two of them, stairs on the odd/odd corner.
+            let (even_col, even_row) = ((c % 2 == 41 / 2 % 2), (r % 2 == 21 / 2 % 2));
+            match tile {
+                super::Tile::Room(_) => assert!(
+                    even_col && even_row,
+                    "a room must sit on the room layer at ({c},{r})"
+                ),
+                super::Tile::Stair(_) => assert!(
+                    !even_col && !even_row,
+                    "a stair must sit on the free corner layer at ({c},{r})"
+                ),
+                super::Tile::LinkH | super::Tile::LinkV => assert!(
+                    even_col != even_row,
+                    "a corridor must sit between two rooms at ({c},{r})"
+                ),
+                _ => {}
+            }
+        }
+    }
+}
+
+// Routing answers the question the picture cannot: not "where is it" but
+// "which exit do I take from here". It walks only ground the player has
+// already covered, so it can never point at an unexplored shortcut.
+#[test]
+fn a_route_names_the_first_exit_to_take_and_the_distance() {
+    let w = super::world();
+    let start = w.start_room;
+    // Two real rooms out from the square, chosen by walking the graph rather
+    // than assuming any particular exit leads on.
+    let (first_dir, second, third) = w.rooms[&start]
+        .exits
+        .iter()
+        .filter_map(|(d, next)| {
+            let onward = w.rooms.get(next)?.exits.values().find(|t| **t != start)?;
+            Some((*d, *next, *onward))
+        })
+        .min_by_key(|(_, second, third)| (*second, *third))
+        .expect("the square leads two rooms out");
+    let visited = std::collections::HashSet::from([start, second, third]);
+
+    let one = super::route(start, second, &visited).expect("a route to the neighbour");
+    assert_eq!(one.next, first_dir, "the first step is the exit to take");
+    assert_eq!(one.rooms, 1, "a neighbour is one room away");
+
+    let two = super::route(start, third, &visited).expect("a route two rooms out");
+    assert_eq!(two.rooms, 2);
+    assert_eq!(
+        two.next, first_dir,
+        "a longer route still names the very next exit, not the last one"
+    );
+
+    // Standing on the destination is not a route, and neither is a place the
+    // player has never been - no route may reveal unexplored ground.
+    assert_eq!(super::route(start, start, &visited), None);
+    let unvisited = std::collections::HashSet::from([start]);
+    assert_eq!(
+        super::route(start, second, &unvisited),
+        None,
+        "a room the player has never seen is not a destination"
+    );
+}
+
+// A stub for a link the flat grid cannot draw adjacently must sit on the side
+// the player would actually walk out of. The house interiors are the sharpest
+// case in the world: each one is its own component in the coordinate field, so
+// the close can land thousands of cells to the *west* of a house whose door
+// out faces *east*. Siding the stub by coordinate delta drew a path west, and
+// walking west then failed - the map inventing a path that is not there is the
+// single worst thing it can do.
+#[test]
+fn a_scattered_links_stub_follows_the_exit_not_the_coordinate_delta() {
+    use crate::app::door::lateania::housing::{HOUSING_BASE, plot_base};
+    let w = super::world();
+    let coords = super::world_coords();
+    let entrance = plot_base(2); // Timber Longhouse: its way out faces east.
+    assert_eq!(
+        w.rooms[&entrance].exits.get(&super::Dir::East),
+        Some(&HOUSING_BASE),
+        "the longhouse door out faces east onto the close"
+    );
+    assert!(
+        coords[&HOUSING_BASE].x < coords[&entrance].x,
+        "and the close sits west of it in the field, which is what used to \
+         decide the stub's side"
+    );
+
+    let visited: std::collections::HashSet<_> = w.rooms.keys().copied().collect();
+    let (cols, rows) = (11, 7);
+    let canvas = super::map_canvas(coords, coords[&entrance], cols, rows, &visited, entrance);
+    let (cx, cy) = ((cols / 2) as usize, (rows / 2) as usize);
+    assert!(
+        matches!(canvas[cy][cx + 1], super::Tile::HintKnown(_)),
+        "the way out reads on the east side, where walking east is what you do"
+    );
+    assert_eq!(
+        canvas[cy][cx - 1],
+        super::Tile::Empty,
+        "and nothing suggests a path west, because there is no way west"
+    );
+}
+
+// The map's gather marker used to carry only a skill name, with no way to
+// scout whether a node was even worth the walk before physically standing in
+// its room - the level gate was only ever shown as an in-room refusal reason
+// after arriving under-levelled. It must be visible on the map itself now.
+#[test]
+fn gather_poi_carries_the_nodes_real_level_requirement() {
+    use crate::app::door::lateania::world::NODES;
+
+    let node = NODES
+        .iter()
+        .find(|n| n.level_req > 0)
+        .expect("at least one gather node has a real level gate");
+    let poi = super::poi(node.home).expect("the node's room is indexed");
+    let gather = poi.gather.expect("a gather node room carries a GatherPoi");
+    assert_eq!(gather.skill, node.skill.key());
+    assert_eq!(
+        gather.level_req, node.level_req,
+        "the map's level requirement must match the real gate, not a placeholder"
+    );
+}
+
+// Quest-target arrows keep the same honesty rule as POI arrows: a target in
+// another reserved block gets no arrow (the coordinate delta there points
+// nowhere real) and is counted as "beyond this land" instead, so the map can
+// say what it dropped rather than silently under-reporting.
+#[test]
+fn quest_arrows_stay_honest_across_reserved_blocks() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+
+    // A same-block off-screen target: a King's Road room a few steps south.
+    let near = 10;
+    // A cross-block target: the Frontier's first zone entrance sits in its own
+    // reserved block, far outside PAN_LIMIT.
+    let far = 2000;
+    assert!(
+        (coords[&far].x - center.x).abs() > super::PAN_LIMIT
+            || (coords[&far].y - center.y).abs() > super::PAN_LIMIT
+            || coords[&far].z != center.z,
+        "test premise: the Frontier target lies beyond the pan range"
+    );
+
+    let (arrows, beyond) = super::quest_arrows(&coords, center, cols, rows, &[near, far]);
+    assert_eq!(beyond, 1, "the cross-block target is counted, not drawn");
+    for a in &arrows {
+        assert!(a.row < rows as usize && a.col < cols as usize);
+        assert!(
+            "\u{2190}\u{2191}\u{2192}\u{2193}\u{2196}\u{2197}\u{2198}\u{2199}".contains(a.glyph)
+        );
+    }
+}
+
+#[test]
+fn the_land_graph_is_read_off_the_room_graph_and_covers_every_region() {
+    let links = super::land_links();
+
+    // Every atlas region has an entry, so a new country can never be silently
+    // missing from the graph the map is drawn from.
+    let mut named: Vec<&str> = links.keys().copied().collect();
+    let mut names = super::super::world::region_names();
+    named.sort_unstable();
+    names.sort_unstable();
+    assert_eq!(named, names);
+
+    // Roads are two-way, because they are read off real exits in both rooms.
+    for (&here, theres) in links {
+        for &there in theres {
+            assert!(
+                links[there].contains(&here),
+                "{here} -> {there} has no road back"
+            );
+        }
+    }
+
+    // The two portal-only regions are portal-only because their rooms hold no
+    // directional exits at all, not because a table says so.
+    assert_eq!(
+        super::portal_lands(),
+        vec!["Portal Villages", "The Shattered Archipelago"]
+    );
+
+    // Kaelmyr's only door is the one inside Yssgar's chamber, and nothing walks
+    // from the overworld straight into the Faewood: `extend_silvael` splices
+    // the city into the road, so the walk goes savanna -> Silvael -> Aelunor.
+    assert_eq!(
+        links["Kaelmyr, the Ashen Reach"],
+        vec!["The Sundered Reaches"]
+    );
+    assert_eq!(links["Aelunor, the Faewood"], vec!["Silvael"]);
+    assert!(links["Silvael"].contains(&"The Overworld & Capitals"));
+    assert!(!links["The Overworld & Capitals"].contains(&"Aelunor, the Faewood"));
 }

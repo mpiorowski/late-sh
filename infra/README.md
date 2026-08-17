@@ -62,7 +62,7 @@ forwards traffic into the existing IPv4 ingress path.
 
 This enables:
 - `ssh late.sh` — SSH TUI
-- `irc.late.sh:6697` — IRC over TLS, when `IRC_ENABLED=1`
+- `irc.late.sh:6697` — IRC over TLS
 - `https://late.sh` — Web landing + audio pairing
 - `https://api.late.sh` — SSH API / WebSocket
 - `https://audio.late.sh` — Icecast audio stream
@@ -131,6 +131,10 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various | Full observability stack |
 
 SSH traffic on port 22 is routed via NGINX TCP passthrough to late-ssh pod port 2222.
+IRC traffic follows the same TCP passthrough pattern when enabled. Both NGINX
+for IPv4 and the host-network HAProxy for IPv6 send PROXY v1 metadata before the
+application's in-process TLS handshake; late-ssh accepts it only from the CIDRs
+configured by `SSH_PROXY_TRUSTED_CIDRS`.
 LiveKit signaling is routed through NGINX ingress on `rtc.<domain>`, while
 LiveKit media ports are bound directly on the node by the `livekit` pod.
 On a fresh cluster, the `livekit` pod may wait for cert-manager to create the
@@ -140,51 +144,39 @@ failed.
 
 ## Configuration Parameters
 
-All parameters are set as Terraform variables (via GitHub secrets/variables for CI/CD).
+Application configuration does not live in Terraform. `service-ssh` and
+`service-web` read `LATE_ENV=prod` plus secrets; everything else is compiled
+into their `config.rs` profiles (`late-ssh/src/config.rs`,
+`late-web/src/config.rs`). The variables below exist only for infrastructure
+shape, images, and secrets, set as Terraform variables (via GitHub
+secrets/variables for CI/CD).
 
 ### Core
 
 | Variable | Description |
 |----------|-------------|
-| `DOMAIN` | Root domain (e.g., `late.sh`) |
 | `LOG_LEVEL` | Rust log level (`RUST_LOG`) |
 | `SSH_HOST_KEY` | Ed25519 private key for SSH server |
 | `SSH_IMAGE_TAG` | Docker image for late-ssh |
 | `WEB_IMAGE_TAG` | Docker image for late-web |
 
-### SSH / Rate Limits
-
-| Variable | Description |
-|----------|-------------|
-| `SSH_OPEN` | Allow open SSH access (no auth required) |
-| `MAX_CONNS_GLOBAL` | Max total concurrent SSH connections |
-| `MAX_CONNS_PER_IP` | Max concurrent SSH connections per IP |
-| `SSH_IDLE_TIMEOUT` | SSH idle timeout in seconds |
-| `FRAME_DROP_LOG_EVERY` | Log every Nth frame drop |
-| `SSH_MAX_ATTEMPTS_PER_IP` | Max SSH attempts per IP in rate limit window |
-| `SSH_RATE_LIMIT_WINDOW_SECS` | SSH rate limit window in seconds |
-| `SSH_PROXY_PROTOCOL` | Enable PROXY protocol parsing for SSH client IP resolution |
-| `SSH_PROXY_TRUSTED_CIDRS` | Comma-separated CIDRs trusted to send PROXY headers |
-| `WS_PAIR_MAX_ATTEMPTS_PER_IP` | Max WebSocket pair attempts per IP in window |
-| `WS_PAIR_RATE_LIMIT_WINDOW_SECS` | WebSocket pair rate limit window in seconds |
-| `DB_POOL_SIZE` | Database connection pool size |
-
 ### IRC
 
-IRC is disabled unless explicitly enabled. When `IRC_ENABLED=1`, Terraform
-requests a Let's Encrypt certificate for `IRC_HOST` with cert-manager, mounts
-the generated Kubernetes TLS secret into `service-ssh`, starts the embedded IRC
-listener with in-process TLS, and exposes the raw TCP port through ingress.
+The IRC edge is always provisioned: Terraform requests a Let's Encrypt
+certificate for `irc.late.sh` with cert-manager, mounts the generated
+Kubernetes TLS secret into `service-ssh`, and exposes port 6697 through
+ingress. The listener itself (ports, limits, TLS paths, trusted proxy CIDRs)
+is part of the late-ssh prod profile.
 
 | Variable | Description |
 |----------|-------------|
-| `IRC_ENABLED` | Enable embedded IRC listener, defaults to `0` |
-| `IRC_HOST` | Public IRC hostname, defaults to `irc.<DOMAIN>` |
-| `IRC_PORT` | IRC TLS port, defaults to `6697` |
-| `IRC_MAX_CONNS_GLOBAL` | Max total concurrent IRC connections, defaults to `200` |
-| `IRC_MAX_CONNS_PER_USER` | Max concurrent IRC connections per user, defaults to `3` |
-| `IRC_MAX_AUTH_FAILURES_PER_IP` | Max failed auth attempts per IP, defaults to `20` |
-| `IRC_AUTH_FAILURE_WINDOW_SECS` | Auth failure rate-limit window, defaults to `300` |
+| `IRC_PROXY_EMIT` | Make ingress-nginx and IPv6 HAProxy emit PROXY headers, defaults to `0` |
+
+`IRC_PROXY_EMIT` stays a variable because flipping edge emission is a
+deploy-time rollout step: deploy a parser-capable image first, then set the
+GitHub environment variable `IRC_PROXY_EMIT=1` and run a subsequent
+infrastructure deployment. Rollback reverses the order. The prod profile
+always accepts PROXY headers, so the old accept-side toggle is gone.
 
 ### IPv6 edge proxy
 
@@ -194,20 +186,17 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 | `IPV6_PROXY_ADDRESS` | Public IPv6 address for the proxy to bind |
 | `IPV6_PROXY_IMAGE` | HAProxy image used by the proxy |
 
-### AI (Gemini)
+### Secrets injected into late-ssh
 
 | Variable | Description |
 |----------|-------------|
-| `AI_ENABLED` | Enable AI features (ghost chat, URL extraction) |
 | `AI_API_KEY` | Gemini API key |
+| `YOUTUBE_API_KEY` | YouTube Data API key |
 
 ### Voice / LiveKit
 
 | Variable | Description |
 |----------|-------------|
-| `VOICE_ENABLED` | Enable voice controls in late-ssh, defaults to `1` |
-| `VOICE_ROOM` | Shared MVP voice room name, defaults to `late-voice` |
-| `LIVEKIT_SUBDOMAIN` | Public LiveKit subdomain under `DOMAIN`, defaults to `rtc` |
 | `LIVEKIT_IMAGE` | LiveKit server image |
 | `LIVEKIT_LOG_LEVEL` | LiveKit server log level |
 | `LIVEKIT_API_KEY` | LiveKit API key; API secret is generated into the Kubernetes `livekit` secret |
@@ -221,13 +210,10 @@ listener with in-process TLS, and exposes the raw TCP port through ingress.
 
 | Variable | Description |
 |----------|-------------|
-| `S3_ACCESS_KEY_ID` | S3 access key |
-| `S3_SECRET_ACCESS_KEY` | S3 secret key |
-| `S3_ENDPOINT` | S3 endpoint URL |
+| `S3_ACCESS_KEY_ID` | S3 access key (DB backups and file uploads) |
+| `S3_SECRET_ACCESS_KEY` | S3 secret key (DB backups and file uploads) |
+| `S3_ENDPOINT` | S3 endpoint URL (DB backups; the files endpoint is a prod-profile literal) |
 | `DB_BACKUPS_BUCKET` | Bucket for CloudNativePG backups |
-| `FILES_BUCKET` | Bucket for public uploaded chat files |
-| `FILES_PUBLIC_BASE_URL` | Public base URL for uploaded files |
-| `FILES_S3_REGION` | S3 signing region for file uploads, defaults to `auto` for R2 |
 
 ## Production Considerations
 

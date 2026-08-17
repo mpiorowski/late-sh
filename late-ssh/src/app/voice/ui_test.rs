@@ -92,6 +92,7 @@ fn voice_row_is_one_line_with_the_keys_flushed_right() {
         room_id,
         current_user_id: Uuid::from_u128(7),
         paired_cli_supports_voice: true,
+        on_air: None,
     };
 
     let line = voice_strip_line(&view, 70);

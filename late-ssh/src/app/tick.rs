@@ -5,7 +5,6 @@ use crate::app::activity::event::ActivityKind;
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::files::inline_image::InlineImageRenderSettings;
-use crate::app::pinstar::browser::BrowserActionResult;
 use crate::session::SessionMessage;
 
 /// The hot world-tick cadence (the classic 15fps): animations that earn
@@ -222,6 +221,7 @@ impl App {
         }
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
+        changed |= self.tick_stream();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
@@ -231,6 +231,11 @@ impl App {
         }
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
+        let translate_to = self.profile_state.profile().translate_to;
+        let auto_translate = self.profile_state.profile().auto_translate;
+        changed |= self
+            .chat
+            .set_translate_settings(translate_to, auto_translate);
         changed |= self.sudoku_state.poll_daily_generation();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
@@ -442,6 +447,40 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
+        // A detached roguelike whose game has ended (death, save, idle
+        // shutdown, network drop) has nothing left to resume: drop the state
+        // so the hub card and backtick cycle stop advertising a live game.
+        // On the door's own screen the launcher/exit-grace flow owns this.
+        // A reap dirties the frame: the Games hub has no animation of its own,
+        // so without this the sidebar pip and resume line would linger until
+        // some unrelated repaint.
+        if self.screen != Screen::Nethack
+            && self
+                .nethack_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_nethack();
+            changed = true;
+        }
+        if self.screen != Screen::Dcss
+            && self
+                .dcss_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_dcss();
+            changed = true;
+        }
+        if self.screen != Screen::Brogue
+            && self
+                .brogue_state
+                .as_ref()
+                .is_some_and(|state| !state.is_running())
+        {
+            self.leave_brogue();
+            changed = true;
+        }
         if let Some(state) = self.usurper_state.as_mut() {
             state.tick();
         }
@@ -524,298 +563,6 @@ impl App {
             && self.codekeep_state.as_ref().is_none_or(|s| !s.is_running())
         {
             self.set_screen(Screen::Games);
-        }
-        // Pinstar Browser Actions
-        if self.pinstar_browser.pending_action.is_some() {
-            changed = true;
-        }
-        if let Some(action) = self.pinstar_browser.pending_action.take() {
-            use crate::app::pinstar::browser::BrowserActionResult;
-
-            let registry = self.pinstar_registry.clone();
-            let user_id = self.user_id;
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.pinstar_open_rx = Some(rx);
-
-            match action {
-                crate::app::pinstar::browser::BrowserAction::Create { title } => {
-                    tokio::spawn(async move {
-                        let res = registry.create_new_diagram(user_id, title).await;
-                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
-                            id,
-                            role: "owner".to_string(),
-                        }));
-                    });
-                }
-                crate::app::pinstar::browser::BrowserAction::Import { title, data } => {
-                    tokio::spawn(async move {
-                        let res = registry.import_diagram(user_id, title, data).await;
-                        let _ = tx.send(res.map(|id| BrowserActionResult::Open {
-                            id,
-                            role: "owner".to_string(),
-                        }));
-                    });
-                }
-                crate::app::pinstar::browser::BrowserAction::Open(id, role) => {
-                    let _ = tx.send(Ok(BrowserActionResult::Open { id, role }));
-                }
-                crate::app::pinstar::browser::BrowserAction::AcceptInvite(token) => {
-                    let db = self.pinstar_registry.db();
-                    tokio::spawn(async move {
-                        if let Some(db) = db {
-                            let res =
-                                crate::app::pinstar::browser::accept_invite(&db, user_id, token)
-                                    .await;
-                            let _ = tx
-                                .send(res.map(|(id, role)| BrowserActionResult::Open { id, role }));
-                        } else {
-                            let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
-                        }
-                    });
-                }
-                crate::app::pinstar::browser::BrowserAction::GenerateInvite(diagram_id) => {
-                    let db = self.pinstar_registry.db();
-                    tokio::spawn(async move {
-                        match db {
-                            Some(db) => {
-                                let res = crate::app::pinstar::browser::create_invite_for_owner(
-                                    &db,
-                                    user_id,
-                                    diagram_id,
-                                    "editor".to_string(),
-                                )
-                                .await
-                                .map(|token| BrowserActionResult::InviteCreated { token });
-                                let _ = tx.send(res);
-                            }
-                            None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
-                            }
-                        }
-                    });
-                }
-                crate::app::pinstar::browser::BrowserAction::CopySource(diagram_id) => {
-                    let db = self.pinstar_registry.db();
-                    tokio::spawn(async move {
-                        match db {
-                            Some(db) => {
-                                let res =
-                                    crate::app::pinstar::browser::copy_diagram_source_for_member(
-                                        &db, user_id, diagram_id,
-                                    )
-                                    .await
-                                    .map(|source| BrowserActionResult::CopiedSource { source });
-                                let _ = tx.send(res);
-                            }
-                            None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
-                            }
-                        }
-                    });
-                }
-                crate::app::pinstar::browser::BrowserAction::Delete(id) => {
-                    let db = self.pinstar_registry.db();
-                    tokio::spawn(async move {
-                        match db {
-                            Some(db) => {
-                                let res = crate::app::pinstar::browser::delete_diagram_for_user(
-                                    &db, user_id, id,
-                                )
-                                .await
-                                .map(|_| (id, "deleted".to_string()));
-                                if res.is_ok() {
-                                    registry.evict(id);
-                                }
-                                let _ = tx.send(res.map(|_| BrowserActionResult::Deleted { id }));
-                            }
-                            None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
-                            }
-                        }
-                    });
-                    // Refresh list after delete completes
-                }
-                crate::app::pinstar::browser::BrowserAction::Rename(id, new_title) => {
-                    let db = self.pinstar_registry.db();
-                    tokio::spawn(async move {
-                        match db {
-                            Some(db) => {
-                                let res = crate::app::pinstar::browser::rename_diagram_for_owner(
-                                    &db, user_id, id, &new_title,
-                                )
-                                .await
-                                .map(|_| BrowserActionResult::Renamed);
-                                let _ = tx.send(res);
-                            }
-                            None => {
-                                let _ = tx.send(Err(anyhow::anyhow!("no db configured")));
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        // Poll Pinstar open results. Every completed poll below (result,
-        // error, or closed channel) clears its receiver, so an rx that
-        // transitions to None marks a render-visible change.
-        let pinstar_open_rx_before = self.pinstar_open_rx.is_some();
-        let pinstar_session_rx_before = self.pinstar_session_rx.is_some();
-        let pinstar_list_rx_before = self.pinstar_list_rx.is_some();
-        if let Some(rx) = &mut self.pinstar_open_rx {
-            match rx.try_recv() {
-                Ok(Ok(result)) => {
-                    self.pinstar_open_rx = None;
-                    match result {
-                        BrowserActionResult::InviteCreated { token } => {
-                            self.pinstar_browser.generated_invite_token = Some(token);
-                            self.pinstar_browser.error = None;
-                            self.banner = Some(crate::app::common::primitives::Banner::success(
-                                "Invite link created",
-                            ));
-                        }
-                        BrowserActionResult::CopiedSource { source } => {
-                            self.pending_clipboard = Some(source);
-                            self.banner = Some(crate::app::common::primitives::Banner::success(
-                                "Diagram source copied to clipboard",
-                            ));
-                        }
-                        BrowserActionResult::Deleted { id } => {
-                            if self.pinstar_state.as_ref().is_some_and(|s| {
-                                matches!(&s.mode, crate::app::pinstar::state::PinstarMode::Shared { service, .. } if service.diagram_id() == id)
-                            }) {
-                                self.pinstar_state = None;
-                            }
-                            self.pinstar_registry.evict(id);
-                            self.banner = Some(crate::app::common::primitives::Banner::success(
-                                "Diagram deleted",
-                            ));
-                            self.refresh_pinstar_browser();
-                        }
-                        BrowserActionResult::Renamed => {
-                            self.banner = Some(crate::app::common::primitives::Banner::success(
-                                "Diagram renamed",
-                            ));
-                            self.refresh_pinstar_browser();
-                        }
-                        BrowserActionResult::Open { id, role } => {
-                            self.start_pinstar_session(id, role);
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    self.pinstar_open_rx = None;
-                    if self.pinstar_browser.mode
-                        == crate::app::pinstar::browser::BrowserMode::GenerateInvite
-                    {
-                        self.pinstar_browser.error = Some(e.to_string());
-                    } else {
-                        self.banner = Some(crate::app::common::primitives::Banner::error(
-                            &e.to_string(),
-                        ));
-                    }
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.pinstar_open_rx = None;
-                }
-            }
-        }
-
-        // Poll Pinstar session results
-        if let Some(rx) = &mut self.pinstar_session_rx {
-            match rx.try_recv() {
-                Ok(Ok((svc, role))) => {
-                    self.pinstar_session_rx = None;
-                    let title = svc.snapshot().title.clone();
-                    self.pinstar_state = Some(
-                        crate::app::pinstar::state::PinstarState::new_shared(svc, role, title),
-                    );
-                    self.banner = Some(crate::app::common::primitives::Banner::success(
-                        "Diagram opened",
-                    ));
-                }
-                Ok(Err(e)) => {
-                    self.pinstar_session_rx = None;
-                    self.banner = Some(crate::app::common::primitives::Banner::error(
-                        &e.to_string(),
-                    ));
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.pinstar_session_rx = None;
-                }
-            }
-        }
-
-        // Poll Pinstar list results
-        if let Some(rx) = &mut self.pinstar_list_rx {
-            match rx.try_recv() {
-                Ok(Ok(entries)) => {
-                    self.pinstar_list_rx = None;
-                    self.pinstar_browser.entries = entries;
-                    self.pinstar_browser.clamp_selection();
-                    self.pinstar_browser.error = None;
-                    self.pinstar_browser.loading = false;
-                }
-                Ok(Err(e)) => {
-                    self.pinstar_list_rx = None;
-                    self.pinstar_browser.loading = false;
-                    self.pinstar_browser.error = Some(e.to_string());
-                }
-                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    self.pinstar_list_rx = None;
-                    self.pinstar_browser.loading = false;
-                }
-            }
-        }
-
-        changed |= pinstar_open_rx_before && self.pinstar_open_rx.is_none();
-        changed |= pinstar_session_rx_before && self.pinstar_session_rx.is_none();
-        changed |= pinstar_list_rx_before && self.pinstar_list_rx.is_none();
-
-        // Pinstar: reload diagram if file changed on disk, or drain events
-        if let Some(state) = self.pinstar_state.as_mut() {
-            if let crate::app::pinstar::state::PinstarMode::Local { .. } = &state.mode {
-                if let Ok(metadata) = std::fs::metadata(&state.path)
-                    && let Ok(modified) = metadata.modified()
-                    && modified > state.last_modified
-                {
-                    let _ = state.reload();
-                    changed = true;
-                }
-            } else {
-                changed |= !state.drain_service_events().is_empty();
-            }
-
-            // Poll invite results; completed polls clear the receiver.
-            let invite_rx_before = state.invite_result_rx.is_some();
-            if let Some(rx) = &mut state.invite_result_rx {
-                match rx.try_recv() {
-                    Ok(Ok(token)) => {
-                        state.invite_token = Some(token);
-                        state.invite_result_rx = None;
-                    }
-                    Ok(Err(err)) => {
-                        state.invite_error = Some(err);
-                        state.invite_result_rx = None;
-                    }
-                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
-                    Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                        state.invite_error = Some("Invite task failed unexpectedly".to_string());
-                        state.invite_result_rx = None;
-                    }
-                }
-            }
-
-            changed |= invite_rx_before && state.invite_result_rx.is_none();
-
-            // Deferred save (avoid blocking event loop on drag end)
-            if state.needs_save {
-                state.needs_save = false;
-                let _ = state.save();
-            }
         }
         if let Some(balance) = self.house.client().and_then(|client| client.chip_balance())
             && balance != self.chip_balance
@@ -1015,14 +762,28 @@ impl App {
         }
 
         // The activity feed subscription survives the retired sidebar panel
-        // for one job: edge-detecting friend joins for the friend-online
-        // banner. The public feed itself ships to #lounge (activity/lounge).
+        // for one job: edge-detecting a friend's arrivals — logging in, and
+        // going live — for the banner + desktop notification. The public
+        // feed itself ships to #lounge (activity/lounge).
         if let Some(rx) = &mut self.activity_feed_rx {
             while let Ok(event) = rx.try_recv() {
-                if matches!(&event.kind, ActivityKind::UserJoined)
-                    && let Some(user_id) = event.user_id
-                    && let Some(b) = self.chat.note_friend_join(user_id, &event.username)
-                {
+                let Some(user_id) = event.user_id else {
+                    continue;
+                };
+                let banner = match &event.kind {
+                    ActivityKind::UserJoined => {
+                        self.chat.note_friend_join(user_id, &event.username)
+                    }
+                    ActivityKind::WentLive { title } => {
+                        self.chat
+                            .note_friend_went_live(user_id, &event.username, title.as_deref())
+                    }
+                    // Everything else on the global feed is somebody else's
+                    // business: this subscription only exists for the two
+                    // friend edges above.
+                    _ => None,
+                };
+                if let Some(b) = banner {
                     self.banner = Some(b);
                     changed = true;
                 }
@@ -1188,12 +949,7 @@ impl App {
         if self.screen != Screen::Dashboard {
             return false;
         }
-        let synthetic_selected = self.chat.feeds_selected
-            || self.chat.news_selected
-            || self.chat.notifications_selected
-            || self.chat.discover_selected
-            || self.chat.showcase_selected
-            || self.chat.work_selected;
+        let synthetic_selected = self.chat.synthetic_entry_selected();
         crate::app::render::dashboard_home_selected(
             self.chat.lounge_room_id(),
             self.chat.selected_room_id,

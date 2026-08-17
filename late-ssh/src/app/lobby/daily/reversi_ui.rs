@@ -213,13 +213,16 @@ fn board_lines(
             for (col, cell) in rank.iter().enumerate() {
                 let is_cursor = cursor_rc == Some((row, col));
                 let is_legal = legal.contains(&(row, col));
-                let mut style = checker(row, col);
-                if last == Some((row, col)) {
-                    style = style.bg(theme::BG_SELECTION());
-                }
-                if is_cursor {
-                    style = style.bg(theme::AMBER_DIM());
-                }
+                // Cursor beats the last-move swap, and the branches stay
+                // exclusive: the swap is a `REVERSED` modifier a later
+                // `.bg()` cannot clear.
+                let style = if is_cursor {
+                    checker(row, col).bg(theme::AMBER_DIM())
+                } else if last == Some((row, col)) {
+                    checker(row, col).patch(theme::selection_style())
+                } else {
+                    checker(row, col)
+                };
                 let span = match *cell {
                     Some(disc) => Span::styled(
                         piece_cell(PUCK_SOLID, disc_glyph(disc), tier, sub),

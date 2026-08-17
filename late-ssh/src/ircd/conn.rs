@@ -71,7 +71,8 @@ type IrcStream = Framed<Box<dyn IrcIo>, IrcCodec>;
 pub async fn handle<S>(
     state: State,
     stream: S,
-    peer_ip: IpAddr,
+    client_ip: Option<IpAddr>,
+    auth_limit_ip: IpAddr,
     auth_limiter: IpRateLimiter,
 ) -> Result<()>
 where
@@ -80,7 +81,9 @@ where
     let codec = IrcCodec::new("utf8").map_err(|e| anyhow::anyhow!("irc codec: {e}"))?;
     let mut framed = Framed::new(Box::new(stream) as Box<dyn IrcIo>, codec);
 
-    let Some(registration) = register(&state, &mut framed, peer_ip, &auth_limiter).await? else {
+    let Some(registration) =
+        register(&state, &mut framed, client_ip, auth_limit_ip, &auth_limiter).await?
+    else {
         return Ok(());
     };
 
@@ -106,7 +109,7 @@ where
         .await?;
         return Ok(());
     }
-    track_active_irc_user(&state, &registration, peer_ip, conn_id);
+    track_active_irc_user(&state, &registration, client_ip, conn_id);
     if let Err(err) = welcome(&state, &mut framed, &registration).await {
         state.irc_registry.unregister(registration.user_id, conn_id);
         untrack_active_irc_user(&state, registration.user_id, conn_id);
@@ -238,7 +241,8 @@ fn cap_reply(nick: &str, subcommand: &str, caps: String) -> Message {
 async fn register(
     state: &State,
     framed: &mut IrcStream,
-    peer_ip: IpAddr,
+    client_ip: Option<IpAddr>,
+    auth_limit_ip: IpAddr,
     auth_limiter: &IpRateLimiter,
 ) -> Result<Option<Registered>> {
     let deadline = Instant::now() + REGISTRATION_TIMEOUT;
@@ -313,7 +317,7 @@ async fn register(
     }
 
     let outcome = match &pending.pass {
-        Some(pass) => auth::authenticate(&state.db, pass, peer_ip).await?,
+        Some(pass) => auth::authenticate(&state.db, pass, client_ip).await?,
         None => AuthOutcome::BadToken,
     };
     match outcome {
@@ -334,7 +338,7 @@ async fn register(
             Ok(Some(registered))
         }
         AuthOutcome::BadToken | AuthOutcome::Banned => {
-            let allowed = auth_limiter.allow(peer_ip);
+            let allowed = auth_limiter.allow(auth_limit_ip);
             tokio::time::sleep(if allowed {
                 AUTH_FAIL_DELAY
             } else {
@@ -429,12 +433,17 @@ fn irc_session_token(conn_id: u64) -> String {
     format!("irc:{conn_id}")
 }
 
-fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr, conn_id: u64) {
+fn track_active_irc_user(
+    state: &State,
+    registered: &Registered,
+    client_ip: Option<IpAddr>,
+    conn_id: u64,
+) {
     let mut active_users = state.active_users.lock_recover();
     let session = ActiveSession {
         token: irc_session_token(conn_id),
         fingerprint: Some(registered.fingerprint.clone()),
-        peer_ip: Some(peer_ip),
+        peer_ip: client_ip,
         afk: None,
     };
 
@@ -442,7 +451,6 @@ fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr
         active.connection_count += 1;
         active.username = registered.username.clone();
         active.fingerprint = Some(registered.fingerprint.clone());
-        active.peer_ip = Some(peer_ip);
         active.audio_source = registered.audio_source;
         active.last_login_at = std::time::Instant::now();
         active.sessions.push(session);
@@ -452,7 +460,6 @@ fn track_active_irc_user(state: &State, registered: &Registered, peer_ip: IpAddr
             ActiveUser {
                 username: registered.username.clone(),
                 fingerprint: Some(registered.fingerprint.clone()),
-                peer_ip: Some(peer_ip),
                 audio_source: registered.audio_source,
                 sessions: vec![session],
                 connection_count: 1,

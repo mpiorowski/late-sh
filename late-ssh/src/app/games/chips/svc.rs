@@ -131,10 +131,16 @@ impl ChipService {
 
     /// Comp the newcomer's welcome pour: record the buzz with no chip debit
     /// (it's on the house) and hand back the fresh buzz so the clubhouse glow
-    /// can light up immediately.
-    pub async fn grant_free_drink(&self, user_id: Uuid, points: i64) -> anyhow::Result<UserDrinks> {
+    /// can light up immediately. At most once per user ever, guarded by the
+    /// `user_drinks` insert; `None` means they have drunk before and the
+    /// welcome is spent.
+    pub async fn grant_free_drink(
+        &self,
+        user_id: Uuid,
+        points: i64,
+    ) -> anyhow::Result<Option<UserDrinks>> {
         let client = self.db.get().await?;
-        UserDrinks::record_free_pour(&client, user_id, points).await
+        UserDrinks::record_welcome_pour(&client, user_id, points).await
     }
 
     pub async fn credit_payout(&self, user_id: Uuid, amount: i64) -> anyhow::Result<i64> {

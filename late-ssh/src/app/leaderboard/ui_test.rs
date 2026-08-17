@@ -1,10 +1,11 @@
-use late_core::models::leaderboard::{DailyPuzzle, RankedEntry, ScoreGame};
+use late_core::models::leaderboard::{DailyPuzzle, DoorGame, RankedEntry, ScoreGame};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use uuid::Uuid;
 
 use super::{
     super::state::{Board, LeaderboardPageState},
-    entry_line, rail_lines, window_lines,
+    entry_line, rail_lines, standings_columns, window_lines, window_natural_width,
 };
 
 fn text(line: &Line) -> String {
@@ -20,6 +21,7 @@ fn entry(rank: i64, username: &str, user_id: Uuid, value: i64) -> RankedEntry {
         user_id,
         rank,
         value,
+        note: None,
     }
 }
 
@@ -66,6 +68,88 @@ fn entry_line_right_aligns_value_and_truncates_long_names() {
         width,
     ));
     assert!(labeled.ends_with("7 wins"), "{labeled}");
+}
+
+#[test]
+fn window_caps_value_column_at_widest_visible_row() {
+    let board = Board::Score(ScoreGame::ALL[0]);
+    let entries = vec![
+        entry(1, "alice", Uuid::from_u128(10), 12_345),
+        entry(2, "longusername", Uuid::from_u128(11), 7),
+        entry(
+            3,
+            "invisible-name-that-must-not-widen-the-column",
+            Uuid::from_u128(12),
+            999_999,
+        ),
+    ];
+
+    let lines = window_lines("monthly", &entries, board, viewer(), 2, 100);
+    let first = text(&lines[1]);
+    let second = text(&lines[2]);
+
+    assert_eq!(first, "  #1  alice    12,345");
+    assert_eq!(second, "  #2  longusername  7");
+    assert_eq!(first.chars().count(), second.chars().count());
+    assert!(first.chars().count() < 100, "{first}");
+}
+
+#[test]
+fn paired_windows_use_natural_widths_with_a_bounded_gap() {
+    let board = Board::Daily(DailyPuzzle::ALL[0]);
+    let entries = vec![
+        entry(1, "short", Uuid::from_u128(10), 15),
+        entry(2, "longest-visible-name", Uuid::from_u128(11), 7),
+    ];
+    let width = window_natural_width("monthly", &entries, board, viewer(), 10);
+    let area = Rect::new(25, 4, 100, 30);
+
+    let [monthly, all_time] = standings_columns(area, width, width);
+
+    assert_eq!(monthly.x, area.x);
+    assert_eq!(monthly.width as usize, width);
+    assert_eq!(all_time.width as usize, width);
+    assert_eq!(all_time.x - monthly.right(), 3);
+
+    let just_fits = Rect::new(25, 4, width as u16 * 2 + 1, 30);
+    let [monthly, all_time] = standings_columns(just_fits, width, width);
+    assert_eq!(all_time.x - monthly.right(), 1);
+}
+
+#[test]
+fn paired_windows_keep_one_cell_between_them_when_width_is_constrained() {
+    let area = Rect::new(25, 4, 25, 30);
+    let [monthly, all_time] = standings_columns(area, 30, 30);
+
+    assert_eq!(monthly.width, 12);
+    assert_eq!(all_time.width, 12);
+    assert_eq!(all_time.x - monthly.right(), 1);
+    assert_eq!(all_time.right(), area.right());
+}
+
+#[test]
+fn compact_value_column_includes_the_own_row_tail() {
+    let board = Board::Score(ScoreGame::ALL[0]);
+    let mut entries: Vec<RankedEntry> = (1..=8)
+        .map(|rank| {
+            entry(
+                rank,
+                &format!("player{rank}"),
+                Uuid::from_u128(rank as u128 + 100),
+                1_000 - rank,
+            )
+        })
+        .collect();
+    let own = Uuid::from_u128(999);
+    entries.push(entry(9, "viewer-with-long-name", own, 7));
+
+    let lines = window_lines("monthly", &entries, board, own, 5, 100);
+    let first = text(&lines[1]);
+    let own = text(&lines[5]);
+
+    assert_eq!(own, "  #9  viewer-with-long-name  7");
+    assert_eq!(first.chars().count(), own.chars().count());
+    assert!(own.chars().count() < 100, "{own}");
 }
 
 #[test]
@@ -123,8 +207,9 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
     let state = LeaderboardPageState::new();
     let (lines, selected_line) = rail_lines(&state);
 
-    // Bespoke boards under "Boards", then one header per roster group, each
-    // preceded by a blank separator.
+    // The bespoke boards lead under "Boards", every game board follows under
+    // "Games", then one header per roster group, each preceded by a blank
+    // separator.
     assert!(text(&lines[0]).contains("Boards"), "{}", text(&lines[0]));
     assert!(
         text(&lines[1]).starts_with(" > "),
@@ -132,15 +217,28 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[1])
     );
     assert_eq!(selected_line, 1);
-    assert_eq!(text(&lines[3]), "");
+    // The two bespoke boards, then a blank and the "Games" header.
+    let games_header = 1 + 2 + 1;
+    assert_eq!(text(&lines[games_header - 1]), "");
     assert!(
-        text(&lines[4]).contains("Daily Wins"),
+        text(&lines[games_header]).contains("Games"),
         "{}",
-        text(&lines[4])
+        text(&lines[games_header])
     );
 
-    // Header at 4, daily boards at 5..5+N, blank, then the High Scores header.
-    let high_scores_header = 5 + DailyPuzzle::ALL.len() + 1;
+    // The Games group: the two Lateania boards plus each door's board
+    // triple, blank, then the Daily Wins group.
+    let games_rows = 2 + 3 * DoorGame::ALL.len();
+    let daily_header = games_header + games_rows + 1 + 1;
+    assert_eq!(text(&lines[daily_header - 1]), "");
+    assert!(
+        text(&lines[daily_header]).contains("Daily Wins"),
+        "{}",
+        text(&lines[daily_header])
+    );
+
+    // Daily boards after their header, blank, then the High Scores header.
+    let high_scores_header = daily_header + 1 + DailyPuzzle::ALL.len() + 1;
     assert_eq!(text(&lines[high_scores_header - 1]), "");
     assert!(
         text(&lines[high_scores_header]).contains("High Scores"),
@@ -148,10 +246,35 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[high_scores_header])
     );
 
-    // Three headers and two separators around the full board list, nothing else.
+    // Four headers and three separators around the full board list, nothing else.
     assert_eq!(
         lines.len(),
-        state.boards().len() + 3 + 2,
+        state.boards().len() + 4 + 3,
         "every board renders exactly once"
     );
+}
+
+#[test]
+fn lateania_rows_show_the_class_note_until_width_runs_short() {
+    let board = Board::LateaniaAdventurers;
+    let mut adventurer = entry(1, "mat", viewer(), 50);
+    adventurer.note = Some("Runemaster".to_string());
+
+    let roomy = text(&entry_line(&adventurer, board, false, 40));
+    assert!(roomy.contains("mat · Runemaster"), "{roomy}");
+    assert!(roomy.ends_with("lvl 50"), "{roomy}");
+
+    // Too narrow for the note: the name keeps the room, the note vanishes.
+    let tight = text(&entry_line(&adventurer, board, false, 18));
+    assert!(!tight.contains("Runemaster"), "{tight}");
+    assert!(tight.contains("mat"), "{tight}");
+    assert!(tight.ends_with("lvl 50"), "{tight}");
+
+    let zone = text(&entry_line(
+        &entry(2, "bob", viewer(), 14),
+        Board::LateaniaFrontier,
+        false,
+        30,
+    ));
+    assert!(zone.ends_with("zone 14"), "{zone}");
 }

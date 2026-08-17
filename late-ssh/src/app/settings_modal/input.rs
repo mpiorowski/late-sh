@@ -327,7 +327,7 @@ fn is_close_event(event: &ParsedInput) -> bool {
 fn activate_selected_row(app: &mut App) {
     match app.settings_modal_state.selected_row() {
         Row::Username => app.settings_modal_state.start_username_edit(),
-        Row::Birthday | Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
+        Row::Ide | Row::Terminal | Row::Os | Row::Langs => {
             if let Some(field) = crate::app::settings_modal::state::SystemField::from_row(
                 app.settings_modal_state.selected_row(),
             ) {
@@ -335,9 +335,13 @@ fn activate_selected_row(app: &mut App) {
             }
         }
         Row::Theme
+        | Row::TranslateTo
+        | Row::AutoTranslate
+        | Row::TranslateMine
         | Row::DirectMessages
         | Row::Mentions
         | Row::GameEvents
+        | Row::Streams
         | Row::Bell
         | Row::Cooldown
         | Row::NotifyFormat => app.settings_modal_state.cycle_setting(true),
@@ -605,13 +609,47 @@ fn handle_picker_input(app: &mut App, event: ParsedInput) {
 /// was one of the two rail rows. The modal owns the account default; the device
 /// layout is the app's, so the sync lives here rather than inside the modal.
 fn toggle_tweak(app: &mut App) {
+    if apply_interaction_mode_row(app, true) {
+        return;
+    }
     app.settings_modal_state.toggle_selected_tweak();
     app.sync_device_rails_from_settings();
 }
 
 fn cycle_tweak(app: &mut App, forward: bool) {
+    if apply_interaction_mode_row(app, forward) {
+        return;
+    }
     app.settings_modal_state.cycle_selected_tweak(forward);
     app.sync_device_rails_from_settings();
+}
+
+/// If the Input row is selected, cycle the interaction mode on the app (which
+/// flips the mouse live and persists) and mirror it into the modal for display.
+/// Returns whether it handled the row.
+fn apply_interaction_mode_row(app: &mut App, forward: bool) -> bool {
+    use late_core::models::user::InteractionMode;
+    if app.settings_modal_state.selected_tweak_row() != TweakRow::InteractionMode {
+        return false;
+    }
+    let order = [
+        InteractionMode::Keyboard,
+        InteractionMode::Mouse,
+        InteractionMode::Hybrid,
+    ];
+    let cur = order
+        .iter()
+        .position(|m| *m == app.interaction_mode)
+        .unwrap_or(0);
+    let next = if forward {
+        (cur + 1) % order.len()
+    } else {
+        (cur + order.len() - 1) % order.len()
+    };
+    app.set_interaction_mode(order[next]);
+    app.settings_modal_state
+        .set_interaction_mode_display(order[next]);
+    true
 }
 
 #[cfg(test)]

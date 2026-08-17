@@ -37,8 +37,8 @@ use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, compare_dm_rooms_for_nav, is_chat_list_room, is_selected_slot,
-    visual_order_for_rooms,
+    SelectedRoomSlotState, TranslationDisplay, compare_dm_rooms_for_nav, dm_is_promoted_unread,
+    dm_peer_is_ignored, is_chat_list_room, is_selected_slot, visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
 
@@ -50,6 +50,8 @@ const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
+/// Presence tag beside an author whose stream is on air right now.
+const LIVE_BADGE: &str = "▶LIVE";
 
 fn is_bot_author(username: &str) -> bool {
     matches!(
@@ -78,6 +80,9 @@ pub struct DashboardChatView<'a> {
     /// `/rules`) is read here; messages arrive separately below.
     pub room: Option<&'a ChatRoom>,
     pub messages: &'a [ChatMessage],
+    /// Registered "watch me" streams; drives the stream header row and the
+    /// ON AIR voice-strip state when this room has one.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub overlay: Option<&'a Overlay>,
     pub image_modal: Option<ImageModalView<'a>>,
     pub rows_cache: &'a mut ChatRowsCache,
@@ -86,6 +91,8 @@ pub struct DashboardChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
@@ -115,6 +122,8 @@ pub struct DashboardChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
@@ -407,12 +416,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
 
     if view.composing {
         return Paragraph::new(Line::from(vec![
-            Span::styled(
-                "T",
-                Style::default()
-                    .fg(theme::BG_CANVAS())
-                    .bg(theme::TEXT_DIM()),
-            ),
+            Span::styled("T", theme::punch_through(theme::TEXT_DIM())),
             Span::styled("ype a message...", dim),
         ]));
     }
@@ -431,7 +435,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
         ))]
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · Enter jump to reply",
+            "f react · r reply · e edit · d delete · p profile · c copy · t translate · Enter jump to reply",
             dim,
         ))]
     } else {
@@ -1085,6 +1089,11 @@ pub fn draw_dashboard_chat_card(
     }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
+    let room_stream = view.room.and_then(|room| {
+        view.live_streams
+            .iter()
+            .find(|stream| stream.room_id == room.id)
+    });
     let voice = view
         .voice_channel_id
         .map(|room_id| crate::app::voice::ui::VoiceRoomView {
@@ -1092,11 +1101,17 @@ pub fn draw_dashboard_chat_card(
             room_id,
             current_user_id: view.current_user_id,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+            on_air: room_stream.map(stream_on_air_view),
         });
     messages_area = draw_room_header(
         frame,
         messages_area,
         RoomHeader {
+            stream: view.room.and_then(|room| {
+                view.live_streams
+                    .iter()
+                    .find(|stream| stream.room_id == room.id)
+            }),
             voice,
             topic: view.room.and_then(room_topic),
             has_rules: view.room.is_some_and(room_has_rules),
@@ -1122,6 +1137,7 @@ pub fn draw_dashboard_chat_card(
                 versions: view.rows_versions,
                 current_user_id: view.current_user_id,
                 afk_user_ids: view.afk_user_ids,
+                live_user_ids: view.live_user_ids,
                 show_flag_fallback: view.show_flag_fallback,
                 usernames: view.usernames,
                 countries: view.countries,
@@ -1135,6 +1151,8 @@ pub fn draw_dashboard_chat_card(
                 drunk_levels: view.drunk_levels,
                 name_styles: view.name_styles,
                 peer_pomodoros: view.peer_pomodoros,
+                translations: view.translations,
+                translation_hidden: view.translation_hidden,
             },
         );
         let visible = visible_chat_rows(
@@ -1206,6 +1224,8 @@ struct ChatRowsContext<'a> {
     versions: ChatRowsVersions,
     current_user_id: Uuid,
     afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    live_user_ids: &'a HashSet<Uuid>,
     show_flag_fallback: bool,
     usernames: &'a UsernameLookup<'a>,
     countries: &'a HashMap<Uuid, String>,
@@ -1221,6 +1241,8 @@ struct ChatRowsContext<'a> {
     /// Resolved 24h username-effect styles per author.
     name_styles: &'a HashMap<Uuid, NameStyle>,
     peer_pomodoros: &'a HashMap<Uuid, String>,
+    translations: &'a HashMap<Uuid, TranslationDisplay>,
+    translation_hidden: &'a HashSet<Uuid>,
 }
 
 // ── Mouse hit-test types ────────────────────────────────────
@@ -1535,10 +1557,14 @@ fn ensure_chat_rows_cache(
             .get(&msg.user_id)
             .map(String::as_str)
             .filter(|s| !s.is_empty());
-        // Presence badges trail every earned badge: AFK first, then a
+        // Presence badges trail every earned badge: the LIVE stream tag
+        // first (an invitation, the loudest of the three), then AFK, then a
         // running `/pomodoro` countdown (minutes only; the label never
         // leaves its owner's session).
         let mut presence_badges: Vec<&str> = Vec::new();
+        if ctx.live_user_ids.contains(&msg.user_id) {
+            presence_badges.push(LIVE_BADGE);
+        }
         if ctx.afk_user_ids.contains(&msg.user_id) {
             presence_badges.push(AFK_BADGE);
         }
@@ -1612,6 +1638,10 @@ fn ensure_chat_rows_cache(
 
         let row_start = all_rows.len();
         let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        let translation = ctx
+            .translations
+            .get(&msg.id)
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
         let wrapped = wrap_chat_entry_to_lines(
             &msg.body,
             &stamp,
@@ -1625,6 +1655,7 @@ fn ensure_chat_rows_cache(
             system_text,
             image_lines,
             reactions,
+            translation,
         );
         let line_count = wrapped.lines.len();
         all_rows.extend(wrapped.lines);
@@ -1791,7 +1822,7 @@ fn visible_chat_rows(
         let end = end.min(visible_end);
         for idx in start..end {
             for span in &mut lines[idx - visible_start].spans {
-                span.style = span.style.bg(theme::BG_SELECTION());
+                span.style = span.style.patch(theme::selection_style());
             }
         }
     }
@@ -1804,13 +1835,10 @@ fn visible_chat_rows(
             if let Some(first_span) = row.spans.first()
                 && (first_span.content == " " || first_span.content == "│")
             {
-                // Keep whatever background the row already has (the mention or
-                // reply wash), so the marker does not punch a hole in it.
-                let mut style = Style::default().fg(theme::AMBER());
-                if let Some(background) = first_span.style.bg {
-                    style = style.bg(background);
-                }
-                row.spans[0] = Span::styled("▸", style);
+                // Keep the row's whole treatment (the mention or reply wash,
+                // or the highlight inversion), so the marker does not punch
+                // a hole in it; only the glyph color is the marker's own.
+                row.spans[0] = Span::styled("▸", first_span.style.fg(theme::AMBER()));
             }
         }
     }
@@ -2500,6 +2528,14 @@ pub struct ChatRenderInput<'a> {
     pub feeds_processing: bool,
     pub feeds_unread_count: i64,
     pub feeds_view: super::feeds::ui::FeedListView<'a>,
+    pub cyberspace_selected: bool,
+    pub cyberspace_unread_count: i64,
+    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_unread_saturated: bool,
+    pub cyberspace_rooms: &'a [String],
+    pub cyberspace_room_selected: Option<usize>,
+    /// `None` only in pure render tests; the app always passes the state.
+    pub cyberspace: Option<&'a super::cyberspace::state::State>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub news_view: super::news::ui::ArticleListView<'a>,
@@ -2539,7 +2575,12 @@ pub struct ChatRenderInput<'a> {
     pub composing: bool,
     pub current_user_id: Uuid,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    /// The DM held in the promoted unread group while it is being read (see
+    /// `ChatState::note_sticky_unread_dm`).
+    pub sticky_unread_dm: Option<Uuid>,
     pub show_flag_fallback: bool,
     pub cursor_visible: bool,
     pub mention_matches: &'a [MentionMatch],
@@ -2557,6 +2598,8 @@ pub struct ChatRenderInput<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -2567,6 +2610,10 @@ pub struct ChatRenderInput<'a> {
         &'a HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>,
     pub voice_snapshot: &'a crate::app::voice::svc::VoiceSnapshot,
     pub voice_paired_cli_supports_voice: bool,
+    /// Registered "watch me" streams (see `ChatState::live_streams`): the
+    /// rail's `stream` section, the LIVE author tag, and the stream header
+    /// block all read from this.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub showcase_selected: bool,
     pub showcase_unread_count: i64,
     pub showcase_view: super::showcase::ui::ShowcaseListView<'a>,
@@ -2606,8 +2653,13 @@ impl ChatSelectionMode {
     }
 }
 
+/// A room paired with the messages loaded for it, as the room rail sees it.
+type RoomEntry = (ChatRoom, Vec<ChatMessage>);
+
 pub(crate) struct ChatRoomListView<'a> {
-    pub chat_rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    pub chat_rooms: &'a [RoomEntry],
+    /// Registered "watch me" streams driving the rail's `stream` section.
+    pub live_streams: &'a [crate::app::stream::registry::LiveStreamView],
     pub usernames: &'a UsernameLookup<'a>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
     pub room_last_message_at: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
@@ -2619,9 +2671,22 @@ pub(crate) struct ChatRoomListView<'a> {
     pub room_section_prefix_armed: bool,
     pub current_user_id: Uuid,
     pub ignored_user_ids: &'a HashSet<Uuid>,
+    pub sticky_unread_dm: Option<Uuid>,
     pub feeds_available: bool,
     pub feeds_selected: bool,
     pub feeds_unread_count: i64,
+    /// Gates the whole section: unlinked users reach the pane through `/cs` only.
+    pub cyberspace_linked: bool,
+    pub cyberspace_selected: bool,
+    pub cyberspace_unread_count: i64,
+    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_unread_saturated: bool,
+    /// Pinned cyberspace chat rooms, in rail order. Slots carry the index.
+    pub cyberspace_rooms: &'a [String],
+    pub cyberspace_room_selected: Option<usize>,
+    /// One flag per pinned room, aligned with `cyberspace_rooms`: the rail
+    /// dot for "messages since this user last sat in the room".
+    pub cyberspace_room_unread: Vec<bool>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub notifications_selected: bool,
@@ -2644,6 +2709,8 @@ pub struct EmbeddedRoomChatView<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub afk_user_ids: &'a HashSet<Uuid>,
+    /// Users whose stream is on air; painted as the LIVE presence tag.
+    pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_marker: Option<DateTime<Utc>>,
@@ -2674,6 +2741,8 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
+    pub translations: &'a HashMap<Uuid, TranslationDisplay>,
+    pub translation_hidden: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -2722,6 +2791,9 @@ pub fn draw_embedded_room_chat(
             snapshot: view.voice_snapshot,
             room_id: voice_channel_id,
             current_user_id: view.current_user_id,
+            // Embedded game chats (house tables, daily boards) are never
+            // stream rooms.
+            on_air: None,
             paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
         };
         let strip_height = crate::app::voice::ui::VOICE_STRIP_HEIGHT.min(messages_area.height);
@@ -2749,6 +2821,7 @@ pub fn draw_embedded_room_chat(
             versions: view.rows_versions,
             current_user_id: view.current_user_id,
             afk_user_ids: view.afk_user_ids,
+            live_user_ids: view.live_user_ids,
             show_flag_fallback: view.show_flag_fallback,
             usernames: view.usernames,
             countries: view.countries,
@@ -2762,6 +2835,8 @@ pub fn draw_embedded_room_chat(
             drunk_levels: view.drunk_levels,
             name_styles: view.name_styles,
             peer_pomodoros: view.peer_pomodoros,
+            translations: view.translations,
+            translation_hidden: view.translation_hidden,
         },
     );
     let visible = visible_chat_rows(
@@ -2875,7 +2950,12 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
 
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
-    if view.notifications_selected || view.discover_selected || view.feeds_selected {
+    if view.notifications_selected
+        || view.discover_selected
+        || view.feeds_selected
+        || view.cyberspace_selected
+        || view.cyberspace_room_selected.is_some()
+    {
         ChatSelectionMode::Compact
     } else if view.news_selected {
         ChatSelectionMode::Composer {
@@ -2941,6 +3021,7 @@ pub(crate) fn room_list_area(area: Rect, selection_mode: ChatSelectionMode) -> R
 fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRoomListView<'a> {
     ChatRoomListView {
         chat_rooms: view.chat_rooms,
+        live_streams: view.live_streams,
         usernames: view.usernames,
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
@@ -2952,9 +3033,22 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
         room_section_prefix_armed: view.room_section_prefix_armed,
         current_user_id: view.current_user_id,
         ignored_user_ids: view.ignored_user_ids,
+        sticky_unread_dm: view.sticky_unread_dm,
         feeds_available: view.feeds_view.has_feeds,
         feeds_selected: view.feeds_selected,
         feeds_unread_count: view.feeds_unread_count,
+        cyberspace_linked: view
+            .cyberspace
+            .is_some_and(super::cyberspace::state::State::is_linked),
+        cyberspace_selected: view.cyberspace_selected,
+        cyberspace_unread_count: view.cyberspace_unread_count,
+        cyberspace_unread_saturated: view.cyberspace_unread_saturated,
+        cyberspace_rooms: view.cyberspace_rooms,
+        cyberspace_room_selected: view.cyberspace_room_selected,
+        cyberspace_room_unread: view
+            .cyberspace
+            .map(super::cyberspace::state::State::room_unread_flags)
+            .unwrap_or_default(),
         news_selected: view.news_selected,
         news_unread_count: view.news_unread_count,
         notifications_selected: view.notifications_selected,
@@ -2970,6 +3064,15 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
 pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String> {
     if view.feeds_selected {
         return Some("rss".to_string());
+    }
+    if view.cyberspace_selected {
+        return Some("cyberspace feeds".to_string());
+    }
+    if let Some(index) = view.cyberspace_room_selected {
+        return view
+            .cyberspace_rooms
+            .get(index)
+            .map(|slug| format!("#{slug}"));
     }
     if view.news_selected {
         return Some("news".to_string());
@@ -3050,6 +3153,8 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     let room_selected = |room_id| {
         !view.feeds_selected
             && !view.news_selected
+            && !view.cyberspace_selected
+            && view.cyberspace_room_selected.is_none()
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
@@ -3175,6 +3280,65 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             Line::from(Span::styled(label, style))
         };
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
+    }
+
+    if view.cyberspace_linked {
+        let cyberspace_line = {
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                view.cyberspace_selected,
+            );
+            let style = if view.cyberspace_selected {
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let label = if view.cyberspace_unread_count > 0 {
+                format!(
+                    "{prefix}feeds ({})",
+                    room_slot_badge(view, RoomSlot::Cyberspace, view.cyberspace_unread_count)
+                )
+            } else {
+                format!("{prefix}feeds")
+            };
+            Line::from(Span::styled(label, style))
+        };
+        push_row(
+            cyberspace_line,
+            Some(RoomSlot::Cyberspace),
+            view.cyberspace_selected,
+        );
+        for (index, slug) in view.cyberspace_rooms.iter().enumerate() {
+            let selected = view.cyberspace_room_selected == Some(index);
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                selected,
+            );
+            let style = match selected {
+                true => Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+                false => Style::default().fg(theme::TEXT()),
+            };
+            let mut spans = vec![Span::styled(format!("{prefix}{slug}"), style)];
+            let unread = view
+                .cyberspace_room_unread
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            if unread {
+                spans.push(Span::styled(" ●", Style::default().fg(theme::AMBER_DIM())));
+            }
+            push_row(
+                Line::from(spans),
+                Some(RoomSlot::CyberspaceRoom(index)),
+                selected,
+            );
+        }
     }
 
     let mut public_rooms: Vec<_> = chat_rooms
@@ -3543,9 +3707,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         unread_counts: view.unread_counts,
         room_last_message_at: view.room_last_message_at,
         feeds_available: view.feeds_available,
+        cyberspace_linked: view.cyberspace_linked,
+        cyberspace_rooms: view.cyberspace_rooms,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
         ignored_user_ids: view.ignored_user_ids,
+        sticky_unread_dm: view.sticky_unread_dm,
+        live_streams: view.live_streams,
     });
     // Bumped rooms are advertised as read-only text at the top of the rail;
     // they are not part of `order`, so they take no jump key and never
@@ -3590,7 +3758,9 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         ]);
         Line::from(spans)
     };
-    let effect_section_header = |label: &'static str| -> Line<'static> {
+    // Header for the groups that carry no collapse toggle: the bumped-room
+    // strip and the promoted unread DMs.
+    let plain_section_header = |label: &'static str| -> Line<'static> {
         Line::from(Span::styled(
             label,
             Style::default()
@@ -3601,6 +3771,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
 
     let item_row = |label: String,
                     unread: i64,
+                    badge: String,
                     active: bool,
                     jump_key: Option<u8>,
                     effects: &[ActiveChatRoomEffect]|
@@ -3634,11 +3805,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         };
         let display = format!("{key_prefix}{display_label}");
         let used = UnicodeWidthStr::width(display.as_str());
-        let unread_str = if unread > 0 {
-            format_unread_badge(unread)
-        } else {
-            String::new()
-        };
+        let unread_str = if unread > 0 { badge } else { String::new() };
         let pad = inner_width.saturating_sub(used + UnicodeWidthStr::width(unread_str.as_str()));
         let mut spans = Vec::new();
         if active {
@@ -3683,11 +3850,13 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         |slot: RoomSlot, push_row: &mut dyn FnMut(Line<'static>, Option<RoomSlot>, bool)| {
             let active = cozy_slot_selected(view, slot);
             let (label, unread) = room_slot_label_and_unread(view, slot);
+            let badge = room_slot_badge(view, slot, unread);
             let effects = room_slot_effects(view, slot);
             push_row(
                 item_row(
                     label,
                     unread,
+                    badge,
                     active,
                     jump_targets.get(&slot).copied(),
                     effects,
@@ -3719,7 +3888,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         })
         .collect();
     if !bumped_slugs.is_empty() {
-        push_row(effect_section_header("bumped"), None, false);
+        push_row(plain_section_header("bumped"), None, false);
         for slug in &bumped_slugs {
             push_row(
                 Line::from(Span::styled(
@@ -3773,7 +3942,72 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_slot(RoomSlot::Discover, &mut push_row);
     }
 
-    let channels: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
+    // Stream: registered "watch me" streams, directly under Core, mirroring
+    // `visual_order_for_rooms`. The section only exists while somebody is
+    // streaming.
+    if !view.live_streams.is_empty() {
+        push_row(blank(), None, false);
+        push_row(section_header(RoomSection::Stream), None, false);
+        if !collapsed_set.contains(&RoomSection::Stream) {
+            for stream in view.live_streams {
+                push_slot(RoomSlot::Room(stream.room_id), &mut push_row);
+            }
+        }
+    }
+
+    // Cyberspace: the feeds pane plus this user's pinned chat rooms, under a
+    // header of their own. Linked accounts only, mirroring
+    // `visual_order_for_rooms`. A row here that the navigation order does not
+    // have (or the reverse) is a slot the user can land on but never see.
+    if view.cyberspace_linked {
+        push_row(blank(), None, false);
+        push_row(section_header(RoomSection::Cyberspace), None, false);
+        if !collapsed_set.contains(&RoomSection::Cyberspace) {
+            push_slot(RoomSlot::Cyberspace, &mut push_row);
+            for index in 0..view.cyberspace_rooms.len() {
+                push_slot(RoomSlot::CyberspaceRoom(index), &mut push_row);
+            }
+        }
+    }
+
+    // DMs split in two: the ones wanting an answer ride directly under Core,
+    // the rest keep the bottom of the rail. Favorited DMs stay in Favorites,
+    // and an ignored peer's DM shows in neither (same rule as
+    // `visual_order_for_rooms`, which is the navigation half of this mirror).
+    let (mut unread_dms, mut dms): (Vec<&RoomEntry>, Vec<&RoomEntry>) = view
+        .chat_rooms
+        .iter()
+        .filter(|(r, _)| {
+            is_chat_list_room(r)
+                && r.kind == "dm"
+                && !favorite_ids.contains(&r.id)
+                && !dm_peer_is_ignored(r, view.current_user_id, view.ignored_user_ids)
+        })
+        .partition(|(r, _)| dm_is_promoted_unread(r.id, view.unread_counts, view.sticky_unread_dm));
+    let sort_dms = |dms: &mut [&RoomEntry]| {
+        dms.sort_by(|(a_room, _), (b_room, _)| {
+            compare_dm_rooms_for_nav(
+                a_room,
+                b_room,
+                view.current_user_id,
+                view.usernames,
+                view.unread_counts,
+                view.room_last_message_at,
+            )
+        });
+    };
+    sort_dms(&mut unread_dms);
+    sort_dms(&mut dms);
+
+    if !unread_dms.is_empty() {
+        push_row(blank(), None, false);
+        push_row(plain_section_header("unread dms"), None, false);
+        for (room, _) in &unread_dms {
+            push_slot(RoomSlot::Room(room.id), &mut push_row);
+        }
+    }
+
+    let channels: Vec<&RoomEntry> = view
         .chat_rooms
         .iter()
         .filter(|(r, _)| {
@@ -3794,21 +4028,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
     }
 
-    let mut dms: Vec<&(ChatRoom, Vec<ChatMessage>)> = view
-        .chat_rooms
-        .iter()
-        .filter(|(r, _)| is_chat_list_room(r) && r.kind == "dm" && !favorite_ids.contains(&r.id))
-        .collect();
-    dms.sort_by(|(a_room, _), (b_room, _)| {
-        compare_dm_rooms_for_nav(
-            a_room,
-            b_room,
-            view.current_user_id,
-            view.usernames,
-            view.unread_counts,
-            view.room_last_message_at,
-        )
-    });
     if !dms.is_empty() {
         push_row(blank(), None, false);
         push_row(section_header(RoomSection::Dms), None, false);
@@ -3839,9 +4058,35 @@ fn format_unread_badge(unread: i64) -> String {
     }
 }
 
+/// The badge text for a slot. Rooms saturate at their SQL cap (`99+`), while
+/// the cyberspace feeds row saturates far earlier: it counts unread entries
+/// out of a probe page of ten, so a full page means "at least this many" and
+/// the badge has to read as a floor rather than name a total it cannot stand
+/// behind.
+fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
+    match slot {
+        RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
+        // A dot, never a number: their roster names a room's last_message_at
+        // but counting would take a per-room history fetch every poll.
+        RoomSlot::CyberspaceRoom(_) => "●".to_string(),
+        _ => format_unread_badge(unread),
+    }
+}
+
 fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (String, i64) {
     match slot {
         RoomSlot::Room(room_id) => {
+            // A stream row carries the show, not the room: streamer, title,
+            // and the watcher count. It also renders before this user is a
+            // member (the room may be missing from `chat_rooms` entirely).
+            if let Some(stream) = view
+                .live_streams
+                .iter()
+                .find(|stream| stream.room_id == room_id)
+            {
+                let unread = view.unread_counts.get(&room_id).copied().unwrap_or(0);
+                return (stream_rail_label(stream), unread);
+            }
             let Some((room, _)) = view.chat_rooms.iter().find(|(room, _)| room.id == room_id)
             else {
                 return ("room".to_string(), 0);
@@ -3852,11 +4097,52 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         }
         RoomSlot::Feeds => ("rss".to_string(), view.feeds_unread_count),
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
+        // Under the `cyberspace` header this row is their feed, not the whole
+        // site: the chat rooms beside it are cyberspace too.
+        RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_unread_count),
+        // Bare slugs, like every other room row in this rail. The "unread" is
+        // a flag, not a count: the roster's last_message_at against this
+        // user's read cursor, rendered as a dot by `room_slot_badge`.
+        RoomSlot::CyberspaceRoom(index) => (
+            match view.cyberspace_rooms.get(index) {
+                Some(slug) => slug.clone(),
+                None => "room".to_string(),
+            },
+            i64::from(
+                view.cyberspace_room_unread
+                    .get(index)
+                    .copied()
+                    .unwrap_or(false),
+            ),
+        ),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
         RoomSlot::Showcase => ("showcase".to_string(), view.showcase_unread_count),
         RoomSlot::Work => ("work".to_string(), view.work_unread_count),
     }
+}
+
+/// The voice strip's ON AIR view for a room with a registered stream.
+fn stream_on_air_view(
+    stream: &crate::app::stream::registry::LiveStreamView,
+) -> crate::app::voice::ui::OnAirView {
+    crate::app::voice::ui::OnAirView { live: stream.live }
+}
+
+/// The rail row label for one stream: `▶ #mat-live · title · 3 watching`.
+/// A pending stream (registered, no media yet) shows `starting…` instead of
+/// the count; the watch count only means something once frames flow.
+fn stream_rail_label(stream: &crate::app::stream::registry::LiveStreamView) -> String {
+    let mut label = format!("▶ {}-live", stream.username);
+    if !stream.title.trim().is_empty() {
+        label.push_str(&format!(" · {}", stream.title.trim()));
+    }
+    if !stream.live {
+        label.push_str(" · starting…");
+    } else if stream.watching > 0 {
+        label.push_str(&format!(" · {} watching", stream.watching));
+    }
+    label
 }
 
 /// Slugs of public topic rooms currently carrying a `room_bump` effect,
@@ -3965,6 +4251,8 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             selected_room_id: view.selected_room_id,
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
+            cyberspace_selected: view.cyberspace_selected,
+            cyberspace_room_selected: view.cyberspace_room_selected,
             notifications_selected: view.notifications_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
@@ -3994,24 +4282,80 @@ fn dm_display_label(
 /// the left with the keys or commands that act on it flushed to the right edge,
 /// so the eye finds status in one column and actions in another.
 struct RoomHeader<'a> {
+    /// The room's registered stream, drawn as the first header row: title,
+    /// watcher count, and the watch-URL nudge (a terminal-only person in
+    /// the room is otherwise missing the show).
+    stream: Option<&'a crate::app::stream::registry::LiveStreamView>,
     voice: Option<crate::app::voice::ui::VoiceRoomView<'a>>,
     topic: Option<&'a str>,
     has_rules: bool,
 }
 
 impl RoomHeader<'_> {
-    /// Rows this header wants: the voice row, a divider between voice and topic
-    /// (only when there is something on both sides of it), the topic row, and a
-    /// closing rule that separates the whole block from the messages.
+    /// Rows this header wants: one per present row (stream, voice, topic),
+    /// a divider between each adjacent pair, and a closing rule that
+    /// separates the whole block from the messages.
     fn height(&self) -> u16 {
-        let voice = u16::from(self.voice.is_some());
-        let topic = u16::from(self.topic.is_some());
-        if voice + topic == 0 {
+        let rows = u16::from(self.stream.is_some())
+            + u16::from(self.voice.is_some())
+            + u16::from(self.topic.is_some());
+        if rows == 0 {
             return 0;
         }
-        let divider = u16::from(self.voice.is_some() && self.topic.is_some());
-        voice + divider + topic + 1
+        rows + (rows - 1) + 1
     }
+}
+
+/// The stream row of the header: `● LIVE title · 3 watching` on the left,
+/// the watch URL flushed right.
+fn stream_header_line(
+    stream: &crate::app::stream::registry::LiveStreamView,
+    width: usize,
+) -> Line<'static> {
+    let mut left = Vec::new();
+    if stream.live {
+        left.push(Span::styled(
+            "● LIVE ",
+            Style::default()
+                .fg(theme::ERROR())
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else {
+        left.push(Span::styled(
+            "○ starting… ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    if !stream.title.trim().is_empty() {
+        left.push(Span::styled(
+            truncate_cells(stream.title.trim(), width.saturating_sub(30)),
+            Style::default().fg(theme::TEXT()),
+        ));
+    }
+    if stream.live {
+        left.push(Span::styled(
+            format!(" · {} watching", stream.watching),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    let hint = if stream.watch_url.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            Span::styled(
+                format!("watch: {}", stream.watch_url),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
+            // Load-bearing trailing space: terminal link detection (kitty and
+            // friends) runs over the cell grid, so a URL flush against the
+            // right edge swallows whatever sits in the next cell: the pane
+            // border `│`, or the `────` rule on the row below when the
+            // terminal treats a full row as wrapped. Clicking the link then
+            // opens a 404. One space ends the token where the URL ends.
+            Span::raw(" "),
+        ]
+    };
+    row_with_hint(left, hint, width)
 }
 
 /// Draw the header and return the area left for messages. A room with neither
@@ -4032,6 +4376,12 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     };
 
     let mut lines: Vec<Line> = Vec::new();
+    if let Some(stream) = header.stream {
+        lines.push(stream_header_line(stream, width));
+    }
+    if header.stream.is_some() && (header.voice.is_some() || header.topic.is_some()) {
+        lines.push(rule());
+    }
     if let Some(voice) = &header.voice {
         lines.push(crate::app::voice::ui::voice_strip_line(voice, width));
     }
@@ -4133,6 +4483,10 @@ fn draw_selected_content(
 
     if feeds_selected {
         super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
+    } else if view.cyberspace_selected || view.cyberspace_room_selected.is_some() {
+        if let Some(cyberspace) = view.cyberspace {
+            super::cyberspace::ui::draw_pane(frame, messages_area, cyberspace);
+        }
     } else if view.notifications_selected {
         super::notifications::ui::draw_notification_list(
             frame,
@@ -4150,7 +4504,15 @@ fn draw_selected_content(
     } else {
         let selected_room = selected_room_id
             .and_then(|id| view.chat_rooms.iter().find(|(room, _)| room.id == id))
-            .filter(|(room, _)| is_chat_list_room(room))
+            // Stream rooms are `kind='game'` (not chat-list rooms) but are
+            // openable from the rail's stream section, so they render here.
+            .filter(|(room, _)| {
+                is_chat_list_room(room)
+                    || view
+                        .live_streams
+                        .iter()
+                        .any(|stream| stream.room_id == room.id)
+            })
             .or_else(|| {
                 view.chat_rooms
                     .iter()
@@ -4160,18 +4522,27 @@ fn draw_selected_content(
         // Voice state and the room's topic share one header block above the
         // messages; a text-only room without a topic renders unchanged.
         let messages_area = if let Some((room, _)) = selected_room {
+            let room_stream = view
+                .live_streams
+                .iter()
+                .find(|stream| stream.room_id == room.id);
             let voice = view.voice_channels_by_room_id.get(&room.id).map(|channel| {
                 crate::app::voice::ui::VoiceRoomView {
                     snapshot: view.voice_snapshot,
                     room_id: channel.id,
                     current_user_id,
                     paired_cli_supports_voice: view.voice_paired_cli_supports_voice,
+                    on_air: room_stream.map(stream_on_air_view),
                 }
             });
             draw_room_header(
                 frame,
                 messages_area,
                 RoomHeader {
+                    stream: view
+                        .live_streams
+                        .iter()
+                        .find(|stream| stream.room_id == room.id),
                     voice,
                     topic: room_topic(room),
                     has_rules: room_has_rules(room),
@@ -4213,6 +4584,7 @@ fn draw_selected_content(
                     },
                     current_user_id,
                     afk_user_ids: view.afk_user_ids,
+                    live_user_ids: view.live_user_ids,
                     show_flag_fallback: view.show_flag_fallback,
                     usernames: view.usernames,
                     countries: view.countries,
@@ -4226,6 +4598,8 @@ fn draw_selected_content(
                     drunk_levels: view.drunk_levels,
                     name_styles: view.name_styles,
                     peer_pomodoros: view.peer_pomodoros,
+                    translations: view.translations,
+                    translation_hidden: view.translation_hidden,
                 },
             );
             let visible = visible_chat_rows(
@@ -4294,6 +4668,51 @@ fn draw_selected_content(
             )))
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
+        }
+    } else if view.cyberspace_selected || view.cyberspace_room_selected.is_some() {
+        let title = match view.cyberspace.and_then(|state| state.open_room_slug()) {
+            Some(slug) => format!(" {slug} "),
+            None => " Cyberspace ".to_string(),
+        };
+        let hint_block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER()));
+        // Writing in a chat room uses this box rather than opening a second
+        // one inside the pane: it is the composer slot every other room types
+        // into, so the room reads like a room.
+        match view.cyberspace.and_then(|state| state.room_composer()) {
+            Some(composer) => {
+                // Inset by a column so the text (and the cursor sitting on its
+                // first character) is padded off the border, same as the main
+                // chat composer's text area.
+                let inner = horizontal_inset(hint_block.inner(composer_area), 1);
+                frame.render_widget(hint_block, composer_area);
+                // An empty composer draws its own hint so the cursor lands on
+                // the first character, the same reason the main chat composer
+                // does (a `TextArea` placeholder renders after the cursor cell).
+                match composer.is_empty() {
+                    true => frame.render_widget(
+                        Paragraph::new(crate::app::common::composer::placeholder_with_cursor(
+                            "Enter send · Esc cancel",
+                        )),
+                        inner,
+                    ),
+                    false => frame.render_widget(composer, inner),
+                }
+            }
+            None => {
+                let hint = view
+                    .cyberspace
+                    .map(super::cyberspace::ui::footer_hint)
+                    .unwrap_or_default();
+                let hint_text = Paragraph::new(Line::from(Span::styled(
+                    hint,
+                    Style::default().fg(theme::TEXT_DIM()),
+                )))
+                .block(hint_block);
+                frame.render_widget(hint_text, composer_area);
+            }
         }
     } else if view.notifications_selected {
         let hint_block = Block::default()

@@ -41,6 +41,52 @@ impl AudioSource {
     }
 }
 
+/// How a session is driven. Chosen on first entry (see the onboarding prompt),
+/// then editable in settings. The key behavioural lever is whether the terminal
+/// mouse reporting is turned on: off in `Keyboard` so native selection/copy keep
+/// working; on in `Mouse` and `Hybrid`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    /// Keyboard only, the classic terminal/programmer experience; mouse
+    /// reporting stays off so the terminal's own text selection works.
+    Keyboard,
+    /// Mouse-first, Discord-like: everything is clickable, mouse reporting on.
+    Mouse,
+    /// Both keyboard shortcuts and the mouse work. The safe default.
+    #[default]
+    Hybrid,
+}
+
+impl InteractionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
+            Self::Hybrid => "hybrid",
+        }
+    }
+
+    pub fn from_settings_str(value: &str) -> Self {
+        match value {
+            "keyboard" => Self::Keyboard,
+            "mouse" => Self::Mouse,
+            _ => Self::Hybrid,
+        }
+    }
+
+    /// Whether the terminal's mouse reporting should be enabled in this mode.
+    pub fn mouse_enabled(self) -> bool {
+        matches!(self, Self::Mouse | Self::Hybrid)
+    }
+
+    /// Whether keyboard shortcuts are the primary/expected input (for which set
+    /// of on-screen hints to show). Both keyboard-only and hybrid say yes.
+    pub fn keyboard_primary(self) -> bool {
+        matches!(self, Self::Keyboard | Self::Hybrid)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IcecastStream {
@@ -305,6 +351,7 @@ pub fn normalize_right_sidebar_components(
 
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
+const INTERACTION_MODE_KEY: &str = "interaction_mode";
 const THEME_ID_KEY: &str = "theme_id";
 const AUDIO_SOURCE_KEY: &str = "audio_source";
 const ICECAST_STREAM_KEY: &str = "icecast_stream";
@@ -325,6 +372,9 @@ const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
+const TRANSLATE_TO_KEY: &str = "translate_to";
+const AUTO_TRANSLATE_KEY: &str = "auto_translate";
+const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
@@ -335,7 +385,6 @@ const IDE_KEY: &str = "ide";
 const TERMINAL_KEY: &str = "terminal";
 const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
-const BIRTHDAY_KEY: &str = "birthday";
 
 impl User {
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
@@ -544,6 +593,10 @@ impl User {
                           WHEN 'lateania_kaethyr_ascendant' THEN 'LKA'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
+                          WHEN 'dcss_orb' THEN 'DCO'
+                          WHEN 'dcss_win' THEN 'DCW'
+                          WHEN 'brogue_escape' THEN 'BRE'
+                          WHEN 'brogue_mastery' THEN 'BRM'
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           ELSE (
                             CASE category
@@ -571,6 +624,10 @@ impl User {
                                    WHEN 'nethack_amulet' THEN 14
                                    WHEN 'nethack_ascension' THEN 15
                                    WHEN 'greendragon_dragon' THEN 16
+                                   WHEN 'dcss_orb' THEN 17
+                                   WHEN 'dcss_win' THEN 18
+                                   WHEN 'brogue_escape' THEN 19
+                                   WHEN 'brogue_mastery' THEN 20
                                    ELSE 99
                                  END
                     ) AS badges
@@ -579,7 +636,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'greendragon_dragon')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -727,6 +784,11 @@ impl User {
         Ok(extract_start_with_music_muted(&settings))
     }
 
+    pub async fn translate_mine_to_en(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_translate_mine_to_en(&settings))
+    }
+
     /// Atomically merge `audio_source` into `settings` without clobbering other keys.
     pub async fn set_audio_source(
         client: &Client,
@@ -741,6 +803,28 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&AUDIO_SOURCE_KEY, &value, &user_id],
+            )
+            .await?;
+        if updated == 0 {
+            bail!("user not found");
+        }
+        Ok(())
+    }
+
+    /// Persist the chosen interaction mode (keyboard / mouse / hybrid).
+    pub async fn set_interaction_mode(
+        client: &Client,
+        user_id: Uuid,
+        mode: InteractionMode,
+    ) -> Result<()> {
+        let value = mode.as_str();
+        let updated = client
+            .execute(
+                "UPDATE users
+                 SET settings = settings || jsonb_build_object($1::text, $2::text),
+                     updated = current_timestamp
+                 WHERE id = $3",
+                &[&INTERACTION_MODE_KEY, &value, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -900,31 +984,6 @@ impl User {
         Ok((true, ids))
     }
 
-    /// `(username, birthday MM-DD)` for every friend that has set a birthday.
-    /// Used to build connect-time birthday alerts.
-    pub async fn friend_birthdays(client: &Client, user_id: Uuid) -> Result<Vec<(String, String)>> {
-        let ids = Self::friend_user_ids(client, user_id).await?;
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let rows = client
-            .query(
-                "SELECT username, settings FROM users WHERE id = ANY($1)",
-                &[&ids],
-            )
-            .await?;
-        let mut out = Vec::new();
-        for row in &rows {
-            let username: String = row.get("username");
-            let settings: Value = row.get("settings");
-            if let Some(birthday) = extract_birthday(&settings) {
-                out.push((username, birthday));
-            }
-        }
-        out.sort();
-        Ok(out)
-    }
-
     /// Atomically merge `theme_id` into `settings` without clobbering other keys.
     pub async fn set_theme_id(client: &Client, user_id: Uuid, theme_id: &str) -> Result<()> {
         let updated = client
@@ -1043,18 +1102,23 @@ fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
     // Collapse the lesser milestone when its superseding one is present:
     // Kaethyr Ascendant implies Yssgar implies the Frontier King implies the
-    // Archdemon, and an Ascension implies the Amulet. Profile views still show
-    // all; chat author labels show only the highest.
+    // Archdemon, an Ascension implies the Amulet, a DCSS escape implies the
+    // Orb pickup, and a Brogue mastery implies the escape. Profile views
+    // still show all; chat author labels show only the highest.
     let has_kaethyr = raw.split_whitespace().any(|badge| badge == "LKA");
     let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
     let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
+    let has_dcss_win = raw.split_whitespace().any(|badge| badge == "DCW");
+    let has_brogue_mastery = raw.split_whitespace().any(|badge| badge == "BRM");
     let badges = raw
         .split_whitespace()
         .filter(|badge| !(has_kaethyr && matches!(*badge, "LYS" | "LKN" | "LMG")))
         .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
         .filter(|badge| !(has_frontier_king && *badge == "LMG"))
         .filter(|badge| !(has_ascension && *badge == "NHA"))
+        .filter(|badge| !(has_dcss_win && *badge == "DCO"))
+        .filter(|badge| !(has_brogue_mastery && *badge == "BRE"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)
@@ -1081,11 +1145,15 @@ fn set_uuid_ids(settings: &mut Value, key: &str, ids: &[Uuid]) {
     settings[key] = json!(ids.iter().map(Uuid::to_string).collect::<Vec<_>>());
 }
 
-pub fn extract_birthday(settings: &Value) -> Option<String> {
+/// The chosen interaction mode, or `None` if the user has never picked one -
+/// which is the signal to show the first-run onboarding prompt.
+pub fn extract_interaction_mode(settings: &Value) -> Option<InteractionMode> {
     settings
-        .get(BIRTHDAY_KEY)
+        .get(INTERACTION_MODE_KEY)
         .and_then(Value::as_str)
-        .and_then(crate::models::birthday::normalize_birthday)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(InteractionMode::from_settings_str)
 }
 
 pub fn extract_theme_id(settings: &Value) -> Option<String> {
@@ -1292,6 +1360,38 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The language chat translations render into for this user. Defaults to
+/// English: inert for the English-reading majority (their messages are
+/// already in it), one settings flip for everyone else.
+pub fn extract_translate_to(settings: &Value) -> crate::models::message_translation::TranslateLang {
+    settings
+        .get(TRANSLATE_TO_KEY)
+        .and_then(Value::as_str)
+        .and_then(crate::models::message_translation::TranslateLang::from_key)
+        .unwrap_or(crate::models::message_translation::TranslateLang::En)
+}
+
+/// Tweak: auto-translate foreign-script messages arriving in the room being
+/// viewed (plus anything already cached). Opt-in; defaults to false so
+/// translation stays on-demand (`t`) until the user asks for more.
+pub fn extract_auto_translate(settings: &Value) -> bool {
+    settings
+        .get(AUTO_TRANSLATE_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: pre-translate this author's outgoing messages to English at send
+/// time, warming the shared cache so English readers see them without
+/// asking. Opt-in; defaults to false since it spends an API call per
+/// message the author writes.
+pub fn extract_translate_mine_to_en(settings: &Value) -> bool {
+    settings
+        .get(TRANSLATE_MINE_TO_EN_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

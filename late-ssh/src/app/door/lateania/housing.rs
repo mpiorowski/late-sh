@@ -103,6 +103,16 @@ pub fn is_housing_room(room: RoomId) -> bool {
     room == HOUSING_BASE || plot_of_room(room).is_some()
 }
 
+/// Whether the exit `a` -> `b` crosses a home's threshold: the close on one
+/// side, a plot interior on the other. The map layout severs these edges so
+/// each home lays out as its own island; walked into the town grid, the
+/// interiors land on top of the streets and the field draws the street's
+/// paths around a player standing inside.
+pub fn crosses_threshold(a: RoomId, b: RoomId) -> bool {
+    (a == HOUSING_BASE && plot_of_room(b).is_some())
+        || (b == HOUSING_BASE && plot_of_room(a).is_some())
+}
+
 /// A placeable furnishing sold by the housing clerk and set down in a home.
 #[derive(Clone, Copy, Debug)]
 pub struct Furniture {

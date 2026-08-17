@@ -301,7 +301,9 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     // Background: selected cell strongest, then all cells sharing its number -
     // the modern-sudoku "light up the board" feel.
     if is_selected {
-        style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        style = style
+            .patch(theme::selection_style())
+            .add_modifier(Modifier::BOLD);
         if value == 0 {
             style = style.fg(theme::TEXT_BRIGHT());
         }
