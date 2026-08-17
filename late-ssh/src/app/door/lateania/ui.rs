@@ -2459,8 +2459,24 @@ fn battle_side_panel(
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Battle"));
-    let meter_w = width.saturating_sub(12).clamp(8, 22);
     let wrap_w = width.saturating_sub(4).max(6);
+    // The panel draws without terminal wrapping (each row must stay one line
+    // so clicks map to rows), so every line here is pre-wrapped or sized to
+    // fit: meters shrink to leave room for their numbers, prose goes through
+    // `side_text_wrap`, ability detail truncates.
+    let hp_meter_line = |label: &'static str, hp: i32, max_hp: i32| {
+        let nums = format!("{hp}/{max_hp}");
+        let meter_w = width
+            .saturating_sub(5 + UnicodeWidthStr::width(nums.as_str()) + 1)
+            .clamp(6, 22);
+        Line::from(vec![
+            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!("{} {nums}", meter(hp, max_hp, meter_w)),
+                Style::default().fg(hp_color(hp, max_hp)),
+            ),
+        ])
+    };
     if let Some(mob) = view.mobs.iter().find(|m| m.targeted) {
         let name_style = Style::default()
             .fg(rarity_color(&mob.rank))
@@ -2477,18 +2493,7 @@ fn battle_side_panel(
                 name_style,
             )));
         }
-        lines.push(Line::from(vec![
-            Span::styled("  HP ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!(
-                    "{} {}/{}",
-                    meter(mob.hp, mob.max_hp, meter_w),
-                    mob.hp,
-                    mob.max_hp
-                ),
-                Style::default().fg(hp_color(mob.hp, mob.max_hp)),
-            ),
-        ]));
+        lines.push(hp_meter_line("  HP ", mob.hp, mob.max_hp));
         let mut traits: Vec<String> = vec![mob.rank.clone()];
         traits.push(format!("strikes with {}", mob.school));
         if let Some(weak) = mob.weak {
@@ -2498,7 +2503,7 @@ fn battle_side_panel(
             traits.push(format!("shrugs off {resist}"));
         }
         lines.extend(side_text_wrap(
-            &format!("  {}", traits.join(" \u{00b7} ")),
+            &traits.join(" \u{00b7} "),
             theme::TEXT_DIM(),
             width,
         ));
@@ -2510,34 +2515,31 @@ fn battle_side_panel(
             afflicted.push("stunned".to_string());
         }
         if !afflicted.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  afflicted: {}", afflicted.join(" \u{00b7} ")),
-                Style::default().fg(theme::SUCCESS()),
-            )));
+            lines.extend(side_text_wrap(
+                &format!("afflicted: {}", afflicted.join(" \u{00b7} ")),
+                theme::SUCCESS(),
+                width,
+            ));
         }
     } else if let Some(occ) = view.occupants.iter().find(|o| o.targeted) {
         let name = usernames
             .get(&occ.user_id)
             .cloned()
             .unwrap_or_else(|| "your rival".to_string());
-        lines.push(Line::from(Span::styled(
-            format!("\u{00bb} Lv{} {name}", occ.level),
-            Style::default()
-                .fg(theme::ERROR())
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(vec![
-            Span::styled("  HP ", Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!(
-                    "{} {}/{}",
-                    meter(occ.hp, occ.max_hp, meter_w),
-                    occ.hp,
-                    occ.max_hp
-                ),
-                Style::default().fg(hp_color(occ.hp, occ.max_hp)),
-            ),
-        ]));
+        let name_style = Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD);
+        for (i, part) in wrap_log_text(&format!("Lv{} {name}", occ.level), wrap_w)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = if i == 0 { "\u{00bb} " } else { "    " };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{part}"),
+                name_style,
+            )));
+        }
+        lines.push(hp_meter_line("  HP ", occ.hp, occ.max_hp));
         lines.push(Line::from(Span::styled(
             "  duel",
             Style::default().fg(theme::TEXT_DIM()),
@@ -2555,25 +2557,23 @@ fn battle_side_panel(
         effects.push("stunned".to_string());
     }
     if !effects.is_empty() {
-        lines.push(Line::from(Span::styled(
-            format!("  you: {}", effects.join(" \u{00b7} ")),
-            Style::default().fg(theme::AMBER_GLOW()),
-        )));
+        lines.extend(side_text_wrap(
+            &format!("you: {}", effects.join(" \u{00b7} ")),
+            theme::AMBER_GLOW(),
+            width,
+        ));
     }
     // Your companion fighting alongside.
     if let Some(pet) = &view.pet {
         let (text, color) = if pet.downed {
-            (
-                format!("  {} {} downed", pet.glyph, pet.name),
-                theme::ERROR(),
-            )
+            (format!("{} {} downed", pet.glyph, pet.name), theme::ERROR())
         } else {
             (
-                format!("  {} {} {}/{}", pet.glyph, pet.name, pet.hp, pet.max_hp),
+                format!("{} {} {}/{}", pet.glyph, pet.name, pet.hp, pet.max_hp),
                 hp_color(pet.hp, pet.max_hp),
             )
         };
-        lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+        lines.extend(side_text_wrap(&text, color, width));
         // Its unlocked auto-skills, so what fires by itself is no mystery.
         if !pet.downed && !pet.skills.is_empty() {
             let names = pet
@@ -2656,7 +2656,8 @@ fn battle_side_panel(
         lines.push(hint("click", "switch target"));
     }
     lines.push(Line::raw(""));
-    lines.push(hint("space/x", "strike  z flee  Q quaff"));
+    lines.push(hint("space/x", "strike  z flee"));
+    lines.push(hint("Q", "quaff a potion"));
     (lines, hits)
 }
 

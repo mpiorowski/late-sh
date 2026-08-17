@@ -421,10 +421,29 @@ fn room_panel_makes_each_foe_a_clickable_row() {
             name: "War Cry".to_string(),
             cost: 40,
             ready: false,
-            effect: "empower".to_string(),
+            effect: "a long empowering shout that would overflow the panel"
+                .to_string(),
         },
     ];
+    // Stress the width budget: boss-sized HP numbers, a full traits line,
+    // and afflictions all at once.
+    view.mobs[1].hp = 12400;
+    view.mobs[1].max_hp = 21000;
+    view.mobs[1].weak = Some("frost");
+    view.mobs[1].resist = Some("physical");
+    view.mobs[1].dot_stacks = 2;
+    view.mobs[1].stunned = true;
     let (blines, bhits) = super::battle_side_panel(&view, &usernames, 30);
+    // The panel draws without terminal wrapping, so every line must be
+    // pre-wrapped or sized to fit - an overflowing line just clips at the
+    // border in the real UI.
+    for l in &blines {
+        let text = line_text(l);
+        assert!(
+            unicode_width::UnicodeWidthStr::width(text.as_str()) <= 30,
+            "battle panel line overflows the panel: {text:?}"
+        );
+    }
     let all: String = blines.iter().map(line_text).collect::<Vec<_>>().join("\n");
     assert!(all.contains("Battle"), "the battle section renders: {all}");
     assert!(
