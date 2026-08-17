@@ -3041,7 +3041,7 @@ fn road_view(titles: &[String], targets: &[Option<RoomId>]) -> Vec<RoadStepView>
         .zip(targets.iter().copied().chain(std::iter::repeat(None)))
         .map(|(m, target)| {
             let title = title_for(m.boss, true);
-            let done = titles.iter().any(|t| *t == title);
+            let done = titles.contains(&title);
             let current = !done && !current_found;
             if current {
                 current_found = true;

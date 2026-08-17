@@ -4565,7 +4565,8 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
                 mob.max_hp,
                 afflicted,
             )
-        } else if let Some(occ) = view.occupants.iter().find(|o| o.targeted) {
+        } else {
+            let occ = view.occupants.iter().find(|o| o.targeted)?;
             (
                 "your rival".to_string(),
                 Style::default()
@@ -4577,8 +4578,6 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
                 occ.max_hp,
                 Vec::new(),
             )
-        } else {
-            return None;
         };
 
     let mut lines = vec![section("Battle")];
