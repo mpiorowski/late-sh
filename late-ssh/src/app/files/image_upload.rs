@@ -152,7 +152,7 @@ pub async fn upload_image_bytes(files: &FilesConfig, data: Vec<u8>, mime: &str) 
     Ok(public_url(config, &key))
 }
 
-async fn put_object(
+pub(crate) async fn put_object(
     config: &FilesConfig,
     key: &str,
     data: Vec<u8>,
@@ -307,7 +307,7 @@ async fn read_response_limited(mut resp: reqwest::Response, max_bytes: usize) ->
     Ok(out)
 }
 
-fn public_url(config: &FilesConfig, key: &str) -> String {
+pub(crate) fn public_url(config: &FilesConfig, key: &str) -> String {
     format!("{}/{}", config.public_base_url.trim_end_matches('/'), key)
 }
 
@@ -329,7 +329,7 @@ fn signing_key(secret_access_key: &str, date: &str, region: &str, service: &str)
     hmac_sha256(&k_service, b"aws4_request")
 }
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts keys of any size");
     mac.update(data);
     mac.finalize().into_bytes().to_vec()

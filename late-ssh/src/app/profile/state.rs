@@ -209,6 +209,7 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
+        save_daily_chat_logs: profile.save_daily_chat_logs,
         land_on_home: profile.land_on_home,
         show_flag_fallback: profile.show_flag_fallback,
         show_pet_strip: profile.show_pet_strip,

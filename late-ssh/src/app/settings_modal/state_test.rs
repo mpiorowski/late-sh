@@ -23,3 +23,21 @@ fn move_bio_cursor_to_end_goes_to_last_line_end() {
 
     assert_eq!(input.cursor(), (2usize, "third line".chars().count()));
 }
+
+#[test]
+fn tweak_row_all_has_no_duplicates_and_includes_chat_log_rows() {
+    // `TweakRow::ALL` is a hand-maintained, manually-sized array - nothing
+    // enforces at compile time that every variant appears exactly once, so
+    // this guards against the array silently drifting out of sync with the
+    // enum (as would've happened if a future edit added a variant but
+    // forgot to append it here).
+    for (i, row) in TweakRow::ALL.iter().enumerate() {
+        assert!(
+            !TweakRow::ALL[..i].contains(row),
+            "{row:?} appears more than once in ALL"
+        );
+    }
+    assert_eq!(TweakRow::ALL.len(), 11);
+    assert!(TweakRow::ALL.contains(&TweakRow::SaveDailyChatLogs));
+    assert!(TweakRow::ALL.contains(&TweakRow::ViewTodaysChatLog));
+}

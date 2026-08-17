@@ -13,6 +13,7 @@ use ratatui_textarea::{CursorMove, TextArea, WrapMode};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
 use crate::app::profile::svc::{IrcTokenStatus, ProfileEvent, ProfileService};
 use crate::app::{
@@ -115,10 +116,13 @@ pub(crate) enum TweakRow {
     LandOnHome,
     // Input group.
     InteractionMode,
+    // Chat logs group.
+    SaveDailyChatLogs,
+    ViewTodaysChatLog,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 9] = [
+    pub(crate) const ALL: [TweakRow; 11] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -128,6 +132,8 @@ impl TweakRow {
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
         TweakRow::InteractionMode,
+        TweakRow::SaveDailyChatLogs,
+        TweakRow::ViewTodaysChatLog,
     ];
 }
 
@@ -468,6 +474,10 @@ pub(crate) struct SettingsModalState {
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
     irc_token: IrcTokenDialogState,
+    /// Read-only viewer for the "View today's log" tweak row. `Some` while
+    /// open; content starts as a "Loading…" placeholder and is filled in by
+    /// `ChatLogLoaded` once the async fetch resolves.
+    chat_log_viewer: Option<Overlay>,
     right_sidebar_components_open: bool,
     right_sidebar_components_index: usize,
     feeds: Vec<RssFeed>,
@@ -531,6 +541,7 @@ impl SettingsModalState {
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
             irc_token: IrcTokenDialogState::new(),
+            chat_log_viewer: None,
             right_sidebar_components_open: false,
             right_sidebar_components_index: 0,
             feeds: Vec::new(),
@@ -824,6 +835,15 @@ impl SettingsModalState {
             TweakRow::InteractionMode => {
                 // Applied on the app (it flips the mouse live and persists on its
                 // own), so there's nothing to save through the profile draft.
+                return;
+            }
+            TweakRow::SaveDailyChatLogs => {
+                self.draft.save_daily_chat_logs ^= true;
+            }
+            TweakRow::ViewTodaysChatLog => {
+                // Not a toggle - Enter on this row opens the viewer overlay
+                // (see `handle_tweaks_tab_input`'s special case), nothing to
+                // flip or save here.
                 return;
             }
         }
@@ -1191,6 +1211,32 @@ impl SettingsModalState {
 
     pub(crate) fn close_irc_token_dialog(&mut self) {
         self.irc_token = IrcTokenDialogState::new();
+    }
+
+    pub(crate) fn chat_log_viewer_open(&self) -> bool {
+        self.chat_log_viewer.is_some()
+    }
+
+    pub(crate) fn chat_log_viewer(&self) -> Option<&Overlay> {
+        self.chat_log_viewer.as_ref()
+    }
+
+    pub(crate) fn open_chat_log_viewer(&mut self) {
+        self.chat_log_viewer = Some(Overlay::new(
+            "Today's chat log",
+            vec!["Loading…".to_string()],
+        ));
+        self.profile_service.load_todays_chat_log(self.user_id);
+    }
+
+    pub(crate) fn close_chat_log_viewer(&mut self) {
+        self.chat_log_viewer = None;
+    }
+
+    pub(crate) fn scroll_chat_log_viewer(&mut self, delta: i16) {
+        if let Some(overlay) = &mut self.chat_log_viewer {
+            overlay.scroll(delta);
+        }
     }
 
     /// Move focus between the IRC token action buttons. Only meaningful while a
@@ -1845,6 +1891,13 @@ impl SettingsModalState {
                         self.irc_token.message = Some("Token revoked.".to_string());
                     }
                 }
+                Ok(ProfileEvent::ChatLogLoaded { user_id, text }) if user_id == self.user_id => {
+                    if let Some(overlay) = &mut self.chat_log_viewer {
+                        let text = text.unwrap_or_else(|| "No messages logged today.".to_string());
+                        overlay.lines = text.lines().map(str::to_string).collect();
+                        overlay.scroll_offset = 0;
+                    }
+                }
                 Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
                     if self.irc_token.open {
                         self.irc_token.pending = false;
@@ -1967,6 +2020,7 @@ impl SettingsModalState {
                 room_list_mode: self.draft.room_list_mode,
                 keep_composer_focused: self.draft.keep_composer_focused,
                 start_with_music_muted: self.draft.start_with_music_muted,
+                save_daily_chat_logs: self.draft.save_daily_chat_logs,
                 land_on_home: self.draft.land_on_home,
                 show_flag_fallback: self.draft.show_flag_fallback,
                 show_pet_strip: self.draft.show_pet_strip,

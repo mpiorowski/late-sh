@@ -675,6 +675,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            save_daily_chat_logs: false,
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,

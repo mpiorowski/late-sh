@@ -152,6 +152,12 @@ pub struct Config {
     pub codekeep_host: String,
     pub codekeep_port: u16,
     pub codekeep_secret: String,
+    /// HMAC key used to derive the R2 object key for a user's daily chat
+    /// log (`app::chat_log`). Not a door secret: the R2 bucket serving
+    /// `files` is CDN-public by design (see `FilesConfig`), so a chat log's
+    /// only confidentiality comes from its object key being unguessable
+    /// without this secret - never derived from the user's id in cleartext.
+    pub chat_log_secret: String,
 }
 
 /// Read a required env value; empty or whitespace-only counts as unset.
@@ -372,6 +378,7 @@ impl Config {
             codekeep_host: "service-codekeep".to_string(),
             codekeep_port: 2328,
             codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+            chat_log_secret: required("LATE_CHAT_LOG_SECRET")?,
         })
     }
 
@@ -474,6 +481,7 @@ impl Config {
             codekeep_host: "late-codekeep-sv".to_string(),
             codekeep_port: 2328,
             codekeep_secret: required("LATE_CODEKEEP_SECRET")?,
+            chat_log_secret: required("LATE_CHAT_LOG_SECRET")?,
         })
     }
 
@@ -591,6 +599,10 @@ impl Config {
             bucket = self.files.as_ref().map(|f| f.bucket.as_str()),
             public_base_url = self.files.as_ref().map(|f| f.public_base_url.as_str()),
             "files: S3/R2 image upload storage status"
+        );
+        tracing::info!(
+            has_secret = !self.chat_log_secret.is_empty(),
+            "chat_log: daily chat log HMAC key status"
         );
         tracing::info!(
             enabled = self.rebels_enabled,

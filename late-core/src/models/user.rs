@@ -371,6 +371,7 @@ const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
+const SAVE_DAILY_CHAT_LOGS_KEY: &str = "save_daily_chat_logs";
 const LAND_ON_HOME_KEY: &str = "land_on_home";
 const TRANSLATE_TO_KEY: &str = "translate_to";
 const AUTO_TRANSLATE_KEY: &str = "auto_translate";
@@ -782,6 +783,20 @@ impl User {
     pub async fn start_with_music_muted(client: &Client, user_id: Uuid) -> Result<bool> {
         let settings = Self::settings_for_user(client, user_id).await?;
         Ok(extract_start_with_music_muted(&settings))
+    }
+
+    /// Whether this user wants their chat archived to a daily log. Read
+    /// fresh from the DB (never trusted from an in-memory snapshot) at the
+    /// point a log would actually be written, so a mid-session toggle-off
+    /// takes effect on the very next save.
+    pub async fn save_daily_chat_logs(client: &Client, user_id: Uuid) -> Result<bool> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_save_daily_chat_logs(&settings))
+    }
+
+    pub async fn timezone(client: &Client, user_id: Uuid) -> Result<Option<String>> {
+        let settings = Self::settings_for_user(client, user_id).await?;
+        Ok(extract_timezone(&settings))
     }
 
     pub async fn translate_mine_to_en(client: &Client, user_id: Uuid) -> Result<bool> {
@@ -1360,6 +1375,17 @@ pub fn extract_keep_composer_focused(settings: &Value) -> bool {
 pub fn extract_start_with_music_muted(settings: &Value) -> bool {
     settings
         .get(START_WITH_MUSIC_MUTED_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Tweak: when true, a plain-text transcript of the user's chat (every room
+/// they're in, plus DMs) for the current day is written to durable storage
+/// at session end, so they have somewhere to check back for anything they
+/// missed. Opt-in; defaults to false.
+pub fn extract_save_daily_chat_logs(settings: &Value) -> bool {
+    settings
+        .get(SAVE_DAILY_CHAT_LOGS_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

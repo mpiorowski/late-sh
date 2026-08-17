@@ -26,6 +26,7 @@ use tokio::time::timeout;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::{
+    chat_log,
     common::theme,
     state::{App, SessionConfig},
 };
@@ -1147,6 +1148,8 @@ impl russh::server::Handler for ClientHandler {
                 budget: Arc::clone(&self.output_budget),
             };
             app.lock().await.set_repaint_signal(Arc::clone(&signal));
+            let hook_user_id = self.user.as_ref().map(|u| u.id);
+            let hook_state = self.state.clone();
             tokio::spawn(async move {
                 let mut previous_render: Option<Instant> = None;
                 let mut input_pending = false;
@@ -1203,6 +1206,7 @@ impl russh::server::Handler for ClientHandler {
                             metrics::record_render_stall_disconnect();
                             let _ = ctx.handle.eof(ctx.channel_id).await;
                             let _ = ctx.handle.close(ctx.channel_id).await;
+                            spawn_save_daily_chat_log_hook(&hook_state, hook_user_id);
                             break;
                         }
                         // Re-poll the budget at the hot cadence; leaving the
@@ -1237,6 +1241,7 @@ impl russh::server::Handler for ClientHandler {
                             if outcome.should_quit {
                                 tracing::debug!("app requested quit, closing connection");
                                 clean_disconnect(&ctx.handle, ctx.channel_id).await;
+                                spawn_save_daily_chat_log_hook(&hook_state, hook_user_id);
                                 break;
                             }
                             if advance_world {
@@ -1259,6 +1264,7 @@ impl russh::server::Handler for ClientHandler {
                             .await;
                             let _ = ctx.handle.eof(ctx.channel_id).await;
                             let _ = ctx.handle.close(ctx.channel_id).await;
+                            spawn_save_daily_chat_log_hook(&hook_state, hook_user_id);
                             break;
                         }
                     }
@@ -1612,6 +1618,45 @@ async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId)
     .await;
     let _ = handle.eof(channel_id).await;
     let _ = handle.close(channel_id).await;
+}
+
+/// Fire-and-forget: if the user has "save daily chat logs" on, rebuild and
+/// upload today's log. Spawned separately from (never awaited by) the render
+/// loop it's called from, so a slow DB/R2 round trip never delays session
+/// teardown. Re-checks the toggle fresh from DB rather than trusting a
+/// possibly-stale in-memory `App` snapshot; failure is warn-and-swallow, same
+/// tolerance as the best-effort `update_last_seen` write in `ensure_user`.
+fn spawn_save_daily_chat_log_hook(state: &State, user_id: Option<uuid::Uuid>) {
+    let Some(user_id) = user_id else {
+        return;
+    };
+    let state = state.clone();
+    tokio::spawn(async move {
+        let result: Result<()> = async {
+            let client = state.db.get().await?;
+            if !User::save_daily_chat_logs(&client, user_id).await? {
+                return Ok(());
+            }
+            let timezone = User::timezone(&client, user_id).await?;
+            let files = state
+                .config
+                .files
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("uploads disabled, no files config"))?;
+            chat_log::save_daily_log(
+                &state.db,
+                files,
+                &state.config.chat_log_secret,
+                user_id,
+                timezone.as_deref(),
+            )
+            .await
+        }
+        .await;
+        if let Err(e) = result {
+            tracing::warn!(error = ?e, %user_id, "failed to save daily chat log");
+        }
+    });
 }
 
 // Updated helper to take State

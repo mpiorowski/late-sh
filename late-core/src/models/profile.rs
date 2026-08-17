@@ -12,11 +12,11 @@ use super::user::{
     extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
     extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
     extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
-    extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
-    extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
-    extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
-    extract_translate_mine_to_en, extract_translate_to, normalize_right_sidebar_components,
-    normalize_text_brightness_adjustment,
+    extract_room_list_mode, extract_save_daily_chat_logs, extract_show_flag_fallback,
+    extract_show_pet_strip, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    extract_start_with_music_muted, extract_terminal, extract_text_brightness_adjustment,
+    extract_theme_id, extract_timezone, extract_translate_mine_to_en, extract_translate_to,
+    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -53,6 +53,9 @@ pub struct Profile {
     /// Tweak: silently mute the first paired audio client on each new SSH
     /// session so music does not auto-play.
     pub start_with_music_muted: bool,
+    /// Tweak: archive a plain-text transcript of the day's chat (every room
+    /// the user is in, plus DMs) to durable storage at session end.
+    pub save_daily_chat_logs: bool,
     /// Tweak: land on Home (page 1) instead of the Clubhouse (page 0) when a
     /// session starts.
     pub land_on_home: bool,
@@ -103,6 +106,7 @@ impl Default for Profile {
             room_list_mode: RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
+            save_daily_chat_logs: false,
             land_on_home: false,
             show_flag_fallback: false,
             show_pet_strip: true,
@@ -138,6 +142,7 @@ pub struct ProfileParams {
     pub room_list_mode: RoomListMode,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
+    pub save_daily_chat_logs: bool,
     pub land_on_home: bool,
     pub show_flag_fallback: bool,
     pub show_pet_strip: bool,
@@ -202,7 +207,7 @@ impl Profile {
     /// enable_background_color/text_brightness_adjustment/
     /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
     /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
-    /// start_with_music_muted/show_flag_fallback into settings via
+    /// start_with_music_muted/save_daily_chat_logs/show_flag_fallback into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
     pub async fn update(client: &Client, user_id: Uuid, params: ProfileParams) -> Result<Self> {
@@ -296,10 +301,11 @@ impl Profile {
                          'show_pet_strip', $26::bool,
                          'translate_to', $27::text,
                          'auto_translate', $28::bool,
-                         'translate_mine_to_en', $29::bool
+                         'translate_mine_to_en', $29::bool,
+                         'save_daily_chat_logs', $30::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $30
+                 WHERE id = $31
                  RETURNING *",
                 &[
                     &params.username,
@@ -331,6 +337,7 @@ impl Profile {
                     &params.translate_to.as_str(),
                     &params.auto_translate,
                     &params.translate_mine_to_en,
+                    &params.save_daily_chat_logs,
                     &user_id,
                 ],
             )
@@ -364,6 +371,7 @@ impl Profile {
             room_list_mode: extract_room_list_mode(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
+            save_daily_chat_logs: extract_save_daily_chat_logs(&user.settings),
             land_on_home: extract_land_on_home(&user.settings),
             show_flag_fallback: extract_show_flag_fallback(&user.settings),
             show_pet_strip: extract_show_pet_strip(&user.settings),

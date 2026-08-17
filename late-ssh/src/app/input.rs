@@ -756,12 +756,12 @@ fn close_image_modal(app: &mut App) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OverlayInputAction {
+pub(crate) enum OverlayInputAction {
     Close,
     Scroll(i16),
 }
 
-fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
+pub(crate) fn overlay_input_action(event: &ParsedInput) -> Option<OverlayInputAction> {
     match event {
         ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             Some(OverlayInputAction::Close)

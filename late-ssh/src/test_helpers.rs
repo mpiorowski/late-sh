@@ -209,6 +209,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         codekeep_host: String::new(),
         codekeep_port: 2328,
         codekeep_secret: String::new(),
+        chat_log_secret: "test-chat-log-secret".to_string(),
     }
 }
 

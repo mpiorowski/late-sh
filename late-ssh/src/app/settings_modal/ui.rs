@@ -8,6 +8,7 @@ use ratatui::{
 
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
+use crate::app::common::overlay::draw_overlay;
 use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
@@ -75,6 +76,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     }
     if state.irc_token_dialog().open() {
         draw_irc_token_dialog(frame, popup, state);
+    }
+    if let Some(overlay) = state.chat_log_viewer() {
+        draw_overlay(frame, popup, overlay);
     }
 }
 
@@ -723,6 +727,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Input subsection heading
         Constraint::Length(1),                // interaction mode row
+        Constraint::Length(1),                // breathing
+        Constraint::Length(1),                // Chat logs subsection heading
+        Constraint::Length(1),                // save daily chat logs row
+        Constraint::Length(1),                // view today's log row
         Constraint::Min(0),                   // flex spacer
         Constraint::Length(gem_strip_height), // gem
     ])
@@ -830,12 +838,34 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[17],
     );
 
+    frame.render_widget(Paragraph::new(section_heading("Chat logs")), sections[19]);
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::SaveDailyChatLogs,
+            width,
+            "Save daily chat logs",
+            toggle_span(state.draft().save_daily_chat_logs),
+        )),
+        sections[20],
+    );
+    frame.render_widget(
+        Paragraph::new(tweak_row_line(
+            state,
+            TweakRow::ViewTodaysChatLog,
+            width,
+            "View today's log",
+            chat_log_action_span(),
+        )),
+        sections[21],
+    );
+
     if gem_strip_height > 0 {
         // Pad 2 cols off each side and lift the gem 1 row off the bottom
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[19];
+        let strip = sections[23];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -2504,6 +2534,15 @@ fn format_lang_tags(langs: &[String]) -> String {
         .map(|lang| format!("#{lang}"))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Value column for an action row (not a toggle) - a static "press ↵"
+/// affordance instead of an on/off state.
+fn chat_log_action_span() -> ValueSpan {
+    ValueSpan {
+        text: "↵ view".to_string(),
+        style: Style::default().fg(theme::TEXT_FAINT()),
+    }
 }
 
 fn toggle_span(enabled: bool) -> ValueSpan {

@@ -205,6 +205,16 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           }
 
           env {
+            name = "LATE_CHAT_LOG_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.chat_log_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
+          }
+
+          env {
             name = "LATE_DCSS_SECRET"
             value_from {
               secret_key_ref {

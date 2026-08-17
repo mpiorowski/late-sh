@@ -33,6 +33,11 @@ pub struct ProfileService {
     username_directory: Option<UsernameDirectory>,
     session_registry: Option<SessionRegistry>,
     irc_registry: Option<IrcRegistry>,
+    /// R2 storage + HMAC key for the "save daily chat logs" tweak
+    /// (`app::chat_log`). `files: None` disables the viewer (same as image
+    /// uploads being disabled when R2 credentials are unset).
+    files: Option<crate::config::FilesConfig>,
+    chat_log_secret: String,
 }
 
 #[derive(Clone, Default)]
@@ -90,6 +95,14 @@ pub enum ProfileEvent {
     IrcTokenRevoked {
         user_id: Uuid,
     },
+    /// Today's saved chat log, for the settings Tweaks tab viewer.
+    /// `text: None` covers both "nothing saved today" and a fetch failure -
+    /// see `app::chat_log::fetch_daily_log`'s doc comment for why those are
+    /// deliberately not distinguished here.
+    ChatLogLoaded {
+        user_id: Uuid,
+        text: Option<String>,
+    },
 }
 
 /// Displayable IRC token metadata (the token value itself is unrecoverable).
@@ -129,6 +142,8 @@ impl ProfileService {
             username_directory: None,
             session_registry: None,
             irc_registry: None,
+            files: None,
+            chat_log_secret: String::new(),
         }
     }
 
@@ -144,6 +159,16 @@ impl ProfileService {
 
     pub fn with_irc_registry(mut self, irc_registry: IrcRegistry) -> Self {
         self.irc_registry = Some(irc_registry);
+        self
+    }
+
+    pub fn with_files(mut self, files: Option<crate::config::FilesConfig>) -> Self {
+        self.files = files;
+        self
+    }
+
+    pub fn with_chat_log_secret(mut self, chat_log_secret: String) -> Self {
+        self.chat_log_secret = chat_log_secret;
         self
     }
 
@@ -465,6 +490,58 @@ impl ProfileService {
             .map(IrcTokenStatus::from);
         self.publish_event(ProfileEvent::IrcTokenStatus { user_id, status });
         Ok(())
+    }
+
+    /// Fire-and-forget: fetch today's saved chat log (if any) for the
+    /// settings Tweaks tab viewer. Never fails outward - every failure path
+    /// (no R2 configured, DB error, fetch error) still publishes
+    /// `ChatLogLoaded { text: None }` exactly once, so the viewer always
+    /// resolves out of its "Loading…" state instead of hanging.
+    pub fn load_todays_chat_log(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let text = service.try_load_todays_chat_log(user_id).await;
+                service.publish_event(ProfileEvent::ChatLogLoaded { user_id, text });
+            }
+            .instrument(info_span!("profile.chat_log_fetch_task", user_id = %user_id)),
+        );
+    }
+
+    async fn try_load_todays_chat_log(&self, user_id: Uuid) -> Option<String> {
+        let files = self.files.as_ref()?;
+        let client = match self.db.get().await {
+            Ok(client) => client,
+            Err(e) => {
+                late_core::error_span!(
+                    "chat_log_fetch_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to get a db connection for today's chat log"
+                );
+                return None;
+            }
+        };
+        let timezone = User::timezone(&client, user_id).await.ok().flatten();
+        match super::super::chat_log::fetch_daily_log(
+            files,
+            &self.chat_log_secret,
+            user_id,
+            timezone.as_deref(),
+        )
+        .await
+        {
+            Ok(text) => text,
+            Err(e) => {
+                late_core::error_span!(
+                    "chat_log_fetch_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to fetch today's chat log"
+                );
+                None
+            }
+        }
     }
 
     /// Fire-and-forget: mint (or re-mint) the user's IRC token. Any prior token

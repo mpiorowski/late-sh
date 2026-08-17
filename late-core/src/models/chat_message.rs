@@ -319,6 +319,62 @@ impl ChatMessage {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
+    /// Every message the user could see across their rooms during
+    /// `[range_start, range_end)`, oldest first - the raw material for their
+    /// personal daily chat log. Unlike `search_for_user`, this does NOT
+    /// exclude the caller's own messages (a personal log wants full
+    /// conversational context) and does not filter ignored users (an
+    /// archival log is not a live view - ignoring is a display choice, not
+    /// a retention policy). Game-room chat is excluded, same as
+    /// `search_for_user`.
+    pub async fn list_for_daily_log(
+        client: &Client,
+        user_id: Uuid,
+        range_start: DateTime<Utc>,
+        range_end: DateTime<Utc>,
+    ) -> Result<Vec<ChatLogRow>> {
+        let rows = client
+            .query(
+                "SELECT msg.created,
+                        room.kind AS room_kind,
+                        room.slug AS room_slug,
+                        room.topic AS room_topic,
+                        room.language_code AS room_language_code,
+                        room.dm_user_a,
+                        room.dm_user_b,
+                        author.id AS author_id,
+                        author.username AS author_username,
+                        msg.body
+                 FROM chat_messages msg
+                 JOIN chat_room_members mem
+                   ON mem.room_id = msg.room_id AND mem.user_id = $1
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 JOIN users author ON author.id = msg.user_id
+                 WHERE room.kind <> 'game'
+                   AND msg.created >= $2
+                   AND msg.created < $3
+                 ORDER BY msg.created ASC, msg.id ASC",
+                &[&user_id, &range_start, &range_end],
+            )
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ChatLogRow {
+                created: row.get("created"),
+                room_kind: row.get("room_kind"),
+                room_slug: row.get("room_slug"),
+                room_topic: row.get("room_topic"),
+                room_language_code: row.get("room_language_code"),
+                dm_user_a: row.get("dm_user_a"),
+                dm_user_b: row.get("dm_user_b"),
+                author_id: row.get("author_id"),
+                author_username: row.get("author_username"),
+                body: row.get("body"),
+            })
+            .collect())
+    }
+
     pub async fn create_with_reply_to(
         client: &impl GenericClient,
         params: ChatMessageParams,
@@ -455,6 +511,23 @@ pub struct UnreadRoomMessage {
     pub id: Uuid,
     pub created: DateTime<Utc>,
     pub author: String,
+    pub body: String,
+}
+
+/// One formatted log-line's raw ingredients: enough room identity to label
+/// it, the author, and the body. Built for `ChatMessage::list_for_daily_log`;
+/// formatting into text lives in late-ssh (late-core stays presentation-free).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatLogRow {
+    pub created: DateTime<Utc>,
+    pub room_kind: String,
+    pub room_slug: Option<String>,
+    pub room_topic: Option<String>,
+    pub room_language_code: Option<String>,
+    pub dm_user_a: Option<Uuid>,
+    pub dm_user_b: Option<Uuid>,
+    pub author_id: Uuid,
+    pub author_username: String,
     pub body: String,
 }
 

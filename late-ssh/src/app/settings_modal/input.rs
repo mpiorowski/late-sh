@@ -1,4 +1,7 @@
-use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, sanitize_paste_markers};
+use crate::app::input::{
+    MouseButton, MouseEventKind, OverlayInputAction, ParsedInput, overlay_input_action,
+    sanitize_paste_markers,
+};
 use crate::app::state::App;
 
 use super::gem::GemKey;
@@ -12,6 +15,11 @@ use crate::app::common::textarea_input::{
 use crate::app::settings_modal::state::SettingsModalState;
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
+    if app.settings_modal_state.chat_log_viewer_open() {
+        handle_chat_log_viewer_input(app, &event);
+        return;
+    }
+
     if app.settings_modal_state.link_account_dialog().open() {
         handle_link_account_dialog_input(app, event);
         return;
@@ -188,6 +196,13 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
             if app.settings_modal_state.selected_tweak_row() == TweakRow::RightSidebar =>
         {
             app.settings_modal_state.open_right_sidebar_components();
+        }
+        // Enter on the "View today's log" row opens the read-only viewer
+        // overlay instead of flipping a toggle - it isn't one.
+        ParsedInput::Byte(b'\r') | ParsedInput::Char('e' | 'E')
+            if app.settings_modal_state.selected_tweak_row() == TweakRow::ViewTodaysChatLog =>
+        {
+            app.settings_modal_state.open_chat_log_viewer();
         }
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') => toggle_tweak(app),
         ParsedInput::Arrow(b'C') => cycle_tweak(app, true),
@@ -394,6 +409,23 @@ fn handle_username_input(app: &mut App, event: ParsedInput) {
         EditOutcome::Submit => state.submit_username(),
         EditOutcome::Cancel => state.cancel_username_edit(),
         EditOutcome::Handled | EditOutcome::Ignored => {}
+    }
+}
+
+/// Read-only viewer for "View today's log": scroll or close, nothing else.
+/// Reuses the same key bindings as chat's own overlay
+/// (`app::input::overlay_input_action`) rather than reinventing them - q/j/k
+/// and the up/down arrows.
+fn handle_chat_log_viewer_input(app: &mut App, event: &ParsedInput) {
+    match overlay_input_action(event) {
+        Some(OverlayInputAction::Close) => app.settings_modal_state.close_chat_log_viewer(),
+        Some(OverlayInputAction::Scroll(delta)) => {
+            app.settings_modal_state.scroll_chat_log_viewer(delta)
+        }
+        None if matches!(event, ParsedInput::Byte(0x1B)) => {
+            app.settings_modal_state.close_chat_log_viewer();
+        }
+        None => {}
     }
 }
 

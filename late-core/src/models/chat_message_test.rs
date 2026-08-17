@@ -3,10 +3,13 @@ use crate::{
         chat_message::{ChatMessage, ChatMessageParams, escape_like_pattern},
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionAction},
         chat_room::ChatRoom,
+        chat_room_member::ChatRoomMember,
+        game_room::GameKind,
         user::{User, UserParams},
     },
     test_utils::test_db,
 };
+use chrono::{Duration, Utc};
 
 #[test]
 fn escape_like_pattern_escapes_metacharacters() {
@@ -233,8 +236,6 @@ async fn chat_message_reactions_toggle_and_summarize() {
 /// by-proxy invariant).
 #[tokio::test]
 async fn search_and_context_exclude_replies_to_ignored_users() {
-    use crate::models::chat_room_member::ChatRoomMember;
-
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
@@ -320,4 +321,143 @@ async fn search_and_context_exclude_replies_to_ignored_users() {
     let window_ids: Vec<_> = before.iter().chain(after.iter()).map(|m| m.id).collect();
     assert!(window_ids.contains(&plain.id));
     assert!(!window_ids.contains(&reply_to_ignored.id));
+}
+
+#[tokio::test]
+async fn list_for_daily_log_covers_rooms_and_dms_but_not_game_rooms_or_out_of_range() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge");
+    let game_room = ChatRoom::get_or_create_game_room(&client, GameKind::Blackjack, "table-1")
+        .await
+        .unwrap();
+
+    let mut users = Vec::new();
+    for (fingerprint, username) in [
+        ("daily-log-viewer", "loguser"),
+        ("daily-log-peer", "logpeer"),
+        ("daily-log-stranger", "logstranger"),
+    ] {
+        users.push(
+            User::create(
+                &client,
+                UserParams {
+                    fingerprint: fingerprint.to_string(),
+                    username: username.to_string(),
+                    settings: serde_json::json!({}),
+                },
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (viewer, peer, stranger) = (&users[0], &users[1], &users[2]);
+
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .unwrap();
+    ChatRoomMember::join(&client, game_room.id, viewer.id)
+        .await
+        .unwrap();
+    let dm = ChatRoom::get_or_create_dm(&client, viewer.id, peer.id)
+        .await
+        .unwrap();
+
+    let range_start = Utc::now() - Duration::minutes(1);
+
+    // Own message in a room the viewer belongs to: included.
+    let own_lounge_msg = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: viewer.id,
+            body: "hello from me".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Someone else's DM reply: included.
+    let dm_msg = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: dm.id,
+            user_id: peer.id,
+            body: "hey there".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // A message in a game-kind room the viewer is a member of: excluded by
+    // `room.kind <> 'game'`, regardless of membership.
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: game_room.id,
+            user_id: viewer.id,
+            body: "hit me".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // A message in a room the viewer never joined: excluded by the
+    // membership join, even though it's a normal chat room.
+    let stranger_room = ChatRoom::get_or_create_dm(&client, peer.id, stranger.id)
+        .await
+        .unwrap();
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: stranger_room.id,
+            user_id: stranger.id,
+            body: "not for viewer's eyes".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let range_end = Utc::now() + Duration::minutes(1);
+
+    let rows = ChatMessage::list_for_daily_log(&client, viewer.id, range_start, range_end)
+        .await
+        .unwrap();
+    let bodies: Vec<_> = rows.iter().map(|r| r.body.as_str()).collect();
+    assert_eq!(bodies, vec!["hello from me", "hey there"]);
+    assert!(rows.iter().all(|r| r.room_kind != "game"));
+
+    let dm_row = rows.iter().find(|r| r.body == "hey there").unwrap();
+    assert_eq!(dm_row.room_kind, "dm");
+    assert_eq!(dm_row.author_id, peer.id);
+    assert_eq!(dm_row.author_username, "logpeer");
+
+    // Out-of-range windows (entirely before / entirely after the messages)
+    // return nothing, even though the messages exist and the viewer is a
+    // member of both rooms.
+    let before_range = ChatMessage::list_for_daily_log(
+        &client,
+        viewer.id,
+        range_start - Duration::hours(2),
+        range_start,
+    )
+    .await
+    .unwrap();
+    assert!(before_range.is_empty());
+
+    let after_range = ChatMessage::list_for_daily_log(
+        &client,
+        viewer.id,
+        range_end,
+        range_end + Duration::hours(2),
+    )
+    .await
+    .unwrap();
+    assert!(after_range.is_empty());
+
+    let _ = own_lounge_msg;
+    let _ = dm_msg;
 }

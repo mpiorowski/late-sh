@@ -173,6 +173,31 @@ resource "kubernetes_secret_v1" "codekeep_identity_secret" {
 }
 
 # =============================================================================
+# Chat Log HMAC Key
+# =============================================================================
+# HMAC key late-ssh uses to derive the R2 object key for a user's saved daily
+# chat log ("save daily chat logs" setting). Unlike the door identity seeds
+# above, this isn't shared with another pod - it's consumed only by
+# service-ssh, which both writes and reads the logs itself.
+
+resource "random_password" "chat_log_secret" {
+  length  = 64
+  special = false
+}
+
+resource "kubernetes_secret_v1" "chat_log_secret" {
+  metadata {
+    name = "chat-log-secret"
+  }
+
+  data = {
+    secret = random_password.chat_log_secret.result
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # DCSS Door Identity Seed
 # =============================================================================
 # Shared secret authorizing late-ssh -> late-dcss. The same value is injected

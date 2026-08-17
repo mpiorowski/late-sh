@@ -174,7 +174,9 @@ async fn main() -> anyhow::Result<()> {
     let profile_service = ProfileService::new(db.clone(), active_users.clone())
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
-        .with_irc_registry(irc_registry.clone());
+        .with_irc_registry(irc_registry.clone())
+        .with_files(config.files.clone())
+        .with_chat_log_secret(config.chat_log_secret.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
