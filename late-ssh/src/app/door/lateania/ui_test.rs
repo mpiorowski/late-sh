@@ -1024,11 +1024,3 @@ fn the_land_map_only_offers_the_scroll_key_when_it_overflows() {
         .unwrap_or_default();
     assert!(short.contains("[ ] scroll"), "{short}");
 }
-
-#[test]
-fn tmp_dump_atlas() {
-    for l in lines_of(&sample_atlas()) {
-        println!("|{l}");
-    }
-    panic!("dump");
-}

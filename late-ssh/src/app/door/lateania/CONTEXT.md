@@ -254,6 +254,7 @@ Every line is a road you can walk. Numbers are zones you have entered.
                                  Kaelmyr  0/20
 
 Only the Ways reach:  Portal Villages · Shattered Archipelago
+
 walked  ·  not yet  ·  where you stand
 ```
 
