@@ -1,7 +1,8 @@
 use super::{
-    compare_span, fit, hug_poi_arrows, inventory_item_tag, line_rows, meter, rarity_color,
-    scroll_offset, star_rating, wrapped_rows,
+    compare_span, fit, hug_poi_arrows, inventory_item_tag, land_line, line_rows, meter,
+    rarity_color, scroll_offset, star_rating, wrapped_rows,
 };
+use crate::app::door::lateania::world::RegionProgress;
 use crate::app::door::lateania::worldmap::{MapArrow, Tile};
 use ratatui::style::Color;
 
@@ -773,4 +774,57 @@ fn journal_seals_the_frontier_until_its_titles_are_held() {
         line_text(&lines[sel]).contains("tracked"),
         "a tracked crown is flagged"
     );
+}
+
+/// A land row for the land map, with only the fields that view reads set.
+fn land(name: &'static str, explored: usize, chain: Option<(usize, usize)>) -> RegionProgress {
+    RegionProgress {
+        name,
+        tier: "",
+        note: "",
+        total: 1000,
+        explored,
+        here: false,
+        bosses: 9,
+        levels: Some((90, 100)),
+        chain,
+    }
+}
+
+fn land_text(region: &'static str, progress: &RegionProgress) -> String {
+    land_line("\u{2514}\u{2500} ", region, &[], 30, Some(progress))
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect()
+}
+
+#[test]
+fn a_land_row_reads_depth_in_zones_not_rooms() {
+    // Three zones into a twenty-zone country on 2% of its rooms: the row says
+    // 3/20, because depth is what tells a player how far in they are.
+    let deep = land("The Sundered Reaches", 20, Some((3, 20)));
+    assert!(land_text("The Sundered Reaches", &deep).contains("3/20"));
+    assert!(
+        !land_text("The Sundered Reaches", &deep).contains("20/1000"),
+        "room counts belong to the atlas list, not the land map"
+    );
+    // A land with no chain gets no depth column at all.
+    let flat = land("City Districts", 12, None);
+    let text = land_text("City Districts", &flat);
+    assert!(!text.contains('/'), "an unchained land shows no depth: {text}");
+}
+
+#[test]
+fn a_land_row_names_a_country_you_have_never_entered() {
+    // The name of a country was never the secret; the road to it is. An
+    // unwalked land renders its real name and an empty depth bar, and says
+    // nothing about bosses or levels even though the atlas row carries both.
+    let unseen = land("Kaelmyr, the Ashen Reach", 0, Some((0, 20)));
+    let text = land_text("Kaelmyr, the Ashen Reach", &unseen);
+    assert!(text.contains("Kaelmyr, the Ashen Reach"), "{text}");
+    assert!(!text.contains('?'), "no fog over the name: {text}");
+    assert!(text.contains("0/20"), "{text}");
+    assert!(!text.contains("100"), "no level band on the land map: {text}");
+    assert!(!text.contains('9'), "no boss count on the land map: {text}");
 }

@@ -48,6 +48,7 @@ pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
 pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
+    LazyLock::force(&LAND_TREE);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -1005,6 +1006,196 @@ pub fn dump_level(coords: &HashMap<RoomId, Coord>, center: RoomId, radius: i32) 
         out.push('\n');
     }
     out
+}
+
+// ---- The land graph: which countries touch which -------------------------
+//
+// A schematic, land-level view of the world for the map's second page. Derived
+// from the room graph and the atlas regions and nothing else: an edge exists
+// exactly where one room's exit lands in another region. It therefore knows
+// nothing about titles, bosses, or levels, and so cannot drift out of step
+// with the real gates in `svc::can_cross_progression_gate`. What a player
+// learns from it is where a land hangs, never what opens it.
+
+/// Region name -> the regions its rooms walk into, in atlas order. A region
+/// with no walking neighbours at all (the portal villages and the archipelago
+/// islands, which carry no directional exits) maps to an empty list.
+static LAND_LINKS: LazyLock<BTreeMap<&'static str, Vec<&'static str>>> =
+    LazyLock::new(|| derive_land_links(world()));
+
+/// The walking world as a tree rooted where a new character starts, plus the
+/// lands no walk reaches. Layout is fixed, so it is derived once.
+static LAND_TREE: LazyLock<LandMap> = LazyLock::new(|| derive_land_tree(world()));
+
+pub fn land_links() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
+    &LAND_LINKS
+}
+
+pub fn land_map() -> &'static LandMap {
+    &LAND_TREE
+}
+
+/// One land in the map, already laid out: the box-drawing prefix that draws
+/// its branch, and any link it has that the tree could not show (a land the
+/// tree reached by another road first).
+#[derive(Clone, Debug)]
+pub struct LandRow {
+    pub region: &'static str,
+    pub prefix: String,
+    /// Neighbours this row links to that are not its tree children, so the map
+    /// never hides a road just because the layout is a tree.
+    pub also: Vec<&'static str>,
+}
+
+/// The whole land map: the walk-tree, then the lands only the Ways reach.
+#[derive(Clone, Debug)]
+pub struct LandMap {
+    pub walked: Vec<LandRow>,
+    pub portal_only: Vec<&'static str>,
+}
+
+fn region_order() -> HashMap<&'static str, usize> {
+    super::world::region_names()
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| (name, i))
+        .collect()
+}
+
+fn derive_land_links(world: &World) -> BTreeMap<&'static str, Vec<&'static str>> {
+    let order = region_order();
+    let mut links: BTreeMap<&'static str, HashSet<&'static str>> =
+        order.keys().map(|name| (*name, HashSet::new())).collect();
+    for room in world.rooms.values() {
+        let Some((here, _)) = super::world::region_atlas_entry(room.id) else {
+            continue;
+        };
+        for dest in room.exits.values() {
+            let Some((there, _)) = super::world::region_atlas_entry(*dest) else {
+                continue;
+            };
+            if there != here {
+                links.entry(here).or_default().insert(there);
+            }
+        }
+    }
+    links
+        .into_iter()
+        .map(|(name, set)| {
+            let mut neighbours: Vec<&'static str> = set.into_iter().collect();
+            neighbours.sort_by_key(|n| order.get(n).copied().unwrap_or(usize::MAX));
+            (name, neighbours)
+        })
+        .collect()
+}
+
+fn derive_land_tree(world: &World) -> LandMap {
+    let order = region_order();
+    let links = &*LAND_LINKS;
+    let root = super::world::region_atlas_entry(world.start_room).map(|(name, _)| name);
+
+    // Breadth-first from the start, so every land hangs off the shortest road
+    // to it and the tree reads the way the journey actually goes.
+    let mut children: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut queue: VecDeque<&'static str> = VecDeque::new();
+    if let Some(root) = root {
+        seen.insert(root);
+        queue.push_back(root);
+    }
+    while let Some(here) = queue.pop_front() {
+        for &there in links.get(here).into_iter().flatten() {
+            if seen.insert(there) {
+                children.entry(here).or_default().push(there);
+                queue.push_back(there);
+            }
+        }
+    }
+
+    let mut walked = Vec::new();
+    if let Some(root) = root {
+        push_land_rows(
+            root,
+            None,
+            String::new(),
+            true,
+            true,
+            &children,
+            links,
+            &mut walked,
+        );
+    }
+    // An off-tree road joins two lands, and both ends would otherwise report
+    // it. Keep the mention on whichever land the tree draws first.
+    let mut mentioned: HashSet<(&'static str, &'static str)> = HashSet::new();
+    for row in &mut walked {
+        row.also.retain(|other| {
+            let pair = if row.region <= *other {
+                (row.region, *other)
+            } else {
+                (*other, row.region)
+            };
+            mentioned.insert(pair)
+        });
+    }
+
+    let mut portal_only: Vec<&'static str> = order
+        .keys()
+        .copied()
+        .filter(|name| !seen.contains(name))
+        .collect();
+    portal_only.sort_by_key(|n| order.get(n).copied().unwrap_or(usize::MAX));
+    LandMap {
+        walked,
+        portal_only,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_land_rows(
+    region: &'static str,
+    parent: Option<&'static str>,
+    prefix: String,
+    is_last: bool,
+    is_root: bool,
+    children: &HashMap<&'static str, Vec<&'static str>>,
+    links: &BTreeMap<&'static str, Vec<&'static str>>,
+    out: &mut Vec<LandRow>,
+) {
+    let kids = children.get(region).map(Vec::as_slice).unwrap_or_default();
+    // The road back to the parent is drawn by the branch itself, and a child is
+    // drawn below; what is left is a road the tree shape cannot show.
+    let also: Vec<&'static str> = links
+        .get(region)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|n| !kids.contains(n) && Some(*n) != parent)
+        .collect();
+    let (row_prefix, child_prefix) = if is_root {
+        (prefix.clone(), prefix.clone())
+    } else if is_last {
+        (format!("{prefix}\u{2514}\u{2500} "), format!("{prefix}   "))
+    } else {
+        (format!("{prefix}\u{251C}\u{2500} "), format!("{prefix}\u{2502}  "))
+    };
+    out.push(LandRow {
+        region,
+        prefix: row_prefix,
+        also,
+    });
+    for (i, &kid) in kids.iter().enumerate() {
+        push_land_rows(
+            kid,
+            Some(region),
+            child_prefix.clone(),
+            i + 1 == kids.len(),
+            false,
+            children,
+            links,
+            out,
+        );
+    }
 }
 
 #[cfg(test)]

@@ -250,6 +250,12 @@ pub struct RegionProgress {
     /// The (min, max) displayed level of the mobs homed in the region, or None
     /// where nothing hostile lives.
     pub levels: Option<(i32, i32)>,
+    /// For a region built as a chain of zones (`LAND_CHAINS`): how many of its
+    /// zones the player has set foot in, and how many there are. `None` for a
+    /// region with no chain, which the land map then draws as a single node.
+    /// This is depth, not room count: a land can be 3 zones deep on 2% of its
+    /// rooms, and depth is the number that tells a player how far they are.
+    pub chain: Option<(usize, usize)>,
 }
 
 /// The world's major regions for the atlas, each `(name, id-lo, id-hi, tier,
@@ -362,6 +368,75 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
     ),
 ];
 
+/// Every atlas region name, in the order the atlas lists them (roughly the
+/// journey outward). The land map lays its tree out in this order, so the two
+/// views read in the same sequence.
+pub fn region_names() -> Vec<&'static str> {
+    REGIONS.iter().map(|&(name, ..)| name).collect()
+}
+
+/// The regions built as a chain of zones, each `(region name, first room,
+/// rooms reserved per zone, zone count)`. Only the name is written out here;
+/// every number comes from the generator's own consts, so a land that grows a
+/// zone grows here too. A land absent from this table draws as a single node.
+const LAND_CHAINS: &[(&str, RoomId, RoomId, usize)] = &[
+    (
+        "The Frontier",
+        FRONTIER_BASE,
+        FRONTIER_W * FRONTIER_H,
+        FRONTIER_ZONES,
+    ),
+    (
+        "The Sundered Reaches",
+        REACHES_BASE,
+        REACHES_ZONE_STRIDE,
+        REACHES_ZONES,
+    ),
+    (
+        "Kaelmyr, the Ashen Reach",
+        KAELMYR_BASE,
+        KAELMYR_ZONE_STRIDE,
+        KAELMYR_ZONES,
+    ),
+    (
+        "The Sunderlakes",
+        LAKES_BASE,
+        LAKES_ZONE_STRIDE,
+        LAKES_ZONES,
+    ),
+    (
+        "Broceliande, the Greenwood",
+        BROCELIANDE_BASE,
+        BROCELIANDE_ZONE_STRIDE,
+        BROCELIANDE_ZONES,
+    ),
+    (
+        "Aelunor, the Faewood",
+        AELUNOR_BASE,
+        AELUNOR_ZONE_STRIDE,
+        AELUNOR_ZONES,
+    ),
+    (
+        "The Wildbound Waste",
+        WILDBOUND_BASE,
+        WILDBOUND_BIOME_STRIDE,
+        3,
+    ),
+];
+
+/// How deep into a chained land the player has walked: zones with at least one
+/// visited room, out of the land's zone count. `None` for an unchained land.
+fn chain_depth(region: &str, visited: &HashSet<RoomId>) -> Option<(usize, usize)> {
+    let &(_, base, stride, zones) = LAND_CHAINS.iter().find(|(name, ..)| *name == region)?;
+    let entered = (0..zones)
+        .filter(|z| {
+            let lo = base + (*z as RoomId) * stride;
+            visited.iter().any(|id| (lo..lo + stride).contains(id))
+        })
+        .count();
+    Some((entered, zones))
+}
+
 impl World {
     /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
     pub fn behavior_of(&self, spawn_id: u32) -> MobBehavior {
@@ -418,6 +493,7 @@ impl World {
                     here: (lo..hi).contains(&current),
                     bosses,
                     levels,
+                    chain: chain_depth(name, visited),
                 }
             })
             .collect()

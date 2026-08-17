@@ -130,6 +130,18 @@ fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
 /// and the walk it produced (`None` when no known-ground route exists).
 type CachedRoute = ((RoomId, RoomId), Option<Route>);
 
+/// The two pages of the `m` map. `m` cycles closed -> Field -> Lands -> closed,
+/// so one key walks the whole map from where your feet are to how the world
+/// hangs together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMode {
+    /// The room-level overhead field: your own neighbourhood, one land at a time.
+    Field,
+    /// The land graph: every country and the roads between them, no bosses and
+    /// no gates. The question it answers is "how do I get there".
+    Lands,
+}
+
 pub struct State {
     user_id: Uuid,
     session_id: Uuid,
@@ -169,6 +181,9 @@ pub struct State {
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
     map_camera: MapCamera,
+    /// Which page of the map `m` is showing. Always reopens on the field, so
+    /// `m` means the same thing every time it is pressed from the room.
+    map_mode: MapMode,
     /// A room the player has marked to travel back to (`x` on the map's
     /// crosshair, or Enter on a journal quest row). Local to the session and
     /// never persisted: it is a note to oneself, not world truth.
@@ -214,6 +229,7 @@ impl State {
             chat_buffer: None,
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
+            map_mode: MapMode::Field,
             map_dest: None,
             map_quests: true,
             route_cache: RefCell::new(None),
@@ -313,6 +329,32 @@ impl State {
     /// True when the graphical overhead world map is the active panel.
     pub fn map_open(&self) -> bool {
         self.panel == Panel::Map
+    }
+
+    /// Which page of the map is showing.
+    pub fn map_mode(&self) -> MapMode {
+        self.map_mode
+    }
+
+    /// `m`: closed -> the overhead field -> the land graph -> closed. One key
+    /// walks the whole map, from the ground under your feet out to how the
+    /// countries hang together.
+    pub fn cycle_map(&mut self) {
+        match (self.panel == Panel::Map, self.map_mode) {
+            (false, _) => {
+                self.map_mode = MapMode::Field;
+                self.set_panel(Panel::Map);
+            }
+            (true, MapMode::Field) => {
+                self.map_mode = MapMode::Lands;
+                self.cursor = 0;
+                self.list_scroll.set(0);
+            }
+            (true, MapMode::Lands) => {
+                self.map_mode = MapMode::Field;
+                self.set_panel(Panel::Room);
+            }
+        }
     }
 
     /// Flip between the live-map RPG view and the plain text MUD view. The

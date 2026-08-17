@@ -19,7 +19,7 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{ClickAction, Heading, Panel, State},
+    state::{ClickAction, Heading, MapMode, Panel, State},
     svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow},
     world::{Dir, MapCell, MiniMap, RoomId},
 };
@@ -283,7 +283,10 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Last frame's clickable chips are stale now; a bar that isn't drawn this
     // frame (map open, cramped view) must leave nothing behind to click.
     state.clear_combat_hits();
-    if view.classed && state.map_open() && map_fits(body) {
+    let land_page = state.map_open() && state.map_mode() == MapMode::Lands;
+    if view.classed && land_page && lands_fit(body) {
+        draw_land_map(frame, body, state, &view);
+    } else if view.classed && state.map_open() && !land_page && map_fits(body) {
         draw_world_map(frame, body, state, &view);
     } else {
         // A classed adventurer gets a clickable action bar on the bottom row -
@@ -346,6 +349,13 @@ fn stair_style() -> Style {
 /// inspector, and footer cost 4 rows before a single cell of map, and the
 /// legend needs the width. Below this, `draw_game` takes over: the text atlas
 /// in the side panel down to 50x9, then compact mode.
+/// The land graph is text, so it needs far less room than the overhead field:
+/// enough width for the deepest branch plus the longest country name and its
+/// depth column, and enough height to be worth scrolling.
+fn lands_fit(area: Rect) -> bool {
+    area.width >= 54 && area.height >= 10
+}
+
 fn map_fits(area: Rect) -> bool {
     // The footer grew by two lines (the symbol and marker legends split
     // apart) to make room for a fuller legend; bump the floor to match, so
@@ -809,6 +819,149 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         rows[2],
     );
 }
+
+/// The land graph: every country, the road each one hangs off, and how deep the
+/// chained ones run. It carries no bosses, no gate titles, and no level bands
+/// on purpose. The question it answers is "how do I get there"; what opens a
+/// road is still something you find by walking to it. Every land is named,
+/// explored or not, because the name of a country was never the secret.
+fn draw_land_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let map = super::worldmap::land_map();
+    let progress: std::collections::HashMap<&str, &super::world::RegionProgress> =
+        view.atlas.iter().map(|r| (r.name, r)).collect();
+
+    // One column for every branch and name, so the depth bars line up whatever
+    // shape the tree turns out to be.
+    let label_width = map
+        .walked
+        .iter()
+        .map(|r| r.prefix.chars().count() + r.region.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let total = view.atlas.len();
+    let walked = view.atlas.iter().filter(|r| r.explored > 0).count();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "The Lands of Lateania",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("   {walked} of {total} set foot in"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Which country hangs off which road. Walk one once and the Ways will carry you back.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::raw(""),
+    ];
+    for row in &map.walked {
+        lines.push(land_line(
+            &row.prefix,
+            row.region,
+            &row.also,
+            label_width,
+            progress.get(row.region).copied(),
+        ));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  No road runs to these; only the Ways",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    for region in &map.portal_only {
+        lines.push(land_line(
+            "  ",
+            region,
+            &[],
+            label_width,
+            progress.get(region).copied(),
+        ));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("m", "back to the room  [ ] scroll"));
+
+    // `[` / `]` scroll, clamped so the last line can reach the top but no
+    // further; the map is taller than a short terminal.
+    let height = area.height as usize;
+    let max_off = lines.len().saturating_sub(height);
+    let off = state.list_scroll().min(max_off);
+    state.set_list_scroll(off);
+    frame.render_widget(Paragraph::new(lines.split_off(off.min(lines.len()))), area);
+}
+
+/// One land: its branch of the tree, its name, and (for a land built as a chain
+/// of zones) how many of those zones the player has actually walked into. Depth,
+/// not room count: a country can be three zones deep on a handful of its rooms,
+/// and depth is the number that says how far in you are.
+fn land_line(
+    prefix: &str,
+    region: &str,
+    also: &[&'static str],
+    label_width: usize,
+    progress: Option<&super::world::RegionProgress>,
+) -> Line<'static> {
+    let explored = progress.is_some_and(|p| p.explored > 0);
+    let here = progress.is_some_and(|p| p.here);
+    let name_style = if here {
+        Style::default()
+            .fg(theme::MENTION())
+            .add_modifier(Modifier::BOLD)
+    } else if explored {
+        Style::default().fg(theme::TEXT_BRIGHT())
+    } else {
+        Style::default().fg(theme::TEXT_FAINT())
+    };
+    let pad = label_width.saturating_sub(prefix.chars().count() + region.chars().count());
+    let mut spans = vec![
+        Span::styled(
+            format!("  {prefix}"),
+            Style::default().fg(theme::BORDER()),
+        ),
+        Span::styled(region.to_string(), name_style),
+        Span::raw(" ".repeat(pad + 2)),
+    ];
+    if let Some((entered, zones)) = progress.and_then(|p| p.chain) {
+        let filled = (entered * CHAIN_BAR) / zones.max(1);
+        spans.push(Span::styled(
+            format!(
+                "{}{}",
+                "\u{2593}".repeat(filled),
+                "\u{2591}".repeat(CHAIN_BAR - filled)
+            ),
+            Style::default().fg(if entered > 0 {
+                theme::AMBER_DIM()
+            } else {
+                theme::TEXT_FAINT()
+            }),
+        ));
+        spans.push(Span::styled(
+            format!("  {entered}/{zones}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    if here {
+        spans.push(Span::styled(
+            "  \u{25C8} you are here",
+            Style::default().fg(theme::MENTION()),
+        ));
+    }
+    for other in also {
+        spans.push(Span::styled(
+            format!("  \u{2194} {other}"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// Cells in a chained land's depth bar.
+const CHAIN_BAR: usize = 10;
 
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;

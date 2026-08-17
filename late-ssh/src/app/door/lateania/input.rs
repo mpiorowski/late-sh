@@ -25,7 +25,8 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
-//   - Map: m overview atlas (pan around); x marks the crosshair room as
+//   - Map: m cycles overhead field (pan around) -> land graph (which country
+//     touches which, and how deep each one runs) -> closed; x marks the crosshair room as
 //     where you're headed, and the room panel then names the next exit to
 //     take until you get there; M toggles RPG mode (the live walk-around
 //     field beside the room) on/off - off is a plain text MUD.
@@ -350,8 +351,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'm' => {
-            // Toggle the whole-world overview atlas (pan-around map).
-            state.toggle_panel(Panel::Map);
+            // Cycle the map: the pan-around overhead field, then the land graph
+            // (every country and the roads between them), then closed.
+            state.cycle_map();
             InputAction::Handled
         }
         b'M' => {
