@@ -3,7 +3,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use super::data::{Perk, Resource};
-use super::event::{self, Active, Ctx, Outcome, Phase, Row};
+use super::event::{self, Active, Ctx, Event, Loot, Outcome, Phase, Row, Scene};
 use super::model::{Expedition, Game, Thieves, View};
 use super::world_data::Weapon;
 
@@ -276,5 +276,182 @@ fn the_unarmed_master_punches_twice_as_fast() {
         cooldown_after_punch(&mut game),
         1.0,
         "upstream halves the fists cooldown for the unarmed master"
+    );
+}
+
+#[test]
+fn drop_items_to_take_heavy_loot() {
+    let mut game = game();
+    // Default capacity is 10.0. Fill it with 10 CuredMeat (weight 1.0 each).
+    let mut trip = Expedition {
+        hp: 10,
+        water: 10,
+        outfit: [(Resource::CuredMeat, 10)].into_iter().collect(),
+        ..Expedition::default()
+    };
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+
+    // An event offering an IronSword (weight 3.0).
+    static LOOT: [Loot; 1] = [Loot {
+        item: Resource::IronSword,
+        min: 1,
+        max: 1,
+        chance: 1.0,
+    }];
+    static SCENE: Scene = Scene {
+        key: "start",
+        loot: &LOOT,
+        ..Scene::EMPTY
+    };
+    static EVENT: Event = Event {
+        key: "test loot drop",
+        title: "test",
+        available: &[],
+        scenes: &[SCENE],
+    };
+
+    let mut active = Active::start(&EVENT, &mut ctx, &mut rng, &mut out);
+    assert_eq!(active.loot.len(), 1);
+    assert_eq!(active.loot[0].item, Resource::IronSword);
+    assert_eq!(ctx.look().free_space(), 0.0);
+
+    // Row::Take(0) should be ready because dropping 3 cured meat covers the sword (weight 3.0).
+    assert!(active.row_ready(Row::Take(0), &ctx.look()));
+
+    // Pressing Take(0) when it doesn't fit transitions to Phase::DropFor { loot_index: 0 }.
+    let outcome = active.press(Row::Take(0), &mut ctx, &mut rng, &mut out);
+    assert_eq!(outcome, Outcome::Continue);
+    assert!(matches!(active.phase, Phase::DropFor { loot_index: 0 }));
+
+    // Check rows offered in DropFor phase.
+    let rows = active.rows(&ctx.look());
+    assert_eq!(
+        rows,
+        vec![
+            Row::Drop {
+                item: Resource::CuredMeat,
+                count: 3
+            },
+            Row::DropCancel
+        ]
+    );
+
+    // Press Row::Drop.
+    let outcome = active.press(
+        Row::Drop {
+            item: Resource::CuredMeat,
+            count: 3,
+        },
+        &mut ctx,
+        &mut rng,
+        &mut out,
+    );
+    assert_eq!(outcome, Outcome::Continue);
+    assert!(matches!(active.phase, Phase::Story));
+
+    // Verify outfit and loot state.
+    let trip = ctx.trip.as_ref().unwrap();
+    assert_eq!(trip.carrying(Resource::CuredMeat), 7);
+    assert_eq!(trip.carrying(Resource::IronSword), 1);
+    assert_eq!(trip.load(), 10.0);
+
+    // Ground loot should now contain the dropped CuredMeat (3 left).
+    let dropped = active.loot.iter().find(|l| l.item == Resource::CuredMeat);
+    assert!(dropped.is_some());
+    assert_eq!(dropped.unwrap().left, 3);
+}
+
+#[test]
+fn cancel_drop_restores_spoils_phase_without_changes() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 10,
+        water: 10,
+        outfit: [(Resource::CuredMeat, 10)].into_iter().collect(),
+        ..Expedition::default()
+    };
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+
+    static LOOT: [Loot; 1] = [Loot {
+        item: Resource::IronSword,
+        min: 1,
+        max: 1,
+        chance: 1.0,
+    }];
+    static SCENE: Scene = Scene {
+        key: "start",
+        loot: &LOOT,
+        ..Scene::EMPTY
+    };
+    static EVENT: Event = Event {
+        key: "test loot drop cancel",
+        title: "test",
+        available: &[],
+        scenes: &[SCENE],
+    };
+
+    let mut active = Active::start(&EVENT, &mut ctx, &mut rng, &mut out);
+    active.press(Row::Take(0), &mut ctx, &mut rng, &mut out);
+    assert!(matches!(active.phase, Phase::DropFor { loot_index: 0 }));
+
+    active.press(Row::DropCancel, &mut ctx, &mut rng, &mut out);
+    assert!(matches!(active.phase, Phase::Story));
+
+    let trip = ctx.trip.as_ref().unwrap();
+    assert_eq!(trip.carrying(Resource::CuredMeat), 10);
+    assert_eq!(trip.carrying(Resource::IronSword), 0);
+    assert_eq!(active.loot[0].left, 1);
+}
+
+#[test]
+fn unusable_ranged_weapon_without_ammo_falls_back_to_fists() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 10,
+        water: 10,
+        ..Expedition::default()
+    };
+    trip.add(Resource::Rifle, 1);
+    assert_eq!(trip.carrying(Resource::Bullets), 0);
+
+    let beast = find(&super::scenes_encounters::ENCOUNTERS, "snarling beast");
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+
+    let weapons = event::available_weapons(&ctx.look());
+    assert!(weapons.contains(&Weapon::Rifle));
+    assert!(weapons.contains(&Weapon::Fists));
+
+    let mut active = Active::start(beast, &mut ctx, &mut rng, &mut out);
+    assert!(matches!(active.phase, Phase::Fighting(_)));
+    assert!(!active.row_ready(Row::Attack(Weapon::Rifle), &ctx.look()));
+    assert!(active.row_ready(Row::Attack(Weapon::Fists), &ctx.look()));
+
+    active.press(Row::Attack(Weapon::Fists), &mut ctx, &mut rng, &mut out);
+    assert_eq!(
+        active
+            .fight()
+            .and_then(|fight| fight.weapon_cooldown.get(&Weapon::Fists).copied()),
+        Some(2.0)
     );
 }

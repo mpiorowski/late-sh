@@ -4181,13 +4181,15 @@ impl ChatState {
         let bytes = text.as_bytes();
         let mut trigger = None;
         for i in (0..bytes.len()).rev() {
-            if matches!(bytes[i], b'@' | b'/') {
-                // Valid if at start or preceded by whitespace (space or newline)
-                if i == 0 || bytes[i - 1].is_ascii_whitespace() {
-                    trigger = Some((i, bytes[i]));
-                }
+            // Valid if at start or preceded by whitespace (space or newline)
+            let is_mention =
+                matches!(bytes[i], b'@') && (i == 0 || bytes[i - 1].is_ascii_whitespace());
+            let is_command = matches!(bytes[i], b'/') && i == 0;
+            if is_mention || is_command {
+                trigger = Some((i, bytes[i]));
                 break;
             }
+
             // Stop scanning if we hit whitespace (no @ in this word)
             if bytes[i].is_ascii_whitespace() {
                 break;

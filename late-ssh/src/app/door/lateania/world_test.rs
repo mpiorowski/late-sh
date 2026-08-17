@@ -994,7 +994,7 @@ fn the_atlas_covers_every_continent_including_kaelmyr() {
 #[test]
 fn continent_waystones_stand_in_real_safe_rooms() {
     let world = seed_world();
-    for (label, room, _) in CONTINENT_WAYSTONES {
+    for (label, room) in CONTINENT_WAYSTONES {
         let r = world
             .room(*room)
             .unwrap_or_else(|| panic!("waystone room for {label} exists"));
@@ -1008,7 +1008,7 @@ fn continent_waystones_stand_in_real_safe_rooms() {
     }
     // Destinations are unique across the whole network.
     let dests = waystone_destinations();
-    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r, _)| *r).collect();
+    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r)| *r).collect();
     rooms.sort_unstable();
     rooms.dedup();
     assert_eq!(rooms.len(), dests.len(), "destination rooms are unique");
@@ -1925,6 +1925,62 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
 }
 
 #[test]
+fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
+    // The Waste is walked into off the Sahra Wastes with no title at all, and
+    // its authored stats sit in `tune_spawn_balance`'s gentle overworld bucket
+    // on purpose, so what its apexes pay has to answer to the biome they
+    // guard. The boss branch of `wildbound_loot` used to hand all three the
+    // catalog's top table, which meant the 1500hp Duskmire boss dropped - on
+    // every kill, since `roll_loot` never rolls for a boss - what the King Who
+    // Was Promised Nothing guards at the end of twenty Frontier zones.
+    use super::super::items::{FRONTIER_TIERS, frontier_loot};
+    let world = seed_world();
+    let tier_of = |loot: &'static [u32]| {
+        (0..FRONTIER_TIERS)
+            .find(|t| frontier_loot(*t) == loot)
+            .expect("the Waste borrows the Frontier catalog, one tier per table")
+    };
+
+    for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
+        let base = WILDBOUND_BASE + (b as u32) * WILDBOUND_BIOME_STRIDE;
+        let mobs: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| (base..base + WILDBOUND_BIOME_STRIDE).contains(&s.home))
+            .collect();
+        let boss = mobs.iter().find(|s| s.boss).expect("one apex per biome");
+        let boss_tier = tier_of(boss.loot);
+        let deepest_regular = mobs
+            .iter()
+            .filter(|s| !s.boss)
+            .map(|s| tier_of(s.loot))
+            .max()
+            .expect("the field is populated");
+
+        assert!(
+            boss_tier > deepest_regular,
+            "{} should out-pay {}'s own deep trash (tier {deepest_regular}), got tier {boss_tier}",
+            boss.name,
+            biome.zone
+        );
+        assert!(
+            boss_tier < FRONTIER_TIERS - 1,
+            "the catalog's top table belongs to the Frontier's crown, not {} (tier {boss_tier})",
+            boss.name
+        );
+        if let Some(next) = WILDBOUND_BIOMES.get(b + 1) {
+            assert!(
+                boss_tier <= next.loot_base,
+                "{} should not out-pay the shallow end of {} (tier {}), got tier {boss_tier}",
+                boss.name,
+                next.zone,
+                next.loot_base
+            );
+        }
+    }
+}
+
+#[test]
 fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
     // Aelunor is a lottery, not a shortcut past the Frontier. Two rules make
     // that true, and both live in `extend_aelunor`/`aelunor_loot`:
@@ -1962,9 +2018,7 @@ fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
     let deepest: Vec<&MobSpawn> = wood
         .iter()
         .copied()
-        .filter(|s| {
-            (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1
-        })
+        .filter(|s| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1)
         .collect();
     assert!(
         share(&deepest) < 25,
@@ -2139,4 +2193,32 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
     }
 }
 
-
+#[test]
+fn zone_level_bands_are_sane_and_cover_the_road() {
+    let world = seed_world();
+    // Every zone that homes a mob gets a band, and every band is ordered.
+    for spawn in &world.spawns {
+        let zone = world.room(spawn.home).expect("mob home exists").zone;
+        let (lo, hi) = world
+            .zone_band(zone)
+            .unwrap_or_else(|| panic!("zone {zone} homes a mob but has no band"));
+        assert!(lo <= hi, "zone {zone} band is inverted: {lo}-{hi}");
+        let level = spawn.level();
+        assert!(
+            (lo..=hi).contains(&level),
+            "zone {zone} band {lo}-{hi} misses its own mob at level {level}"
+        );
+    }
+    // The starting road reads as low-level ground, and a mob-less haven reads
+    // as no band at all rather than a made-up number.
+    let (lo, _) = world.zone_band("King's Road").expect("the road has mobs");
+    assert!(lo <= 3, "the King's Road should read as a starting zone");
+    assert!(world.zone_band("Hearthward Close").is_none());
+    // The atlas carries the same bands per region.
+    let progress = world.region_progress(&std::collections::HashSet::new(), 1);
+    let road = progress
+        .iter()
+        .find(|r| r.name.contains("King's Road"))
+        .expect("home region listed");
+    assert!(road.levels.is_some(), "the home region has hostile levels");
+}
