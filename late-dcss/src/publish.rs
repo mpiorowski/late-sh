@@ -49,6 +49,13 @@ const CRAWL_SUBDIR: &str = ".crawl";
 /// Morgue dumps: one file per finished game, written by crawl at game end.
 const MORGUE_SUBDIR: &str = "morgue";
 
+/// Where crawl actually appends the shared xlog files. This build leaves
+/// SAVEDIR at its default (`$HOME/.crawl`, docker/doors/dcss.Dockerfile) and
+/// passes no `-shared_dir`, so crawl falls back to writing `logfile` and
+/// `milestones` inside the save directory rather than beside it. The morgue
+/// does sit directly under `.crawl`, so only the xlog paths carry this.
+const SAVES_SUBDIR: &str = "saves";
+
 const TEXT_PLAIN: &str = "text/plain; charset=utf-8";
 
 /// Chunk size for streamed bodies. Only a buffer hint; `Body::from_stream`
@@ -147,7 +154,7 @@ async fn morgue_path(
 }
 
 async fn serve_log(publish: &Publish, log: PublishedLog, headers: &HeaderMap) -> Response {
-    let path = publish.crawl_dir.join(log.file_name());
+    let path = publish.crawl_dir.join(SAVES_SUBDIR).join(log.file_name());
     // Missing is normal until the first game finishes: crawl creates both files
     // on demand.
     let Ok(meta) = tokio::fs::metadata(&path).await else {

@@ -8,7 +8,7 @@ use ratatui::{
 
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 
-use crate::app::common::{markdown::render_body_to_lines, primitives::EDGE_GAP, theme};
+use crate::app::common::{markdown::render_body_to_lines, theme};
 
 use super::{
     data::country_label,
@@ -715,9 +715,6 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         Constraint::Length(1),                // Compose subsection heading
         Constraint::Length(1),                // composer keep-focused row
         Constraint::Length(1),                // breathing
-        Constraint::Length(1),                // Music subsection heading
-        Constraint::Length(1),                // start-with-music-muted row
-        Constraint::Length(1),                // breathing
         Constraint::Length(1),                // Display subsection heading
         Constraint::Length(1),                // flag fallback row
         Constraint::Length(1),                // breathing
@@ -797,19 +794,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         sections[8],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Music")), sections[10]);
-    frame.render_widget(
-        Paragraph::new(tweak_row_line(
-            state,
-            TweakRow::StartWithMusicMuted,
-            width,
-            "Start app with music muted",
-            toggle_span(state.draft().start_with_music_muted),
-        )),
-        sections[11],
-    );
-
-    frame.render_widget(Paragraph::new(section_heading("Display")), sections[13]);
+    frame.render_widget(Paragraph::new(section_heading("Display")), sections[10]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -818,10 +803,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Chat flag text fallback",
             toggle_span(state.draft().show_flag_fallback),
         )),
-        sections[14],
+        sections[11],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[16]);
+    frame.render_widget(Paragraph::new(section_heading("Startup")), sections[13]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -830,10 +815,10 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Land on Home page",
             toggle_span(state.draft().land_on_home),
         )),
-        sections[17],
+        sections[14],
     );
 
-    frame.render_widget(Paragraph::new(section_heading("Input")), sections[19]);
+    frame.render_widget(Paragraph::new(section_heading("Input")), sections[16]);
     frame.render_widget(
         Paragraph::new(tweak_row_line(
             state,
@@ -842,7 +827,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             "Interaction mode",
             interaction_mode_span(state.interaction_mode()),
         )),
-        sections[20],
+        sections[17],
     );
 
     if gem_strip_height > 0 {
@@ -850,7 +835,7 @@ fn draw_tweaks_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         // border so it doesn't crowd the dialog frame.
         const PAD_X: u16 = 2;
         const PAD_BOTTOM: u16 = 1;
-        let strip = sections[22];
+        let strip = sections[19];
         let pad_x = PAD_X.min(strip.width / 2);
         let pad_bottom = PAD_BOTTOM.min(strip.height);
         let gem_area = Rect::new(
@@ -1151,52 +1136,24 @@ fn feed_row_line(
         Style::default()
     };
 
-    let prefix = Span::styled(format!(" {marker} "), prefix_style);
-    let title = Span::styled(format!("{title:<28}  "), title_style);
-    let status = Span::styled(
-        error
-            .map(|err| format!("  error: {err}"))
-            .unwrap_or_default(),
-        error_style,
-    );
-    // A feed URL long enough to reach the modal border would be clipped flush
-    // against it; trim it to leave a blank cell there instead.
-    let url_budget =
-        width.saturating_sub(prefix.width() + title.width() + status.width() + EDGE_GAP);
-    let url = Span::styled(truncate_to_width(url, url_budget), url_style);
-
-    let used = prefix.width() + title.width() + url.width() + status.width();
-    let padding = width.saturating_sub(used);
+    let prefix = format!(" {marker} ");
+    let title_text = format!("{title:<28}  ");
+    let status_text = error
+        .map(|err| format!("  error: {err}"))
+        .unwrap_or_default();
+    let used = prefix.chars().count()
+        + title_text.chars().count()
+        + url.chars().count()
+        + status_text.chars().count();
+    let padding = width.saturating_sub(used.min(width));
 
     Line::from(vec![
-        prefix,
-        title,
-        url,
-        status,
+        Span::styled(prefix, prefix_style),
+        Span::styled(title_text, title_style),
+        Span::styled(url.to_string(), url_style),
+        Span::styled(status_text, error_style),
         Span::styled(" ".repeat(padding), trailing_style),
     ])
-}
-
-/// `text` cut to `budget` display cells, ellipsized when it does not fit, so a
-/// wide glyph costs the two cells it actually paints.
-fn truncate_to_width(text: &str, budget: usize) -> String {
-    if Span::raw(text).width() <= budget {
-        return text.to_string();
-    }
-    if budget <= 1 {
-        return "…".to_string();
-    }
-    let mut out = String::new();
-    for ch in text.chars() {
-        out.push(ch);
-        // Leave room for the ellipsis that replaces whatever is dropped.
-        if Span::raw(out.as_str()).width() + 1 > budget {
-            out.pop();
-            break;
-        }
-    }
-    out.push('…');
-    out
 }
 
 fn feed_add_line(

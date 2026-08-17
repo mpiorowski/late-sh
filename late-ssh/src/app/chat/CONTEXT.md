@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-15 (message rows moved to a uniform 2-cell gutter and stop a cell short of the right edge so a link never abuts the frame border or sidebar separator — `MENTION_BAR`/`BLANK_GUTTER`/`SELECTED_GUTTER` in `ui_text.rs` are all `MESSAGE_GUTTER` wide, see §12 Rendering Constraints; the stream header row now sizes its title and watcher count from the measured watch-link width instead of a hardcoded guess, see §11 Room Header)
+- Last updated: 2026-08-17 (the room header's stream row now sizes its title and watcher count from the measured watch-link width instead of a hardcoded guess, so the watch URL renders instead of being the thing that gets dropped; see §11 Room Header. Previously: composer `/ban` and `/unban` join `/kick` as room moderation commands routed through `ModerationService::room_command`; chat-originated room actions now name the room by id instead of slug, and an ownership-granted ban can no longer touch an active staff ban; see Room Membership Commands items 5-6 and `stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -481,7 +481,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 ### Room Header
 
 `ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row with a `/rules` hint when the room has rules, and a closing rule that separates the block from the conversation. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
-- The stream row (`stream_header_line`) fits everything around its watch link, not the other way round: `row_with_hint` drops a hint it cannot fit rather than wrapping it, and here the hint *is* the URL. So the hint is measured first, the title clips to whatever is left, and the ` · N watching` count drops when even that is not enough. A `watch: https://…/live/<id>` runs 50 cells, which is why stream capability ids moved from 32-char hex to 22-char base64url (`stream/CONTEXT.md` §2) — at hex width the link almost never rendered, and a title budget guessed ahead of the hint (a hardcoded `width - 30`) meant it was the link that got dropped rather than the title. The watcher count survives down to 73 columns.
+- The stream row (`stream_header_line`) fits everything around its watch link, not the other way round: `row_with_hint` drops a hint it cannot fit rather than wrapping it, and here the hint *is* the URL. So the hint is measured first, the title clips to whatever is left, and the ` · N watching` count drops when even that is not enough. A `watch: https://…/live/<id>` plus its load-bearing trailing cell runs 51 columns, which is why stream capability ids moved from 32-char hex to 22-char base64url (`stream/CONTEXT.md` §2): at hex width the link almost never rendered, and a title budget guessed ahead of the hint (a hardcoded `width - 30`) meant the link was what got dropped rather than the title. The watcher count survives down to 73 columns.
 - `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
 ---
@@ -506,7 +506,7 @@ Embedded game chat:
 Message rendering:
 - Local message storage is newest-first.
 - Rendering reverses to oldest-first rows with newest at the bottom.
-- Every message row opens with a fixed 2-cell gutter, so a body that starts or ends with a URL always has a blank cell between the link and the chrome — without it, terminals that linkify a whole row swallow the frame border or sidebar separator into the link. The three variants (`ui_text::MENTION_BAR` `"│ "` when the message mentions/replies to you, `ui_text::BLANK_GUTTER` `"  "` otherwise, `ui_text::SELECTED_GUTTER` `"▸ "` swapped over either on the selected row) must stay the same width or the left text edge jitters by a column as mentions arrive. `MESSAGE_GUTTER` is that width, and `build_author_prefix_and_segments*` bases its hit-test columns on it. Row text also stops `primitives::EDGE_GAP` short of the right edge. See the root `CONTEXT.md` §11 "Text never touches chrome" for the app-wide rule.
+- Selected messages replace the leading pad with a selection marker.
 - Highlighted reply targets get background styling across the whole row range.
 - Message wrapping is word-aware and uses Unicode display width, not codepoint count; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
@@ -673,11 +673,12 @@ Chat messages translate on demand (`t`) or, opt-in, automatically. The model cal
 2. `/private #room` opens the room-info form (`app/room_info_modal`) and creates the room with its topic/rules and `created_by` in one go.
 3. `/roominfo` opens the same form for the selected room. Authority is decided once in `ChatService::set_room_info`: mods for any room, otherwise the derived owner of a private topic room. `ChatState::room_info_authority` mirrors the rule for what the UI offers (and what the refusal banner says); DMs and game rooms have no info at all. A successful write broadcasts `RoomInfoUpdated`, which banners for the editor and refreshes the room list of every session sitting in that room, so no header waits on the 10s snapshot.
 4. `/rules` shows the selected room's rules in the shared overlay (`Overlay`, the same surface `/active` uses), titled `#slug rules`, one entry per stored line: rules are multi-line and a banner is one line. A room with no rules answers with a banner instead of an empty overlay.
-5. `/kick @user` runs the moderation service's room kick (`ModerationService::kick_from_room` then `room_action`), so membership removal, voice removal, audit log and the target's live session behave exactly as from the mod surface. A private room's owner is granted `Caps::KICK_FROM_ROOM` for that one room via `Permissions::as_room_owner`, which leaves the tier alone so staff stay out of reach.
-6. `/invite @user` requires caller membership and rejects DMs.
-7. `/leave` rejects permanent rooms.
-8. Admin `/fill-room #room` works only for public rooms, bulk-adds all users, and sets `auto_join=true`.
-9. DMs always preserve canonical endpoints; sending repairs membership for both endpoints.
+5. `/kick @user` runs the moderation service's room action (`ModerationService::room_command` then `room_action`), so membership removal, voice removal, audit log and the target's live session behave exactly as from the mod surface. A private room's owner is granted `Caps::KICK_FROM_ROOM` for that one room via `Permissions::as_room_owner`, which leaves the tier alone so staff stay out of reach. Chat-originated room actions name the room by id (`RoomRef::Id`), never by slug: slugs are only unique per namespace (a topic room and a stream room can share one), so the id is the only exact name of the room the actor is sitting in. The mod surface still resolves its typed slug.
+6. `/ban @user [duration] [reason]` and `/unban @user` run the same room action with `RoomModAction::Ban`/`Unban`. Staff act by rank anywhere; a streamer additionally holds the `STREAM_OWNER` grant (kick + ban + unban) inside their own stream room only — the full story, including why ban rather than kick and the voice-ticket refusal, lives in `stream/CONTEXT.md` §6. When the grant comes from ownership rather than rank, an *active* ban placed by another actor refuses both the unban and a re-ban, so a streamer can never lift or soften a staff decision on their room; expired bans are history and do not block.
+7. `/invite @user` requires caller membership and rejects DMs.
+8. `/leave` rejects permanent rooms.
+9. Admin `/fill-room #room` works only for public rooms, bulk-adds all users, and sets `auto_join=true`.
+10. DMs always preserve canonical endpoints; sending repairs membership for both endpoints.
 
 ### Notifications
 

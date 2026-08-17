@@ -69,8 +69,8 @@ fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
 }
 
 /// The board rail. The bespoke boards lead under a "Boards" header, every
-/// game board follows under "Games" (door triples, then Lateania), and the
-/// roster boards get one header per group. Returns the built lines and the
+/// game board follows under "Games" (Lateania, then the door triples), and
+/// the roster boards get one header per group. Returns the built lines and the
 /// index of the selected row, so the caller can keep it scrolled into view.
 fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
     let boards = state.boards();

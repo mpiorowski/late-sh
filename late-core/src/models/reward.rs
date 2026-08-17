@@ -30,7 +30,6 @@ pub const DCSS_ORB_REWARD_KEY: &str = "dcss_orb";
 pub const DCSS_WIN_REWARD_KEY: &str = "dcss_win";
 pub const BROGUE_ESCAPE_REWARD_KEY: &str = "brogue_escape";
 pub const BROGUE_MASTERY_REWARD_KEY: &str = "brogue_mastery";
-pub const SSNAKE_WIN_REWARD_KEY: &str = "ssnake_win";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
 pub const TRON_WIN_4P_REWARD_KEY: &str = "tron_win_4p";

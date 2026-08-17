@@ -6,47 +6,12 @@ use ratatui::{
 use crate::app::chat::action::parse_action_body;
 use crate::app::chat::state::TranslationDisplay;
 use crate::app::chat::svc::ReportKind;
-use crate::app::common::primitives::EDGE_GAP;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
-
-/// Cells every message row spends on its left gutter. The mention bar is
-/// painted into the first of them, so a body that opens with a URL still has
-/// a blank cell between the link and the bar — without it a terminal's URL
-/// detection glues `│` onto the front of the link.
-pub(super) const MESSAGE_GUTTER: usize = BLANK_GUTTER.len();
-
-/// The gutter itself: the mention bar plus its blank cell when the message is
-/// for us, two blanks otherwise, so body text lands in the same column either
-/// way and the left edge does not jitter as mentions arrive.
-fn gutter(mentions_us: bool) -> Span<'static> {
-    if mentions_us {
-        Span::styled(MENTION_BAR, Style::default().fg(theme::MENTION()))
-    } else {
-        Span::raw(BLANK_GUTTER)
-    }
-}
-
-/// The mention/reply gutter, recolored per attention kind by `ui::visible_chat_rows`.
-pub(super) const MENTION_BAR: &str = "│ ";
-
-/// The gutter on a row with nothing to flag.
-pub(super) const BLANK_GUTTER: &str = "  ";
-
-/// The gutter on the selected row; `ui::visible_chat_rows` swaps it in over
-/// either of the other two, so all three must be the same width.
-pub(super) const SELECTED_GUTTER: &str = "▸ ";
-
-/// Width available to a message row's own text: the full column minus the
-/// gutter it starts with and a blank cell at the far edge, so a wrapped URL
-/// never ends flush against the frame border or the sidebar separator.
-fn text_width(width: usize) -> usize {
-    width.saturating_sub(EDGE_GAP).max(1)
-}
 
 /// The flair painted over the bare username inside the author header: the
 /// tavern drunk state as a trailing `(word)` label and/or a bought 24h
@@ -131,7 +96,11 @@ pub(super) fn wrap_message_to_lines(
     continuation: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let pad = gutter(mentions_us);
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
 
     if !continuation {
         let mut spans = vec![pad.clone()];
@@ -150,12 +119,7 @@ pub(super) fn wrap_message_to_lines(
         return lines;
     }
 
-    lines.extend(render_body_to_lines(
-        body,
-        text_width(width),
-        pad,
-        body_style,
-    ));
+    lines.extend(render_body_to_lines(body, width, pad, body_style));
 
     lines
 }
@@ -176,7 +140,11 @@ pub(super) fn wrap_chat_entry_to_lines(
     reactions: &[ChatMessageReactionSummary],
     translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
-    let pad = gutter(mentions_us);
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
     let news_payload = system_text
         .is_none()
         .then(|| parse_news_payload(body))
@@ -274,7 +242,7 @@ fn translation_lines(
         TranslationDisplay::Failed | TranslationDisplay::SameLanguage => Vec::new(),
         TranslationDisplay::Ready(text) => {
             // pad + " ↳ " prefix on the first row, matching indent after.
-            let budget = width.saturating_sub(MESSAGE_GUTTER + 3 + EDGE_GAP).max(8);
+            let budget = width.saturating_sub(5).max(8);
             wrap_plain_display_width(text, budget)
                 .into_iter()
                 .enumerate()
@@ -304,8 +272,7 @@ pub(crate) fn parse_system_line(body: &str) -> Option<&str> {
 /// System lines render as exactly one authorless row — a stacked run must
 /// stay dense — so overlong text is truncated, never wrapped.
 fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
-    // gutter + "· " + right breathing room
-    let budget = width.saturating_sub(MESSAGE_GUTTER + 2 + EDGE_GAP);
+    let budget = width.saturating_sub(4); // pad + "· " + right breathing room
     let shown: String = if text.chars().count() > budget && budget > 1 {
         let mut cut: String = text.chars().take(budget - 1).collect();
         cut.push('…');
@@ -314,7 +281,7 @@ fn wrap_system_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
         text.to_string()
     };
     vec![Line::from(vec![
-        Span::raw(BLANK_GUTTER),
+        Span::raw(" "),
         Span::styled("· ", Style::default().fg(theme::TEXT_FAINT())),
         Span::styled(
             shown,
@@ -332,14 +299,13 @@ fn wrap_action_to_lines(
     body_style: Style,
     mentions_us: bool,
 ) -> Vec<Line<'static>> {
-    let pad = gutter(mentions_us);
+    let pad = if mentions_us {
+        Span::styled("│", Style::default().fg(theme::MENTION()))
+    } else {
+        Span::raw(" ")
+    };
     let style = body_style.add_modifier(Modifier::ITALIC);
-    render_body_to_lines(
-        &format!("* {prefix} {action}"),
-        text_width(width),
-        pad,
-        style,
-    )
+    render_body_to_lines(&format!("* {prefix} {action}"), width, pad, style)
 }
 
 pub(super) struct WrappedChatEntry {
@@ -422,7 +388,7 @@ fn wrap_news_to_lines(
     let body_style = Style::default().fg(theme::CHAT_BODY());
     let meta_style = Style::default().fg(theme::TEXT_FAINT());
 
-    let pad = Span::raw(BLANK_GUTTER);
+    let pad = Span::raw(" ");
 
     lines.push(Line::from(vec![
         pad.clone(),
@@ -442,7 +408,7 @@ fn wrap_news_to_lines(
         return lines;
     }
 
-    let inner_width = width.saturating_sub(MESSAGE_GUTTER + EDGE_GAP).max(1);
+    let inner_width = width.saturating_sub(2).max(1);
     let mut ascii_lines = format_news_ascii_art_for_display(&payload.ascii_art, 6);
     if ascii_lines.is_empty() {
         ascii_lines.push("........".to_string());
@@ -545,7 +511,7 @@ fn wrap_report_to_lines(
     let border_style = Style::default().fg(theme::BORDER());
     let body_style = Style::default().fg(theme::CHAT_BODY());
     let meta_style = Style::default().fg(theme::TEXT_FAINT());
-    let pad = Span::raw(BLANK_GUTTER);
+    let pad = Span::raw(" ");
 
     let mut lines = vec![Line::from(vec![
         pad.clone(),
@@ -571,20 +537,15 @@ fn wrap_report_to_lines(
         return lines;
     }
 
-    let inner_width = width.saturating_sub(MESSAGE_GUTTER + EDGE_GAP).max(1);
+    let inner_width = width.saturating_sub(2).max(1);
     let rule = || {
         Line::from(vec![
-            Span::raw(BLANK_GUTTER),
+            Span::raw(" "),
             Span::styled("─".repeat(inner_width), border_style),
         ])
     };
     lines.push(rule());
-    lines.extend(render_body_to_lines(
-        &body,
-        text_width(width),
-        pad,
-        body_style,
-    ));
+    lines.extend(render_body_to_lines(&body, width, pad, body_style));
     lines.push(rule());
     lines
 }
@@ -601,7 +562,7 @@ fn render_reaction_footer_lines(
     }
 
     let mut footer_lines: Vec<Line<'static>> = Vec::new();
-    let available_width = width.saturating_sub(MESSAGE_GUTTER + EDGE_GAP).max(1);
+    let available_width = width.saturating_sub(1).max(1);
     let mut current_width = 0usize;
     let mut current_spans = vec![pad.clone()];
 

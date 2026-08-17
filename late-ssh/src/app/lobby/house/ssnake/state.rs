@@ -1,11 +1,16 @@
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::svc::{SsnakeService, SsnakeSnapshot};
+use super::svc::{SsnakeChipKind, SsnakeService, SsnakeSnapshot};
 
-/// Seat arrays are always this size; the per-room seat count (2-4) lives in
+/// Seat arrays are always this size; the per-room seat count (2-5) lives in
 /// the table settings and unused trailing seats simply stay empty.
-pub const MAX_SEATS: usize = 4;
+pub const MAX_SEATS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SsnakeColor {
@@ -13,6 +18,7 @@ pub enum SsnakeColor {
     Red,
     Blue,
     Purple,
+    Cyan,
 }
 
 impl SsnakeColor {
@@ -21,7 +27,8 @@ impl SsnakeColor {
             0 => Self::Green,
             1 => Self::Red,
             2 => Self::Blue,
-            _ => Self::Purple,
+            3 => Self::Purple,
+            _ => Self::Cyan,
         }
     }
 
@@ -31,6 +38,7 @@ impl SsnakeColor {
             Self::Red => "Red",
             Self::Blue => "Blue",
             Self::Purple => "Purple",
+            Self::Cyan => "Cyan",
         }
     }
 }
@@ -64,7 +72,9 @@ impl Direction {
 }
 
 /// What a snake is doing this tick. `Idle` is the just-(re)spawned state from
-/// the original: the snake sits still until its first steer.
+/// the original: the snake sits still until its first steer. Only `Moving`
+/// snakes count toward the payout multiplier, so parking a body on the board
+/// earns nobody anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Motion {
     Idle,
@@ -72,17 +82,13 @@ pub enum Motion {
     Dying,
 }
 
+/// The arena never ends; it only sleeps. `Idle` is an empty board nobody is
+/// sitting at, `Running` is the tick loop turning. There is no match to win,
+/// start, or finish.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SsnakePhase {
-    Waiting,
+    Idle,
     Running,
-    Finished,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SsnakeOutcome {
-    Winner { seat_index: usize },
-    Draw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,11 +97,35 @@ pub struct Pos {
     pub y: u16,
 }
 
+/// How long a `+5 chips` pop stays on screen. Long enough to read between
+/// bites, short enough that a fast eater's pops do not pile up.
+pub const CHIP_POP_TTL: Duration = Duration::from_millis(2500);
+/// Only the newest few pops are worth showing; anything older has been read.
+const MAX_CHIP_POPS: usize = 3;
+
+/// One chip movement still on screen.
+#[derive(Clone, Copy, Debug)]
+pub struct ChipPop {
+    pub delta: i64,
+    pub kind: SsnakeChipKind,
+    shown_at: Instant,
+}
+
+impl ChipPop {
+    pub fn is_expired(&self) -> bool {
+        self.shown_at.elapsed() >= CHIP_POP_TTL
+    }
+}
+
 pub struct State {
     user_id: Uuid,
-    snapshot: SsnakeSnapshot,
+    snapshot: Arc<SsnakeSnapshot>,
     svc: SsnakeService,
-    snapshot_rx: watch::Receiver<SsnakeSnapshot>,
+    snapshot_rx: watch::Receiver<Arc<SsnakeSnapshot>>,
+    /// Our seat's running tally as of the last snapshot we popped from. The
+    /// difference against the next one is the movement to pop.
+    last_net: i64,
+    pops: Vec<ChipPop>,
 }
 
 impl State {
@@ -107,6 +137,8 @@ impl State {
             snapshot,
             svc,
             snapshot_rx,
+            last_net: 0,
+            pops: Vec::new(),
         }
     }
 
@@ -114,15 +146,54 @@ impl State {
         self.svc.room_id()
     }
 
-    /// Returns true when a snapshot landed. The round loop publishes at
-    /// its speed cadence and self-terminates outside Running, so the peek
-    /// covers all animation.
+    /// Returns true when anything visible moved. The arena loop publishes at
+    /// its speed cadence and self-terminates once the last snake leaves, so
+    /// the snapshot peek covers all animation; pop expiry is polled here too,
+    /// since a pop can outlive the last snapshot.
     pub fn tick(&mut self) -> bool {
+        let before = self.pops.len();
+        self.pops.retain(|pop| !pop.is_expired());
+        let mut changed = self.pops.len() != before;
         if self.snapshot_rx.has_changed().unwrap_or(false) {
             self.snapshot = self.snapshot_rx.borrow_and_update().clone();
-            return true;
+            self.pop_own_movement();
+            changed = true;
         }
-        false
+        changed
+    }
+
+    /// Pop what the arena just paid (or charged) this session. Our seat's
+    /// running tally is already in the shared snapshot, so the delta between
+    /// two snapshots *is* the movement: no per-user event channel needed, and
+    /// a seat we no longer hold simply resets the baseline.
+    fn pop_own_movement(&mut self) {
+        let Some(seat) = self.seat_index() else {
+            self.last_net = 0;
+            return;
+        };
+        let player = &self.snapshot.players[seat];
+        let net = player.chips;
+        if net == self.last_net {
+            return;
+        }
+        let delta = net - self.last_net;
+        self.last_net = net;
+        let Some(kind) = player.last_chip else {
+            return;
+        };
+        self.pops.push(ChipPop {
+            delta,
+            kind,
+            shown_at: Instant::now(),
+        });
+        if self.pops.len() > MAX_CHIP_POPS {
+            self.pops.remove(0);
+        }
+    }
+
+    /// Live pops, oldest first.
+    pub fn chip_pops(&self) -> &[ChipPop] {
+        &self.pops
     }
 
     pub fn snapshot(&self) -> &SsnakeSnapshot {
@@ -152,16 +223,19 @@ impl State {
         self.svc.leave_seat_task(self.user_id);
     }
 
-    pub fn start_round(&self) {
-        self.svc.start_round_task(self.user_id);
-    }
-
     pub fn steer(&self, direction: Direction) {
         self.svc.steer_task(self.user_id, direction);
     }
 
-    pub fn select_arena(&self, delta: isize) {
-        self.svc.select_level_task(self.user_id, delta);
+    pub fn vote_skip(&self) {
+        self.svc.vote_skip_task(self.user_id);
+    }
+
+    /// Whether this session already has a live vote against the current
+    /// arena, so the sidebar can say "voted" rather than re-offer the key.
+    pub fn has_voted_skip(&self) -> bool {
+        self.seat_index()
+            .is_some_and(|seat| self.snapshot.skip_votes[seat])
     }
 
     pub fn touch_activity(&self) {

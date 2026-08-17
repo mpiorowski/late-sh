@@ -44,18 +44,21 @@ pub(crate) enum Standings<'a> {
 }
 
 impl Board {
-    /// Page order: the bespoke boards, then the Games group (each door's
-    /// board triple, then the Lateania snapshot boards), then daily puzzles,
+    /// Page order: the bespoke boards, then the Games group (the Lateania
+    /// snapshot boards, then each door's board triple), then daily puzzles,
     /// then score games, each roster in its declaration order.
     pub(crate) fn all() -> Vec<Self> {
-        let mut boards = vec![Self::TopChips, Self::ArcadeWins];
+        let mut boards = vec![
+            Self::TopChips,
+            Self::ArcadeWins,
+            Self::LateaniaAdventurers,
+            Self::LateaniaFrontier,
+        ];
         for &game in DoorGame::ALL {
             boards.push(Self::DoorWins(game));
             boards.push(Self::DoorDepth(game));
             boards.push(Self::DoorScore(game));
         }
-        boards.push(Self::LateaniaAdventurers);
-        boards.push(Self::LateaniaFrontier);
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
         boards

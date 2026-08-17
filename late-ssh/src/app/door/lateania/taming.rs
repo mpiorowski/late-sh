@@ -610,6 +610,7 @@ pub fn mount_stride(species_key: &str) -> Option<u8> {
 }
 
 /// A `const` constructor for a tameable species (keeps the table readable).
+/// Every classic/Wildbound beast walks the shared `PET_SKILLS` ladder.
 const fn beast(
     key: &'static str,
     name: &'static str,
@@ -618,6 +619,32 @@ const fn beast(
     base_hp: i32,
     base_attack: i32,
     desc: &'static str,
+) -> PetSpecies {
+    beast_with_skills(
+        key,
+        name,
+        glyph,
+        tame_level,
+        base_hp,
+        base_attack,
+        desc,
+        PET_SKILLS,
+    )
+}
+
+/// Like [`beast`], but with its own auto-skill ladder instead of the shared
+/// one - what makes the five Aelunor companions genuinely play differently
+/// from each other and from the classic fifty.
+#[allow(clippy::too_many_arguments)]
+const fn beast_with_skills(
+    key: &'static str,
+    name: &'static str,
+    glyph: &'static str,
+    tame_level: i32,
+    base_hp: i32,
+    base_attack: i32,
+    desc: &'static str,
+    skills: &'static [PetSkill],
 ) -> PetSpecies {
     PetSpecies {
         key,
@@ -628,6 +655,7 @@ const fn beast(
         base_attack,
         desc,
         tame_level,
+        skills,
     }
 }
 
@@ -642,27 +670,30 @@ pub fn tameable_by_key(key: &str) -> Option<&'static PetSpecies> {
 #[derive(Clone, Copy, Debug)]
 pub struct WildBeast {
     pub home: RoomId,
-    /// Index into `TAMEABLE` of the beast that roams here.
+    /// Index into the *combined* `TAMEABLE` then `AELUNOR_TAMEABLE` pool -
+    /// resolve with `beast_species`, never by indexing `TAMEABLE` directly.
     pub species: usize,
 }
 
-/// Every place a tameable beast roams, keyed to a Broceliande room. Built once
-/// and cached: each of the fifty beasts is placed in the zone whose depth suits
-/// its taming difficulty (small easy beasts near the eaves, the great wyrms in
-/// the deep). Beasts gather at that zone's **forest gate** - the entrance room,
-/// which is always real and safe (offset 0), so every beast is guaranteed a live
-/// home room a tamer can reach and work at in peace. Several beasts share a
-/// gate, reading as a menagerie at each woodward-holt.
+/// Every place a tameable beast roams: the classic fifty at a Broceliande
+/// forest gate, plus the five Aelunor companions at an Aelunor wood-gate
+/// (`world::aelunor_entrances` - never offset 0, since every Aelunor zone is
+/// cavern-carved and offset 0 is always solid rock there; Broceliande's own
+/// maze zones are the one place offset 0 genuinely is the entrance, since
+/// `carve_maze`'s DFS always starts at cell 0). Built once and cached: each
+/// beast is placed in the zone whose depth suits its taming difficulty, at
+/// that zone's entrance, which is always real and safe. Several beasts can
+/// share a gate, reading as a menagerie at each woodward-holt.
 pub fn wild_beasts() -> &'static [WildBeast] {
     use std::sync::OnceLock;
     static BEASTS: OnceLock<Vec<WildBeast>> = OnceLock::new();
     BEASTS
         .get_or_init(|| {
             // Map each beast onto a zone by its rank (0..50 -> zone 0..N), and
-            // home it at that zone's entrance gate (offset 0), which always
-            // exists whether the zone was carved as a maze or a sparse cavern.
+            // home it at that zone's entrance gate (offset 0, always real for
+            // Broceliande's maze-carved DFS - see the fn doc comment).
             let zones = BROCELIANDE_ZONE_COUNT.max(1);
-            TAMEABLE
+            let mut beasts: Vec<WildBeast> = TAMEABLE
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
@@ -670,7 +701,20 @@ pub fn wild_beasts() -> &'static [WildBeast] {
                     let home = BROCELIANDE_BASE + zone as u32 * BROCELIANDE_ZONE_STRIDE;
                     WildBeast { home, species: i }
                 })
-                .collect()
+                .collect();
+
+            let entrances = super::world::aelunor_entrances();
+            let ae_zones = entrances.len().max(1);
+            beasts.extend(AELUNOR_TAMEABLE.iter().enumerate().filter_map(|(i, _)| {
+                let zone = (i * ae_zones / AELUNOR_TAMEABLE.len()).min(ae_zones - 1);
+                entrances.get(zone).map(|&home| WildBeast {
+                    home,
+                    // Continues past TAMEABLE's own index range - see
+                    // `beast_species`.
+                    species: TAMEABLE.len() + i,
+                })
+            }));
+            beasts
         })
         .as_slice()
 }
@@ -728,6 +772,8 @@ pub enum PetSkillEffect {
     Guard,
     /// A killing pounce: a heavy burst of bonus damage.
     Pounce,
+    /// A mend: heals the owner directly (fae/druidic pets only).
+    Mend,
 }
 
 /// One unlockable pet auto-skill.
@@ -789,6 +835,227 @@ pub const PET_SKILLS: &[PetSkill] = &[
 /// The pet auto-skills unlocked at a given pet level (those with `level <= lvl`).
 pub fn pet_skills_at(level: i32) -> impl Iterator<Item = &'static PetSkill> {
     PET_SKILLS.iter().filter(move |s| s.level <= level)
+}
+
+// ---- Aelunor companions: five tameable beasts, each with its own spells ---
+//
+// Unlike the fifty classic beasts (all sharing `PET_SKILLS`), each of these
+// carries its own auto-skill ladder, so they play differently from each
+// other, not just look different. Home of the region's own species: a
+// support healer, a tank, a glass-cannon, a bleed hybrid, and an apex
+// all-rounder. Placed one per gate at five of Aelunor's twelve zones (see
+// `aelunor_wild_beasts`), so each is genuinely exclusive to Aelunor.
+//
+// KEYS ARE PERSISTED - never reorder or rename.
+
+const AELUNOR_FAERIE_SKILLS: &[PetSkill] = &[
+    PetSkill {
+        level: 2,
+        name: "Fae Mending",
+        effect: PetSkillEffect::Mend,
+        cooldown: 4,
+        power: 10,
+    },
+    PetSkill {
+        level: 5,
+        name: "Glamour",
+        effect: PetSkillEffect::Roar,
+        cooldown: 6,
+        power: 5,
+    },
+    PetSkill {
+        level: 8,
+        name: "Thorn Rend",
+        effect: PetSkillEffect::Rend,
+        cooldown: 4,
+        power: 5,
+    },
+];
+
+const AELUNOR_SAPLING_SKILLS: &[PetSkill] = &[
+    PetSkill {
+        level: 2,
+        name: "Root Guard",
+        effect: PetSkillEffect::Guard,
+        cooldown: 5,
+        power: 10,
+    },
+    PetSkill {
+        level: 6,
+        name: "Sap Mending",
+        effect: PetSkillEffect::Mend,
+        cooldown: 6,
+        power: 14,
+    },
+    PetSkill {
+        level: 10,
+        name: "Heartwood Slam",
+        effect: PetSkillEffect::SavageBite,
+        cooldown: 5,
+        power: 10,
+    },
+];
+
+const AELUNOR_OWL_SKILLS: &[PetSkill] = &[
+    PetSkill {
+        level: 2,
+        name: "Talon Strike",
+        effect: PetSkillEffect::SavageBite,
+        cooldown: 3,
+        power: 8,
+    },
+    PetSkill {
+        level: 6,
+        name: "Silent Stoop",
+        effect: PetSkillEffect::Pounce,
+        cooldown: 5,
+        power: 14,
+    },
+    PetSkill {
+        level: 10,
+        name: "Moonlit Dive",
+        effect: PetSkillEffect::Pounce,
+        cooldown: 6,
+        power: 22,
+    },
+];
+
+const AELUNOR_FOX_SKILLS: &[PetSkill] = &[
+    PetSkill {
+        level: 3,
+        name: "Briar Rend",
+        effect: PetSkillEffect::Rend,
+        cooldown: 4,
+        power: 5,
+    },
+    PetSkill {
+        level: 7,
+        name: "Druid's Blessing",
+        effect: PetSkillEffect::Roar,
+        cooldown: 6,
+        power: 6,
+    },
+    PetSkill {
+        level: 10,
+        name: "Pounce from the Bracken",
+        effect: PetSkillEffect::Pounce,
+        cooldown: 7,
+        power: 18,
+    },
+];
+
+const AELUNOR_HOUND_SKILLS: &[PetSkill] = &[
+    PetSkill {
+        level: 2,
+        name: "Wild Hunt Bite",
+        effect: PetSkillEffect::SavageBite,
+        cooldown: 3,
+        power: 7,
+    },
+    PetSkill {
+        level: 5,
+        name: "Baying Rend",
+        effect: PetSkillEffect::Rend,
+        cooldown: 4,
+        power: 5,
+    },
+    PetSkill {
+        level: 7,
+        name: "Huntmaster's Guard",
+        effect: PetSkillEffect::Guard,
+        cooldown: 6,
+        power: 12,
+    },
+    PetSkill {
+        level: 9,
+        name: "Second Wind",
+        effect: PetSkillEffect::Mend,
+        cooldown: 7,
+        power: 16,
+    },
+    PetSkill {
+        level: 10,
+        name: "the Wild Hunt's Kill",
+        effect: PetSkillEffect::Pounce,
+        cooldown: 7,
+        power: 20,
+    },
+];
+
+/// The five tameable companions of Aelunor, ordered easy to hard. Stats climb
+/// with `tame_level` under the same "no beast Pareto-dominated by an easier
+/// one" rule as the classic fifty: same-tier beasts may trade attack for hp,
+/// but nothing higher may lose on both axes to something cheaper. The rule
+/// spans both pools, since a player grinds one Animal Taming level and takes
+/// the best beast it opens wherever it roams - `taming_test`'s
+/// `no_beast_is_out_classed_by_an_easier_one` walks the combined list, so a
+/// stat edit here is checked against every Broceliande beast too.
+pub const AELUNOR_TAMEABLE: &[PetSpecies] = &[
+    beast_with_skills(
+        "ae_faerie",
+        "Moonlit Faerie",
+        "\u{1F9DA}",
+        8,
+        58,
+        9,
+        "a small fae creature trailing cold moonlight, quick to heal what it loves",
+        AELUNOR_FAERIE_SKILLS,
+    ),
+    beast_with_skills(
+        "ae_sapling",
+        "Woodkin Sapling",
+        "\u{1F331}",
+        18,
+        130,
+        11,
+        "a walking sapling of the deep wood, slow, patient, and hard to fell",
+        AELUNOR_SAPLING_SKILLS,
+    ),
+    beast_with_skills(
+        "ae_owl",
+        "High Elf Owl",
+        "\u{1F989}",
+        26,
+        70,
+        22,
+        "a silver-eyed owl bonded to the high elves, all speed and talon",
+        AELUNOR_OWL_SKILLS,
+    ),
+    beast_with_skills(
+        "ae_fox",
+        "Druid's Fox",
+        "\u{1F98A}",
+        34,
+        110,
+        21,
+        "a russet fox that runs at a druid's heel and fights with the wood's own cunning",
+        AELUNOR_FOX_SKILLS,
+    ),
+    beast_with_skills(
+        "ae_hound",
+        "Wild Hunt Hound",
+        "\u{1F415}",
+        44,
+        200,
+        28,
+        "a spectral hound of the Wild Hunt, the rarest and deadliest companion Aelunor offers",
+        AELUNOR_HOUND_SKILLS,
+    ),
+];
+
+/// Resolve a `WildBeast.species` index to its `PetSpecies`, across **both**
+/// pools `wild_beasts()` can place: the classic fifty (`TAMEABLE`, indices
+/// `0..TAMEABLE.len()`) and the five Aelunor companions (`AELUNOR_TAMEABLE`,
+/// indices continuing on from there). `wild_beasts()` is the one thing that
+/// actually builds `WildBeast.species` values, so this is its match - every
+/// external consumer of a `WildBeast` (the tame panel, the tame action, the
+/// map POI index) should resolve through this, never index `TAMEABLE`
+/// directly, or an Aelunor placement panics on an out-of-range index.
+pub fn beast_species(index: usize) -> &'static PetSpecies {
+    TAMEABLE
+        .get(index)
+        .or_else(|| AELUNOR_TAMEABLE.get(index - TAMEABLE.len()))
+        .expect("WildBeast.species always indexes TAMEABLE then AELUNOR_TAMEABLE")
 }
 
 /// The Animal Taming trade's stable key (for persistence/display parity).

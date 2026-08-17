@@ -48,6 +48,7 @@ pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
 pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
+    LazyLock::force(&LAND_LINKS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -445,7 +446,16 @@ pub struct Poi {
     /// A tameable wild beast roaming here, if any.
     pub tameable: Option<&'static str>,
     /// A harvestable resource here (the gather trade worked at it), if any.
-    pub gather: Option<&'static str>,
+    pub gather: Option<GatherPoi>,
+}
+
+/// A gather node's skill and level gate, for the map inspector - previously
+/// the map only ever showed the skill name, with no way to scout whether a
+/// node was even worth the walk before physically standing in its room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GatherPoi {
+    pub skill: &'static str,
+    pub level_req: i32,
 }
 
 static POIS: LazyLock<HashMap<RoomId, Poi>> = LazyLock::new(build_pois);
@@ -491,10 +501,13 @@ fn build_pois() -> HashMap<RoomId, Poi> {
     }
     for beast in super::taming::wild_beasts() {
         map.entry(beast.home).or_default().tameable =
-            Some(super::taming::TAMEABLE[beast.species].name);
+            Some(super::taming::beast_species(beast.species).name);
     }
     for n in super::world::NODES {
-        map.entry(n.home).or_default().gather = Some(n.skill.key());
+        map.entry(n.home).or_default().gather = Some(GatherPoi {
+            skill: n.skill.key(),
+            level_req: n.level_req,
+        });
     }
     map
 }
@@ -853,6 +866,17 @@ pub fn poi_arrows(
         if c.z != center.z {
             continue;
         }
+        // Distinct reserved blocks always sit at least `COMPONENT_MARGIN` apart
+        // (see the module doc comment), so a delta within `PAN_LIMIT` guarantees
+        // the POI is in the *same* block as the player - the one case where the
+        // coordinate delta is a real spatial relationship rather than an
+        // accident of which block `derive_coords` laid down first. Anything
+        // farther is dropped rather than pointed at with a meaningless
+        // direction (see CONTEXT.md §11); the camera could never pan there
+        // anyway, since `MapCamera::pan` clamps to the same `PAN_LIMIT`.
+        if (c.x - center.x).abs() > PAN_LIMIT || (c.y - center.y).abs() > PAN_LIMIT {
+            continue;
+        }
         let sc = cx + 2 * (c.x - center.x);
         let sr = cy + 2 * (c.y - center.y);
         if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
@@ -877,6 +901,63 @@ pub fn poi_arrows(
             boss,
         })
         .collect()
+}
+
+/// Border arrows for active-quest target rooms that are off-screen on the
+/// viewed level, honoring the same `PAN_LIMIT` honesty filter as `poi_arrows`:
+/// a target in another reserved block gets no arrow at all, because across
+/// blocks the coordinate delta points nowhere real. The count of targets
+/// dropped that way is returned alongside, so the map can say "N marks lie
+/// beyond this land" instead of silently showing fewer quests than exist.
+pub fn quest_arrows(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    cols: i32,
+    rows: i32,
+    targets: &[RoomId],
+) -> (Vec<MapArrow>, usize) {
+    if cols <= 0 || rows <= 0 {
+        return (Vec::new(), targets.len());
+    }
+    let cx = cols / 2;
+    let cy = rows / 2;
+    let mut by_cell: BTreeMap<(usize, usize), char> = BTreeMap::new();
+    let mut beyond = 0usize;
+    for room in targets {
+        let Some(&c) = coords.get(room) else {
+            beyond += 1;
+            continue;
+        };
+        if c.z != center.z
+            || (c.x - center.x).abs() > PAN_LIMIT
+            || (c.y - center.y).abs() > PAN_LIMIT
+        {
+            beyond += 1;
+            continue;
+        }
+        let sc = cx + 2 * (c.x - center.x);
+        let sr = cy + 2 * (c.y - center.y);
+        if (0..cols).contains(&sc) && (0..rows).contains(&sr) {
+            continue; // on-screen: the canvas draws the quest marker itself
+        }
+        let glyph = arrow_glyph(c.x - center.x, c.y - center.y);
+        by_cell
+            .entry((
+                sr.clamp(0, rows - 1) as usize,
+                sc.clamp(0, cols - 1) as usize,
+            ))
+            .or_insert(glyph);
+    }
+    let arrows = by_cell
+        .into_iter()
+        .map(|((row, col), glyph)| MapArrow {
+            row,
+            col,
+            glyph,
+            boss: false,
+        })
+        .collect();
+    (arrows, beyond)
 }
 
 /// Every coordinate shared by more than one room, with the room ids that land
@@ -925,6 +1006,70 @@ pub fn dump_level(coords: &HashMap<RoomId, Coord>, center: RoomId, radius: i32) 
         out.push('\n');
     }
     out
+}
+
+// ---- The land graph: which countries touch which -------------------------
+//
+// A schematic, land-level view of the world for the map's second page. Derived
+// from the room graph and the atlas regions and nothing else: an edge exists
+// exactly where one room's exit lands in another region. It therefore knows
+// nothing about titles, bosses, or levels, and so cannot drift out of step
+// with the real gates in `svc::can_cross_progression_gate`. What a player
+// learns from it is where a land hangs, never what opens it.
+
+/// Region name -> the regions its rooms walk into, in atlas order. A region
+/// with no walking neighbours at all (the portal villages and the archipelago
+/// islands, which carry no directional exits) maps to an empty list.
+static LAND_LINKS: LazyLock<BTreeMap<&'static str, Vec<&'static str>>> =
+    LazyLock::new(|| derive_land_links(world()));
+
+pub fn land_links() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
+    &LAND_LINKS
+}
+
+/// The lands no road reaches, in atlas order: the ones whose rooms hold no
+/// directional exit into another region at all, so a waystone is the only way
+/// in. Derived like everything else here, never listed by hand.
+pub fn portal_lands() -> Vec<&'static str> {
+    super::world::region_names()
+        .into_iter()
+        .filter(|name| LAND_LINKS.get(name).is_none_or(Vec::is_empty))
+        .collect()
+}
+
+fn region_order() -> HashMap<&'static str, usize> {
+    super::world::region_names()
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| (name, i))
+        .collect()
+}
+
+fn derive_land_links(world: &World) -> BTreeMap<&'static str, Vec<&'static str>> {
+    let order = region_order();
+    let mut links: BTreeMap<&'static str, HashSet<&'static str>> =
+        order.keys().map(|name| (*name, HashSet::new())).collect();
+    for room in world.rooms.values() {
+        let Some((here, _)) = super::world::region_atlas_entry(room.id) else {
+            continue;
+        };
+        for dest in room.exits.values() {
+            let Some((there, _)) = super::world::region_atlas_entry(*dest) else {
+                continue;
+            };
+            if there != here {
+                links.entry(here).or_default().insert(there);
+            }
+        }
+    }
+    links
+        .into_iter()
+        .map(|(name, set)| {
+            let mut neighbours: Vec<&'static str> = set.into_iter().collect();
+            neighbours.sort_by_key(|n| order.get(n).copied().unwrap_or(usize::MAX));
+            (name, neighbours)
+        })
+        .collect()
 }
 
 #[cfg(test)]

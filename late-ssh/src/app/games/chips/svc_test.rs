@@ -247,3 +247,43 @@ async fn welcome_pour_never_comps_a_prior_drinker() {
         "a prior drinker never gets the welcome pour"
     );
 }
+
+#[tokio::test]
+async fn apply_move_settles_a_seat_and_refuses_what_the_balance_cannot_cover() {
+    // The Super Snake arena banks a seat through this one call, so both
+    // directions matter: a winning visit credits and hands back the new
+    // balance, and a losing one is declined outright rather than pushing a
+    // player negative.
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ssnake-settler").await;
+    let chips = ChipService::new(test_db.db.clone());
+    // Every session ensures its chips row at bootstrap, so a player who can
+    // reach the table always has the 1000 stipend behind them.
+    chips.ensure_chips(user.id).await.expect("chips row");
+
+    let balance = chips
+        .apply_move(user.id, ChipMove::SsnakeArenaEarned, 250)
+        .await
+        .expect("credit succeeds");
+    assert_eq!(balance, Some(1_250), "starting 1000 plus the seat's take");
+
+    let declined = chips
+        .apply_move(user.id, ChipMove::SsnakeArenaLost, 5_000)
+        .await
+        .expect("the call itself succeeds");
+    assert_eq!(declined, None, "a debit past zero is refused, not applied");
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = client
+        .query_one(
+            "SELECT balance FROM user_chips WHERE user_id = $1",
+            &[&user.id],
+        )
+        .await
+        .expect("chips row");
+    assert_eq!(
+        row.get::<_, i64>("balance"),
+        1_250,
+        "the declined debit left the balance alone"
+    );
+}

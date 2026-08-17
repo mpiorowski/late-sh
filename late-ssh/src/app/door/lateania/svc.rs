@@ -58,13 +58,15 @@ use super::persist::{
 use super::pets::{Pet, pet_species_by_key};
 use super::skills::{CraftSkill, GatherSkill, TamingSkill, skill_level_for_xp, skill_progress};
 use super::stats::AbilityScores;
-use super::taming::{PetSkillEffect, TAMEABLE, beasts_at, pet_skills_at, tame_chance, tame_xp};
+use super::taming::{PetSkillEffect, beast_species, beasts_at, tame_chance, tame_xp};
 use super::world::{
     CritterKind, Dir, FeatureKind, MiniMap, MobBehavior, MobSpawn, Perk, RegionProgress,
     ResourceNode, RoomId, World, craft_stations_at, critter_index, critters_at, features_at,
     frontier_entrance_room, is_frontier_room, node_index, nodes_at, seed_world,
     tutorial_start_room,
 };
+
+// ---- Tuning: tick rate, timers, gate titles, boss achievements -----------
 
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
@@ -386,15 +388,63 @@ pub struct MobView {
     pub boss: bool,
     /// True when this is the foe you're currently locked onto.
     pub targeted: bool,
+    /// The damage school this foe strikes with (e.g. "fire").
+    pub school: &'static str,
+    /// The school this foe is weak to, if any - the tactical opening.
+    pub weak: Option<&'static str>,
+    /// The school this foe shrugs off, if any.
+    pub resist: Option<&'static str>,
+    /// Damage-over-time stacks currently ticking on this foe.
+    pub dot_stacks: u8,
+    /// True while this foe is stunned (skipping its actions).
+    pub stunned: bool,
+}
+
+/// Which kind of quest a journal row is; closed so the panel matches
+/// exhaustively when grouping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuestKind {
+    /// The auto-granted new-player chain (one active step at a time).
+    Starter,
+    /// An accepted board bounty.
+    Board,
+    /// A Frontier zone-clear quest (only listed once the Frontier is open).
+    Frontier,
 }
 
 /// One quest row in the journal.
 #[derive(Clone, Debug)]
 pub struct QuestView {
     pub name: String,
+    /// What the quest actually asks for, so it's still readable long after
+    /// the one-time accept-time log line has scrolled off - a board bounty's
+    /// blurb plus its mechanical objective, or a Frontier quest's plain
+    /// "slay X" restated here for the same reason.
+    pub desc: String,
     pub done: bool,
     pub reward: String,
-    pub frontier: bool,
+    pub kind: QuestKind,
+    /// A room this quest points at, for tracking it on the world map (Enter in
+    /// the journal). None when no single meaningful place exists.
+    pub target: Option<RoomId>,
+}
+
+/// One milestone on the Long Road - the realm's spine of great bosses whose
+/// titles gate the next land. Derived purely from the player's titles.
+#[derive(Clone, Debug)]
+pub struct RoadStepView {
+    /// The boss to bring down, as named in the world.
+    pub boss: String,
+    /// Where the fight happens.
+    pub place: &'static str,
+    /// What falls open once it's done ("" when it is glory alone).
+    pub unlocks: &'static str,
+    pub done: bool,
+    /// The first undone milestone - the one the player walks toward now.
+    pub current: bool,
+    /// The boss's lair, for tracking the crown on the compass/map (Enter in
+    /// the journal). Resolved from the spawn table at world build.
+    pub target: Option<RoomId>,
 }
 
 /// One wild creature in the room, for the Wildlife list.
@@ -652,6 +702,8 @@ pub struct InvView {
     /// The collapsible category this item groups under (Weapons / Armor /
     /// Consumables / Valuables).
     pub category: &'static str,
+    /// The item's flavor/description text.
+    pub desc: &'static str,
 }
 
 /// A batch-sell request at a merchant. Consumables and equipped gear are never
@@ -683,15 +735,23 @@ pub struct ShopEntryView {
     /// The collapsible category this item groups under (Weapons / Armor /
     /// Consumables / Valuables).
     pub category: &'static str,
+    /// The item's flavor/description text.
+    pub desc: &'static str,
 }
 
-/// The collapsible-panel category an item belongs to.
+/// The collapsible-panel category an item belongs to. Split from a single
+/// "Consumables" bucket so a batch-sell of loose gear/valuables never risks
+/// a buff item that happened to be lumped in with them: "Heals" is anything
+/// that actually restores HP/resource, "Consumables" is everything else you
+/// use from the pack (poisons and future non-heal effect items) - a player
+/// can bulk-sell Valuables without checking every item for a hidden buff.
 pub(super) fn item_category(kind: &super::items::ItemKind) -> &'static str {
     use super::items::{ItemKind, Slot};
     match kind {
         ItemKind::Equipment(Slot::Weapon) => "Weapons",
         ItemKind::Equipment(_) => "Armor",
-        ItemKind::Consumable { .. } => "Consumables",
+        ItemKind::Consumable { heal, restore } if *heal > 0 || *restore > 0 => "Heals",
+        ItemKind::Consumable { .. } | ItemKind::Utility => "Consumables",
         ItemKind::Valuable => "Valuables",
     }
 }
@@ -788,9 +848,47 @@ pub struct HousingView {
 /// The waystone fast-travel menu, present when standing on a portal.
 #[derive(Clone, Debug)]
 pub struct PortalView {
-    /// Each destination: `(label, room id, is_here, is_sealed)`. Sealed gates
-    /// (a continent whose title the player lacks) render dimmed and refuse.
-    pub entries: Vec<(String, RoomId, bool, bool)>,
+    /// Each offered destination: `(label, room id, is_here)`. A mainland gate
+    /// the player has never stood in is absent entirely rather than dimmed;
+    /// the archipelago is always listed (it has no walking route in).
+    pub entries: Vec<(String, RoomId, bool)>,
+    /// How many leading entries are mainland gates, so the panel can head its
+    /// three blocks (gates, villages, islands) without index arithmetic over a
+    /// list whose first block varies in length.
+    pub known_gates: usize,
+    /// Mainland gates not yet found, so the panel can say the network is larger
+    /// than what it lists without naming what is missing.
+    pub unknown_gates: usize,
+}
+
+/// A quest board's postings, present whenever the player stands where a
+/// board feature is. Replaces the old "examine auto-assigns the next bounty"
+/// flow: every ready-to-claim and still-open bounty for this board is listed
+/// so taking one is an explicit choice, not the luck of whatever was first in
+/// the static list - that's what let a low-level player get handed a bounty
+/// for a foe they'd never even seen yet.
+#[derive(Clone, Debug)]
+pub struct BoardView {
+    pub entries: Vec<BoardEntryView>,
+}
+
+/// One posting on a board: either a finished counter-bounty ready to turn in
+/// (`ready`), or one still open to accept.
+#[derive(Clone, Debug)]
+pub struct BoardEntryView {
+    pub quest_id: u32,
+    pub title: String,
+    pub blurb: String,
+    pub objective: String,
+    pub reward: String,
+    pub ready: bool,
+    /// Where the work is and how to walk there, in plain words.
+    pub hint: String,
+    /// A rough level at which the bounty is a fair fight.
+    pub suggested_level: i32,
+    /// True when the bounty's hunting ground sits behind a progression gate
+    /// the player has not opened; shown sealed and refused on accept.
+    pub locked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -845,6 +943,9 @@ pub struct PlayerView {
     pub room_name: String,
     pub room_desc: String,
     pub zone: String,
+    /// The (min, max) mob level of the zone the player stands in, so the zone
+    /// line reads "King's Road · Lv 2-5". None where nothing hostile lives.
+    pub zone_band: Option<(i32, i32)>,
     pub safe: bool,
     /// True in a Wildbound-style contested zone (see `Room::pvp`), where the
     /// "Adventurers here" roster shows hostile marks and is clickable to duel.
@@ -880,6 +981,12 @@ pub struct PlayerView {
     /// The player's gathering skills and their progress, for the Skills block.
     pub skills: Vec<SkillView>,
     pub in_combat_with: Option<String>,
+    /// Absorb shield remaining on the player, for the battle frame.
+    pub shield: i32,
+    /// Outgoing-damage buff magnitude currently active (0 when none).
+    pub empower: i32,
+    /// True while the player is stunned (skipping their actions).
+    pub stunned: bool,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
@@ -898,6 +1005,8 @@ pub struct PlayerView {
     pub crafting: Option<CraftView>,
     /// The waystone fast-travel menu, present when standing on a portal.
     pub portal: Option<PortalView>,
+    /// The quest board's postings, present when standing where a board is.
+    pub board: Option<BoardView>,
     /// The composed character bio (from the appearance choices).
     pub bio: String,
     /// The appearance/bio builder rows: (field label, chosen option).
@@ -920,8 +1029,14 @@ pub struct PlayerView {
     pub title_levels: Vec<i32>,
     /// Index of the displayed title, if one is chosen.
     pub active_title: Option<usize>,
-    /// The Frontier zone quests and their completion state.
+    /// The journal's quest rows: the active starter step, accepted board
+    /// bounties, and (once the Frontier is open) its zone quests.
     pub quests: Vec<QuestView>,
+    /// The Long Road: the realm's great-boss spine, derived from titles.
+    pub road: Vec<RoadStepView>,
+    /// True once the player holds every title the Frontier stair demands (the
+    /// journal shows the 20 zone quests only then; sealed reads as one line).
+    pub frontier_open: bool,
     /// Veteran in-place resurrections remaining / total this adventure.
     pub resurrections_left: u8,
     pub resurrection_cap: u8,
@@ -980,6 +1095,7 @@ impl PlayerView {
             room_name: String::new(),
             room_desc: String::new(),
             zone: String::new(),
+            zone_band: None,
             safe: true,
             pvp: false,
             pvp_kills: 0,
@@ -997,6 +1113,9 @@ impl PlayerView {
             nodes: Vec::new(),
             skills: Vec::new(),
             in_combat_with: None,
+            shield: 0,
+            empower: 0,
+            stunned: false,
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
@@ -1007,6 +1126,7 @@ impl PlayerView {
             housing: None,
             crafting: None,
             portal: None,
+            board: None,
             bio: String::new(),
             appearance: Vec::new(),
             appearance_idx: Vec::new(),
@@ -1020,6 +1140,8 @@ impl PlayerView {
             title_levels: Vec::new(),
             active_title: None,
             quests: Vec::new(),
+            road: Vec::new(),
+            frontier_open: false,
             resurrections_left: 0,
             resurrection_cap: 0,
             features: Vec::new(),
@@ -1070,6 +1192,8 @@ fn compare_to_worn(equipped: &HashMap<Slot, u32>, it: &Item) -> String {
         }
     }
 }
+
+// ---- The service: command tasks, autosave loops, and snapshots -----------
 
 impl LateaniaService {
     pub fn new(activity: ActivityPublisher, chip_svc: ChipService, db: Db) -> Self {
@@ -1859,6 +1983,16 @@ impl LateaniaService {
         self.mutate(user_id, move |s| s.travel(user_id, dest));
     }
 
+    /// Turn in a finished counter-bounty chosen from the board's picker.
+    pub fn claim_board_task(&self, user_id: Uuid, quest_id: u32) {
+        self.mutate(user_id, move |s| s.claim_board_quest(user_id, quest_id));
+    }
+
+    /// Accept a bounty chosen from the board's picker.
+    pub fn accept_board_task(&self, user_id: Uuid, quest_id: u32) {
+        self.mutate(user_id, move |s| s.accept_board_quest(user_id, quest_id));
+    }
+
     /// Delete one character slot. Only kicks a live session out (and clears
     /// its sessions/in-memory player) when that slot is the one actually
     /// being played right now - deleting an idle slot from the landing must
@@ -2133,6 +2267,12 @@ struct PlayerState {
     board_done: Vec<u32>,
     /// Unix time at which each repeatable bounty was last claimed (id, seconds).
     quest_cooldowns: Vec<(u32, u64)>,
+    /// Index of the next uncompleted starter-chain quest; equal to
+    /// `STARTER_QUESTS.len()` once the chain is done. Persisted.
+    starter_stage: u8,
+    /// Kills counted toward the current starter stage, when it is a slay
+    /// stage. Persisted alongside.
+    starter_kills: u32,
     /// The chosen archetype path (from `ARCHETYPES`), once level 10 is reached.
     archetype: Option<&'static ArchetypeDef>,
     /// The combat companion bought from a Stable; travels with and fights for
@@ -2296,6 +2436,8 @@ impl PlayerState {
     }
 }
 
+// ---- Board quests: objectives, repeats, escorts, the bounty table --------
+
 /// A board-quest objective. `Reach` completes the moment the player enters any
 /// room of the named zone; the others count up to a target.
 #[derive(Clone, Copy, Debug)]
@@ -2366,6 +2508,16 @@ struct BoardQuest {
     reward_title: Option<&'static str>,
     repeat: Repeat,
     blurb: &'static str,
+    /// Where the work is and how to walk there, in plain words. The blurb sets
+    /// the scene; this answers "so where do I actually go".
+    hint: &'static str,
+    /// A rough level at which the bounty is a fair fight, shown on the board
+    /// so a fresh adventurer can tell a chore from a death sentence.
+    suggested_level: i32,
+    /// Gate titles the bounty's hunting ground sits behind (empty when the
+    /// ground is open country). A player missing any of them sees the posting
+    /// sealed and cannot accept it.
+    requires: &'static [&'static str],
 }
 
 /// Ticks/seconds in a world day (four phases) and the escortee's starting health.
@@ -2389,6 +2541,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Skeletons walk the crypt below Tasmania. Put five back to rest.",
+        hint: "The crypt mouth opens from Tasmania's own square - but the living dark needs the Archdemon's fall before it will let you in.",
+        suggested_level: 32,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 2,
@@ -2402,6 +2557,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "The chapel will pay for three relics recovered from the Catacombs.",
+        hint: "Relics drop from the dead of the Sunken Catacombs, entered from Tasmania's square once the Archdemon has fallen.",
+        suggested_level: 32,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 3,
@@ -2414,6 +2572,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Crypt-Delver"),
         repeat: Repeat::Once,
         blurb: "No one has mapped the new crypt. Descend, and live to tell of it.",
+        hint: "The way down lies in Tasmania's square itself; it opens only to a Bane of the Archdemon.",
+        suggested_level: 30,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 4,
@@ -2427,6 +2588,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Dire wolves harry the lake road. Cull four from the Thornwood.",
+        hint: "The Thornwood opens from Melvanala's lakeside square - post-Archdemon country; its packs are no roadside wolves.",
+        suggested_level: 32,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 5,
@@ -2440,6 +2604,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Bring back three spoils taken from the Thornwood Hollows.",
+        hint: "Spoils drop from the beasts and fae of the Thornwood Hollows, below Melvanala's square, once the Archdemon has fallen.",
+        suggested_level: 32,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 6,
@@ -2452,6 +2619,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Wood-Warden"),
         repeat: Repeat::Once,
         blurb: "Step beneath the eaves and find your way to the heart-tree's grove.",
+        hint: "The Hollows open from Melvanala's square, to a Bane of the Archdemon.",
+        suggested_level: 30,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 7,
@@ -2465,6 +2635,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Things lie in wait in the flooded caves. Clear four of them out.",
+        hint: "The flooded caves open from Matlatesh's square - post-Archdemon country, the hardest of the three living darks.",
+        suggested_level: 34,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 8,
@@ -2478,6 +2651,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Salvage three finds from the depths of the Drowned Caverns.",
+        hint: "Salvage drops from the aberrations of the Drowned Caverns, below Matlatesh's square, once the Archdemon has fallen.",
+        suggested_level: 34,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 9,
@@ -2490,6 +2666,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Deep-Walker"),
         repeat: Repeat::Once,
         blurb: "Find the tide-mouth beneath Matlatesh and enter the drowned dark.",
+        hint: "The Caverns open from Matlatesh's square, to a Bane of the Archdemon.",
+        suggested_level: 30,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 10,
@@ -2503,6 +2682,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Crypt Shepherd"),
         repeat: Repeat::Once,
         blurb: "An old priest must bless the crypt. Keep him alive and see him in.",
+        hint: "Brother Aldric waits by this board; the Catacombs he must reach open from Tasmania's square, past the Archdemon's gate.",
+        suggested_level: 33,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 11,
@@ -2516,6 +2698,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Wood-Shepherd"),
         repeat: Repeat::Once,
         blurb: "A scholar would study the heart-tree. Guard her through the Hollows.",
+        hint: "Mira waits by this board; the Hollows she studies open from Melvanala's square, past the Archdemon's gate.",
+        suggested_level: 33,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     BoardQuest {
         id: 12,
@@ -2529,6 +2714,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Tide Shepherd"),
         repeat: Repeat::Once,
         blurb: "Old Pell knows the tides. Bring him safe to the drowned dark.",
+        hint: "Old Pell waits by this board; the Caverns he would dive open from Matlatesh's square, past the Archdemon's gate.",
+        suggested_level: 35,
+        requires: &[FRONTIER_GATE_TITLE],
     },
     // ---- The Sundered Reaches (off Matlatesh) ----------------------------
     BoardQuest {
@@ -2543,6 +2731,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "The Reaches vomit up their dead onto the shore. Put six of the drowned down again.",
+        hint: "The drowned walk the Drowned Crypts on the old road below Duskhollow - and thicker still in the Reaches, for those who hold the sea-gate.",
+        suggested_level: 12,
+        requires: &[],
     },
     BoardQuest {
         id: 14,
@@ -2556,6 +2747,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Restless revenants stalk the sunken cities. Lay five of them to their long rest.",
+        hint: "Revenants stalk the Drowned Crypts below Duskhollow and the frozen heights of Frostspire, on the old road east of Embergate.",
+        suggested_level: 14,
+        requires: &[],
     },
     BoardQuest {
         id: 15,
@@ -2568,6 +2762,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Reach-Walker"),
         repeat: Repeat::Once,
         blurb: "A drowned realm lies beyond the desert's edge. Pass the sea-gate and set foot in it.",
+        hint: "The sea-gate stands in Matlatesh's shallows; it opens only to a Bane of the King Who Was Promised Nothing.",
+        suggested_level: 52,
+        requires: &[REACHES_GATE_TITLE],
     },
     BoardQuest {
         id: 16,
@@ -2580,6 +2777,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Sounder of the Deep"),
         repeat: Repeat::Once,
         blurb: "Few return from the floor of all seas. Reach the Sundering Deep and prove it can be done.",
+        hint: "The Sundering Deep is the floor of the Sundered Reaches - twenty zones down from the sea-gate.",
+        suggested_level: 60,
+        requires: &[REACHES_GATE_TITLE],
     },
     // ---- Kaelmyr, the Ashen Reach (the ash-cairn board, off Yssgar) -------
     BoardQuest {
@@ -2593,6 +2793,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Ash-Walker"),
         repeat: Repeat::Once,
         blurb: "A burnt continent lies below the drowned wound. Descend the ash-gate and set foot on Kaelmyr.",
+        hint: "The ash-gate descends from Yssgar's drowned chamber at the bottom of the Reaches; it opens only to a Bane of Yssgar.",
+        suggested_level: 62,
+        requires: &[KAELMYR_GATE_TITLE],
     },
     BoardQuest {
         id: 18,
@@ -2606,6 +2809,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "The Reaches' dead wash up and rise again on the burnt strand. Put six of the cinder-dead down.",
+        hint: "The cinder-dead shamble along Kaelmyr's Cinderfall Shore, just past the ash-gate.",
+        suggested_level: 64,
+        requires: &[KAELMYR_GATE_TITLE],
     },
     BoardQuest {
         id: 19,
@@ -2619,6 +2825,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "The ash-shamans keep their pyres lit with the living. Scatter four of the Emberkin from the terraces.",
+        hint: "The Emberkin keep their pyres in the caldera terraces west of the Cinderfall Shore.",
+        suggested_level: 66,
+        requires: &[KAELMYR_GATE_TITLE],
     },
     BoardQuest {
         id: 20,
@@ -2632,6 +2841,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "Relics of the world's first age wash up on the cinder shore. Bring back three from Kaelmyr.",
+        hint: "Shore relics drop from the dead along Kaelmyr's Cinderfall Shore, past the ash-gate.",
+        suggested_level: 64,
+        requires: &[KAELMYR_GATE_TITLE],
     },
     BoardQuest {
         id: 21,
@@ -2644,6 +2856,9 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: Some("Throne-Seeker of Kaelmyr"),
         repeat: Repeat::Once,
         blurb: "Kaethyr the Unquenched has ruled the ash since the Sundering. Walk to his burning throne and look upon it.",
+        hint: "The Unquenched Throne stands near Kaelmyr's far end - a long march east and down through the ash.",
+        suggested_level: 75,
+        requires: &[KAELMYR_GATE_TITLE],
     },
     BoardQuest {
         id: 22,
@@ -2657,12 +2872,252 @@ const BOARD_QUESTS: &[BoardQuest] = &[
         reward_title: None,
         repeat: Repeat::Daily,
         blurb: "The Hollow Choir sings to wake the drowned god beneath the wound. Silence four of the choristers.",
+        hint: "The Hollow Choir sings in Kaelmyr's deepest zones, on the way to the Sundering Wound.",
+        suggested_level: 78,
+        requires: &[KAELMYR_GATE_TITLE],
     },
 ];
 
 fn board_quest(id: u32) -> Option<&'static BoardQuest> {
     BOARD_QUESTS.iter().find(|q| q.id == id)
 }
+
+// ---- The starter chain and the Long Road ---------------------------------
+
+/// A goal for one starter-chain step. Separate from `Objective` because the
+/// chain needs "slay anything in a zone", which boards never ask for.
+#[derive(Clone, Copy, Debug)]
+enum StarterGoal {
+    /// Set foot in the named zone.
+    Reach { zone: &'static str },
+    /// Slay this many foes anywhere in the named zone.
+    SlayIn { zone: &'static str, count: u32 },
+    /// Slay one foe whose name contains this fragment.
+    SlayNamed { name_contains: &'static str },
+}
+
+fn starter_goal_target(goal: StarterGoal) -> u32 {
+    match goal {
+        StarterGoal::Reach { .. } | StarterGoal::SlayNamed { .. } => 1,
+        StarterGoal::SlayIn { count, .. } => count,
+    }
+}
+
+/// One step of the auto-granted new-player chain. Sequential: exactly one is
+/// active at a time, finishing it opens the next, and the whole chain hands a
+/// fresh character from Wayfarer's Hollow to the first real gate title.
+struct StarterQuest {
+    title: &'static str,
+    goal: StarterGoal,
+    /// Where to go and what to do, in plain words - shown in the journal and
+    /// as the room panel's "next" line.
+    hint: &'static str,
+    /// The room the step points at, for tracking on the world map.
+    target: RoomId,
+    reward_gold: i64,
+    reward_xp: i64,
+}
+
+const STARTER_QUESTS: &[StarterQuest] = &[
+    StarterQuest {
+        title: "First Steps",
+        goal: StarterGoal::Reach { zone: "Embergate" },
+        hint: "Leave Wayfarer's Hollow for Embergate proper: press r to recall to the Town Square, or walk south through the Gilded Flagon.",
+        target: 1,
+        reward_gold: 25,
+        reward_xp: 20,
+    },
+    StarterQuest {
+        title: "The Open Road",
+        goal: StarterGoal::SlayIn {
+            zone: "King's Road",
+            count: 3,
+        },
+        hint: "Head south past the South Gate. Goblins, bandits and gaunt wolves prowl the King's Road - put down three of them.",
+        target: 6,
+        reward_gold: 40,
+        reward_xp: 40,
+    },
+    StarterQuest {
+        title: "Under the Eaves",
+        goal: StarterGoal::Reach {
+            zone: "Whisperwood",
+        },
+        hint: "Follow the King's Road south until the trees close in and the Whisperwood begins.",
+        target: 11,
+        reward_gold: 40,
+        reward_xp: 40,
+    },
+    StarterQuest {
+        title: "The Elder Treant",
+        goal: StarterGoal::SlayNamed {
+            name_contains: "Elder Treant",
+        },
+        hint: "Deep in Whisperwood the Elder Treant keeps the way down into Duskhollow. Bring it down, and its leave to descend is yours.",
+        target: 28,
+        reward_gold: 80,
+        reward_xp: 120,
+    },
+    StarterQuest {
+        title: "Into the Dark Below",
+        goal: StarterGoal::Reach {
+            zone: "Duskhollow Caverns",
+        },
+        hint: "Descend past the Treant's grove into Duskhollow Caverns. From here the deeps chain onward, boss by boss.",
+        target: 31,
+        reward_gold: 60,
+        reward_xp: 80,
+    },
+];
+
+fn starter_quest(stage: u8) -> Option<&'static StarterQuest> {
+    STARTER_QUESTS.get(stage as usize)
+}
+
+/// One milestone of the Long Road: the realm's spine of great bosses. `boss`
+/// must match the spawn's name exactly - the view derives each milestone's
+/// required title via `title_for`, so the roadmap can never drift from what a
+/// kill actually grants (a drift test pins the gate consts to this table).
+struct RoadMilestone {
+    boss: &'static str,
+    place: &'static str,
+    unlocks: &'static str,
+}
+
+const LONG_ROAD: &[RoadMilestone] = &[
+    RoadMilestone {
+        boss: "the Elder Treant",
+        place: "Whisperwood",
+        unlocks: "the descent into Duskhollow",
+    },
+    RoadMilestone {
+        boss: "the Archdemon Mal'gareth",
+        place: "the Obsidian Throne, at the authored road's end",
+        unlocks: "the living dark below the three capitals",
+    },
+    RoadMilestone {
+        boss: "The Bonewright Lich",
+        place: "the Sunken Catacombs, below Tasmania",
+        unlocks: "one of the three Frontier seals",
+    },
+    RoadMilestone {
+        boss: "the Elder Dryad",
+        place: "the Thornwood Hollows, below Melvanala",
+        unlocks: "one of the three Frontier seals",
+    },
+    RoadMilestone {
+        boss: "the Abyss-Thing",
+        place: "the Drowned Caverns, below Matlatesh",
+        unlocks: "one of the three Frontier seals",
+    },
+    RoadMilestone {
+        boss: "the King Who Was Promised Nothing",
+        place: "the Frontier's deepest zone",
+        unlocks: "the sea-gate into the Sundered Reaches",
+    },
+    RoadMilestone {
+        boss: "Yssgar, the Sundering Deep",
+        place: "the deepest chamber of the Sundered Reaches",
+        unlocks: "the ash-gate down into Kaelmyr",
+    },
+    RoadMilestone {
+        boss: "Kaethyr the Unquenched, Ashen King of Kaelmyr",
+        place: "the Unquenched Throne",
+        unlocks: "",
+    },
+    RoadMilestone {
+        boss: "Kaethyr Ascendant, Who Sang the God Awake",
+        place: "the Sundering Wound",
+        unlocks: "the last crown of the realm",
+    },
+];
+
+/// The one line that always answers "where do I go now": the active starter
+/// step, else the Long Road's first unconquered milestone. None only once the
+/// realm is fully conquered.
+fn next_step_for(starter_stage: u8, titles: &[String]) -> Option<String> {
+    if let Some(q) = starter_quest(starter_stage) {
+        return Some(format!("{}: {}", q.title, q.hint));
+    }
+    LONG_ROAD
+        .iter()
+        .find(|m| !titles.iter().any(|t| *t == title_for(m.boss, true)))
+        .map(|m| format!("bring down {} in {}", m.boss, m.place))
+}
+
+/// The Long Road rows for a set of earned titles: each milestone checked off
+/// by its boss title, the first undone one flagged as current. `targets` is
+/// the per-milestone lair room (see `road_targets`), parallel to `LONG_ROAD`.
+fn road_view(titles: &[String], targets: &[Option<RoomId>]) -> Vec<RoadStepView> {
+    let mut current_found = false;
+    LONG_ROAD
+        .iter()
+        .zip(targets.iter().copied().chain(std::iter::repeat(None)))
+        .map(|(m, target)| {
+            let title = title_for(m.boss, true);
+            let done = titles.contains(&title);
+            let current = !done && !current_found;
+            if current {
+                current_found = true;
+            }
+            RoadStepView {
+                boss: m.boss.to_string(),
+                place: m.place,
+                unlocks: m.unlocks,
+                done,
+                current,
+                target,
+            }
+        })
+        .collect()
+}
+
+/// Each Long Road milestone's lair: the home room of the spawn whose name the
+/// milestone carries. Computed once at world build; the drift test pins every
+/// milestone to a real spawn, so a `None` here means the table rotted.
+fn road_targets(world: &World) -> Vec<Option<RoomId>> {
+    LONG_ROAD
+        .iter()
+        .map(|m| {
+            world
+                .spawns
+                .iter()
+                .find(|s| s.name == m.boss)
+                .map(|s| s.home)
+        })
+        .collect()
+}
+
+/// One board posting's picker-menu row, for a `BoardView`.
+fn board_entry(q: &BoardQuest, ready: bool, locked: bool) -> BoardEntryView {
+    BoardEntryView {
+        quest_id: q.id,
+        title: q.title.to_string(),
+        blurb: q.blurb.to_string(),
+        objective: q.objective.describe(),
+        reward: format!(
+            "{} gold{}",
+            q.reward_gold,
+            match q.reward_title {
+                Some(t) => format!(" + title: {t}"),
+                None => String::new(),
+            }
+        ),
+        ready,
+        hint: q.hint.to_string(),
+        suggested_level: q.suggested_level,
+        locked,
+    }
+}
+
+/// True when the bounty's hunting ground sits behind a gate title the player
+/// does not hold: the posting shows sealed and cannot be accepted, so a fresh
+/// adventurer is never handed work in a land that will refuse them the door.
+fn board_quest_locked(q: &BoardQuest, titles: &[String]) -> bool {
+    !titles_include_all(titles, q.requires)
+}
+
+// ---- Live mobs, and the world state they live in -------------------------
 
 struct MobInstance {
     spawn: MobSpawn,
@@ -2688,6 +3143,9 @@ struct MobInstance {
 struct WorldState {
     room_id: Uuid,
     world: World,
+    /// Each Long Road milestone's lair room, parallel to `LONG_ROAD` (see
+    /// `road_targets`). Computed once here so snapshots never scan the spawns.
+    road_targets: Vec<Option<RoomId>>,
     players: HashMap<Uuid, PlayerState>,
     mobs: HashMap<u32, MobInstance>,
     /// mob id -> stun ticks remaining.
@@ -2755,6 +3213,8 @@ const POISON_DOT_TICKS: u8 = 3;
 const WELL_FED_TICKS: u8 = 8;
 
 impl WorldState {
+    // ---- Construction, the world clock, and broadcast -------------------
+
     fn new(room_id: Uuid, world: World) -> Self {
         let mobs = world
             .spawns
@@ -2778,9 +3238,11 @@ impl WorldState {
                 )
             })
             .collect();
+        let road_targets = road_targets(&world);
         Self {
             room_id,
             world,
+            road_targets,
             players: HashMap::new(),
             mobs,
             mob_stuns: HashMap::new(),
@@ -2828,6 +3290,8 @@ impl WorldState {
         self.world_dirty = true;
         self.world_revision = self.world_revision.wrapping_add(1);
     }
+
+    // ---- Joining, class choice, and character reset ---------------------
 
     fn join(&mut self, user_id: Uuid) -> bool {
         if self.players.contains_key(&user_id) {
@@ -2879,6 +3343,8 @@ impl WorldState {
             board_progress: Vec::new(),
             board_done: Vec::new(),
             quest_cooldowns: Vec::new(),
+            starter_stage: 0,
+            starter_kills: 0,
             archetype: None,
             pet: None,
             stray: None,
@@ -2941,6 +3407,16 @@ impl WorldState {
             "Welcome to Wayfarer's Hollow, a safe place to learn your trade before the real world asks anything of you. Explore it at your own pace - press r anytime to leave for Embergate, the real town, whenever you're ready."
                 .to_string(),
         );
+        // The chain's first step, so a brand-new player has a concrete goal
+        // from their very first breath (it also rides the journal and the
+        // room panel's Next line from here on).
+        if let Some(q) = starter_quest(0) {
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("Next - {}: {}", q.title, q.hint),
+            );
+        }
         self.describe_room(user_id);
     }
 
@@ -3035,6 +3511,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Persistence: hydrate a save, export one, the shared world ------
+
     /// Apply a saved character onto a freshly-joined player. Restores class,
     /// progression, gold, gear, and inventory; reloads at a safe room with full
     /// vitals so a logged-out fight never resumes mid-swing.
@@ -3110,6 +3588,16 @@ impl WorldState {
             p.taming_xp = saved.taming_xp.max(0);
             // Restore lifetime PvP kills (0 for pre-Wildbound-Waste saves).
             p.pvp_kills = saved.pvp_kills.max(0);
+            // Restore the starter chain. Pre-v19 saves default to stage 0; a
+            // character already past level 10 has long outgrown the tutorial
+            // chain, so it is marked complete rather than handed to a veteran.
+            let chain_len = STARTER_QUESTS.len() as u8;
+            p.starter_stage = if saved.version < 19 && level >= 10 {
+                chain_len
+            } else {
+                saved.starter_stage.min(chain_len)
+            };
+            p.starter_kills = saved.starter_kills;
             p.rpg_mode = saved.rpg_mode;
             // Restore the chosen archetype (ignored if the key is unknown or no
             // longer matches the class, e.g. a respec/rename).
@@ -3168,6 +3656,15 @@ impl WorldState {
             LogKind::System,
             format!("Welcome back. Your {name} stands ready (level {level})."),
         );
+        // Re-orientation that survives any scrollback: say what the next goal
+        // is every time a character comes back to the world.
+        let step = self
+            .players
+            .get(&user_id)
+            .and_then(|p| next_step_for(p.starter_stage, &p.titles));
+        if let Some(step) = step {
+            self.log_to(user_id, LogKind::System, format!("Next - {step}"));
+        }
         self.describe_room(user_id);
     }
 
@@ -3229,6 +3726,8 @@ impl WorldState {
             taming_xp: p.taming_xp,
             rpg_mode: p.rpg_mode,
             pvp_kills: p.pvp_kills,
+            starter_stage: p.starter_stage,
+            starter_kills: p.starter_kills,
         }))
     }
 
@@ -3411,6 +3910,8 @@ impl WorldState {
             player.frontier_descent_pending = false;
         }
     }
+
+    // ---- Movement, and the gates a road may not cross -------------------
 
     fn move_player(&mut self, user_id: Uuid, dir: Dir) {
         if !self.is_classed(user_id) {
@@ -3800,6 +4301,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Recall, waypoints, retreat, and following ----------------------
+
     /// Speak the word of recall: return to Embergate's Town Square from anywhere,
     /// so long as you are not in combat. A universal escape, not a class spell.
     fn recall(&mut self, user_id: Uuid) {
@@ -4129,6 +4632,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Gathering, hunting, and crafting -------------------------------
+
     /// Apply any Boon-creature perks for the room a player just entered.
     fn apply_critter_perks(&mut self, user_id: Uuid) {
         let room_id = match self.players.get(&user_id) {
@@ -4427,6 +4932,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Looking at a room, examining it, and the Ways ------------------
+
     fn look(&mut self, user_id: Uuid) {
         self.describe_room_context(user_id, Arrival::Silent);
     }
@@ -4498,6 +5005,7 @@ impl WorldState {
             self.bump_quests(user_id, |o| {
                 u32::from(matches!(o, Objective::Reach { zone } if zone == here_zone))
             });
+            self.bump_starter_reach(user_id, here_zone);
             self.check_escort_arrival(user_id, here_zone);
         }
         let Some(player) = self.players.get(&user_id) else {
@@ -4616,11 +5124,11 @@ impl WorldState {
             return;
         };
         if feat.kind == FeatureKind::Villager {
-            self.log_to(
-                user_id,
-                LogKind::Normal,
-                format!("You ask {} for a moment.", feat.name),
-            );
+            // No "you ask X for a moment" preamble: that phrasing implied an
+            // exchange was starting when the line *is* the whole interaction,
+            // which read as "...and? that's it?" A villager's dialogue is the
+            // payoff, not a placeholder for one - present it directly, same
+            // as the "look at" default below does for its own `desc`.
             self.log_to(
                 user_id,
                 LogKind::Room,
@@ -4656,8 +5164,6 @@ impl WorldState {
             if safe {
                 self.use_bank(user_id);
             }
-        } else if feat.kind == FeatureKind::Board {
-            self.use_board(user_id, room_id);
         } else if feat.kind == FeatureKind::Housing {
             self.log_to(
                 user_id,
@@ -4699,25 +5205,24 @@ impl WorldState {
             );
             return;
         }
-        let Some((_, _, required)) = super::world::waystone_destinations()
+        let Some((label, _)) = super::world::waystone_destinations()
             .into_iter()
-            .find(|(_, r, _)| *r == dest)
+            .find(|(_, r)| *r == dest)
         else {
             return;
         };
         if dest == p.room {
             return;
         }
-        // The Ways honor the same locks as the walking gates: a sealed
-        // continent's waystone refuses until its title is earned.
-        if let Some(title) = required
-            && !self.player_has_title(user_id, title)
-        {
+        // The Ways carry no progression rules of their own; they only shorten a
+        // road the player has already walked. Titles are checked where you walk
+        // in, in `can_cross_progression_gate`.
+        if !super::world::waystone_is_known(dest, &p.visited) {
             self.log_to(
                 user_id,
                 LogKind::System,
                 format!(
-                    "The waystone hums against your palm, then stills. That far gate is sealed to any but a crowned {title}."
+                    "The waystone hums against your palm, then stills. The Ways carry you only where your own feet have already gone, and you have never stood at {label}."
                 ),
             );
             return;
@@ -4734,6 +5239,8 @@ impl WorldState {
         );
         self.describe_room(user_id);
     }
+
+    // ---- Board quests, escorts, and the starter chain -------------------
 
     fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
         self.board_quest_available_at(p, q, now_unix_secs())
@@ -4764,59 +5271,110 @@ impl WorldState {
         }
     }
 
-    /// Examine a quest board: claim a finished bounty if one is ready here,
-    /// otherwise take up the next available posting for this capital's region.
-    fn use_board(&mut self, user_id: Uuid, board_room: RoomId) {
-        let (progress, level) = match self.players.get(&user_id) {
-            Some(p) => (p.board_progress.clone(), p.level),
-            None => return,
+    /// Every posting for a board in the player's room: ready-to-claim
+    /// counter-bounties first, then bounties still open to accept. Backs the
+    /// picker menu (`Panel::Board`) - the player chooses, rather than
+    /// `examine` silently auto-assigning whatever came first in the static
+    /// list (which is how a fresh adventurer could get handed a bounty for a
+    /// foe several zones above them with no way to preview or decline it).
+    fn board_entries(&self, user_id: Uuid, board_room: RoomId) -> Vec<BoardEntryView> {
+        let Some(p) = self.players.get(&user_id) else {
+            return Vec::new();
         };
-        // 1) A finished counter-bounty for this board takes priority - claim it.
-        let claimable = progress.iter().find_map(|(id, prog)| {
-            board_quest(*id).filter(|q| q.board == board_room && *prog >= q.objective.target())
+        let mut entries: Vec<BoardEntryView> = p
+            .board_progress
+            .iter()
+            .filter_map(|(id, prog)| {
+                let q = board_quest(*id)?;
+                (q.board == board_room && *prog >= q.objective.target())
+                    .then(|| board_entry(q, true, false))
+            })
+            .collect();
+        entries.extend(
+            BOARD_QUESTS
+                .iter()
+                .filter(|q| q.board == board_room && self.board_quest_available(p, q))
+                .map(|q| board_entry(q, false, board_quest_locked(q, &p.titles))),
+        );
+        entries
+    }
+
+    /// Turn in a finished counter-bounty chosen from the board's picker. A
+    /// stale selection (already claimed elsewhere, or not actually ready) is
+    /// silently a no-op rather than an error the player has to parse.
+    fn claim_board_quest(&mut self, user_id: Uuid, quest_id: u32) {
+        let Some(q) = board_quest(quest_id) else {
+            return;
+        };
+        let ready = self.players.get(&user_id).is_some_and(|p| {
+            p.board_progress
+                .iter()
+                .any(|(id, prog)| *id == quest_id && *prog >= q.objective.target())
         });
-        if let Some(q) = claimable {
-            if let Some(p) = self.players.get_mut(&user_id) {
-                p.board_progress.retain(|(qid, _)| *qid != q.id);
-                p.gold += q.reward_gold;
-                // Repeatable bounties go on cooldown; one-offs are done for good.
-                if q.repeat == Repeat::Once {
-                    p.board_done.push(q.id);
-                } else {
-                    p.quest_cooldowns.retain(|(id, _)| *id != q.id);
-                    p.quest_cooldowns.push((q.id, now_unix_secs()));
-                }
-            }
-            self.log_to(
-                user_id,
-                LogKind::Loot,
-                format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
-            );
-            if let Some(title) = q.reward_title {
-                self.award_title(user_id, title.to_string(), level);
-            }
-            self.dirty = true;
+        if !ready {
             return;
         }
-        // 2) Otherwise post the next available bounty for this board.
-        let next = match self.players.get(&user_id) {
-            Some(p) => BOARD_QUESTS
-                .iter()
-                .find(|q| q.board == board_room && self.board_quest_available(p, q)),
-            None => None,
-        };
-        let Some(q) = next else {
-            let pending = progress
-                .iter()
-                .any(|(id, _)| board_quest(*id).is_some_and(|qq| qq.board == board_room));
-            let msg = if pending {
-                "Every bounty here is already in your hands - go and finish them."
+        let level = self.players[&user_id].level;
+        if let Some(p) = self.players.get_mut(&user_id) {
+            p.board_progress.retain(|(id, _)| *id != quest_id);
+            p.gold += q.reward_gold;
+            // Repeatable bounties go on cooldown; one-offs are done for good.
+            if q.repeat == Repeat::Once {
+                p.board_done.push(q.id);
             } else {
-                "The board has no new bounties for you. Come back when more are posted."
-            };
-            self.log_to(user_id, LogKind::Normal, msg.to_string());
+                p.quest_cooldowns.retain(|(id, _)| *id != q.id);
+                p.quest_cooldowns.push((q.id, now_unix_secs()));
+            }
+        }
+        self.log_to(
+            user_id,
+            LogKind::Loot,
+            format!("Bounty claimed: {} (+{} gold).", q.title, q.reward_gold),
+        );
+        if let Some(title) = q.reward_title {
+            self.award_title(user_id, title.to_string(), level);
+        }
+        self.dirty = true;
+    }
+
+    /// Accept a bounty explicitly chosen from the board's picker.
+    fn accept_board_quest(&mut self, user_id: Uuid, quest_id: u32) {
+        let Some(q) = board_quest(quest_id) else {
             return;
         };
+        let available = self
+            .players
+            .get(&user_id)
+            .is_some_and(|p| self.board_quest_available(p, q));
+        if !available {
+            return;
+        }
+        // A sealed posting cannot be taken: its hunting ground refuses the
+        // player at the door, so accepting it would only hand out dead weight.
+        let locked = self
+            .players
+            .get(&user_id)
+            .is_some_and(|p| board_quest_locked(q, &p.titles));
+        if locked {
+            let missing = q
+                .requires
+                .iter()
+                .filter(|t| {
+                    !self
+                        .players
+                        .get(&user_id)
+                        .is_some_and(|p| p.titles.iter().any(|owned| owned == **t))
+                })
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.log_to(
+                user_id,
+                LogKind::System,
+                format!("The posting is sealed to you - that ground opens only to: {missing}."),
+            );
+            return;
+        }
         if let Objective::Escort { npc, dest_zone } = q.objective {
             if self
                 .players
@@ -4955,6 +5513,95 @@ impl WorldState {
         }
     }
 
+    /// Advance the starter chain when `inc` reports progress for its active
+    /// goal. Completing a step pays out and announces the next; completing the
+    /// last hands the player over to the Long Road and the capital boards.
+    fn bump_starter(&mut self, user_id: Uuid, inc: impl Fn(StarterGoal) -> u32) {
+        enum Outcome {
+            Progress(&'static StarterQuest, u32, u32),
+            Complete(&'static StarterQuest),
+        }
+        let outcome = {
+            let Some(p) = self.players.get_mut(&user_id) else {
+                return;
+            };
+            let Some(q) = starter_quest(p.starter_stage) else {
+                return;
+            };
+            let step = inc(q.goal);
+            if step == 0 {
+                return;
+            }
+            let need = starter_goal_target(q.goal);
+            p.starter_kills = (p.starter_kills + step).min(need);
+            if p.starter_kills < need {
+                Outcome::Progress(q, p.starter_kills, need)
+            } else {
+                p.starter_stage += 1;
+                p.starter_kills = 0;
+                p.gold += q.reward_gold;
+                p.xp += q.reward_xp;
+                Outcome::Complete(q)
+            }
+        };
+        match outcome {
+            Outcome::Progress(q, done, need) => {
+                self.log_to(
+                    user_id,
+                    LogKind::System,
+                    format!("{} - {done}/{need}.", q.title),
+                );
+            }
+            Outcome::Complete(q) => {
+                self.log_to(
+                    user_id,
+                    LogKind::Loot,
+                    format!(
+                        "{} - done (+{} xp, +{} gold).",
+                        q.title, q.reward_xp, q.reward_gold
+                    ),
+                );
+                let next_stage = self
+                    .players
+                    .get(&user_id)
+                    .map(|p| p.starter_stage)
+                    .unwrap_or(0);
+                match starter_quest(next_stage) {
+                    Some(next) => self.log_to(
+                        user_id,
+                        LogKind::System,
+                        format!("Next - {}: {}", next.title, next.hint),
+                    ),
+                    None => self.log_to(
+                        user_id,
+                        LogKind::System,
+                        "You know the land now. The Long Road in your journal (j) names every crown between you and the realm's end; the capital boards post the daily work."
+                            .to_string(),
+                    ),
+                }
+                self.check_level_up(user_id);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Room-enter half of the starter chain: Reach goals.
+    fn bump_starter_reach(&mut self, user_id: Uuid, here_zone: &'static str) {
+        self.bump_starter(user_id, |g| {
+            u32::from(matches!(g, StarterGoal::Reach { zone } if zone == here_zone))
+        });
+    }
+
+    /// Kill half of the starter chain: SlayIn (by the zone the fight happened
+    /// in) and SlayNamed (by the slain foe's name).
+    fn bump_starter_kill(&mut self, user_id: Uuid, mob_name: &str, here_zone: &str) {
+        self.bump_starter(user_id, |g| match g {
+            StarterGoal::SlayIn { zone, .. } => u32::from(zone == here_zone),
+            StarterGoal::SlayNamed { name_contains } => u32::from(mob_name.contains(name_contains)),
+            StarterGoal::Reach { .. } => 0,
+        });
+    }
+
     fn use_bank(&mut self, user_id: Uuid) {
         let Some(p) = self.players.get_mut(&user_id) else {
             return;
@@ -4977,6 +5624,8 @@ impl WorldState {
         };
         self.log_to(user_id, LogKind::Loot, message);
     }
+
+    // ---- Combat: targeting, abilities, damage, and the kill -------------
 
     fn engage(&mut self, user_id: Uuid) {
         if !self.is_classed(user_id) {
@@ -5090,6 +5739,20 @@ impl WorldState {
             player.target = Some(mob_id);
             // Opportunist: the Rogue's first strike of a fight always crits.
             player.opening_strike = player.class == Some(Class::Rogue);
+        }
+        // A named boss is an event, not another roster row - open with a bark.
+        let boss = self
+            .mobs
+            .get(&mob_id)
+            .is_some_and(|m| m.spawn.boss && m.alive);
+        if boss {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!(
+                    "{mob_name} turns its full attention on you. The air itself seems to brace."
+                ),
+            );
         }
         self.log_to(
             user_id,
@@ -5547,6 +6210,7 @@ impl WorldState {
     /// they respect the victim's armor exactly like every other pvp blow;
     /// `Roar`/`Guard` are pure self-buffs and work identically either way.
     /// Returns true if the companion's blow finished the victim off.
+    #[allow(clippy::too_many_arguments)]
     fn fire_pet_skills_pvp(
         &mut self,
         user_id: Uuid,
@@ -5554,10 +6218,15 @@ impl WorldState {
         pet_level: i32,
         pet_atk: i32,
         pet_name: &str,
+        pet_skills: &'static [super::taming::PetSkill],
         beastlord: bool,
     ) -> bool {
         let now_tick = self.world_ticks;
-        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+        for (si, skill) in pet_skills
+            .iter()
+            .filter(|s| s.level <= pet_level)
+            .enumerate()
+        {
             let ready = self
                 .pet_skill_cd
                 .get(&(user_id, si))
@@ -5629,6 +6298,15 @@ impl WorldState {
                     );
                     self.dirty = true;
                 }
+                PetSkillEffect::Mend => {
+                    let mag = skill.power + pet_atk / 6;
+                    self.heal_player(user_id, mag);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} nuzzles you with a mending glow."),
+                    );
+                }
             }
         }
         false
@@ -5691,6 +6369,16 @@ impl WorldState {
         self.bump_quests(user_id, |o| {
             u32::from(matches!(o, Objective::Bounty { name_contains, .. } if mob_name.contains(name_contains)))
         });
+        // The starter chain's slay steps: the fight happened in the player's
+        // own room, so its zone is the hunting ground.
+        let here_zone = self
+            .players
+            .get(&user_id)
+            .and_then(|p| self.world.room(p.room))
+            .map(|r| r.zone);
+        if let Some(here_zone) = here_zone {
+            self.bump_starter_kill(user_id, &mob_name, here_zone);
+        }
         if boss && let Some(zone) = super::world::frontier_zone_of_boss(&mob_name) {
             self.complete_quest(user_id, zone, mob_level);
         }
@@ -5720,6 +6408,8 @@ impl WorldState {
         self.dirty = true;
         self.mark_world_dirty();
     }
+
+    // ---- What a kill pays: titles, quests, loot, and levels -------------
 
     /// Set the displayed title to the one at `idx`; selecting the active title
     /// again (or an out-of-range index) clears it.
@@ -5917,6 +6607,8 @@ impl WorldState {
             }
         }
     }
+
+    // ---- Fleeing, and world-local chat ----------------------------------
 
     fn flee(&mut self, user_id: Uuid) {
         let Some(player) = self.players.get(&user_id) else {
@@ -6349,6 +7041,7 @@ impl WorldState {
                 let Some(it) = item(*id) else { return false };
                 match it.kind {
                     ItemKind::Consumable { .. } => false, // never dump potions
+                    ItemKind::Utility => false,           // never dump poisons/buff items either
                     ItemKind::Valuable => true,           // pure sell-fodder, always goes
                     ItemKind::Equipment(_) => match kind {
                         SellBatch::All => true,
@@ -6613,22 +7306,42 @@ impl WorldState {
             }
             // Auto-attack is physical and runs through the mob's resistances,
             // so a physical-resistant foe rewards switching to spells.
-            let (mob_name, dealt, defense, dead) = {
+            let (mob_name, dealt, defense, dead, big_hit, staggered) = {
                 let Some(mob) = self.mobs.get_mut(&mob_id) else {
                     continue;
                 };
                 let (dealt, defense) = mob.spawn.profile.apply(player_atk, DamageType::Physical);
+                let hp_before = mob.hp;
                 mob.hp -= dealt;
                 self.dirty = true;
-                (mob.spawn.name.to_string(), dealt, defense, mob.hp <= 0)
+                (
+                    mob.spawn.name.to_string(),
+                    dealt,
+                    defense,
+                    mob.hp <= 0,
+                    dealt * 4 >= mob.spawn.max_hp,
+                    hp_before * 4 > mob.spawn.max_hp
+                        && mob.hp * 4 <= mob.spawn.max_hp
+                        && mob.hp > 0,
+                )
             };
             self.mark_world_dirty();
             let tag = defense_tag(defense, DamageType::Physical);
+            // A blow worth a quarter of the foe's whole life deserves a louder
+            // sentence than the tick-by-tick chip damage.
+            let verb = if big_hit { "crush into" } else { "strike" };
             self.log_to(
                 user_id,
                 LogKind::Combat,
-                format!("You strike {mob_name} for {dealt} physical{tag}."),
+                format!("You {verb} {mob_name} for {dealt} physical{tag}."),
             );
+            if staggered {
+                self.log_to(
+                    user_id,
+                    LogKind::Combat,
+                    format!("{mob_name} staggers - the fight turns your way!"),
+                );
+            }
             // Valewalker "Reaping Harvest": each landed melee strike draws a little
             // of the wild's vigour back into the reaper.
             if class == Some(Class::Valewalker) {
@@ -6676,7 +7389,7 @@ impl WorldState {
             } else {
                 0
             };
-            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&user_id)
                 .and_then(|p| p.pet.as_ref())
@@ -6687,6 +7400,7 @@ impl WorldState {
                         pet.species.name,
                         pet.attack() + pet.attack() * pet_bonus / 100,
                         pet.level(),
+                        pet.species.skills,
                     )
                 })
             {
@@ -6713,7 +7427,7 @@ impl WorldState {
                 // own cooldown (savage bite / rend / roar / guard / pounce).
                 let beastlord = class == Some(Class::Beastlord);
                 if self.fire_pet_skills(
-                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, beastlord,
+                    user_id, mob_id, pet_level, pet_atk, pet_name, &mob_name, pet_skills, beastlord,
                 ) {
                     // A killing pounce may have finished the foe.
                     continue;
@@ -6851,7 +7565,7 @@ impl WorldState {
             } else {
                 0
             };
-            if let Some((pet_glyph, pet_name, pet_atk, pet_level)) = self
+            if let Some((pet_glyph, pet_name, pet_atk, pet_level, pet_skills)) = self
                 .players
                 .get(&attacker_id)
                 .and_then(|p| p.pet.as_ref())
@@ -6862,6 +7576,7 @@ impl WorldState {
                         pet.species.name,
                         pet.attack() + pet.attack() * pet_bonus / 100,
                         pet.level(),
+                        pet.species.skills,
                     )
                 })
             {
@@ -6887,6 +7602,7 @@ impl WorldState {
                     pet_level,
                     pet_atk,
                     pet_name,
+                    pet_skills,
                     beastlord,
                 ) {
                     continue;
@@ -6935,6 +7651,8 @@ impl WorldState {
             kills: std::mem::take(&mut self.pending_kills),
         }
     }
+
+    // ---- Mobs between rounds: the world boss, roaming, behaviour --------
 
     /// Raise the lone wandering world boss after the Frontier seals are claimed.
     /// It hunts as a roaming boss across the living-dark and Frontier regions.
@@ -7428,6 +8146,8 @@ impl WorldState {
         }
     }
 
+    // ---- Death, the temple, and resurrection ----------------------------
+
     /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
     /// clearing the corpse state. Shared by the auto-release tick and the manual
     /// release action. A fallen escort cannot be led from beyond the temple.
@@ -7546,6 +8266,8 @@ impl WorldState {
         self.dirty = true;
         self.mark_world_dirty();
     }
+
+    // ---- Companions: the stable, feeding, and wounds --------------------
 
     /// Whether a companion Stable stands in this room.
     fn room_has_stable(&self, room: RoomId) -> bool {
@@ -7801,10 +8523,15 @@ impl WorldState {
         pet_atk: i32,
         pet_name: &str,
         mob_name: &str,
+        pet_skills: &'static [super::taming::PetSkill],
         beastlord: bool,
     ) -> bool {
         let now_tick = self.world_ticks;
-        for (si, skill) in pet_skills_at(pet_level).enumerate() {
+        for (si, skill) in pet_skills
+            .iter()
+            .filter(|s| s.level <= pet_level)
+            .enumerate()
+        {
             // Respect the per-skill cooldown.
             let ready = self
                 .pet_skill_cd
@@ -7884,6 +8611,15 @@ impl WorldState {
                     );
                     self.dirty = true;
                 }
+                PetSkillEffect::Mend => {
+                    let mag = skill.power + pet_atk / 6;
+                    self.heal_player(user_id, mag);
+                    self.log_to(
+                        user_id,
+                        LogKind::Combat,
+                        format!("Your {pet_name} nuzzles you with a mending glow."),
+                    );
+                }
             }
         }
         false
@@ -7916,7 +8652,7 @@ impl WorldState {
             );
             return;
         };
-        let species = &TAMEABLE[wb.species];
+        let species = beast_species(wb.species);
         let bi = wb.species;
         let now = Instant::now();
         // A spooked beast will not be approached again until it settles.
@@ -8135,6 +8871,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Appearance, per-player logging, and the snapshot ---------------
+
     /// Cycle one appearance/bio field forward (+1) or back (-1), wrapping.
     fn cycle_appearance(&mut self, user_id: Uuid, field: usize, delta: i8) {
         if field >= appearance::N_FIELDS {
@@ -8267,6 +9005,7 @@ impl WorldState {
                     Vec::new(),
                 ),
             };
+            let zone_band = room.and_then(|r| self.world.zone_band(r.zone));
             let mobs: Vec<MobView> = mobs_by_room
                 .get(&player.room)
                 .into_iter()
@@ -8280,6 +9019,15 @@ impl WorldState {
                     rank: m.spawn.rank().to_string(),
                     boss: m.spawn.boss,
                     targeted: player.target == Some(m.spawn.id),
+                    school: m.spawn.profile.attack_type.label(),
+                    weak: m.spawn.profile.weak.map(|d| d.label()),
+                    resist: m.spawn.profile.resist.map(|d| d.label()),
+                    dot_stacks: self
+                        .mob_dots
+                        .get(&m.spawn.id)
+                        .map(|stacks| stacks.len().min(u8::MAX as usize) as u8)
+                        .unwrap_or(0),
+                    stunned: self.mob_stuns.get(&m.spawn.id).is_some_and(|t| *t > 0),
                 })
                 .collect();
             // Foes lairing in nearby rooms (not this one) and other adventurers
@@ -8535,6 +9283,7 @@ impl WorldState {
                     compare: compare_to_worn(&player.equipped, it),
                     compare_pct: player.compare_gear(it),
                     category: item_category(&it.kind),
+                    desc: it.desc,
                 })
                 .chain(
                     player
@@ -8552,6 +9301,7 @@ impl WorldState {
                             compare: String::new(),
                             compare_pct: None,
                             category: item_category(&it.kind),
+                            desc: it.desc,
                         }),
                 )
                 .collect();
@@ -8574,6 +9324,7 @@ impl WorldState {
                         compare: compare_to_worn(&player.equipped, it),
                         compare_pct: player.compare_gear(it),
                         category: item_category(&it.kind),
+                        desc: it.desc,
                     })
                     .collect(),
             });
@@ -8587,7 +9338,11 @@ impl WorldState {
                 attack: pet.attack(),
                 downed: pet.downed,
                 loyalty_pct: pet.loyalty_pct(),
-                skills: pet_skills_at(pet.level())
+                skills: pet
+                    .species
+                    .skills
+                    .iter()
+                    .filter(|s| s.level <= pet.level())
                     .map(|s| (s.name.to_string(), s.level))
                     .collect(),
             });
@@ -8625,7 +9380,7 @@ impl WorldState {
                         .iter()
                         .enumerate()
                         .map(|(i, wb)| {
-                            let sp = &TAMEABLE[wb.species];
+                            let sp = beast_species(wb.species);
                             let spooked = self
                                 .tame_cooldowns
                                 .get(&(*user_id, wb.species))
@@ -8709,15 +9464,29 @@ impl WorldState {
             let portal = features_at(player.room)
                 .iter()
                 .any(|f| f.kind == FeatureKind::Portal)
-                .then(|| PortalView {
-                    entries: super::world::waystone_destinations()
-                        .into_iter()
-                        .map(|(label, room, required)| {
-                            let sealed = required
-                                .is_some_and(|t| !player.titles.iter().any(|owned| owned == t));
-                            (label.to_string(), room, room == player.room, sealed)
-                        })
-                        .collect(),
+                .then(|| {
+                    let known_gates = super::world::CONTINENT_WAYSTONES
+                        .iter()
+                        .filter(|(_, room)| player.visited.contains(room))
+                        .count();
+                    PortalView {
+                        entries: super::world::waystone_destinations()
+                            .into_iter()
+                            .filter(|(_, room)| {
+                                super::world::waystone_is_known(*room, &player.visited)
+                            })
+                            .map(|(label, room)| (label.to_string(), room, room == player.room))
+                            .collect(),
+                        known_gates,
+                        unknown_gates: super::world::CONTINENT_WAYSTONES.len() - known_gates,
+                    }
+                });
+
+            let board = features_at(player.room)
+                .iter()
+                .any(|f| f.kind == FeatureKind::Board)
+                .then(|| BoardView {
+                    entries: self.board_entries(*user_id, player.room),
                 });
 
             let xp_into = player.xp - xp_for_level(player.level);
@@ -8739,16 +9508,27 @@ impl WorldState {
                 self.world
                     .minimap(player.room, player.previous_room, &player.visited, 3, 2);
             let atlas = self.world.region_progress(&player.visited, player.room);
-            let mut quests: Vec<QuestView> = (0..super::world::frontier_zone_count())
-                .filter_map(|z| {
-                    super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
-                        name: format!("{zname} - slay {boss}"),
-                        done: player.completed_quests.contains(&z),
-                        reward: format!("title: Champion of the {zname}"),
-                        frontier: true,
-                    })
-                })
-                .collect();
+            // The journal, in reading order: the active starter step first,
+            // then accepted board bounties, then - only once the Frontier's
+            // gate titles are held - its twenty zone quests. A locked Frontier
+            // used to dump all twenty endgame rows on a level-2 character and
+            // drown everything that actually applied to them.
+            let mut quests: Vec<QuestView> = Vec::new();
+            if let Some(q) = starter_quest(player.starter_stage) {
+                let need = starter_goal_target(q.goal);
+                quests.push(QuestView {
+                    name: if need > 1 {
+                        format!("{} ({}/{})", q.title, player.starter_kills, need)
+                    } else {
+                        q.title.to_string()
+                    },
+                    desc: q.hint.to_string(),
+                    done: false,
+                    reward: format!("{} gold + {} xp", q.reward_gold, q.reward_xp),
+                    kind: QuestKind::Starter,
+                    target: Some(q.target),
+                });
+            }
             // Accepted board bounties, with live progress and a claim hint.
             for (id, prog) in &player.board_progress {
                 if let Some(q) = board_quest(*id) {
@@ -8760,6 +9540,7 @@ impl WorldState {
                         } else {
                             format!("{} ({}/{})", q.title, prog, need)
                         },
+                        desc: format!("{} ({}) {}", q.blurb, q.objective.describe(), q.hint),
                         done: ready,
                         reward: format!(
                             "{} gold{}",
@@ -8769,10 +9550,25 @@ impl WorldState {
                                 None => String::new(),
                             }
                         ),
-                        frontier: false,
+                        kind: QuestKind::Board,
+                        target: None,
                     });
                 }
             }
+            let frontier_open = titles_include_all(&player.titles, &FRONTIER_REQUIRED_TITLES);
+            if frontier_open {
+                quests.extend((0..super::world::frontier_zone_count()).filter_map(|z| {
+                    super::world::frontier_zone_info(z).map(|(zname, boss)| QuestView {
+                        name: format!("{zname} - slay {boss}"),
+                        desc: format!("Hunt down and slay {boss}, {zname}'s zone boss."),
+                        done: player.completed_quests.contains(&z),
+                        reward: format!("title: Champion of the {zname}"),
+                        kind: QuestKind::Frontier,
+                        target: Some(super::world::frontier_zone_entrance(z)),
+                    })
+                }));
+            }
+            let road = road_view(&player.titles, &self.road_targets);
 
             players.insert(
                 *user_id,
@@ -8802,6 +9598,7 @@ impl WorldState {
                     room_name,
                     room_desc,
                     zone,
+                    zone_band,
                     safe,
                     pvp,
                     pvp_kills: player.pvp_kills,
@@ -8826,6 +9623,9 @@ impl WorldState {
                     nodes,
                     skills,
                     in_combat_with,
+                    shield: player.shield,
+                    empower: player.empower,
+                    stunned: player.stunned > 0,
                     abilities,
                     inventory,
                     shop,
@@ -8836,6 +9636,7 @@ impl WorldState {
                     housing,
                     crafting,
                     portal,
+                    board,
                     bio: appearance::compose_bio(&player.appearance),
                     appearance: (0..appearance::N_FIELDS)
                         .map(|i| {
@@ -8856,6 +9657,8 @@ impl WorldState {
                     title_levels: player.title_levels.clone(),
                     active_title: player.active_title,
                     quests,
+                    road,
+                    frontier_open,
                     resurrections_left: player.resurrections_left,
                     resurrection_cap: player.resurrection_cap,
                     features,
@@ -8905,6 +9708,8 @@ impl WorldState {
         }
     }
 }
+
+// ---- Free helpers: titles, tags, gold, and the log buffer ----------------
 
 /// A short combat-log suffix announcing a resist or weakness, empty for normal.
 fn defense_tag(defense: Defense, _dtype: DamageType) -> &'static str {

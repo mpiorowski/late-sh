@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -14,7 +14,7 @@ use crate::app::{
     },
     common::{
         markdown::render_body_to_lines,
-        primitives::{EDGE_GAP, format_relative_time, hint_line, row_with_hint},
+        primitives::{format_relative_time, hint_line, row_with_hint},
         theme,
     },
     directory::state::{DirectoryState, PersonEntry, PersonFocus, person_entries},
@@ -342,15 +342,10 @@ fn draw_person_detail(
     view: &DirectoryPageView<'_>,
     entry: Option<&PersonEntry<'_>>,
 ) {
-    // Padded off the divider and the frame border on the far side: the card
-    // is mostly links — the work profile URL, every project URL — and a link
-    // flush against `│` reads as part of the URL to a terminal that linkifies
-    // by scanning the row.
     let block = Block::default()
         .title(" Person ")
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(theme::BORDER()))
-        .padding(Padding::horizontal(EDGE_GAP as u16));
+        .border_style(Style::default().fg(theme::BORDER()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

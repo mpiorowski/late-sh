@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::app::common::{
     composer::composer_line_count,
     overlay::{Overlay, draw_overlay},
-    primitives::{EDGE_GAP, horizontal_inset, row_with_hint},
+    primitives::row_with_hint,
     theme,
     username_effect::NameStyle,
 };
@@ -475,6 +475,16 @@ pub(crate) fn draw_composer_block(frame: &mut Frame, area: Rect, view: &Composer
 
     if view.mention_active {
         draw_mention_autocomplete(frame, area, view.mention_matches, view.mention_selected);
+    }
+}
+
+fn horizontal_inset(rect: Rect, pad: u16) -> Rect {
+    let pad = pad.min(rect.width / 2);
+    Rect {
+        x: rect.x + pad,
+        y: rect.y,
+        width: rect.width.saturating_sub(pad * 2),
+        height: rect.height,
     }
 }
 
@@ -1790,7 +1800,7 @@ fn visible_chat_rows(
         // The left margin bar is drawn in the mention color by `ui_text`;
         // recolor it here so a reply reads as a reply.
         if let Some(first_span) = row.spans.first_mut()
-            && first_span.content == super::ui_text::MENTION_BAR
+            && first_span.content == "│"
         {
             first_span.style = first_span.style.fg(accent);
         }
@@ -1823,17 +1833,12 @@ fn visible_chat_rows(
         for idx in start..end {
             let row = &mut lines[idx - visible_start];
             if let Some(first_span) = row.spans.first()
-                && (first_span.content == super::ui_text::BLANK_GUTTER
-                    || first_span.content == super::ui_text::MENTION_BAR)
+                && (first_span.content == " " || first_span.content == "│")
             {
                 // Keep the row's whole treatment (the mention or reply wash,
                 // or the highlight inversion), so the marker does not punch
-                // a hole in it; only the glyph color is the marker's own. The
-                // marker replaces the whole gutter so the body never shifts.
-                row.spans[0] = Span::styled(
-                    super::ui_text::SELECTED_GUTTER,
-                    first_span.style.fg(theme::AMBER()),
-                );
+                // a hole in it; only the glyph color is the marker's own.
+                row.spans[0] = Span::styled("▸", first_span.style.fg(theme::AMBER()));
             }
         }
     }
@@ -2304,10 +2309,10 @@ fn build_author_prefix_and_segments_with_chat_badges(
 ) -> (String, Vec<HeaderSegment>, (usize, usize)) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
-    // The painted line is `[gutter][prefix][ stamp]`, so the prefix begins
-    // where the gutter ends. The gutter's width is fixed across both the blank
-    // and the mention-bar variants, so one constant covers both.
-    let mut col: u16 = super::ui_text::MESSAGE_GUTTER as u16;
+    // The painted line is `[pad (1 cell)][prefix][ stamp]`, so prefix
+    // begins at column 1. Pad width is fixed at 1 across both the
+    // `" "` and `"│"` mention variants.
+    let mut col: u16 = 1;
 
     if is_friend {
         let glyph_w = UnicodeWidthStr::width(FRIEND_BADGE) as u16;
@@ -4307,10 +4312,11 @@ impl RoomHeader<'_> {
 /// The link is the point of the row, so it is measured first and everything
 /// else is fitted around it: the title clips to what is left, and the watcher
 /// count drops when even that is not enough. A budget guessed ahead of the
-/// hint would let the rest of the row push the URL off entirely —
-/// `row_with_hint` drops the hint rather than wrap it, and the hint is the
-/// URL. A live stream's `watch: https://…/live/<id>` runs 50 cells, so at
-/// ordinary chat-pane widths something has to give for the link to show at all.
+/// hint would let the rest of the row push the URL off entirely, since
+/// `row_with_hint` drops a hint it cannot fit rather than wrapping it, and
+/// here the hint *is* the URL. A live stream's `watch: https://…/live/<id>`
+/// runs 51 cells, so at ordinary chat-pane widths something has to give for
+/// the link to show at all.
 fn stream_header_line(
     stream: &crate::app::stream::registry::LiveStreamView,
     width: usize,
@@ -4318,10 +4324,19 @@ fn stream_header_line(
     let hint = if stream.watch_url.is_empty() {
         Vec::new()
     } else {
-        vec![Span::styled(
-            format!("watch: {}", stream.watch_url),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )]
+        vec![
+            Span::styled(
+                format!("watch: {}", stream.watch_url),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ),
+            // Load-bearing trailing space: terminal link detection (kitty and
+            // friends) runs over the cell grid, so a URL flush against the
+            // right edge swallows whatever sits in the next cell: the pane
+            // border `│`, or the `────` rule on the row below when the
+            // terminal treats a full row as wrapped. Clicking the link then
+            // opens a 404. One space ends the token where the URL ends.
+            Span::raw(" "),
+        ]
     };
 
     let status = if stream.live {
@@ -4341,15 +4356,11 @@ fn stream_header_line(
         )
     });
 
+    // What the rest of the row may not eat into: the hint (its own trailing
+    // cell included) plus the two cells `row_with_hint` keeps between the two
+    // sides. Nothing to reserve when there is no hint to flush right.
     let hint_width: usize = hint.iter().map(Span::width).sum();
-    // What the rest of the row may not eat into: the hint plus the two cells
-    // `row_with_hint` keeps between the sides, or just the reserved edge cell
-    // when there is no hint to flush right.
-    let reserved = if hint_width == 0 {
-        EDGE_GAP
-    } else {
-        hint_width + 2 + EDGE_GAP
-    };
+    let reserved = if hint_width == 0 { 0 } else { hint_width + 2 };
     let status_width = status.width();
     let watching = watching.filter(|count| status_width + count.width() + reserved <= width);
     let title_budget =
@@ -4408,10 +4419,8 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
             Vec::new()
         };
         // The topic is clipped to whatever the hint leaves, so a long topic
-        // never pushes `/rules` off the row. Without a hint there is nothing
-        // to flush right, so the clip has to reserve the edge cell itself —
-        // topics carry links too.
-        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { EDGE_GAP });
+        // never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if header.has_rules { 8 } else { 0 });
         lines.push(row_with_hint(
             vec![Span::styled(
                 truncate_cells(topic, room_for_topic),

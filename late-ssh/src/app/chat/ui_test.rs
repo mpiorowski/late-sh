@@ -1,5 +1,4 @@
 use super::*;
-use crate::app::chat::ui_text::{self, MESSAGE_GUTTER};
 use chrono::Utc;
 use late_core::models::chat_room::ChatRoom;
 use std::{
@@ -67,6 +66,49 @@ fn author_badge_suffix_keeps_badges_compact() {
         " bonsai"
     );
     assert_eq!(format_author_badge_suffix(&[], None, None), "");
+}
+
+fn live_stream_view(watch_url: &str) -> crate::app::stream::registry::LiveStreamView {
+    crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(7),
+        username: "mat".to_string(),
+        title: "hacking on late".to_string(),
+        room_id: Uuid::from_u128(8),
+        voice_channel_id: Uuid::from_u128(9),
+        stream_id: "abc123".to_string(),
+        live: true,
+        watching: 3,
+        watch_url: watch_url.to_string(),
+    }
+}
+
+#[test]
+fn stream_header_never_lets_the_watch_url_touch_the_right_edge() {
+    let url = "https://late.sh/live/abc123";
+    let width = 80;
+    let line = stream_header_line(&live_stream_view(url), width);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    // Terminals detect links over the cell grid, so a URL flush against the
+    // last column absorbs the pane border `│` and the `────` rule below it.
+    assert_eq!(UnicodeWidthStr::width(text.as_str()), width);
+    assert!(text.ends_with(&format!("{url} ")), "got {text:?}");
+}
+
+#[test]
+fn stream_header_drops_the_watch_url_when_the_row_is_too_tight() {
+    let line = stream_header_line(&live_stream_view("https://late.sh/live/abc123"), 30);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+
+    assert!(!text.contains("watch:"), "got {text:?}");
 }
 
 #[test]
@@ -828,10 +870,7 @@ fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
     theme::set_current_by_id("terminal");
     let message_id = Uuid::now_v7();
     let mut cache = ChatRowsCache {
-        all_rows: vec![Line::from(vec![
-            Span::raw(ui_text::BLANK_GUTTER),
-            Span::raw("hello"),
-        ])],
+        all_rows: vec![Line::from(vec![Span::raw(" "), Span::raw("hello")])],
         ..Default::default()
     };
     cache.selected_ranges.insert(message_id, (0, 1));
@@ -842,7 +881,7 @@ fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
     theme::set_current_by_id("contrast");
 
     let marker = &visible.lines[0].spans[0];
-    assert_eq!(marker.content, ui_text::SELECTED_GUTTER);
+    assert_eq!(marker.content, "▸");
     assert_eq!(marker.style.fg, Some(marker_fg));
     assert!(
         marker
@@ -1788,10 +1827,9 @@ fn header_segments_bare_username_only() {
     assert_eq!(prefix, "alice");
     assert_eq!(segs.len(), 1);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
-    // The gutter occupies the leading columns; the prefix begins after it.
-    let pad = MESSAGE_GUTTER as u16;
-    assert_eq!(segs[0].start_col, pad);
-    assert_eq!(segs[0].end_col, pad + 5); // "alice"
+    // column 0 is pad, prefix begins at 1.
+    assert_eq!(segs[0].start_col, 1);
+    assert_eq!(segs[0].end_col, 1 + 5); // "alice"
 }
 
 #[test]
@@ -1859,8 +1897,8 @@ fn header_segments_full_label_orders_special_bonsai_store() {
     assert_eq!(stores.len(), 1);
     let store = stores[0];
     // The store segment's start col must equal the prefix-relative
-    // offset of the chat-badge emoji, past the leading gutter.
-    let expected_store_offset = MESSAGE_GUTTER as u16
+    // offset of the chat-badge emoji (column 0 is the pad cell).
+    let expected_store_offset = 1
         + UnicodeWidthStr::width(FRIEND_BADGE) as u16
         + 1
         + UnicodeWidthStr::width("alice") as u16
@@ -1930,7 +1968,7 @@ fn header_segments_put_monthly_awards_after_author() {
     assert_eq!(segs[3].target, HeaderTarget::Profile);
     assert_eq!(segs[4].target, HeaderTarget::StoreBadge);
 
-    let expected_awards_offset = MESSAGE_GUTTER as u16 + UnicodeWidthStr::width("alice ") as u16;
+    let expected_awards_offset = 1 + UnicodeWidthStr::width("alice ") as u16;
     assert_eq!(segs[1].start_col, expected_awards_offset);
     assert_eq!(
         segs[1].end_col,
@@ -2171,10 +2209,10 @@ fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::Li
 }
 
 /// A real stream id is 16 random bytes in base64url (`registry::capability_id`),
-/// so `watch: <url>` runs 50 cells — still wider than the slack an ordinary
-/// chat pane has left over. The link is the point of the row, so the title and
-/// then the watcher count yield to it; a budget guessed ahead of the hint used
-/// to push the URL off entirely.
+/// so `watch: <url>` plus its trailing cell runs 51 columns, wider than the
+/// slack an ordinary chat pane has left over. The link is the point of the
+/// row, so the title and then the watcher count yield to it; a budget guessed
+/// ahead of the hint used to push the URL off the row entirely.
 const REAL_WATCH_URL: &str = "https://late.sh/live/HdRl3AJfRhWc7_BdvUEFrQ";
 
 #[test]
@@ -2194,14 +2232,15 @@ fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
         text.contains("· 3 watching"),
         "there is room for the count here: {text:?}"
     );
+    // The hint's own trailing cell is still the last thing on the row, so the
+    // URL never ends flush against whatever the terminal paints next.
     assert!(
-        line.width() < WIDTH,
-        "the row still stops short of the edge: {}",
-        line.width()
+        text.ends_with(&format!("{REAL_WATCH_URL} ")),
+        "the link keeps its blank cell: {text:?}"
     );
 }
 
-/// Below 73 columns the watcher count goes too — a link nobody can see is
+/// Below 73 columns the watcher count goes too: a link nobody can see is
 /// worse than a count nobody misses. That floor was 83 while ids were hex.
 #[test]
 fn stream_header_drops_the_watcher_count_before_the_watch_url() {
@@ -2212,7 +2251,12 @@ fn stream_header_drops_the_watcher_count_before_the_watch_url() {
     let text = line.to_string();
     assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
     assert!(!text.contains("watching"), "the count yielded: {text:?}");
-    assert!(line.width() < WIDTH, "{}", line.width());
+    assert!(line.width() <= WIDTH, "{}", line.width());
+
+    // One column higher than the floor the count needs, it comes back.
+    let roomy = super::stream_header_line(&stream, 73).to_string();
+    assert!(roomy.contains("· 3 watching"), "{roomy:?}");
+    assert!(roomy.contains(REAL_WATCH_URL), "{roomy:?}");
 }
 
 #[test]

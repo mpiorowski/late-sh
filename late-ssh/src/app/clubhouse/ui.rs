@@ -13,13 +13,13 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 use uuid::Uuid;
 
-use crate::app::common::primitives::{EDGE_GAP, Screen};
+use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use late_core::api_types::NowPlaying;
@@ -1331,10 +1331,6 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border)
-                // Each card is sized `text + 4`, so a blank cell on either
-                // side costs nothing and keeps a `late.sh/...` line off the
-                // border, where a terminal would linkify `│` along with it.
-                .padding(Padding::horizontal(EDGE_GAP as u16))
                 .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
         ),
         rect,
@@ -1675,10 +1671,6 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border)
-                // Each card is sized `text + 4`, so a blank cell on either
-                // side costs nothing and keeps a `late.sh/...` line off the
-                // border, where a terminal would linkify `│` along with it.
-                .padding(Padding::horizontal(EDGE_GAP as u16))
                 .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
         ),
         rect,
@@ -1826,10 +1818,6 @@ fn draw_popover(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border)
-                // Each card is sized `text + 4`, so a blank cell on either
-                // side costs nothing and keeps a `late.sh/...` line off the
-                // border, where a terminal would linkify `│` along with it.
-                .padding(Padding::horizontal(EDGE_GAP as u16))
                 .title(Span::styled(title, border.add_modifier(Modifier::BOLD))),
         ),
         rect,

@@ -54,7 +54,8 @@ struct VoiceJoinTaskResult {
 }
 
 /// Full-screen stream handoff overlay, drawn over everything and dismissed
-/// by any key.
+/// by Esc alone: it holds hand-copied capability values, so a stray key must
+/// not clear them off the screen.
 pub(crate) enum StreamModal {
     /// URL + QR (publisher URL from `/golive`, watch URL from `/watch`).
     Qr(StreamQrModal),
@@ -3125,12 +3126,18 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
-        let Some(registry) = self.session_registry.clone() else {
-            return;
-        };
         if self.session_token.is_empty() {
             return;
         }
+        // The paired registry keeps token-scoped state that outlives the
+        // sockets (the once-per-session boot mute claim), so the session end
+        // has to retire it or it accumulates a row per session forever.
+        if let Some(paired) = &self.paired_client_registry {
+            paired.forget_session(&self.session_token);
+        }
+        let Some(registry) = self.session_registry.clone() else {
+            return;
+        };
         let token = self.session_token.clone();
         tokio::spawn(async move {
             registry.unregister(&token).await;

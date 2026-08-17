@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-15 (URL-bearing text keeps a blank cell against adjacent chrome so terminals stop linkifying border glyphs: `primitives::EDGE_GAP` / `horizontal_inset`, `Padding::horizontal` on list item blocks, and a uniform 2-cell chat message gutter; details in §11 "Text never touches chrome" and `late-ssh/src/app/chat/CONTEXT.md`)
+- Last updated: 2026-08-17 (Stream capability ids are 22-char base64url instead of 32-char hex, so the room header's watch link fits the row it used to be dropped from; the stream header row now fits its title and watcher count around the measured link instead of a hardcoded guess. Details in `late-ssh/src/app/stream/CONTEXT.md` §2 and `late-ssh/src/app/chat/CONTEXT.md` §11)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -874,7 +874,7 @@ Currently the SSH app assumes a single process. These in-memory structures would
 **Paired client control + visualizer:**
 1. Trigger: SSH PTY request creates a session token plus the inbound `SessionRegistry` route.
 2. Processing: The CLI or its webview helper connects `GET /api/ws/pair?token=...`; API registers an outbound paired-client sender/state slot in `PairedClientRegistry`.
-3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`.
+3. Side effects: the webview helper sends `client_state`/`player_state`; the CLI sends `client_state`. `client_state` updates paired kind/mute/volume metadata in `PairedClientRegistry`, persists the reported mute/volume to this device's `user_ssh_keys.settings` row (the one source of truth for both), and, on the session's *first* paired client only, aligns that client to the stored value (the CLI boots silent and needs it to start playing). The alignment is claimed per session token, not per WebSocket: re-applying it on a mid-session pair-WS reconnect is what used to unmute a muted session. See `late-ssh/src/app/audio/CONTEXT.md`, "Mute and volume: one source of truth, stored per device".
 4. Side effects: TUI `m`, `+`, and `-` send `toggle_mute`, `volume_up`, and `volume_down` back over the same WS to only the paired client for that token.
 5. Failure: If the paired client disconnects, paired state disappears. If the CLI viz source disconnects or goes silent, visualizer bars decay (rms * 0.96 per tick). If SSH disconnects, the session token unregisters on drop.
 
@@ -1212,15 +1212,6 @@ WHERE jsonb_array_length(coalesce(data->'house_furniture', '[]'::jsonb)) > 0;
 
 Toast notification is hidden by default (0 rows). When active, it appears as a 3-row bordered block (green for success, red for error) at the **top-right** of the content area. The settings overlay renders on top of the toast.
 
-### Text never touches chrome [STABLE]
-
-Any surface that can print a URL keeps at least one blank cell between the text and the chrome beside it — the frame border, a pane divider, the sidebar separator, an overlay's own border. Terminals that linkify by scanning a row (kitty and friends) otherwise swallow the neighbouring `│` or `─` into the link, so clicking a message link opens a URL with a box-drawing glyph glued to its end. The frame itself carries no `Padding`, so panes still receive its `inner` rect edge to edge; the gap is the caller's job.
-
-- `primitives::EDGE_GAP` is the one-cell reservation. `primitives::row_with_hint` bakes it into the right-flushed hint, and `primitives::horizontal_inset(rect, pad)` narrows a rect for content drawn straight into a pane.
-- Item lists inside a bordered pane use `Padding::horizontal(EDGE_GAP)` on the item `Block`, so the bottom rule and the selection wash keep full width while only the text is inset.
-- Chat message rows spend a fixed 2-cell gutter: `ui_text::MENTION_BAR` (`"│ "`) when the message mentions or replies to you, `ui_text::BLANK_GUTTER` (`"  "`) otherwise, and `ui_text::SELECTED_GUTTER` (`"▸ "`) swapped over either one on the selected row. All three are the same width on purpose — a mixed gutter would jitter the left text edge by a column as mentions arrive, and the author-header hit test bases its columns on `ui_text::MESSAGE_GUTTER`.
-- Titles drawn over a border (the ko-fi sponsor line) carry their own blank cell on each side of the link, since a title has no inner rect to inset.
-
 ### Global guide (`?`) [STABLE]
 
 One global overlay owns general app help plus the former Pair, terminal FAQ, and Hub Guide content. `?` opens it globally when not composing, except Artboard keeps its local page help. The default/first tab is Pair, which steers to the CLI first and carries the static late.sh/listen link and QR for listening without it.
@@ -1254,7 +1245,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `4` | Global | Jump to Artboard |
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
-| `m` | Global | Toggle mute on paired client |
+| `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |
 | `w` | Global (not composing, active Arcade games override) | Open the Bonsai care modal |

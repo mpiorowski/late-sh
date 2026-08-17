@@ -175,6 +175,21 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
         (1600..=BROCELIANDE_ZONES * BROCELIANDE_W * BROCELIANDE_H).contains(&broceliande),
         "Broceliande should be ~2000 rooms, got {broceliande}"
     );
+    // Aelunor, the Faewood: a sixth continent of twelve organic fae-glades
+    // (rooms 25000+, cavern-carved only - never a maze, never a grid). Each
+    // zone is sparse, so the total is a sane band rather than an exact count.
+    let aelunor = count_in(
+        AELUNOR_BASE,
+        AELUNOR_BASE + AELUNOR_ZONES as RoomId * AELUNOR_ZONE_STRIDE,
+    );
+    assert!(
+        (250..=AELUNOR_ZONES * AELUNOR_W * AELUNOR_H).contains(&aelunor),
+        "Aelunor should be ~300 rooms, got {aelunor}"
+    );
+    // Silvael: the Faewood's own city (rooms 26000+). A fixed, fully
+    // hand-authored set, so this is an exact count rather than a band.
+    let silvael = count_in(SILVAEL_BASE, SILVAEL_BASE + SILVAEL_ROOM_COUNT);
+    assert_eq!(silvael, 8, "eight Silvael rooms");
     // The Shattered Archipelago: portal villages + maze/cavern islands.
     use super::super::archipelago as arch;
     let villages = count_in(arch::VILLAGE_BASE, arch::VILLAGE_BASE + 1000);
@@ -213,6 +228,8 @@ fn world_has_expected_size_and_every_mob_homes_to_a_real_room() {
             + kaelmyr
             + lakes
             + broceliande
+            + aelunor
+            + silvael
             + villages
             + islands
             + wildbound
@@ -977,7 +994,7 @@ fn the_atlas_covers_every_continent_including_kaelmyr() {
 #[test]
 fn continent_waystones_stand_in_real_safe_rooms() {
     let world = seed_world();
-    for (label, room, _) in CONTINENT_WAYSTONES {
+    for (label, room) in CONTINENT_WAYSTONES {
         let r = world
             .room(*room)
             .unwrap_or_else(|| panic!("waystone room for {label} exists"));
@@ -991,7 +1008,7 @@ fn continent_waystones_stand_in_real_safe_rooms() {
     }
     // Destinations are unique across the whole network.
     let dests = waystone_destinations();
-    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r, _)| *r).collect();
+    let mut rooms: Vec<RoomId> = dests.iter().map(|(_, r)| *r).collect();
     rooms.sort_unstable();
     rooms.dedup();
     assert_eq!(rooms.len(), dests.len(), "destination rooms are unique");
@@ -1877,7 +1894,11 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
     let wildbound: Vec<&MobSpawn> = world
         .spawns
         .iter()
-        .filter(|s| s.id >= WILDBOUND_SPAWN_ID_START)
+        // Bounded above by Aelunor's own spawn-id band (1,600,000+), which
+        // now sits just past Wildbound's - an unbounded `>=` here used to
+        // silently sweep Aelunor's dozen zone bosses in as "Wildbound apex
+        // bosses" too.
+        .filter(|s| (WILDBOUND_SPAWN_ID_START..AELUNOR_SPAWN_ID_START).contains(&s.id))
         .collect();
     let distinct_names: std::collections::HashSet<&str> =
         wildbound.iter().map(|s| s.name).collect();
@@ -1901,6 +1922,182 @@ fn wildbound_template_pool_is_three_hundred_mobs_plus_three_apex_bosses() {
         levels.iter().any(|&l| l < 30) && levels.iter().any(|&l| l > 90),
         "the Waste should span from early levels to near the cap, got {levels:?}"
     );
+}
+
+#[test]
+fn a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown() {
+    // The Waste is walked into off the Sahra Wastes with no title at all, and
+    // its authored stats sit in `tune_spawn_balance`'s gentle overworld bucket
+    // on purpose, so what its apexes pay has to answer to the biome they
+    // guard. The boss branch of `wildbound_loot` used to hand all three the
+    // catalog's top table, which meant the 1500hp Duskmire boss dropped - on
+    // every kill, since `roll_loot` never rolls for a boss - what the King Who
+    // Was Promised Nothing guards at the end of twenty Frontier zones.
+    use super::super::items::{FRONTIER_TIERS, frontier_loot};
+    let world = seed_world();
+    let tier_of = |loot: &'static [u32]| {
+        (0..FRONTIER_TIERS)
+            .find(|t| frontier_loot(*t) == loot)
+            .expect("the Waste borrows the Frontier catalog, one tier per table")
+    };
+
+    for (b, biome) in WILDBOUND_BIOMES.iter().enumerate() {
+        let base = WILDBOUND_BASE + (b as u32) * WILDBOUND_BIOME_STRIDE;
+        let mobs: Vec<&MobSpawn> = world
+            .spawns
+            .iter()
+            .filter(|s| (base..base + WILDBOUND_BIOME_STRIDE).contains(&s.home))
+            .collect();
+        let boss = mobs.iter().find(|s| s.boss).expect("one apex per biome");
+        let boss_tier = tier_of(boss.loot);
+        let deepest_regular = mobs
+            .iter()
+            .filter(|s| !s.boss)
+            .map(|s| tier_of(s.loot))
+            .max()
+            .expect("the field is populated");
+
+        assert!(
+            boss_tier > deepest_regular,
+            "{} should out-pay {}'s own deep trash (tier {deepest_regular}), got tier {boss_tier}",
+            boss.name,
+            biome.zone
+        );
+        assert!(
+            boss_tier < FRONTIER_TIERS - 1,
+            "the catalog's top table belongs to the Frontier's crown, not {} (tier {boss_tier})",
+            boss.name
+        );
+        if let Some(next) = WILDBOUND_BIOMES.get(b + 1) {
+            assert!(
+                boss_tier <= next.loot_base,
+                "{} should not out-pay the shallow end of {} (tier {}), got tier {boss_tier}",
+                boss.name,
+                next.zone,
+                next.loot_base
+            );
+        }
+    }
+}
+
+#[test]
+fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
+    // Aelunor is a lottery, not a shortcut past the Frontier. Two rules make
+    // that true, and both live in `extend_aelunor`/`aelunor_loot`:
+    //
+    //   1. A Legendary spawn stays a genuinely rare roll at every depth. The
+    //      affix roll used to climb linearly with the zone, so every spawn
+    //      past zone 8 was Legendary - "rarity" was really just depth.
+    //   2. A plain spawn's table stays in the catalog's lower half. Only the
+    //      rare affixes reach the top bands, so the wood's ~660hp mobs can't
+    //      hand out what the Frontier's ~3280hp mobs guard behind four Bane
+    //      titles, on a walk in from the Amber Savanna with no gate at all.
+    use super::super::items::{Rarity, item};
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    assert!(
+        wood.len() > 100,
+        "the wood should be populated, got {} spawns",
+        wood.len()
+    );
+
+    let legendary = |s: &MobSpawn| s.name.starts_with("Legendary ");
+    let share = |pool: &[&MobSpawn]| match pool.len() {
+        0 => 0,
+        n => pool.iter().filter(|s| legendary(s)).count() * 100 / n,
+    };
+    assert!(
+        share(&wood) < 15,
+        "a Legendary should be a lucky find across the wood, got {}% of spawns",
+        share(&wood)
+    );
+    let deepest: Vec<&MobSpawn> = wood
+        .iter()
+        .copied()
+        .filter(|s| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1)
+        .collect();
+    assert!(
+        share(&deepest) < 25,
+        "even the Deep Heart keeps Legendaries a minority, got {}%",
+        share(&deepest)
+    );
+    assert!(
+        wood.iter().any(|s| legendary(s)),
+        "but the tail is real - some spawns do roll Legendary"
+    );
+
+    // A plain, unaffixed spawn never carries endgame gear, however deep it is.
+    for s in wood.iter().filter(|s| AELUNOR_CREATURES.contains(&s.name)) {
+        for id in s.loot {
+            let it = item(*id).unwrap_or_else(|| panic!("{} drops unknown item {id}", s.name));
+            assert!(
+                !matches!(it.rarity, Rarity::Epic | Rarity::Legendary),
+                "{} is a plain spawn but drops {} ({})",
+                s.name,
+                it.name,
+                it.rarity.label()
+            );
+        }
+    }
+    // The jackpot is real, though: the rare rolls do reach the top bands.
+    assert!(
+        wood.iter().any(|s| s
+            .loot
+            .iter()
+            .any(|id| item(*id).is_some_and(|it| it.rarity == Rarity::Legendary))),
+        "a Legendary spawn should be worth the walk"
+    );
+}
+
+#[test]
+fn a_legendary_aelunor_spawn_is_an_elite_that_guards_its_prize() {
+    // The affix jumps the drop table twelve tiers wherever it lands, so what
+    // carries it has to stand as far above the local floor as the prize does.
+    // Otherwise the lottery is only a shortcut: a first-glade Legendary would
+    // hand a wanderer Epic-band gear off an ordinary fight. The premium is
+    // quadratic in the affix and flat across zones for exactly that reason -
+    // the prize doesn't get smaller near the eaves, so neither does the guard.
+    let world = seed_world();
+    let wood: Vec<&MobSpawn> = world
+        .spawns
+        .iter()
+        .filter(|s| is_aelunor_room(s.home) && !s.boss)
+        .collect();
+    let zone_of = |s: &MobSpawn| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE;
+    let mut checked = 0;
+    for legend in wood.iter().filter(|s| s.name.starts_with("Legendary ")) {
+        // The toughest ordinary spawn in the same glade, deepest cell included.
+        let Some(plain) = wood
+            .iter()
+            .filter(|s| zone_of(s) == zone_of(legend) && AELUNOR_CREATURES.contains(&s.name))
+            .max_by_key(|s| s.max_hp)
+        else {
+            continue;
+        };
+        assert!(
+            legend.max_hp * 10 >= plain.max_hp * 16,
+            "{} ({} hp) barely outweighs the glade's toughest common {} ({} hp) - \
+             a Legendary should read as a mini-boss",
+            legend.name,
+            legend.max_hp,
+            plain.name,
+            plain.max_hp,
+        );
+        assert!(
+            legend.damage > plain.damage,
+            "{} ({} dmg) hits no harder than the common {} ({} dmg)",
+            legend.name,
+            legend.damage,
+            plain.name,
+            plain.damage,
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "some glade should hold a Legendary to check");
 }
 
 #[test]
@@ -1994,4 +2191,34 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
             "safe tutorial room {room} needs a villager"
         );
     }
+}
+
+#[test]
+fn zone_level_bands_are_sane_and_cover_the_road() {
+    let world = seed_world();
+    // Every zone that homes a mob gets a band, and every band is ordered.
+    for spawn in &world.spawns {
+        let zone = world.room(spawn.home).expect("mob home exists").zone;
+        let (lo, hi) = world
+            .zone_band(zone)
+            .unwrap_or_else(|| panic!("zone {zone} homes a mob but has no band"));
+        assert!(lo <= hi, "zone {zone} band is inverted: {lo}-{hi}");
+        let level = spawn.level();
+        assert!(
+            (lo..=hi).contains(&level),
+            "zone {zone} band {lo}-{hi} misses its own mob at level {level}"
+        );
+    }
+    // The starting road reads as low-level ground, and a mob-less haven reads
+    // as no band at all rather than a made-up number.
+    let (lo, _) = world.zone_band("King's Road").expect("the road has mobs");
+    assert!(lo <= 3, "the King's Road should read as a starting zone");
+    assert!(world.zone_band("Hearthward Close").is_none());
+    // The atlas carries the same bands per region.
+    let progress = world.region_progress(&std::collections::HashSet::new(), 1);
+    let road = progress
+        .iter()
+        .find(|r| r.name.contains("King's Road"))
+        .expect("home region listed");
+    assert!(road.levels.is_some(), "the home region has hostile levels");
 }

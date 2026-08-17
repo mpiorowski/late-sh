@@ -110,9 +110,9 @@ fn voice_row_is_one_line_with_the_keys_flushed_right() {
         "the keys sit at the right edge: {rendered}"
     );
     assert_eq!(
-        line.width(),
-        70 - crate::app::common::primitives::EDGE_GAP,
-        "the row stops one cell short so the hint never abuts the chrome"
+        unicode_width::UnicodeWidthStr::width(rendered.as_str()),
+        70,
+        "the row fills the width exactly, so the hint lands on the edge"
     );
 
     // Too narrow for both: the status wins and the hint drops rather than wrap.
