@@ -13,22 +13,20 @@ use super::state::{
     TOPICS_MAX_CHARS, View,
 };
 
+/// How far PageUp/PageDown move a room's conversation. A fixed jump rather
+/// than a viewport height: only the renderer knows the height, and it is not
+/// worth threading back for a scroll step.
+const ROOM_PAGE_ROWS: isize = 10;
+
+/// Arrows in the pane. A room's arrows never reach here: its composer is
+/// always open, so `app::input` routes every event there first.
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    let in_room = app.chat.cyberspace.open_room_slug().is_some();
-    match (key, in_room) {
-        (b'A', true) => {
-            app.chat.cyberspace.room_scroll(-1);
-            true
-        }
-        (b'B', true) => {
-            app.chat.cyberspace.room_scroll(1);
-            true
-        }
-        (b'A', false) => {
+    match key {
+        b'A' => {
             app.chat.cyberspace.move_selection(-1);
             true
         }
-        (b'B', false) => {
+        b'B' => {
             app.chat.cyberspace.move_selection(1);
             true
         }
@@ -36,36 +34,36 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
 }
 
-/// Keys inside an open chat room. The room is its own surface (its own rail
-/// slot), so it does not share the pane's view keys.
-pub fn handle_room_byte(app: &mut App, byte: u8) -> bool {
-    let state = &mut app.chat.cyberspace;
-    match byte {
-        b'j' | b'J' => {
-            state.room_scroll(1);
-            true
-        }
-        b'k' | b'K' => {
-            state.room_scroll(-1);
-            true
-        }
-        b'g' | b'G' => {
-            state.room_to_bottom();
-            true
-        }
-        b'i' | b'I' | b'\r' | b'\n' => {
-            state.start_room_composer();
-            true
-        }
-        _ => false,
-    }
-}
-
-/// Keystrokes while the room composer is open. It owns every one of them, the
-/// same way an open modal does, so a message can contain a space or an `h`
-/// without the rail stealing it. Reached from `app::input`'s modal chain,
-/// which runs before any chat routing.
+/// Keystrokes inside an open chat room. The composer is always open, the way
+/// it is in every other room in the rail, so it owns every one of them and a
+/// message can contain a space or an `h` without the rail stealing it.
+/// Reached from `app::input`'s modal chain, which runs before any chat
+/// routing. Scrolling moves to the arrows, since the letters are text now.
 pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
+    match event {
+        ParsedInput::Arrow(b'A') => {
+            app.chat.cyberspace.room_scroll(-1);
+            return;
+        }
+        ParsedInput::Arrow(b'B') => {
+            app.chat.cyberspace.room_scroll(1);
+            return;
+        }
+        ParsedInput::PageUp => {
+            app.chat.cyberspace.room_scroll(-ROOM_PAGE_ROWS);
+            return;
+        }
+        ParsedInput::PageDown => {
+            app.chat.cyberspace.room_scroll(ROOM_PAGE_ROWS);
+            return;
+        }
+        // Back to the live bottom, however far back the user scrolled.
+        ParsedInput::End => {
+            app.chat.cyberspace.room_to_bottom();
+            return;
+        }
+        _ => {}
+    }
     let Some(composer) = app.chat.cyberspace.room_composer_mut() else {
         return;
     };
@@ -77,9 +75,9 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
                 app.banner = Some(banner);
             }
         }
-        EditOutcome::Cancel => {
-            app.chat.cyberspace.cancel_room_composer();
-        }
+        // Esc: `app::input`'s escape chain owns leaving the room, and it asks
+        // the composer first, so this arm never has to.
+        EditOutcome::Cancel => {}
         EditOutcome::Handled => app.chat.cyberspace.note_composer_activity(),
         EditOutcome::Ignored => {}
     }
@@ -128,7 +126,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                     app.banner = Some(Banner::success("Refreshing cyberspace..."));
                 }
                 View::Thread => state.open_reply_modal(),
-                View::Notifications => state.open_notifications(),
+                View::Notifications => state.refresh_notifications(),
             }
             true
         }
@@ -138,15 +136,18 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
+        // `n` moves the rail rather than swapping the view underneath it:
+        // notifications are their own row, and the highlight has to follow.
         b'n' | b'N' => {
-            state.open_notifications();
+            app.chat.select_cyberspace_notifications();
             true
         }
         // Esc never arrives here: it is routed through `dispatch_escape`,
-        // which has its own arm for the pane.
+        // which has its own arm for the pane. `b` with nothing open over the
+        // row is the way back off the notifications row, mirroring `n`.
         b'b' | b'B' => {
-            if state.view != View::Feed {
-                state.back_to_feed();
+            if !state.escape_to_root() {
+                app.chat.select_cyberspace();
             }
             true
         }
@@ -167,15 +168,18 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
         handle_modal_escape(app);
         return;
     }
-    // The room picker is a list, not a form: it moves and toggles rather than
-    // editing text, so it is resolved before the text-field modals.
-    if matches!(app.chat.cyberspace.modal, Some(Modal::Rooms(_))) {
-        handle_rooms_modal_input(app, event);
+    // The pickers are lists, not forms: they move and toggle rather than
+    // editing text, so they are resolved before the text-field modals.
+    if matches!(
+        app.chat.cyberspace.modal,
+        Some(Modal::Rooms(_) | Modal::Cmail(_))
+    ) {
+        handle_picker_modal_input(app, event);
         return;
     }
     let action = match &mut app.chat.cyberspace.modal {
         // Handled above; the arm keeps the match exhaustive over the roster.
-        None | Some(Modal::Rooms(_)) => ModalAction::None,
+        None | Some(Modal::Rooms(_) | Modal::Cmail(_)) => ModalAction::None,
         // While a submit is in flight the draft is locked; Esc above still works.
         Some(modal) if modal_busy(modal) => ModalAction::None,
         Some(Modal::Link(link)) => match event {
@@ -258,18 +262,26 @@ pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// The room picker: move the highlight, toggle a room onto the rail, close.
-/// Nothing here opens a room, because the rail entry is how a room is entered.
-fn handle_rooms_modal_input(app: &mut App, event: ParsedInput) {
+/// The room and c-mail pickers: move the highlight, toggle the row onto the
+/// rail, close. Nothing here opens anything, because the rail entry is how a
+/// room or a conversation is entered.
+fn handle_picker_modal_input(app: &mut App, event: ParsedInput) {
+    let is_cmail = matches!(app.chat.cyberspace.modal, Some(Modal::Cmail(_)));
     match event {
-        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => {
-            app.chat.cyberspace.move_rooms_modal_selection(1);
-        }
-        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => {
-            app.chat.cyberspace.move_rooms_modal_selection(-1);
-        }
+        ParsedInput::Byte(b'j' | b'J') | ParsedInput::Arrow(b'B') => match is_cmail {
+            true => app.chat.cyberspace.move_cmail_modal_selection(1),
+            false => app.chat.cyberspace.move_rooms_modal_selection(1),
+        },
+        ParsedInput::Byte(b'k' | b'K') | ParsedInput::Arrow(b'A') => match is_cmail {
+            true => app.chat.cyberspace.move_cmail_modal_selection(-1),
+            false => app.chat.cyberspace.move_rooms_modal_selection(-1),
+        },
         ParsedInput::Byte(b'\r' | b'\n' | b' ') => {
-            if let Some(banner) = app.chat.cyberspace.toggle_selected_room() {
+            let banner = match is_cmail {
+                true => app.chat.cyberspace.toggle_selected_cmail(),
+                false => app.chat.cyberspace.toggle_selected_room(),
+            };
+            if let Some(banner) = banner {
                 app.banner = Some(banner);
             }
         }
@@ -287,9 +299,9 @@ fn modal_busy(modal: &Modal) -> bool {
         Modal::Link(link) => link.busy,
         Modal::Compose(compose) => compose.busy,
         Modal::Reply(reply) => reply.busy,
-        // The picker is never busy in this sense: it holds no draft to
-        // protect, and toggling stays usable while its roster loads.
-        Modal::Rooms(_) => false,
+        // The pickers are never busy in this sense: they hold no draft to
+        // protect, and toggling stays usable while the list loads.
+        Modal::Rooms(_) | Modal::Cmail(_) => false,
     }
 }
 

@@ -36,6 +36,7 @@ async fn session_init_reports_unlinked_users_without_network() {
             username,
             feed_read_at,
             circ_rooms,
+            cmail_threads: _,
             circ_room_reads,
         } => {
             assert_eq!(user_id, user.id);
@@ -67,6 +68,7 @@ async fn session_init_reports_the_linked_username() {
             username,
             feed_read_at,
             circ_rooms,
+            cmail_threads: _,
             circ_room_reads,
         } => {
             assert_eq!(user_id, user.id);

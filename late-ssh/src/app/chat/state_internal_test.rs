@@ -754,6 +754,7 @@ fn visual_order_matches_cozy_rail_grouping() {
             feeds_available: true,
             cyberspace_linked: false,
             cyberspace_rooms: &[],
+            cyberspace_mail: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -826,6 +827,7 @@ fn collapsed_sections_drop_their_rooms_from_visual_order() {
             feeds_available: false,
             cyberspace_linked: false,
             cyberspace_rooms: &[],
+            cyberspace_mail: &[],
             favorite_room_ids: &[],
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
@@ -906,6 +908,7 @@ fn visual_order_dms_use_snapshot_activity_not_loaded_tails() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -947,6 +950,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -969,6 +973,7 @@ fn visual_order_hides_dm_with_ignored_peer() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[dm_bob.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &ignored,
@@ -1014,6 +1019,7 @@ fn visual_order_promotes_unread_dms_above_channels() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[dm_carol.id],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::new(),
@@ -1062,6 +1068,7 @@ fn visual_order_holds_the_dm_being_read_in_the_unread_group() {
             feeds_available: false,
             cyberspace_linked: false,
             cyberspace_rooms: &[],
+            cyberspace_mail: &[],
             favorite_room_ids: &[],
             collapsed_sections: &HashSet::new(),
             ignored_user_ids: &HashSet::new(),
@@ -1114,6 +1121,7 @@ fn visual_order_keeps_promoted_unread_dms_when_the_dms_section_is_collapsed() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::from([RoomSection::Dms]),
         ignored_user_ids: &HashSet::new(),
@@ -1202,6 +1210,7 @@ fn visual_order_never_promotes_an_ignored_peers_unread_dm() {
         feeds_available: false,
         cyberspace_linked: false,
         cyberspace_rooms: &[],
+        cyberspace_mail: &[],
         favorite_room_ids: &[],
         collapsed_sections: &HashSet::new(),
         ignored_user_ids: &HashSet::from([bob]),
@@ -2295,7 +2304,7 @@ async fn remote_pin_changes_re_derive_the_rail_room_selection() {
     .await;
 
     state.select_cyberspace_room(1);
-    assert_eq!(state.cyberspace.open_room_slug(), Some("beta"));
+    assert_eq!(state.cyberspace.open_circ_slug(), Some("beta"));
     assert_eq!(state.cyberspace_room_selected, Some(1));
 
     // Another session of the same account pins a room in front: beta moves
@@ -2314,7 +2323,7 @@ async fn remote_pin_changes_re_derive_the_rail_room_selection() {
         "the selection follows the open room's slug through a reorder"
     );
     assert_eq!(
-        state.cyberspace.open_room_slug(),
+        state.cyberspace.open_circ_slug(),
         Some("beta"),
         "the open room itself rides out the reorder"
     );
@@ -2328,7 +2337,7 @@ async fn remote_pin_changes_re_derive_the_rail_room_selection() {
     .await;
     assert_eq!(state.cyberspace_room_selected, None);
     assert_eq!(
-        state.cyberspace.open_room_slug(),
+        state.cyberspace.open_circ_slug(),
         None,
         "an unpinned room cannot keep its stream and heartbeat"
     );
@@ -3313,12 +3322,16 @@ async fn changing_the_target_language_drops_translations_for_the_old_one() {
 }
 
 #[test]
-fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
+fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
     let me = Uuid::from_u128(1);
     let lounge = Uuid::from_u128(10);
     let usernames: HashMap<Uuid, String> = HashMap::new();
     let rooms = vec![make_room(lounge, "lounge", "public", true, Some("lounge"))];
     let pinned = vec!["general".to_string(), "tech".to_string()];
+    let mail = vec![CmailThread {
+        id: "conv-1".to_string(),
+        username: "alice".to_string(),
+    }];
 
     let order_for = |linked: bool, collapsed: &HashSet<RoomSection>| {
         visual_order_for_rooms(RoomVisualOrderInput {
@@ -3330,6 +3343,7 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             feeds_available: false,
             cyberspace_linked: linked,
             cyberspace_rooms: &pinned,
+            cyberspace_mail: &mail,
             favorite_room_ids: &[],
             collapsed_sections: collapsed,
             ignored_user_ids: &HashSet::new(),
@@ -3338,8 +3352,10 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
         })
     };
 
-    // Linked: the pane leads its own section and every pinned room follows it,
-    // in the user's order. Slots carry the index into that list.
+    // Linked: feeds, then notifications, then the pinned rooms, then the
+    // pinned conversations, all under one section. Notifications is its own
+    // row rather than a view inside the pane, so the rail highlight and the
+    // pane can never disagree about which of the two you are reading.
     assert_eq!(
         order_for(true, &HashSet::new()),
         vec![
@@ -3348,8 +3364,10 @@ fn the_cyberspace_section_carries_the_pane_and_the_pinned_rooms() {
             RoomSlot::News,
             RoomSlot::Discover,
             RoomSlot::Cyberspace,
+            RoomSlot::CyberspaceNotifications,
             RoomSlot::CyberspaceRoom(0),
             RoomSlot::CyberspaceRoom(1),
+            RoomSlot::CyberspaceMail(0),
         ]
     );
 

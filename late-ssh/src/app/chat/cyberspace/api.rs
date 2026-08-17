@@ -177,6 +177,10 @@ impl CircRoom {
     }
 }
 
+/// One message in a cIRC room or a C-Mail conversation. Their two chat
+/// surfaces carry the same fields under two names for the author (`userId` /
+/// `username` in a room, `senderId` / `senderUsername` in a conversation), so
+/// the aliases collapse them here and everything downstream sees one message.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CircMessage {
@@ -184,9 +188,9 @@ pub struct CircMessage {
     /// its object hangs off rather than a field inside it.
     #[serde(default)]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, alias = "senderId")]
     pub user_id: String,
-    #[serde(default)]
+    #[serde(default, alias = "senderUsername")]
     pub username: String,
     #[serde(default)]
     pub is_chat_admin: bool,
@@ -278,6 +282,88 @@ impl CircMessage {
 pub struct CircHistory {
     pub messages: Vec<CircMessage>,
     pub cursor: Option<i64>,
+}
+
+/// Their history endpoints are documented by their fields rather than their
+/// envelope shape, so accept both the bare list and the paged object. Shared
+/// by rooms and C-Mail, which return the same two shapes.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HistoryBody {
+    Paged {
+        messages: Vec<CircMessage>,
+        #[serde(default)]
+        cursor: Option<i64>,
+    },
+    List(Vec<CircMessage>),
+}
+
+impl HistoryBody {
+    fn into_history(self) -> CircHistory {
+        match self {
+            HistoryBody::Paged { messages, cursor } => CircHistory { messages, cursor },
+            HistoryBody::List(messages) => CircHistory {
+                cursor: messages.first().map(|message| message.timestamp),
+                messages,
+            },
+        }
+    }
+}
+
+/// Which realtime-database collection a live stream reads from. Their two
+/// chat surfaces are the same mechanism over two nodes, so the opener takes
+/// this instead of growing a second copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamNode {
+    /// cIRC rooms, keyed by room id.
+    ChatMessages,
+    /// C-Mail conversations, keyed by conversation id.
+    DmMessages,
+}
+
+impl StreamNode {
+    fn path(self) -> &'static str {
+        match self {
+            StreamNode::ChatMessages => "chat_messages",
+            StreamNode::DmMessages => "dm_messages",
+        }
+    }
+}
+
+/// One C-Mail conversation as their list reports it. `unread_count` is theirs,
+/// not ours: they read it back, so the rail badge is a real number instead of
+/// the dot a cIRC room has to settle for.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailConversation {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub other_user: CmailUser,
+    #[serde(default)]
+    pub last_message: Option<String>,
+    /// Milliseconds since the epoch, on their clock.
+    #[serde(default)]
+    pub last_message_at: Option<i64>,
+    #[serde(default)]
+    pub unread_count: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailUser {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+}
+
+/// The answer to starting a conversation: their id for it, and who it is with.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailStarted {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub other_user: CmailUser,
 }
 
 /// The floor under the presence cadence. Their response names the interval
@@ -481,34 +567,14 @@ impl CsApi {
         room_id: &str,
         before: Option<i64>,
     ) -> Result<CircHistory, CsApiError> {
-        /// Their history endpoint is documented by its fields rather than its
-        /// envelope shape, so accept both the bare list and the paged object.
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Body {
-            Paged {
-                messages: Vec<CircMessage>,
-                #[serde(default)]
-                cursor: Option<i64>,
-            },
-            List(Vec<CircMessage>),
-        }
-
         let path = match before {
             Some(before) => {
                 format!("/v1/circ/{room_id}?limit={CIRC_HISTORY_LIMIT}&before={before}")
             }
             None => format!("/v1/circ/{room_id}?limit={CIRC_HISTORY_LIMIT}"),
         };
-        let body: Body = self.get_json(&path, id_token).await?;
-        let history = match body {
-            Body::Paged { messages, cursor } => CircHistory { messages, cursor },
-            Body::List(messages) => CircHistory {
-                cursor: messages.first().map(|message| message.timestamp),
-                messages,
-            },
-        };
-        Ok(history)
+        let body: HistoryBody = self.get_json(&path, id_token).await?;
+        Ok(body.into_history())
     }
 
     pub async fn send_circ_message(
@@ -569,6 +635,76 @@ impl CsApi {
         parse_void(status, &body)
     }
 
+    /// Their conversation list, newest activity first, with the unread count
+    /// per conversation. This is the C-Mail badge: unlike the cIRC roster it
+    /// reports read state back, so no cursor of ours is involved.
+    pub async fn list_cmail(&self, id_token: &str) -> Result<Vec<CmailConversation>, CsApiError> {
+        self.get_json("/v1/cmail", id_token).await
+    }
+
+    /// Start (or find) the conversation with a username. Idempotent on their
+    /// side: an existing conversation comes back rather than a second one.
+    pub async fn start_cmail(
+        &self,
+        id_token: &str,
+        recipient_username: &str,
+    ) -> Result<CmailStarted, CsApiError> {
+        self.post_json(
+            "/v1/cmail",
+            Some(id_token),
+            &serde_json::json!({ "recipientUsername": recipient_username }),
+        )
+        .await
+    }
+
+    /// A page of conversation history, oldest-first. Same two shapes as the
+    /// room history endpoint.
+    pub async fn read_cmail(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+        before: Option<i64>,
+    ) -> Result<CircHistory, CsApiError> {
+        let path = match before {
+            Some(before) => {
+                format!("/v1/cmail/{conversation_id}?limit={CIRC_HISTORY_LIMIT}&before={before}")
+            }
+            None => format!("/v1/cmail/{conversation_id}?limit={CIRC_HISTORY_LIMIT}"),
+        };
+        let body: HistoryBody = self.get_json(&path, id_token).await?;
+        Ok(body.into_history())
+    }
+
+    pub async fn send_cmail(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+        content: &str,
+    ) -> Result<(), CsApiError> {
+        self.post_void(
+            &format!("/v1/cmail/{conversation_id}"),
+            Some(id_token),
+            &serde_json::json!({ "content": content }),
+        )
+        .await
+    }
+
+    /// Zero the unread count on their side. Unlike the cIRC equivalent this
+    /// one is readable back (their conversation list carries `unreadCount`),
+    /// which is why C-Mail needs no read cursor of ours.
+    pub async fn mark_cmail_read(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+    ) -> Result<(), CsApiError> {
+        self.post_void(
+            &format!("/v1/cmail/{conversation_id}/read"),
+            Some(id_token),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
     /// Open the live message stream for a room: their realtime database over
     /// Server-Sent Events, under the user's own id token. The bounds are not
     /// optional politeness, unbounded reads are rejected: always ordered by
@@ -576,14 +712,21 @@ impl CsApi {
     ///
     /// The stream ends when the id token expires (~60 minutes), which the
     /// caller answers by minting a fresh one and opening a new stream.
-    pub async fn open_circ_stream(
+    ///
+    /// `node` is the realtime-database collection: `chat_messages` for a cIRC
+    /// room, `dm_messages` for a C-Mail conversation. Their docs describe the
+    /// two as the same mechanism, and the frames are identical, so one opener
+    /// and one parser serve both.
+    pub async fn open_message_stream(
         &self,
         rtdb_url: &str,
-        room_id: &str,
+        node: StreamNode,
+        id: &str,
         id_token: &str,
     ) -> Result<reqwest::Response, CsApiError> {
+        let node = node.path();
         let url = format!(
-            "{}/chat_messages/{room_id}.json?auth={id_token}&orderBy=%22timestamp%22&limitToLast={CIRC_STREAM_WINDOW}",
+            "{}/{node}/{id}.json?auth={id_token}&orderBy=%22timestamp%22&limitToLast={CIRC_STREAM_WINDOW}",
             rtdb_url.trim_end_matches('/')
         );
         let response = self

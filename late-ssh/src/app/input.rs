@@ -2077,11 +2077,13 @@ fn dispatch_escape(app: &mut App) {
     if app.chat.cyberspace.cancel_room_composer() {
         return;
     }
-    if app.chat.cyberspace.open_room_slug().is_some() {
+    if app.chat.cyberspace.open_room_name().is_some() {
         app.leave_cyberspace_room();
         return;
     }
-    if app.chat.cyberspace_selected && app.chat.cyberspace.escape_to_feed() {
+    if (app.chat.cyberspace_selected || app.chat.cyberspace_notifications_selected)
+        && app.chat.cyberspace.escape_to_root()
+    {
         return;
     }
     if app.show_bonsai_v2_modal {
@@ -2512,9 +2514,14 @@ fn chat_room_list_view<'a>(
         cyberspace_linked: app.chat.cyberspace.is_linked(),
         cyberspace_rooms: app.chat.cyberspace.pinned_rooms(),
         cyberspace_selected: app.chat.cyberspace_selected,
+        cyberspace_notifications_selected: app.chat.cyberspace_notifications_selected,
         cyberspace_room_selected: app.chat.cyberspace_room_selected,
         cyberspace_room_unread: app.chat.cyberspace.room_unread_flags(),
-        cyberspace_unread_count: app.chat.cyberspace.unread_count(),
+        cyberspace_mail: app.chat.cyberspace.pinned_cmail(),
+        cyberspace_mail_selected: app.chat.cyberspace_mail_selected,
+        cyberspace_mail_unread: app.chat.cyberspace.cmail_unread_counts(),
+        cyberspace_feeds_unread: app.chat.cyberspace.unread_entries(),
+        cyberspace_notifications_unread: app.chat.cyberspace.unread_notifications(),
         cyberspace_unread_saturated: app.chat.cyberspace.unread_saturated(),
         news_selected: app.chat.news_selected,
         news_unread_count: app.chat.news.unread_count(),

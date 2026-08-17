@@ -1168,7 +1168,7 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
 
     app.chat.select_cyberspace_room(0);
     assert_eq!(
-        app.chat.cyberspace.open_room_slug(),
+        app.chat.cyberspace.open_circ_slug(),
         Some("circ-lab"),
         "selecting the rail entry should open the room"
     );
@@ -1177,7 +1177,7 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
     // rail; the room's stream and presence heartbeat must not survive it.
     app.set_screen(Screen::Arcade);
     assert_eq!(
-        app.chat.cyberspace.open_room_slug(),
+        app.chat.cyberspace.open_circ_slug(),
         None,
         "leaving Home must drop the room session"
     );
