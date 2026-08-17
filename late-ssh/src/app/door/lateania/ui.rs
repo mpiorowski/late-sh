@@ -27,6 +27,8 @@ use super::{
 const SIDE_WIDE: u16 = 34;
 const SIDE_NARROW: u16 = 28;
 
+// ---- Screen entry: which layout this terminal gets -----------------------
+
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let view = state.view();
 
@@ -123,6 +125,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
 }
+
+// ---- The clickable action bar along the bottom row -----------------------
 
 /// One chip on the combat action bar: its label, the action a click triggers,
 /// and whether it is ready (dim when a spell can't be paid for right now).
@@ -335,6 +339,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     }
 }
 
+// ---- Does the map fit, and the small shared name/style lookups -----------
+
 /// The ways up and down. Deliberately loud (the brightest thing on the map
 /// after `@`): these are the exits the flat grid cannot draw as corridors, and
 /// in a world where every zone chains to the next one by a stair they are what
@@ -372,6 +378,8 @@ fn land_label(name: &str) -> &str {
     let name = name.split(" & ").next().unwrap_or(name);
     name.split(", ").next().unwrap_or(name)
 }
+
+// ---- The overhead field: biomes, ground tiles, POI arrows (5.1) ----------
 
 fn biome_style(biome: super::world::Biome) -> (char, Color) {
     use super::world::Biome;
@@ -1376,6 +1384,8 @@ fn land_style(progress: Option<&super::world::RegionProgress>) -> Style {
     }
 }
 
+// ---- The overhead map page: viewport, legend, and compass (5.1) ----------
+
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
@@ -1871,6 +1881,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     frame.render_widget(Paragraph::new(Line::from(key)), rows[6]);
 }
 
+// ---- The one-time gates: class select and archetype select ---------------
+
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
     let cursor = cursor.min(Class::ALL.len() - 1);
     let chosen = Class::ALL[cursor];
@@ -2015,6 +2027,8 @@ fn draw_archetype_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
+
+// ---- The side column: log, compact mode, and list scrolling --------------
 
 fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
@@ -2259,6 +2273,8 @@ fn wrapped_rows(text: &str, width: usize) -> usize {
     rows
 }
 
+// ---- The room side panel, and the titles panel ---------------------------
+
 fn draw_room_side(
     frame: &mut Frame,
     area: Rect,
@@ -2384,6 +2400,8 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     lines.push(hint("k", "close  (* = shown by your name)"));
     (lines, sel_line)
 }
+
+// ---- The quest journal and the bounty board ------------------------------
 
 /// Quest journal, in reading order: what the player is doing right now (the
 /// starter step and accepted bounties), then the Long Road - the realm's spine
@@ -2936,6 +2954,8 @@ fn draw_board_screen(frame: &mut Frame, area: Rect, state: &State, view: &Player
     }
     frame.render_widget(Paragraph::new(detail), cols[1]);
 }
+
+// ---- The leaderboard, vitals, and the room / battle panels ---------------
 
 /// One leaderboard row: rank, level + class abbreviation, name, then the
 /// board's own value column (already formatted by the caller, since its
@@ -3723,6 +3743,8 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
     Span::styled(glyph.to_string(), style)
 }
 
+// ---- The character sheet -------------------------------------------------
+
 /// Full-width character dashboard (the `c` panel when the terminal is roomy).
 /// A class portrait and vitals bars on the left, ability scores as dot ratings
 /// in the middle, and combat/derived stats, trait, titles, and XP on the right.
@@ -4006,6 +4028,8 @@ fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+// ---- Meters, stars, portraits, and the class palette ---------------------
+
 /// A labelled filled meter line, e.g. `HP   ███████░░░`.
 fn bar_line(label: &str, cur: i32, max: i32, color: Color) -> Line<'static> {
     Line::from(vec![
@@ -4285,6 +4309,8 @@ fn composed_portrait(
     )));
     lines
 }
+
+// ---- The panel behind each key: pack, shop, craft, tame, atlas -----------
 
 fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vitals(view);
@@ -5362,6 +5388,8 @@ fn wrap_plain(s: &str, width: usize) -> Vec<String> {
     out
 }
 
+// ---- The footer hint row -------------------------------------------------
+
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
@@ -5440,7 +5468,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
-// ---- helpers -------------------------------------------------------------
+// ---- The log: wrapping, collapsing, and the recent tail ------------------
 
 fn wrapped_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'static>> {
     if width == 0 || height == 0 {
@@ -5541,6 +5569,8 @@ fn separator_line(width: usize) -> Line<'static> {
     };
     Line::from(Span::styled(line, Style::default().fg(theme::BORDER())))
 }
+
+// ---- The main column's room and battle context ---------------------------
 
 /// The left column's battle frame, shown in place of the room context while a
 /// fight is on: the foe's full name and nature, both sides' vitals as wide
@@ -5751,6 +5781,8 @@ fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Lin
         Span::styled(value, Style::default().fg(color)),
     ])
 }
+
+// ---- Text helpers: wrapping, sections, hints, and vitals -----------------
 
 fn side_kv_wrap(
     label: &str,
@@ -5968,6 +6000,8 @@ fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
     }
 }
 
+// ---- The follow panel ----------------------------------------------------
+
 /// Follow panel: a selectable list of adventurers in the room. Enter follows the
 /// highlighted one (or stops, if you are already following them).
 fn follow_panel(
@@ -6081,6 +6115,9 @@ fn follow_panel(
 // Lateania reads in its own warm, parchment-toned prose so the world feels
 // distinct from the cool chat UI around it. Body/description text uses these;
 // headers, rarity, and interactables keep their own accents.
+
+// ---- The Lateania palette, and the kind-to-colour lookups ----------------
+
 const LAT_TEXT: Color = Color::Rgb(0xdc, 0xc9, 0xa4);
 const LAT_TEXT_DIM: Color = Color::Rgb(0xac, 0x9b, 0x79);
 

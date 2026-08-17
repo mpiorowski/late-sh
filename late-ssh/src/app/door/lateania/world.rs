@@ -24,6 +24,8 @@ use std::sync::OnceLock;
 use super::damage::{DamageProfile, DamageType};
 use super::skills::{CraftSkill, GatherSkill};
 
+// ---- Core world types: directions, rooms, spawns, behaviour --------------
+
 /// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
@@ -231,6 +233,8 @@ pub struct World {
     zone_bands: HashMap<&'static str, (i32, i32)>,
 }
 
+// ---- The atlas regions: what counts as a land, and how deep --------------
+
 /// One region's exploration line in the world atlas.
 #[derive(Clone, Copy, Debug)]
 pub struct RegionProgress {
@@ -437,6 +441,8 @@ fn chain_depth(region: &str, visited: &HashSet<RoomId>) -> Option<(usize, usize)
     Some((entered, zones))
 }
 
+// ---- World queries: rooms, zones, and atlas progress ---------------------
+
 impl World {
     /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
     pub fn behavior_of(&self, spawn_id: u32) -> MobBehavior {
@@ -633,6 +639,8 @@ impl World {
         }
     }
 }
+
+// ---- The minimap grid drawn in the room panel ----------------------------
 
 /// What a single char-cell of the overhead minimap shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2179,6 +2187,8 @@ pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
     by_room.get(&room).cloned().unwrap_or_default()
 }
 
+// ---- Waystones: the Ways menu, and what it will carry you to -------------
+
 const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
     inside it rippling like a heat-haze over water. Step through and it will carry you in a \
     breath to any other waystone you know of - the far villages, the drowned isles of the \
@@ -2317,6 +2327,8 @@ pub fn craft_stations_at(room: RoomId) -> Vec<CraftSkill> {
         })
         .collect()
 }
+
+// ---- Wildlife: critters you can feed, and the perks they leave -----------
 
 /// A small benefit a Boon creature confers while you share its room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2962,6 +2974,8 @@ pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
 pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
     WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
 }
+
+// ---- Resource nodes: what you chop, mine, fish, forage, and skin ---------
 
 /// A harvestable resource node fixed to a room: a tree stand, an ore vein, a
 /// fishing spot, or a herb/skinning patch. Modelled exactly like wildlife -
@@ -3835,6 +3849,8 @@ pub fn nodes_at(room: RoomId) -> Vec<&'static ResourceNode> {
 pub fn node_index(n: &ResourceNode) -> Option<usize> {
     NODES.iter().position(|x| std::ptr::eq(x, n))
 }
+
+// ---- seed_world: the authored core, then every extension wing ------------
 
 fn room(
     id: RoomId,
@@ -12748,6 +12764,8 @@ fn house_room_desc(upper: bool, entrance: bool) -> &'static str {
     }
 }
 
+// ---- The overworld: the Greatroad and three capitals (rooms 600+) --------
+
 /// The overworld: 100 rooms of new biomes radiating from Embergate's South Gate
 /// down the Greatroad, plus the three capital cities - Tasmania (harbor),
 /// Melvanala (mountain lake), and Matlatesh (desert) - each a safe haven with a
@@ -13770,6 +13788,8 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
     );
 }
+
+// ---- The loot tables the region generators draw from ---------------------
 
 /// Common low-tier drop pool shared by wandering wing mobs.
 const COMMON_LOOT: &[u32] = &[1000, 1100, 1103, 1300];

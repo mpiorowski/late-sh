@@ -66,6 +66,8 @@ use super::world::{
     tutorial_start_room,
 };
 
+// ---- Tuning: tick rate, timers, gate titles, boss achievements -----------
+
 /// World heartbeat. One combat round resolves per tick.
 const TICK_SECS: u64 = 2;
 /// First id handed out to runtime-only summoned adds, kept far clear of the
@@ -1190,6 +1192,8 @@ fn compare_to_worn(equipped: &HashMap<Slot, u32>, it: &Item) -> String {
         }
     }
 }
+
+// ---- The service: command tasks, autosave loops, and snapshots -----------
 
 impl LateaniaService {
     pub fn new(activity: ActivityPublisher, chip_svc: ChipService, db: Db) -> Self {
@@ -2432,6 +2436,8 @@ impl PlayerState {
     }
 }
 
+// ---- Board quests: objectives, repeats, escorts, the bounty table --------
+
 /// A board-quest objective. `Reach` completes the moment the player enters any
 /// room of the named zone; the others count up to a target.
 #[derive(Clone, Copy, Debug)]
@@ -3111,6 +3117,8 @@ fn board_quest_locked(q: &BoardQuest, titles: &[String]) -> bool {
     !titles_include_all(titles, q.requires)
 }
 
+// ---- Live mobs, and the world state they live in -------------------------
+
 struct MobInstance {
     spawn: MobSpawn,
     hp: i32,
@@ -3205,6 +3213,8 @@ const POISON_DOT_TICKS: u8 = 3;
 const WELL_FED_TICKS: u8 = 8;
 
 impl WorldState {
+    // ---- Construction, the world clock, and broadcast -------------------
+
     fn new(room_id: Uuid, world: World) -> Self {
         let mobs = world
             .spawns
@@ -3280,6 +3290,8 @@ impl WorldState {
         self.world_dirty = true;
         self.world_revision = self.world_revision.wrapping_add(1);
     }
+
+    // ---- Joining, class choice, and character reset ---------------------
 
     fn join(&mut self, user_id: Uuid) -> bool {
         if self.players.contains_key(&user_id) {
@@ -3498,6 +3510,8 @@ impl WorldState {
         }
         self.dirty = true;
     }
+
+    // ---- Persistence: hydrate a save, export one, the shared world ------
 
     /// Apply a saved character onto a freshly-joined player. Restores class,
     /// progression, gold, gear, and inventory; reloads at a safe room with full
@@ -3897,6 +3911,8 @@ impl WorldState {
         }
     }
 
+    // ---- Movement, and the gates a road may not cross -------------------
+
     fn move_player(&mut self, user_id: Uuid, dir: Dir) {
         if !self.is_classed(user_id) {
             return;
@@ -4285,6 +4301,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Recall, waypoints, retreat, and following ----------------------
+
     /// Speak the word of recall: return to Embergate's Town Square from anywhere,
     /// so long as you are not in combat. A universal escape, not a class spell.
     fn recall(&mut self, user_id: Uuid) {
@@ -4614,6 +4632,8 @@ impl WorldState {
         self.dirty = true;
     }
 
+    // ---- Gathering, hunting, and crafting -------------------------------
+
     /// Apply any Boon-creature perks for the room a player just entered.
     fn apply_critter_perks(&mut self, user_id: Uuid) {
         let room_id = match self.players.get(&user_id) {
@@ -4911,6 +4931,8 @@ impl WorldState {
         }
         self.dirty = true;
     }
+
+    // ---- Looking at a room, examining it, and the Ways ------------------
 
     fn look(&mut self, user_id: Uuid) {
         self.describe_room_context(user_id, Arrival::Silent);
@@ -5217,6 +5239,8 @@ impl WorldState {
         );
         self.describe_room(user_id);
     }
+
+    // ---- Board quests, escorts, and the starter chain -------------------
 
     fn board_quest_available(&self, p: &PlayerState, q: &BoardQuest) -> bool {
         self.board_quest_available_at(p, q, now_unix_secs())
@@ -5600,6 +5624,8 @@ impl WorldState {
         };
         self.log_to(user_id, LogKind::Loot, message);
     }
+
+    // ---- Combat: targeting, abilities, damage, and the kill -------------
 
     fn engage(&mut self, user_id: Uuid) {
         if !self.is_classed(user_id) {
@@ -6383,6 +6409,8 @@ impl WorldState {
         self.mark_world_dirty();
     }
 
+    // ---- What a kill pays: titles, quests, loot, and levels -------------
+
     /// Set the displayed title to the one at `idx`; selecting the active title
     /// again (or an out-of-range index) clears it.
     fn set_active_title(&mut self, user_id: Uuid, idx: usize) {
@@ -6579,6 +6607,8 @@ impl WorldState {
             }
         }
     }
+
+    // ---- Fleeing, and world-local chat ----------------------------------
 
     fn flee(&mut self, user_id: Uuid) {
         let Some(player) = self.players.get(&user_id) else {
@@ -7622,6 +7652,8 @@ impl WorldState {
         }
     }
 
+    // ---- Mobs between rounds: the world boss, roaming, behaviour --------
+
     /// Raise the lone wandering world boss after the Frontier seals are claimed.
     /// It hunts as a roaming boss across the living-dark and Frontier regions.
     fn spawn_world_boss(&mut self) {
@@ -8114,6 +8146,8 @@ impl WorldState {
         }
     }
 
+    // ---- Death, the temple, and resurrection ----------------------------
+
     /// Send a (usually dead) player to the Temple of the Dawn, fully restored,
     /// clearing the corpse state. Shared by the auto-release tick and the manual
     /// release action. A fallen escort cannot be led from beyond the temple.
@@ -8232,6 +8266,8 @@ impl WorldState {
         self.dirty = true;
         self.mark_world_dirty();
     }
+
+    // ---- Companions: the stable, feeding, and wounds --------------------
 
     /// Whether a companion Stable stands in this room.
     fn room_has_stable(&self, room: RoomId) -> bool {
@@ -8834,6 +8870,8 @@ impl WorldState {
         );
         self.dirty = true;
     }
+
+    // ---- Appearance, per-player logging, and the snapshot ---------------
 
     /// Cycle one appearance/bio field forward (+1) or back (-1), wrapping.
     fn cycle_appearance(&mut self, user_id: Uuid, field: usize, delta: i8) {
@@ -9672,6 +9710,8 @@ impl WorldState {
         }
     }
 }
+
+// ---- Free helpers: titles, tags, gold, and the log buffer ----------------
 
 /// A short combat-log suffix announcing a resist or weakness, empty for normal.
 fn defense_tag(defense: Defense, _dtype: DamageType) -> &'static str {
