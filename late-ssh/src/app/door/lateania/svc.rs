@@ -9475,9 +9475,7 @@ impl WorldState {
                             .filter(|(_, room)| {
                                 super::world::waystone_is_known(*room, &player.visited)
                             })
-                            .map(|(label, room)| {
-                                (label.to_string(), room, room == player.room)
-                            })
+                            .map(|(label, room)| (label.to_string(), room, room == player.room))
                             .collect(),
                         known_gates,
                         unknown_gates: super::world::CONTINENT_WAYSTONES.len() - known_gates,
