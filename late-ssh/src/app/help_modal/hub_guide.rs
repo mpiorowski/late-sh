@@ -412,8 +412,10 @@ fn room_game_sections() -> Vec<GuideSection> {
                     .to_string(),
                 "Sit down mid-flight and you spawn well clear of the other snakes; stand up any time.".to_string(),
                 format!(
-                    "Every food pays {SSNAKE_FOOD_CHIPS} chips times the number of snakes MOVING when you eat it, credited on the spot."
+                    "Every food is worth {SSNAKE_FOOD_CHIPS} chips times the number of snakes MOVING when you eat it."
                 ),
+                "What the arena owes you runs up in the seat row as a pending figure; it reaches your balance when you stand up, and the idle kick banks it for you if you just disconnect."
+                    .to_string(),
                 "Snakes that are seated but not moving count for nobody, so idling at a seat pays zero and inflates nothing."
                     .to_string(),
                 format!(

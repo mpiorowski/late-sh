@@ -1,22 +1,30 @@
 //! The perpetual Super Snake arena.
 //!
 //! There is no match here: one board runs forever, anyone may sit down or
-//! stand up mid-flight, and chips settle the instant they are earned rather
-//! than at some finish line. Clearing an arena of food reshuffles it to
-//! another random level and the same snakes keep going.
+//! stand up mid-flight, and the arena tallies what each seat is owed as it
+//! plays. Clearing an arena of food reshuffles it to another random level and
+//! the same snakes keep going.
 //!
 //! Every payout scales with the number of snakes *moving* on the board, so a
 //! lone farmer earns the base rate and a busy arena pays everyone several
 //! times over. Seated-but-parked snakes deliberately count for nothing —
 //! otherwise a table of idlers would be worth more than a table of players.
+//!
+//! The tally is in-memory and reaches the ledger exactly once, when the seat
+//! is given up (by hand or by the idle kick). A bite is worth single-digit
+//! chips and lands every few seconds, so writing each one would turn a busy
+//! table into the app's loudest source of `user_chips` writes, and every one
+//! of those fans out through the `chip_user_changed` notify into a full shop
+//! snapshot reload for that player. One row per visit instead.
 
 use std::{
+    cmp::Ordering,
     collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use late_core::models::chips::{ChipDirection, ChipMove};
+use late_core::models::chips::ChipMove;
 use rand::Rng;
 use tokio::sync::{Mutex, broadcast, watch};
 use uuid::Uuid;
@@ -52,56 +60,43 @@ const SPAWN_CANDIDATES: usize = 96;
 /// Cadence used when no level is loaded at all (every asset failed to parse).
 const FALLBACK_TICK_MILLIS: u64 = 150;
 
-/// How many chip events the pop feed buffers before a slow client starts
-/// missing them. Pops are cosmetic and expire in seconds, so dropping the
-/// oldest is the right failure mode.
-const CHIP_EVENT_BUFFER: usize = 64;
-
 #[derive(Clone)]
 pub struct SsnakeService {
     room_id: Uuid,
     chip_svc: ChipService,
     settings: SsnakeTableSettings,
     room_event_tx: broadcast::Sender<RoomGameEvent>,
-    snapshot_tx: watch::Sender<SsnakeSnapshot>,
-    snapshot_rx: watch::Receiver<SsnakeSnapshot>,
-    chip_event_tx: broadcast::Sender<SsnakeChipEvent>,
+    /// Published behind an `Arc` because every session that has opened this
+    /// table keeps its client for the rest of the session and drains this
+    /// channel on every app tick, on screen or not. The arena publishes at
+    /// its own cadence for as long as one seat is held, so a bare snapshot
+    /// would have every such session deep-copying five snake bodies several
+    /// times a second to look at nothing.
+    snapshot_tx: watch::Sender<Arc<SsnakeSnapshot>>,
+    snapshot_rx: watch::Receiver<Arc<SsnakeSnapshot>>,
     state: Arc<Mutex<SharedState>>,
 }
 
-/// What earned (or cost) the chips, so the pop can say so.
+/// What last moved a seat's tally, so the pop can say so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SsnakeChipEventKind {
+pub enum SsnakeChipKind {
     Food,
     BonusFood,
     ArenaClear,
     Crash,
-    /// Standing up while still moving: charged the crash penalty, since
-    /// otherwise it would be a free way out of one.
-    Bail,
-}
-
-/// A settled chip movement, announced once the ledger has confirmed it. Sent
-/// per user rather than folded into the shared snapshot: a balance is the
-/// owner's business, and only the owner's screen pops it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SsnakeChipEvent {
-    pub user_id: Uuid,
-    /// Signed by direction: positive for food and arena clears, negative for
-    /// a crash.
-    pub delta: i64,
-    /// The balance the move left them on, straight from the write.
-    pub balance: i64,
-    pub kind: SsnakeChipEventKind,
 }
 
 #[derive(Clone, Debug)]
 pub struct SsnakePlayerSnapshot {
     pub body: Vec<Pos>,
     pub motion: Motion,
-    /// Net chips this seat has earned since sitting down; goes negative when
-    /// crashes outrun food.
+    /// Net chips this seat has run up since sitting down; goes negative when
+    /// crashes outrun food. Unbanked: it reaches the ledger when the seat is
+    /// given up, and the owning session pops the difference between two
+    /// snapshots as it moves.
     pub chips: i64,
+    /// What moved `chips` last, for the pop label.
+    pub last_chip: Option<SsnakeChipKind>,
     pub seated: bool,
 }
 
@@ -177,14 +172,43 @@ struct TickLoop {
     generation: u64,
 }
 
-/// One pending chip movement. `chip_move` carries the direction, so a crash
-/// penalty and a food payout travel the same path.
+/// A seat's final figure on its way to the ledger. The sign lives in the
+/// `ChipMove`, so a losing visit and a winning one travel the same path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Payout {
+struct Settlement {
     user_id: Uuid,
     chips: i64,
     chip_move: ChipMove,
-    kind: SsnakeChipEventKind,
+}
+
+impl Settlement {
+    /// `None` when the seat comes out exactly even: nothing moved, so nothing
+    /// is written and nobody is notified.
+    fn for_net(user_id: Uuid, net: i64) -> Option<Self> {
+        match net.cmp(&0) {
+            Ordering::Greater => Some(Self {
+                user_id,
+                chips: net,
+                chip_move: ChipMove::SsnakeArenaEarned,
+            }),
+            Ordering::Less => Some(Self {
+                user_id,
+                chips: -net,
+                chip_move: ChipMove::SsnakeArenaLost,
+            }),
+            Ordering::Equal => None,
+        }
+    }
+}
+
+/// What an idle-kick attempt did. A kick that found nothing to reclaim
+/// changed no state, so it must not publish: the kick timer is re-armed on
+/// every keypress, and a publish per keystroke would wake every session
+/// watching the table.
+#[derive(Default)]
+struct KickOutcome {
+    reclaimed: bool,
+    settlement: Option<Settlement>,
 }
 
 #[derive(Clone)]
@@ -201,9 +225,7 @@ impl SsnakeService {
     ) -> Self {
         let SsnakeServiceContext { room_event_tx } = context;
         let state = SharedState::new(room_id, settings);
-        let initial_snapshot = state.snapshot();
-        let (snapshot_tx, snapshot_rx) = watch::channel(initial_snapshot);
-        let (chip_event_tx, _) = broadcast::channel(CHIP_EVENT_BUFFER);
+        let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(state.snapshot()));
         Self {
             room_id,
             chip_svc,
@@ -211,7 +233,6 @@ impl SsnakeService {
             room_event_tx,
             snapshot_tx,
             snapshot_rx,
-            chip_event_tx,
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -220,16 +241,11 @@ impl SsnakeService {
         self.room_id
     }
 
-    pub fn subscribe_state(&self) -> watch::Receiver<SsnakeSnapshot> {
+    pub fn subscribe_state(&self) -> watch::Receiver<Arc<SsnakeSnapshot>> {
         self.snapshot_rx.clone()
     }
 
-    /// Settled chip movements for every seat; clients filter for their own.
-    pub fn subscribe_chip_events(&self) -> broadcast::Receiver<SsnakeChipEvent> {
-        self.chip_event_tx.subscribe()
-    }
-
-    pub fn current_snapshot(&self) -> SsnakeSnapshot {
+    pub fn current_snapshot(&self) -> Arc<SsnakeSnapshot> {
         self.snapshot_rx.borrow().clone()
     }
 
@@ -266,13 +282,13 @@ impl SsnakeService {
     pub fn leave_seat_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let mut payouts = Vec::new();
-            {
+            let settlement = {
                 let mut state = svc.state.lock().await;
-                state.leave(user_id, true, &mut payouts);
+                let settlement = state.leave(user_id, true);
                 svc.publish(&state);
-            }
-            svc.settle(payouts);
+                settlement
+            };
+            svc.settle(settlement);
         });
     }
 
@@ -341,7 +357,6 @@ impl SsnakeService {
                     }
                     outcome
                 };
-                svc.settle(outcome.payouts);
                 match outcome.next_millis {
                     Some(next) => millis = next,
                     None => break,
@@ -354,60 +369,53 @@ impl SsnakeService {
         let svc = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS)).await;
-            let mut state = svc.state.lock().await;
-            if state.kick_inactive_user(user_id, activity_generation) {
-                svc.publish(&state);
-            }
+            let outcome = {
+                let mut state = svc.state.lock().await;
+                let outcome = state.kick_inactive_user(user_id, activity_generation);
+                if outcome.reclaimed {
+                    svc.publish(&state);
+                }
+                outcome
+            };
+            svc.settle(outcome.settlement);
         });
     }
 
     fn publish(&self, state: &SharedState) {
-        let _ = self.snapshot_tx.send(state.snapshot());
+        let _ = self.snapshot_tx.send(Arc::new(state.snapshot()));
     }
 
-    /// Write the tick's chip movements to the ledger, then announce each
-    /// confirmed one so the owner's screen can pop it and move their balance
-    /// counter. Payouts are tiny and frequent, so they ride one spawned task
-    /// per tick rather than one per payout, and a declined debit (a player
-    /// already at zero) is expected rather than an error — nothing moved, so
-    /// nothing is announced.
-    fn settle(&self, payouts: Vec<Payout>) {
-        if payouts.is_empty() {
+    /// Bank a seat's final figure. This is the arena's only ledger write, and
+    /// the idle kick reaches it as surely as the `l` key does: nothing frees
+    /// a seat when a session drops, so for anyone who just closes their
+    /// terminal the kick *is* the settle path.
+    ///
+    /// A declined debit (a player who has spent down to nothing since they
+    /// sat) is expected rather than an error: the arena is not a creditor.
+    fn settle(&self, settlement: Option<Settlement>) {
+        let Some(settlement) = settlement else {
             return;
-        }
+        };
         let chip_svc = self.chip_svc.clone();
-        let chip_event_tx = self.chip_event_tx.clone();
         tokio::spawn(async move {
-            for payout in payouts {
-                match chip_svc
-                    .apply_move(payout.user_id, payout.chip_move, payout.chips)
-                    .await
-                {
-                    Ok(Some(balance)) => {
-                        let delta = match payout.chip_move.direction() {
-                            ChipDirection::Debit { .. } => -payout.chips,
-                            ChipDirection::Credit | ChipDirection::Restore => payout.chips,
-                        };
-                        let _ = chip_event_tx.send(SsnakeChipEvent {
-                            user_id: payout.user_id,
-                            delta,
-                            balance,
-                            kind: payout.kind,
-                        });
-                    }
-                    Ok(None) => tracing::debug!(
-                        user_id = %payout.user_id,
-                        chips = payout.chips,
-                        reason = payout.chip_move.reason(),
-                        "ssnake chip move declined by the balance floor"
-                    ),
-                    Err(error) => tracing::error!(
-                        ?error,
-                        user_id = %payout.user_id,
-                        reason = payout.chip_move.reason(),
-                        "failed to settle ssnake chips"
-                    ),
-                }
+            match chip_svc
+                .apply_move(settlement.user_id, settlement.chip_move, settlement.chips)
+                .await
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => tracing::debug!(
+                    user_id = %settlement.user_id,
+                    chips = settlement.chips,
+                    reason = settlement.chip_move.reason(),
+                    "ssnake settlement declined by the balance floor"
+                ),
+                Err(error) => tracing::error!(
+                    ?error,
+                    user_id = %settlement.user_id,
+                    chips = settlement.chips,
+                    reason = settlement.chip_move.reason(),
+                    "failed to settle ssnake seat"
+                ),
             }
         });
     }
@@ -416,7 +424,6 @@ impl SsnakeService {
 #[derive(Default)]
 struct TickOutcome {
     ticked: bool,
-    payouts: Vec<Payout>,
     /// Cadence for the next sleep; `None` retires the loop.
     next_millis: Option<u64>,
 }
@@ -431,9 +438,11 @@ struct PlayerState {
     /// Direction actually applied on the previous move (original `OldDir`);
     /// second half of the reversal guard.
     last_moved: Option<Direction>,
-    /// Net chips earned since sitting down. Survives arena shuffles and
-    /// crashes; only standing up clears it.
+    /// Net chips run up since sitting down, still unbanked. Survives arena
+    /// shuffles and crashes; standing up banks it and clears it.
     chips: i64,
+    /// What moved `chips` last, for the owner's pop.
+    last_chip: Option<SsnakeChipKind>,
     /// Length to regrow to after the death shrink (original `S1OldLength`).
     respawn_length: i32,
 }
@@ -446,6 +455,7 @@ impl PlayerState {
             motion: Motion::Idle,
             last_moved: None,
             chips: 0,
+            last_chip: None,
             respawn_length: 0,
         }
     }
@@ -455,6 +465,7 @@ impl PlayerState {
             body: self.body.iter().copied().collect(),
             motion: self.motion,
             chips: self.chips,
+            last_chip: self.last_chip,
             seated,
         }
     }
@@ -598,8 +609,8 @@ impl SharedState {
         Some(index)
     }
 
-    /// Free a seat. `voluntary` marks a player pressing `l` rather than the
-    /// idle timer reclaiming the seat.
+    /// Free a seat and hand back what it owes or is owed. `voluntary` marks a
+    /// player pressing `l` rather than the idle timer reclaiming the seat.
     ///
     /// Standing up mid-slither costs the crash penalty, because otherwise it
     /// *is* the crash-avoidance move: a snake one tick from a wall could bail
@@ -608,20 +619,17 @@ impl SharedState {
     /// and the second has already been charged for the crash it is playing
     /// out. The idle kick never charges: it is involuntary and two minutes
     /// away, so it cannot be used to dodge anything.
-    fn leave(&mut self, user_id: Uuid, voluntary: bool, payouts: &mut Vec<Payout>) {
+    fn leave(&mut self, user_id: Uuid, voluntary: bool) -> Option<Settlement> {
         let Some(index) = self.seat_index(user_id) else {
-            return;
+            return None;
         };
         let bailed = voluntary && matches!(self.players[index].motion, Motion::Moving(_));
         if bailed {
-            self.charge(
-                index,
-                SSNAKE_CRASH_CHIPS,
-                ChipMove::SsnakeCrash,
-                SsnakeChipEventKind::Bail,
-                payouts,
-            );
+            self.charge(index, SSNAKE_CRASH_CHIPS, SsnakeChipKind::Crash);
         }
+        // Read after the bail penalty: the whole visit, including the exit
+        // charge, is what lands in the ledger.
+        let settlement = Settlement::for_net(user_id, self.players[index].chips);
         self.seats[index] = None;
         self.players[index] = PlayerState::empty();
         self.skip_votes = [None; MAX_SEATS];
@@ -638,6 +646,7 @@ impl SharedState {
                 false => format!("{color} left the arena."),
             };
         }
+        settlement
     }
 
     /// Start the heartbeat if the arena has a snake and is not already
@@ -690,16 +699,14 @@ impl SharedState {
         if self.is_frozen() {
             return TickOutcome {
                 ticked: true,
-                payouts: Vec::new(),
                 next_millis: Some(self.tick_millis()),
             };
         }
 
         // The original moves and collision-checks player 1, then player 2, so
         // later snakes see earlier snakes' fresh positions. Keep that order.
-        let mut payouts = Vec::new();
         for seat_index in 0..MAX_SEATS {
-            if self.step_player(seat_index, &mut payouts) {
+            if self.step_player(seat_index) {
                 // The arena just reshuffled under everyone; the remaining
                 // snakes are freshly placed and hold still until steered.
                 break;
@@ -708,13 +715,12 @@ impl SharedState {
 
         TickOutcome {
             ticked: true,
-            payouts,
             next_millis: Some(self.tick_millis()),
         }
     }
 
     /// Returns true when this step cleared the arena and reshuffled it.
-    fn step_player(&mut self, seat_index: usize, payouts: &mut Vec<Payout>) -> bool {
+    fn step_player(&mut self, seat_index: usize) -> bool {
         if self.seats[seat_index].is_none() {
             return false;
         }
@@ -729,7 +735,7 @@ impl SharedState {
                 self.step_death_shrink(seat_index);
                 false
             }
-            Motion::Moving(direction) => self.step_move(seat_index, direction, payouts),
+            Motion::Moving(direction) => self.step_move(seat_index, direction),
         }
     }
 
@@ -753,12 +759,7 @@ impl SharedState {
         self.players[seat_index].pending_growth = respawn_length.min(MAX_SNAKE_LEN - 1);
     }
 
-    fn step_move(
-        &mut self,
-        seat_index: usize,
-        direction: Direction,
-        payouts: &mut Vec<Payout>,
-    ) -> bool {
+    fn step_move(&mut self, seat_index: usize, direction: Direction) -> bool {
         let Some(level) = self.level.clone() else {
             return false;
         };
@@ -797,30 +798,19 @@ impl SharedState {
             player.respawn_length = ssnake_respawn_length(died_at);
             player.pending_growth = 0;
             player.motion = Motion::Dying;
-            self.charge(
-                seat_index,
-                SSNAKE_CRASH_CHIPS,
-                ChipMove::SsnakeCrash,
-                SsnakeChipEventKind::Crash,
-                payouts,
-            );
+            self.charge(seat_index, SSNAKE_CRASH_CHIPS, SsnakeChipKind::Crash);
             return false;
         }
 
         if self.point == Some(new_head) {
-            return self.eat_food(seat_index, &level, payouts);
+            return self.eat_food(seat_index, &level);
         }
         false
     }
 
     /// Returns true when this was the arena's last food and the board
     /// reshuffled.
-    fn eat_food(
-        &mut self,
-        seat_index: usize,
-        level: &SsnakeLevel,
-        payouts: &mut Vec<Payout>,
-    ) -> bool {
+    fn eat_food(&mut self, seat_index: usize, level: &SsnakeLevel) -> bool {
         let mut rng = rand::thread_rng();
         // Original growth roll: random(growth_factor * random(3) + 1) + 2.
         let bound = level.growth_factor * rng.gen_range(0..3) + 1;
@@ -837,10 +827,10 @@ impl SharedState {
 
         let food_chips = ssnake_food_chips(self.food_wall_edges, bonus, multiplier);
         let kind = match bonus {
-            true => SsnakeChipEventKind::BonusFood,
-            false => SsnakeChipEventKind::Food,
+            true => SsnakeChipKind::BonusFood,
+            false => SsnakeChipKind::Food,
         };
-        self.award(seat_index, food_chips, ChipMove::SsnakeFood, kind, payouts);
+        self.award(seat_index, food_chips, kind);
 
         self.points_left -= 1;
         if self.points_left > 0 {
@@ -848,12 +838,13 @@ impl SharedState {
             return false;
         }
 
+        // The closer's food and clear bonus land on the same tick, so the
+        // owner sees them as one pop: `+270 cleared` rather than two numbers
+        // fighting for the same frame.
         self.award(
             seat_index,
             SSNAKE_CLEAR_CHIPS * multiplier,
-            ChipMove::SsnakeArenaClear,
-            SsnakeChipEventKind::ArenaClear,
-            payouts,
+            SsnakeChipKind::ArenaClear,
         );
         self.advance_arena(seat_index);
         true
@@ -969,8 +960,10 @@ impl SharedState {
         // ones already down, not against stale positions from the old arena.
         for seat_index in 0..MAX_SEATS {
             let chips = self.players[seat_index].chips;
+            let last_chip = self.players[seat_index].last_chip;
             self.players[seat_index] = PlayerState::empty();
             self.players[seat_index].chips = chips;
+            self.players[seat_index].last_chip = last_chip;
         }
         for seat_index in 0..MAX_SEATS {
             if self.seats[seat_index].is_some() {
@@ -1000,48 +993,20 @@ impl SharedState {
 
     // ── Chips ──────────────────────────────────────────────────
 
-    fn award(
-        &mut self,
-        seat_index: usize,
-        chips: i64,
-        chip_move: ChipMove,
-        kind: SsnakeChipEventKind,
-        payouts: &mut Vec<Payout>,
-    ) {
+    fn award(&mut self, seat_index: usize, chips: i64, kind: SsnakeChipKind) {
         if chips <= 0 {
             return;
         }
         self.players[seat_index].chips += chips;
-        if let Some(user_id) = self.seats[seat_index] {
-            payouts.push(Payout {
-                user_id,
-                chips,
-                chip_move,
-                kind,
-            });
-        }
+        self.players[seat_index].last_chip = Some(kind);
     }
 
-    fn charge(
-        &mut self,
-        seat_index: usize,
-        chips: i64,
-        chip_move: ChipMove,
-        kind: SsnakeChipEventKind,
-        payouts: &mut Vec<Payout>,
-    ) {
+    fn charge(&mut self, seat_index: usize, chips: i64, kind: SsnakeChipKind) {
         if chips <= 0 {
             return;
         }
         self.players[seat_index].chips -= chips;
-        if let Some(user_id) = self.seats[seat_index] {
-            payouts.push(Payout {
-                user_id,
-                chips,
-                chip_move,
-                kind,
-            });
-        }
+        self.players[seat_index].last_chip = Some(kind);
     }
 
     // ── Placement ──────────────────────────────────────────────
@@ -1159,23 +1124,31 @@ impl SharedState {
 
     // ── Housekeeping ───────────────────────────────────────────
 
-    /// Returns true when the seat was actually reclaimed. A snake that has
-    /// been steered keeps slithering on its own, so the idle timer tracks
-    /// keypresses, not motion: an abandoned snake still frees its seat.
-    fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> bool {
+    /// A snake that has been steered keeps slithering on its own, so the idle
+    /// timer tracks keypresses, not motion: an abandoned snake still frees
+    /// its seat.
+    ///
+    /// The kick banks the seat's tally like any other exit. Nothing frees a
+    /// seat when a session drops, so this is the settle path for everyone who
+    /// closes their terminal rather than pressing `l`, and skipping it would
+    /// quietly void their whole visit.
+    fn kick_inactive_user(&mut self, user_id: Uuid, activity_generation: u64) -> KickOutcome {
         let Some(index) = self.seat_index(user_id) else {
-            return false;
+            return KickOutcome::default();
         };
         if self.activity_generation[index] != activity_generation {
-            return false;
+            return KickOutcome::default();
         }
         if self.last_activity[index].elapsed() < Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS) {
-            return false;
+            return KickOutcome::default();
         }
-        // Involuntary: no penalty, and nothing to settle.
-        self.leave(user_id, false, &mut Vec::new());
+        // Involuntary, so no bail penalty on the way out.
+        let settlement = self.leave(user_id, false);
         self.status_message = "Idle snake left the arena.".to_string();
-        true
+        KickOutcome {
+            reclaimed: true,
+            settlement,
+        }
     }
 
     fn seated_count(&self) -> usize {

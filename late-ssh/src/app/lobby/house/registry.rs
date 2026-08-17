@@ -189,11 +189,7 @@ impl HouseTableRegistry {
                 crate::app::lobby::house::tron::state::State::new(self.tron_service(), user_id),
             ))),
             HouseTable::Ssnake => Some(HouseTableClient::Ssnake(Box::new(
-                crate::app::lobby::house::ssnake::state::State::new(
-                    self.ssnake_service(),
-                    user_id,
-                    chip_balance,
-                ),
+                crate::app::lobby::house::ssnake::state::State::new(self.ssnake_service(), user_id),
             ))),
         }
     }

@@ -21,7 +21,7 @@ use crate::app::{
                 SSNAKE_EDGE_BONUS_CHIPS, SSNAKE_FOOD_CHIPS,
             },
             state::{MAX_SEATS, Motion, Pos, SsnakeColor, SsnakePhase, State},
-            svc::{SsnakeChipEventKind, SsnakePlayerSnapshot, SsnakeSnapshot},
+            svc::{SsnakeChipKind, SsnakePlayerSnapshot, SsnakeSnapshot},
         },
     },
 };
@@ -474,9 +474,9 @@ fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static
     lines.extend([
         Line::raw(""),
         section_header("House rules"),
-        info_tagline("Food pays on the spot, times"),
-        info_tagline("the MOVING snakes — parked"),
-        info_tagline("ones count for nobody."),
+        info_tagline("Food pays times the MOVING"),
+        info_tagline("snakes — parked ones count"),
+        info_tagline("for nobody."),
         info_tagline(&format!(
             "Pink {SSNAKE_BONUS_FOOD_MULTIPLIER}x, +{SSNAKE_EDGE_BONUS_CHIPS} per wall it"
         )),
@@ -485,6 +485,9 @@ fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static
         info_tagline(&format!("Crash -{SSNAKE_CRASH_CHIPS}. Standing up while")),
         info_tagline("moving costs the same — no"),
         info_tagline("bailing out of a crash."),
+        info_tagline("Your take is pending until"),
+        info_tagline("you stand up; that is when"),
+        info_tagline("it reaches your balance."),
     ]);
     lines
 }
@@ -613,9 +616,11 @@ fn player_lines(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> V
     }
 }
 
-/// Chips banked since sitting down, plus the multiplier status. `parked` is
-/// the one that matters socially: it is why a full table can still be paying
-/// the lone rate.
+/// What the seat has run up since sitting down, plus the multiplier status.
+/// The word is "pending" on purpose: none of it is in the player's balance
+/// until they stand up, and a counter that read "chips" next to a number they
+/// cannot spend yet would be a lie. `parked` is the one that matters
+/// socially: it is why a full table can still be paying the lone rate.
 fn earnings_line(player: &SsnakePlayerSnapshot, voted_skip: bool) -> Line<'static> {
     let (state_text, state_color) = match player.motion {
         Motion::Moving(_) => ("moving", theme::SUCCESS()),
@@ -629,7 +634,7 @@ fn earnings_line(player: &SsnakePlayerSnapshot, voted_skip: bool) -> Line<'stati
     };
     let mut spans = vec![
         Span::styled(
-            format!("  {:+} chips  ", player.chips),
+            format!("  {:+} pending  ", player.chips),
             Style::default().fg(chips_color),
         ),
         Span::styled(state_text.to_string(), Style::default().fg(state_color)),
@@ -735,13 +740,12 @@ fn chip_pop_line(state: &State) -> Option<Line<'static>> {
 
 /// What the pop calls itself. Plain food is the common case and stays bare,
 /// so the eye only stops on the ones worth stopping for.
-fn chip_pop_suffix(kind: SsnakeChipEventKind) -> &'static str {
+fn chip_pop_suffix(kind: SsnakeChipKind) -> &'static str {
     match kind {
-        SsnakeChipEventKind::Food => "",
-        SsnakeChipEventKind::BonusFood => " pink",
-        SsnakeChipEventKind::ArenaClear => " cleared",
-        SsnakeChipEventKind::Crash => " crash",
-        SsnakeChipEventKind::Bail => " bailed",
+        SsnakeChipKind::Food => "",
+        SsnakeChipKind::BonusFood => " pink",
+        SsnakeChipKind::ArenaClear => " cleared",
+        SsnakeChipKind::Crash => " crash",
     }
 }
 

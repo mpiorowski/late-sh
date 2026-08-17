@@ -171,10 +171,10 @@ impl HouseTableClient {
             Self::Blackjack(state) => Some(state.balance()),
             Self::Asterion(_) => None,
             Self::Tron(_) => None,
-            // The snake arena settles chips per food eaten and hands the new
-            // balance straight back, so it drives the top-right counter live
-            // instead of waiting on the periodic leaderboard refresh.
-            Self::Ssnake(state) => Some(state.balance()),
+            // The arena banks nothing until you stand up, so it has no
+            // balance to report: what a seat has run up so far is shown in
+            // its sidebar row, where it reads as the unbanked figure it is.
+            Self::Ssnake(_) => None,
         }
     }
 
@@ -186,11 +186,9 @@ impl HouseTableClient {
             }
             Self::Asterion(_) => false,
             Self::Tron(_) => false,
-            // While you hold a snake the arena is the fresher authority on
-            // your balance: it writes every few seconds and the leaderboard
-            // refresh is ~30s stale, so accepting it would jog the counter
-            // backwards. Off-seat, take the external number.
-            Self::Ssnake(state) => state.seat_index().is_none(),
+            // The arena never contradicts the ledger, so external balance
+            // changes (a shop purchase, a gift) are always the newer truth.
+            Self::Ssnake(_) => true,
         }
     }
 
@@ -200,7 +198,7 @@ impl HouseTableClient {
             Self::Blackjack(state) => state.set_balance(balance),
             Self::Asterion(_) => {}
             Self::Tron(_) => {}
-            Self::Ssnake(state) => state.set_balance(balance),
+            Self::Ssnake(_) => {}
         }
     }
 }

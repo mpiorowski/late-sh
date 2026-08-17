@@ -410,10 +410,12 @@ fn chips_help_lines() -> Vec<String> {
         format!("    Asterion         {asterion} chips for escaping the last maze, once per UTC day"),
         format!("    Super Snake      {} chips per food eaten (+{} per arena wall the food touches),", crate::app::lobby::house::ssnake::settings::SSNAKE_FOOD_CHIPS, crate::app::lobby::house::ssnake::settings::SSNAKE_EDGE_BONUS_CHIPS),
         "                     times the number of snakes moving,".to_string(),
-        format!("                     paid instantly and with no cooldown. Clearing an arena pays {} on"
+        format!("                     with no cooldown. Clearing an arena pays {} on"
             , crate::app::lobby::house::ssnake::settings::SSNAKE_CLEAR_CHIPS),
         format!("                     the same multiplier; every crash costs {}. The arena runs forever,", crate::app::lobby::house::ssnake::settings::SSNAKE_CRASH_CHIPS),
         "                     so one player alone can farm it and a crowd earns more each.".to_string(),
+        "                     The seat's take is pending while you play and lands in your balance".to_string(),
+        "                     when you stand up (or when the idle kick reclaims the seat).".to_string(),
         format!("    Tron             {} chips per win, one payout per 5 minutes", crate::app::lobby::house::tron::svc::TRON_WIN_CHIPS),
         "    Poker, Blackjack these are real betting: you put chips in and can lose them.".to_string(),
         "                     Winnings come from the pot or the dealer, not from a fixed payout,".to_string(),

@@ -45,9 +45,9 @@ fn a_single_snake_keeps_the_arena_running() {
 #[test]
 fn arena_sleeps_when_the_last_snake_stands_up() {
     let (mut state, a, b, generation) = arena_state();
-    state.leave(a, true, &mut Vec::new());
+    state.leave(a, true);
     assert_eq!(state.phase, SsnakePhase::Running, "one snake still playing");
-    state.leave(b, true, &mut Vec::new());
+    state.leave(b, true);
     assert_eq!(state.phase, SsnakePhase::Idle);
     assert!(
         state.tick(generation).next_millis.is_none(),
@@ -108,13 +108,24 @@ fn food_pays_the_eater_scaled_by_moving_snakes() {
     state.players[1].motion = Motion::Moving(Direction::Left);
     state.steer(a, Direction::Right);
 
-    let payouts = state.tick(generation).payouts;
-    assert_eq!(payouts.len(), 1);
-    assert_eq!(payouts[0].user_id, a);
-    assert_eq!(payouts[0].chip_move, ChipMove::SsnakeFood);
-    assert_eq!(payouts[0].chips, SSNAKE_FOOD_CHIPS * 2, "two snakes moving");
-    assert_eq!(state.players[0].chips, SSNAKE_FOOD_CHIPS * 2);
+    state.tick(generation);
+    assert_eq!(
+        state.players[0].chips,
+        SSNAKE_FOOD_CHIPS * 2,
+        "two snakes moving"
+    );
+    assert_eq!(state.players[0].last_chip, Some(SsnakeChipKind::Food));
+    assert_eq!(state.players[1].chips, 0, "only the eater is paid");
     assert_eq!(state.points_left, 4);
+    // Nothing reaches the ledger mid-flight; the seat banks on the way out.
+    assert_eq!(
+        state.leave(a, false),
+        Some(Settlement {
+            user_id: a,
+            chips: SSNAKE_FOOD_CHIPS * 2,
+            chip_move: ChipMove::SsnakeArenaEarned,
+        })
+    );
 }
 
 #[test]
@@ -134,9 +145,9 @@ fn food_against_a_wall_pays_the_edge_bonus() {
     state.food_wall_edges = state.wall_edges(Pos { x: 1, y: 1 });
     state.steer(a, Direction::Left);
 
-    let payouts = state.tick(generation).payouts;
+    state.tick(generation);
     assert_eq!(
-        payouts[0].chips,
+        state.players[0].chips,
         SSNAKE_FOOD_CHIPS + 2 * SSNAKE_EDGE_BONUS_CHIPS,
         "corner food pays the base plus two edges, one snake moving"
     );
@@ -166,12 +177,13 @@ fn pink_food_pays_the_bonus_multiple() {
     state.point = Some(Pos { x: 6, y: 5 });
     state.steer(a, Direction::Right);
 
-    let payouts = state.tick(generation).payouts;
+    state.tick(generation);
     assert_eq!(
-        payouts[0].chips,
+        state.players[0].chips,
         SSNAKE_FOOD_CHIPS * SSNAKE_BONUS_FOOD_MULTIPLIER,
         "one snake moving, pink food"
     );
+    assert_eq!(state.players[0].last_chip, Some(SsnakeChipKind::BonusFood));
 }
 
 #[test]
@@ -184,13 +196,16 @@ fn last_food_pays_the_clear_bonus_and_reshuffles_the_arena() {
     state.steer(a, Direction::Right);
 
     let outcome = state.tick(generation);
-    let clear = outcome
-        .payouts
-        .iter()
-        .find(|payout| payout.chip_move == ChipMove::SsnakeArenaClear)
-        .expect("the closer banks the clear bonus");
-    assert_eq!(clear.user_id, a);
-    assert_eq!(clear.chips, SSNAKE_CLEAR_CHIPS);
+    assert_eq!(
+        state.players[0].chips,
+        SSNAKE_FOOD_CHIPS + SSNAKE_CLEAR_CHIPS,
+        "the closer takes the food and the clear bonus"
+    );
+    assert_eq!(
+        state.players[0].last_chip,
+        Some(SsnakeChipKind::ArenaClear),
+        "both land on one tick, so the pop reads as the clear"
+    );
 
     assert_eq!(state.phase, SsnakePhase::Running, "play never stops");
     let after = state.level.clone().unwrap();
@@ -315,7 +330,6 @@ fn the_new_arena_holds_still_before_anyone_can_move() {
     assert_eq!(state.players[0].motion, Motion::Idle);
     let outcome = state.tick(generation);
     assert!(outcome.ticked, "the hold still repaints");
-    assert!(outcome.payouts.is_empty());
     assert_eq!(state.players[0].body[0], head, "nobody moved");
 
     // Once it lapses, play resumes normally.
@@ -325,27 +339,28 @@ fn the_new_arena_holds_still_before_anyone_can_move() {
 }
 
 #[test]
-fn payouts_carry_the_kind_the_pop_will_show() {
-    let (mut state, a, _, generation) = arena_state();
-    state.points_left = 1;
-    state.bonus_food = true;
-    state.point = Some(Pos { x: 6, y: 5 });
-    state.steer(a, Direction::Right);
-
-    let kinds: Vec<SsnakeChipEventKind> = state
-        .tick(generation)
-        .payouts
-        .iter()
-        .map(|payout| payout.kind)
-        .collect();
+fn a_seat_that_crashed_more_than_it_ate_banks_a_debit() {
+    // The sign lives in the ChipMove, so a losing visit takes the same exit
+    // as a winning one and the amount stays positive.
+    let (mut state, a, _, _) = arena_state();
+    state.players[0].chips = -30;
     assert_eq!(
-        kinds,
-        [
-            SsnakeChipEventKind::BonusFood,
-            SsnakeChipEventKind::ArenaClear
-        ],
-        "pink food then the clear bonus, each labelled for the pop"
+        state.leave(a, false),
+        Some(Settlement {
+            user_id: a,
+            chips: 30,
+            chip_move: ChipMove::SsnakeArenaLost,
+        })
     );
+}
+
+#[test]
+fn a_seat_that_broke_even_writes_nothing() {
+    // Nothing moved, so nothing should reach the ledger, and nothing should
+    // fire the chip notify behind it.
+    let (mut state, a, _, _) = arena_state();
+    assert_eq!(state.players[0].chips, 0);
+    assert_eq!(state.leave(a, false), None);
 }
 
 #[test]
@@ -354,11 +369,9 @@ fn crashing_costs_chips_and_respawns_instead_of_eliminating() {
     state.players[0].body[0] = Pos { x: 1, y: 5 };
     state.steer(a, Direction::Left);
 
-    let payouts = state.tick(generation).payouts;
-    assert_eq!(payouts.len(), 1);
-    assert_eq!(payouts[0].chip_move, ChipMove::SsnakeCrash);
-    assert_eq!(payouts[0].chips, SSNAKE_CRASH_CHIPS);
+    state.tick(generation);
     assert_eq!(state.players[0].chips, -SSNAKE_CRASH_CHIPS);
+    assert_eq!(state.players[0].last_chip, Some(SsnakeChipKind::Crash));
     assert_eq!(state.players[0].motion, Motion::Dying);
 
     // The shrink runs out and the snake simply comes back.
@@ -375,15 +388,19 @@ fn bailing_out_while_moving_costs_the_crash_penalty() {
     // Otherwise `l` is a free escape: a snake one tick from a wall stands
     // up, dodges the -10, and sits straight back down on a clean spawn.
     let (mut state, a, _, _) = arena_state();
+    state.players[0].chips = 100;
     state.steer(a, Direction::Left);
 
-    let mut payouts = Vec::new();
-    state.leave(a, true, &mut payouts);
-    assert_eq!(payouts.len(), 1);
-    assert_eq!(payouts[0].user_id, a);
-    assert_eq!(payouts[0].chips, SSNAKE_CRASH_CHIPS);
-    assert_eq!(payouts[0].chip_move, ChipMove::SsnakeCrash);
-    assert_eq!(payouts[0].kind, SsnakeChipEventKind::Bail);
+    // The penalty lands before the seat is cashed out, so what reaches the
+    // ledger is the whole visit including the exit charge.
+    assert_eq!(
+        state.leave(a, true),
+        Some(Settlement {
+            user_id: a,
+            chips: 100 - SSNAKE_CRASH_CHIPS,
+            chip_move: ChipMove::SsnakeArenaEarned,
+        })
+    );
     assert!(state.status_message.contains("bailed"));
 }
 
@@ -394,24 +411,55 @@ fn standing_up_parked_or_dying_is_free() {
     for motion in [Motion::Idle, Motion::Dying] {
         let (mut state, a, _, _) = arena_state();
         state.players[0].motion = motion;
-        let mut payouts = Vec::new();
-        state.leave(a, true, &mut payouts);
-        assert!(payouts.is_empty(), "{motion:?} should leave for free");
+        state.players[0].chips = 100;
+        assert_eq!(
+            state.leave(a, true).map(|settlement| settlement.chips),
+            Some(100),
+            "{motion:?} should leave for free"
+        );
     }
 }
 
 #[test]
-fn the_idle_kick_never_charges() {
-    // Involuntary and two minutes out, so it cannot be used to dodge a
-    // crash — charging for it would just punish a dropped connection.
+fn the_idle_kick_banks_the_seat_without_charging_it() {
+    // Nothing frees a seat when a session drops, so for anyone who closes
+    // their terminal the kick is the only settle path: it has to pay out.
+    // It must not charge the bail penalty though, since it is involuntary
+    // and two minutes out, so it cannot be used to dodge a crash.
     let (mut state, a, _, _) = arena_state();
     state.steer(a, Direction::Left);
+    state.players[0].chips = 250;
     state.last_activity[0] = Instant::now() - Duration::from_secs(SEAT_IDLE_TIMEOUT_SECS + 1);
     let generation = state.activity_generation[0];
 
-    assert!(state.kick_inactive_user(a, generation));
+    let outcome = state.kick_inactive_user(a, generation);
+    assert!(outcome.reclaimed);
+    assert_eq!(
+        outcome.settlement,
+        Some(Settlement {
+            user_id: a,
+            chips: 250,
+            chip_move: ChipMove::SsnakeArenaEarned,
+        }),
+        "a dropped connection still banks what it earned, at full value"
+    );
     assert!(state.seats[0].is_none(), "the seat reopens");
-    assert_eq!(state.players[0].chips, 0, "no penalty for being kicked");
+}
+
+#[test]
+fn a_kick_that_reclaims_nothing_changes_nothing() {
+    // The kick timer is re-armed on every keypress, so the common case is a
+    // stale timer firing against a seat that is still being played. It must
+    // not publish or settle, or a steering player would wake every session
+    // watching the table once per keystroke.
+    let (mut state, a, _, _) = arena_state();
+    state.players[0].chips = 250;
+    let generation = state.activity_generation[0];
+
+    let outcome = state.kick_inactive_user(a, generation);
+    assert!(!outcome.reclaimed, "the seat was touched recently");
+    assert!(outcome.settlement.is_none());
+    assert_eq!(state.seats[0], Some(a));
 }
 
 #[test]
@@ -466,7 +514,7 @@ fn earnings_survive_an_arena_shuffle_but_not_standing_up() {
         state.players[0].chips, 250,
         "the session tally carries over"
     );
-    state.leave(a, true, &mut Vec::new());
+    state.leave(a, true);
     assert_eq!(state.players[0].chips, 0, "standing up clears the tally");
 }
 
@@ -565,7 +613,7 @@ fn moving_into_own_vacated_tail_cell_is_safe() {
     ]);
     state.players[0].motion = Motion::Moving(Direction::Down);
     state.players[0].last_moved = Some(Direction::Left);
-    let outcome = state.tick(generation);
-    assert!(outcome.payouts.is_empty(), "tail cell vacated, no crash");
+    state.tick(generation);
+    assert_eq!(state.players[0].chips, 0, "tail cell vacated, no crash");
     assert_eq!(state.players[0].motion, Motion::Moving(Direction::Down));
 }

@@ -8,6 +8,7 @@ fn empty_player() -> SsnakePlayerSnapshot {
         body: Vec::new(),
         motion: Motion::Idle,
         chips: 0,
+        last_chip: None,
         seated: false,
     }
 }
@@ -23,12 +24,14 @@ fn snapshot_with_level(level: SsnakeLevel) -> SsnakeSnapshot {
                 body: vec![Pos { x: 2, y: 2 }, Pos { x: 3, y: 2 }],
                 motion: Motion::Moving(crate::app::lobby::house::ssnake::state::Direction::Left),
                 chips: 120,
+                last_chip: Some(SsnakeChipKind::Food),
                 seated: true,
             },
             SsnakePlayerSnapshot {
                 body: vec![Pos { x: 5, y: 5 }],
                 motion: Motion::Idle,
                 chips: 0,
+                last_chip: None,
                 seated: true,
             },
             empty_player(),
@@ -113,13 +116,15 @@ fn zoom_asks_for_taller_pane_only_when_it_fits() {
 fn earnings_line_signs_the_tally_and_names_the_motion() {
     let snapshot = snapshot_with_level(open_test_arena(30, 20));
 
+    // "pending", not "chips": none of it is spendable until the player
+    // stands up and the seat is banked.
     let moving = earnings_line(&snapshot.players[0], false);
-    assert_eq!(moving.spans[0].content, "  +120 chips  ");
+    assert_eq!(moving.spans[0].content, "  +120 pending  ");
     assert_eq!(moving.spans[1].content, "moving");
 
     // A parked snake is called out: it pays nobody, including itself.
     let parked = earnings_line(&snapshot.players[1], false);
-    assert_eq!(parked.spans[0].content, "  +0 chips  ");
+    assert_eq!(parked.spans[0].content, "  +0 pending  ");
     assert_eq!(parked.spans[1].content, "parked");
 
     let broke = earnings_line(
@@ -130,7 +135,7 @@ fn earnings_line_signs_the_tally_and_names_the_motion() {
         },
         false,
     );
-    assert_eq!(broke.spans[0].content, "  -30 chips  ");
+    assert_eq!(broke.spans[0].content, "  -30 pending  ");
     assert_eq!(broke.spans[1].content, "crashed");
 }
 
