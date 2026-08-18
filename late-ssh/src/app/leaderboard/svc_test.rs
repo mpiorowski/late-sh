@@ -145,3 +145,77 @@ fn refresh_interval_stays_coarse() {
         "leaderboard refresh is a background timer, not a live feed"
     );
 }
+
+fn month(year: i32, month: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(year, month, 1).expect("valid month")
+}
+
+fn increment_for(batch: &PreparedOnlineTimeBatch, user_id: Uuid, month_start: NaiveDate) -> i64 {
+    batch
+        .batch
+        .increments
+        .iter()
+        .find_map(|value| {
+            (value.user_id == user_id && value.month_start == month_start)
+                .then_some(value.milliseconds)
+        })
+        .expect("user increment in batch")
+}
+
+#[test]
+fn online_time_checkpoints_one_continuous_presence_interval() {
+    let tracker = OnlineTimeTracker::default();
+    let user_id = Uuid::from_u128(10);
+    let start = Instant::now();
+    let august = month(2026, 8);
+    let september = month(2026, 9);
+
+    tracker.connected_at(user_id, start, august);
+    // A defensive duplicate start cannot reset the first-online timestamp or
+    // move its elapsed time into another UTC month.
+    tracker.connected_at(user_id, start + Duration::from_secs(5), september);
+    let first = tracker
+        .begin_batch_at(start + Duration::from_secs(10), september)
+        .expect("first checkpoint");
+    assert!(!first.was_retry);
+    assert_eq!(increment_for(&first, user_id, august), 10_000);
+
+    let retry = tracker
+        .begin_batch_at(start + Duration::from_secs(15), september)
+        .expect("retained uncertain batch");
+    assert!(retry.was_retry);
+    assert_eq!(retry.batch.id, first.batch.id);
+    assert_eq!(increment_for(&retry, user_id, august), 10_000);
+
+    tracker.acknowledge(retry.batch.id);
+    let follow_up = tracker
+        .begin_batch_at(start + Duration::from_secs(15), september)
+        .expect("time accrued while batch was uncertain");
+    assert_eq!(increment_for(&follow_up, user_id, september), 5_000);
+    tracker.acknowledge(follow_up.batch.id);
+
+    tracker.disconnected_at(user_id, start + Duration::from_secs(20));
+    let final_batch = tracker
+        .begin_batch_at(start + Duration::from_secs(30), september)
+        .expect("completed interval");
+    assert_eq!(increment_for(&final_batch, user_id, september), 5_000);
+    assert!(!tracker.is_active(user_id));
+}
+
+#[test]
+fn online_time_adds_disjoint_reconnections() {
+    let tracker = OnlineTimeTracker::default();
+    let user_id = Uuid::from_u128(11);
+    let start = Instant::now();
+    let august = month(2026, 8);
+
+    tracker.connected_at(user_id, start, august);
+    tracker.disconnected_at(user_id, start + Duration::from_secs(10));
+    tracker.connected_at(user_id, start + Duration::from_secs(20), august);
+    tracker.disconnected_at(user_id, start + Duration::from_secs(25));
+
+    let batch = tracker
+        .begin_batch_at(start + Duration::from_secs(30), august)
+        .expect("two completed intervals");
+    assert_eq!(increment_for(&batch, user_id, august), 15_000);
+}

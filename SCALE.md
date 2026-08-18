@@ -418,6 +418,11 @@ Still open: the other eight queries in the bundle, which are individually cheap 
 
 Done 2026-07-26 (`app/hub/svc.rs`; the service has since moved to `app/leaderboard/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`). Verify against `pg_stat_statements` after the next deploy.
 
+Follow-up 2026-08-18: Late Time adds one query over indexed all-time and
+current-month O(users) rollups to the subscriber-gated pass (fourteen queries
+total), plus one array-upsert statement updating both rollups per five minutes
+when connected time is pending. Connection and disconnection do no DB work.
+
 ### 3. Add a second node; give `service-ssh` a full node to itself
 
 `late-ssh` render/tick CPU is the scaling unit; everything else on `server-1` is overhead stealing cores from sessions. Move the overhead to a new node so the full 8 cores serve sessions.

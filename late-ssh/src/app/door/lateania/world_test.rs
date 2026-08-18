@@ -1962,9 +1962,7 @@ fn aelunor_high_end_loot_is_a_lucky_find_not_the_default_drop() {
     let deepest: Vec<&MobSpawn> = wood
         .iter()
         .copied()
-        .filter(|s| {
-            (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1
-        })
+        .filter(|s| (s.home - AELUNOR_BASE) / AELUNOR_ZONE_STRIDE == AELUNOR_ZONES as u32 - 1)
         .collect();
     assert!(
         share(&deepest) < 25,
@@ -2138,5 +2136,3 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
         );
     }
 }
-
-

@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/leaderboard` — the top-level Leaderboards page (screen `6`) and `LeaderboardService` — plus the roster-generated data model in `late-core/src/models/leaderboard.rs` and the monthly `profile_awards` snapshot machinery it drives.
-- Last updated: 2026-08-10 (this file absorbs the cross-door log-pipe contract and its settled decisions from `devdocs/PLAN-ROGUELIKE-BOARDS.md`, which is now finished and kept only as the build record: the pipe that fills the door boards is documented here, per-game formats and host internals stay in the door contexts)
+- Last updated: 2026-08-18 (added paired monthly/all-time Late Time standings and their process-local, five-minute batched persistence path)
 - Purpose: local working context for everything leaderboard: the refresh service and its cost rules, the board rosters and queries, the door log pipe that fills the door boards, the page, monthly profile awards, and the local seed script.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -25,10 +25,10 @@ to the doors.
 
 ## Source Map
 
-- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
+- `state.rs`: `Board` (the closed page-board enum; page order: Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
-- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, and the daily `profile_awards` snapshot loop.
+- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, process-local online-time accumulator/five-minute batch writer, and the daily `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
 - Read-only from here, documented below: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`, models `late-core/src/models/{door_run,door_milestone,door_log_cursor}.rs`, migration `136_create_door_ingestion.sql`).
 
@@ -37,13 +37,14 @@ to the doors.
 `LeaderboardService` refreshes `LeaderboardData` from DB every 5 minutes, and
 only while at least one session is subscribed, publishing it through a
 `watch::Receiver<Arc<LeaderboardData>>`. The cadence is deliberately coarse:
-the old fourteen-query pass was 13% of all DB execution time at 30s (SCALE.md
-DB Cost Ranking). Today the pass is **thirteen queries**: each board family is
+the old refresh pass was 13% of all DB execution time at 30s (SCALE.md
+DB Cost Ranking). Today the pass is **fourteen queries**: each board family is
 one union query ranked with `PARTITION BY game`; the Lateania boards add two
 (both O(players) over `mud_characters`) and the roguelike-door boards two
 (one query per window over `door_runs`/`door_milestones`, all three families
-ranked `PARTITION BY (family, game)`). Do not make it hot again without
-re-reading that ranking.
+ranked `PARTITION BY (family, game)`), and Late Time adds one query over its
+indexed all-time and current-month O(users) rollups. Do not make it hot again
+without re-reading that ranking.
 
 Two rules keep the coarse cadence from reading as a broken screen:
 
@@ -54,6 +55,28 @@ Refresh is polling-based, so Activity events can appear before the page
 catches up: a score set at minute 0 shows on the board within 5 minutes, not
 at once. The boards are never *empty*, just up to one interval behind; there
 is no leaderboard notify path (quest/shop snapshots have one, this does not).
+
+### Late Time persistence
+
+Late Time counts authenticated human presence across SSH and IRC, including
+idle/AFK time. `active_users` remains the authoritative cross-protocol
+connection ref-count: only its 0→1 transition starts a monotonic `Instant`, and
+only 1→0 stops it, so overlapping sessions for one user count once. Ghost users
+never enter this path.
+
+The accumulator checkpoints on the same five-minute timer as the leaderboard.
+It performs no DB work on connect/disconnect and writes every changed user in
+one `UNNEST` statement that atomically updates `user_online_time` (one all-time
+row per user) and `user_online_time_monthly` (one row per user and UTC month);
+no pending time means no statement. A retained flush UUID and month make an
+uncertain retry idempotent, and shutdown performs a final serialized flush.
+Tracking starts with migrations 142-143 and has no invented historical
+backfill. A connected segment is attributed to the UTC month in which that
+segment began; the regular checkpoint bounds month-boundary spill to five
+minutes while Postgres is healthy. A hard process crash can lose the current
+interval since the last checkpoint. Deduplication is process-local, matching
+the one-replica service; a rolling deployment's brief old/new-pod overlap may
+overcount.
 
 ## Data model (roster-generated)
 
@@ -67,6 +90,7 @@ rosters).
 - `ScoreGame` (Lateris, TwentyFortyEight, Snake, Traffic): monthly boards union `game_score_events` with legacy best-score rows touched this month; all-time boards read only the legacy tables of record.
 - `DoorGame` (Dcss, Nethack, Brogue): the uniform board triple over the log-pipe fact tables — Wins (all-time count of `DoorRunResult::WINS` results, single window by design, `Standings::AllTimeOnly`), Deepest Dive, and Top Score (monthly + all-time). `WINS` is win + mastery, so a Brogue escape and a Brogue mastery both count once each on its wins board. The dive board unions end-of-run depth with the depth snapshot on every tracked milestone line, because crawl stamps the *final* place on the logfile line and a winner ends at the surface; NetHack's `maxlvl` and Brogue's `deepestLevel` are already run maximums, so their milestone rows contribute nothing to the union (Brogue writes no milestone rows at all: it logs only at end of game).
 - `Top Chips` (monthly net chip delta from `chip_ledger`, exclusions derived from `ChipMove::excluded_earning_reasons()`) and `Arcade Wins` are bespoke monthly-only boards. Arcade Wins weights come from `Difficulty::points` (easy/draw-1 = 1, medium = 3, hard/draw-3 = 5; Le Word fixed Easy, Rubik's fixed Medium), the same enum whose `chips()` carries the daily-win payout tiers, so points and payouts cannot drift apart. Unknown difficulty keys score 0, never a default.
+- `Late Time` is a bespoke paired board over the current-month and all-time online-time rollups. It ranks exact milliseconds and renders the largest two useful units; no profile award or reward is attached.
 - The two Lateania boards are snapshot boards over the game-owned `mud_characters` JSONB blobs, not event tables: `lateania_adventurers` ranks living characters by level with experience as the tiebreak and carries the class in `RankedEntry.note` (the one board note in the system; the page renders it dim after the username and drops it when width runs short); `lateania_frontier` unnests each blob's visited-room array for the deepest Frontier zone (rooms 2000..=2999, 50 per zone, constants restated in `leaderboard.rs` with a pointer at `lateania/world.rs`). A reset character leaves both boards; the page shows one "right now" window (`Standings::Snapshot`).
 - The Le Word win-streak board was deliberately dropped (the gaps-and-islands query was the most expensive in the pass).
 
@@ -161,8 +185,8 @@ that the migrations and a few source comments still point at.
 ## The page
 
 Screen `6`, board rail + detail view. The rail leads with the Boards group
-(Top Chips, Arcade Wins), then the Games group (the Lateania boards, then
-each door's board triple), Daily Wins, and High Scores, in roster order.
+(Top Chips, Arcade Wins, Late Time), then the Games group (the Lateania boards,
+then each door's board triple), Daily Wins, and High Scores, in roster order.
 The first board, and the one selected when the page opens, is Top Chips. The detail pane shows
 the selected board's window(s) with an around-you tail (the viewer's row
 replaces the last two rows below the fold). There is no scrolling inside a
@@ -180,8 +204,8 @@ board's standings beyond that tail; a board deeper than the pane clips.
 An empty local database renders every panel as "no scores yet".
 `make seed-leaderboard` (`scripts/seed_leaderboard_test_data.{sh,sql}`) fills
 the Compose database with 48 synthetic players spread across every board,
-including `mud_characters` blobs for the Lateania boards and per-door
-`door_runs`/`door_milestones` rows for all three doors (winners, quits,
+including online-time totals, `mud_characters` blobs for the Lateania boards,
+and per-door `door_runs`/`door_milestones` rows for all three doors (winners, quits,
 spread depths, DCSS Orb milestones carrying the dive depth, Brogue escapes
 and masteries; each door's block is offset from the others so no two boards
 mirror each other, and `seed:`-prefixed source files keep the idempotency key
@@ -189,7 +213,7 @@ from ever colliding with real ingested lines). Local
 development only: it owns the `seed:leaderboard:` fingerprints, prefixes
 usernames with `lb_`, and rewrites their stats on every rerun. With no
 argument it also gives the most recently active real user a representative
-deep-rank row on every board (insert-only where real state could exist);
+deep-rank row on every board without lowering or overwriting real state;
 pass a username to target that enrichment explicitly.
 
 ## Testing guidance
@@ -197,6 +221,7 @@ pass a username to target that enrichment explicitly.
 - Board/rail/window layout: `state_test.rs`, `ui_test.rs` (pure).
 - The refresh gate (`should_refresh`, pure channel state): `svc_test.rs` — the one sanctioned inert-`Db` test (it makes no DB calls; see the root Test Strategy exception).
 - Query behavior: `late-core/src/models/leaderboard_test.rs` (DB-backed, fixtures through production constructors).
+- Online-time accumulator/retry behavior: `svc_test.rs`; SSH and IRC lifecycle hooks: `ssh_test.rs` and `ircd/serve_test.rs`.
 - The pipe behind the door boards: `app/door/ingest/{dcss,nethack,brogue}_test.rs` (pure parsers against real captured lines, including unknown fields, dead and reserved handles, and truncated last lines), `stream_test.rs` (the stats client against a stub SSH host), `svc_test.rs` (DB-backed: replay idempotency, skipped names, once-per-lifetime grants, cursor advancement).
 - Seed-on-connect behavior: `app/state_test.rs::leaderboard_seeds_from_the_already_published_snapshot`.
 
@@ -204,3 +229,4 @@ pass a username to target that enrichment explicitly.
 
 - No notify-driven refresh; up to one `REFRESH_INTERVAL` of staleness by design (see Refresh model).
 - No in-board scrolling beyond the around-you tail.
+- Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy; cross-pod overlap is intentionally not deduplicated.
