@@ -1,7 +1,6 @@
 use crate::AppState;
 use axum::Router;
 
-pub(crate) mod bashquest_graduates;
 pub(crate) mod gallery;
 pub(crate) mod home;
 pub(crate) mod legal;
@@ -23,5 +22,4 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(profiles::router())
         .merge(legal::router())
         .merge(stream::router())
-        .merge(bashquest_graduates::router())
 }

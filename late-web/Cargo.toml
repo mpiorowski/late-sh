@@ -47,4 +47,3 @@ opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 tower.workspace = true
-uuid.workspace = true
