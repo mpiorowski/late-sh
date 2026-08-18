@@ -1,7 +1,8 @@
 // Records a verified BashQuest graduation to the database. Constructed once
-// at session bootstrap and cloned into each connection, mirroring nethack's
-// `NethackAwards` (see `door::nethack::award`). `None` on headless/test
-// paths where there is no database.
+// at session bootstrap and cloned into each connection, the same fire-and-
+// forget shape the roguelike doors' milestone sink uses (see
+// `door::ingest::award`). `None` on headless/test paths where there is no
+// database.
 //
 // The caller (`state::State::tick`) only ever passes a `GraduationRecord`
 // that came from `proxy::BashquestProcess::take_graduation`, which only ever

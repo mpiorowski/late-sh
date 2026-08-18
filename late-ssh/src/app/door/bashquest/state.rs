@@ -189,16 +189,21 @@ impl State {
     /// lands.
     pub fn tick(&mut self) {
         if self.mode == Mode::Running {
+            // Status first, graduation second. The proxy task records a
+            // graduation before it flips the status to Closed, so a tick that
+            // reads Closed is guaranteed to then see any graduation that came
+            // with it. The other order drops a marker that lands between the
+            // two reads, and by then the host has already sent it.
+            let closed = self
+                .proxy
+                .as_ref()
+                .is_none_or(|p| p.status() == ProxyStatus::Closed);
             if let Some(proxy) = &self.proxy
                 && let Some(record) = proxy.take_graduation()
                 && let Some(awards) = &self.awards
             {
                 awards.spawn_record(self.user_id, record.handle, record.certificate);
             }
-            let closed = self
-                .proxy
-                .as_ref()
-                .is_none_or(|p| p.status() == ProxyStatus::Closed);
             if closed {
                 self.proxy = None;
                 self.mode = Mode::Launcher;

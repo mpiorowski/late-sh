@@ -1,5 +1,5 @@
 use crate::{
-    models::bashquest_graduate::BashquestGraduate,
+    models::{bashquest_graduate::BashquestGraduate, user::User},
     test_utils::{create_test_user, test_db},
 };
 
@@ -38,7 +38,7 @@ async fn record_is_idempotent_per_account() {
 }
 
 #[tokio::test]
-async fn list_all_returns_every_graduate() {
+async fn list_all_returns_every_graduate_with_a_live_account() {
     let test_db = test_db().await;
     let user_a = create_test_user(&test_db.db, "bashquest-grad-a").await;
     let user_b = create_test_user(&test_db.db, "bashquest-grad-b").await;
@@ -57,4 +57,36 @@ async fn list_all_returns_every_graduate() {
     let handles: Vec<&str> = all.iter().map(|g| g.handle.as_str()).collect();
     assert!(handles.contains(&"grad_a"));
     assert!(handles.contains(&"grad_b"));
+}
+
+/// The feed `list_all` backs is republished to a public page keyed on the
+/// player's handle, so deleting the late.sh account must stop the publishing.
+/// The row itself is kept (`user_id` is `ON DELETE SET NULL`), it just drops
+/// out of the feed.
+#[tokio::test]
+async fn a_deleted_account_drops_out_of_the_public_list_but_keeps_its_row() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "bashquest-grad-gone").await;
+    let client = test_db.db.get().await.expect("db client");
+
+    BashquestGraduate::record(&client, user.id, "grad_gone", "cert gone", "digest-gone")
+        .await
+        .expect("record");
+
+    User::delete_by_id(&client, user.id)
+        .await
+        .expect("delete user");
+
+    let listed = BashquestGraduate::list_all(&client).await.expect("list all");
+    assert!(!listed.iter().any(|g| g.handle == "grad_gone"));
+
+    let row = client
+        .query_one(
+            "SELECT user_id, certificate FROM bashquest_graduates WHERE handle = $1",
+            &[&"grad_gone"],
+        )
+        .await
+        .expect("row survives the account deletion");
+    assert_eq!(row.get::<_, Option<uuid::Uuid>>("user_id"), None);
+    assert_eq!(row.get::<_, String>("certificate"), "cert gone");
 }

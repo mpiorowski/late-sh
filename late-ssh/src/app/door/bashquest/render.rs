@@ -84,8 +84,8 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         tier_strip(),
         tier_legend(),
         Line::from(""),
-        landing::stat("levels", "61 levels across 12 tiers", 8),
-        landing::stat("topics", "LVM, networking, SAN, kernels, and desktop ricing", 8),
+        landing::stat("levels", "90 levels across 18 tiers", 8),
+        landing::stat("topics", "LVM, networking, SAN, kernels, containers, and TUI tooling", 8),
         landing::stat("style", "type the command, get graded, keep the streak", 8),
         Line::from(""),
         flavor_headline(),
@@ -152,12 +152,16 @@ fn tier_strip() -> Line<'static> {
         tier("Kernel"),
         dim(" -> "),
         tier("Ricing"),
+        dim(" -> "),
+        tier("Docker"),
+        dim(" -> "),
+        tier("TUI"),
     ])
 }
 
 fn tier_legend() -> Line<'static> {
     Line::from(Span::styled(
-        "  twelve tiers, each one builds on the last, from ls to building a kernel",
+        "  eighteen tiers, each builds on the last, from ls to kernels and containers",
         Style::default().fg(theme::TEXT_DIM()),
     ))
 }
@@ -183,7 +187,7 @@ fn flavor_headline() -> Line<'static> {
 
 fn flavor_quote() -> Line<'static> {
     Line::from(Span::styled(
-        "  finish all 61 levels and graduate: a certificate, your name, your stats, kept for good.",
+        "  finish all 90 levels and graduate: a certificate, your name, your stats, kept for good.",
         Style::default()
             .fg(theme::TEXT_FAINT())
             .add_modifier(Modifier::ITALIC),

@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use russh::keys::PublicKey;
@@ -6,7 +7,7 @@ use russh::server::{Auth, Handler, Msg, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet};
 
 use crate::config::Config;
-use crate::host::{HostConfig, PtyHost};
+use crate::host::{HostConfig, PtyHost, SessionLease};
 use crate::identity::derive_client_key;
 use crate::playname;
 
@@ -17,6 +18,11 @@ struct Shared {
     data_dir: String,
     /// The single client public key we accept (derived from the shared secret).
     authorized_key: PublicKey,
+    /// Playnames with a live child right now. Every save lives in one shared
+    /// `HOME` keyed by playname, so a second concurrent session under the
+    /// same name would race the first's `<name>.save` (see
+    /// `host::SessionLease`).
+    active_playnames: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -32,6 +38,7 @@ impl Server {
                 bin: config.bin.clone(),
                 data_dir: config.data_dir.clone(),
                 authorized_key,
+                active_playnames: Arc::new(Mutex::new(HashSet::new())),
             }),
         }
     }
@@ -158,6 +165,21 @@ impl Handler for ClientHandler {
         // session handle from here on.
         let _ = self.channel.take();
 
+        // This account may already have a live child. Both would hold their own
+        // copy of the player's progress and overwrite each other's save, so
+        // refuse rather than silently losing one of them. Close without writing
+        // to the channel: late-ssh leaves the BashQuest screen on the same tick
+        // it sees the close, so anything sent here is parsed into a vt100 screen
+        // the client never paints. The log is the only place this is observable.
+        let Some(lease) =
+            SessionLease::claim(playname.clone(), self.shared.active_playnames.clone())
+        else {
+            tracing::info!(playname, "rejected: session already active for this playname");
+            session.eof(channel)?;
+            session.close(channel)?;
+            return Ok(());
+        };
+
         self.host = Some(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
@@ -169,6 +191,7 @@ impl Handler for ClientHandler {
             },
             session.handle(),
             channel,
+            lease,
         ));
         Ok(())
     }

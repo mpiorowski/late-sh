@@ -27,17 +27,9 @@ on:
       brogue_image_tag:
         required: true
         type: string
-      # Optional, unlike every other door's tag above: deploy_bashquest.yml and
-      # deploy_infra.yml (the only two callers that actually plan bashquest
-      # resources) both supply a real value. Every other deploy_<door>.yml's
-      # terraform_bootstrap call is `targets`-scoped to just that door's own
-      # resources, so an empty bashquest_image_tag there is never read. Making
-      # it required:true would mean touching all nine existing callers in one
-      # PR just to satisfy the schema; revisit if that consistency is wanted.
       bashquest_image_tag:
-        required: false
+        required: true
         type: string
-        default: ""
       environment:
         required: false
         type: string

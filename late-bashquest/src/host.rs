@@ -1,9 +1,54 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use russh::ChannelId;
 use russh::server::Handle;
 use tokio::sync::mpsc;
+
+/// Holds one playname's claim on the shared playground for the life of a
+/// session. Every player's save lives in one `HOME` keyed by playname (see
+/// [`HostConfig::data_dir`]), so two live children under the same name each
+/// keep their own in-memory progress and overwrite the other's `<name>.save`
+/// on their next write. The lease makes the second session fail to start
+/// instead, and releasing it is tied to the bridge task's lifetime rather
+/// than to any teardown path remembering to do it.
+pub(crate) struct SessionLease {
+    playname: String,
+    active_playnames: Arc<Mutex<HashSet<String>>>,
+}
+
+impl SessionLease {
+    /// Claim `playname`, or `None` if another live session already holds it.
+    /// Claiming and releasing live in this one type so a caller cannot record
+    /// the claim and then forget the lease, or hold a lease it never claimed.
+    pub(crate) fn claim(
+        playname: String,
+        active_playnames: Arc<Mutex<HashSet<String>>>,
+    ) -> Option<Self> {
+        if !active_playnames
+            .lock()
+            .expect("active playnames mutex")
+            .insert(playname.clone())
+        {
+            return None;
+        }
+        Some(Self {
+            playname,
+            active_playnames,
+        })
+    }
+}
+
+impl Drop for SessionLease {
+    fn drop(&mut self) {
+        self.active_playnames
+            .lock()
+            .expect("active playnames mutex")
+            .remove(&self.playname);
+    }
+}
 
 /// Configuration for a single bashquest.sh child process.
 pub(crate) struct HostConfig {
@@ -43,7 +88,12 @@ pub(crate) struct PtyHost {
 }
 
 impl PtyHost {
-    pub(crate) fn spawn(cfg: HostConfig, handle: Handle, channel: ChannelId) -> Self {
+    pub(crate) fn spawn(
+        cfg: HostConfig,
+        handle: Handle,
+        channel: ChannelId,
+        lease: SessionLease,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
         // Detached: the JoinHandle drops here, but the task runs to completion.
         // Keep a clone of the handle so we can guarantee the channel is closed
@@ -57,6 +107,9 @@ impl PtyHost {
         // fail, so an Err here always means the channel was never closed.
         let cleanup = handle.clone();
         tokio::spawn(async move {
+            // Held for the whole bridge, so the playname frees up only once
+            // the child is actually gone.
+            let _lease = lease;
             if let Err(e) = run_bridge(cfg, cmd_rx, handle, channel).await {
                 tracing::warn!(error = ?e, "bashquest host bridge ended with error");
                 let _ = cleanup.eof(channel).await;
@@ -195,17 +248,17 @@ async fn run_bridge(
     )
     .await;
 
-    // If bashquest.sh just wrote a graduation certificate for this session's
-    // handle, report it once before the channel closes: a marker sent
-    // directly here from the host, never derived from anything the child
-    // process wrote to the pty. Nothing the player typed or pasted flows
+    // If bashquest.sh has written a graduation certificate for this session's
+    // handle, report it before the channel closes: a marker sent directly
+    // here from the host, never derived from anything the child process
+    // wrote to the pty. Nothing the player typed or pasted flows
     // through this call site, so it cannot be spoofed from the game side --
     // only an actual `$SAVE_DIR/<handle>.certificate.txt` on disk (written
     // solely by bashquest.sh's own `graduation_ceremony`, which is only
     // reached by completing every level) makes this fire. late-ssh strips the
     // marker out of the rendered stream and treats it as the authoritative
     // "this account graduated" signal (see `door::bashquest::proxy`).
-    report_certificate_if_new(&cfg, &handle, channel).await;
+    report_certificate(&cfg, &handle, channel).await;
 
     // Close the SSH channel first so the late-ssh client returns to its
     // launcher immediately.
@@ -294,16 +347,6 @@ fn certificate_path(cfg: &HostConfig) -> PathBuf {
         .join(format!("{}.certificate.txt", cfg.playname))
 }
 
-/// Sentinel this host writes once it has reported a graduation, so a
-/// graduate logging back in to keep playing doesn't resend the marker every
-/// session. Purely a local dedup: late-ssh's DB write is idempotent on
-/// account id regardless, this just avoids the noise.
-fn reported_path(cfg: &HostConfig) -> PathBuf {
-    Path::new(&cfg.data_dir)
-        .join(".bashquest")
-        .join(format!("{}.certificate.reported", cfg.playname))
-}
-
 /// `TAG <64-hex blake3 digest of certificate> \x01 <handle> \x01 <certificate> \x00`.
 /// The fixed-length digest right after the tag lets late-ssh validate the
 /// marker wasn't truncated before trusting the (variable-length) handle and
@@ -324,20 +367,28 @@ fn build_certificate_marker(playname: &str, cert: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Checks for a fresh, not-yet-reported certificate and, if present, sends
-/// the marker and records that it has been reported. Best-effort: any
-/// failure here (no certificate yet, IO error, channel already gone) just
-/// means nothing is reported this session -- never fatal to teardown.
-async fn report_certificate_if_new(cfg: &HostConfig, handle: &Handle, channel: ChannelId) {
-    let reported = reported_path(cfg);
-    if reported.exists() {
-        return;
-    }
+/// Sends the graduation marker if this playname has a certificate on disk.
+///
+/// Deliberately unconditional: every session a graduate plays re-reports it.
+/// This host cannot know whether late-ssh actually persisted a report --
+/// `handle.data()` returning Ok only means the bytes were queued -- so any
+/// local "already reported" sentinel would turn a single failed database
+/// write into a permanently lost certificate, with the sentinel suppressing
+/// the only path that could heal it. Re-sending costs one ~1KB message per
+/// login and is absorbed by the idempotent
+/// `INSERT ... ON CONFLICT (user_id) DO NOTHING` on the late-ssh side, so
+/// the whole path is self-healing instead.
+///
+/// Best-effort: no certificate yet, an IO error, or an already-gone channel
+/// all just mean nothing is reported this session, never fatal to teardown.
+async fn report_certificate(cfg: &HostConfig, handle: &Handle, channel: ChannelId) {
     let Ok(cert) = std::fs::read(certificate_path(cfg)) else {
-        return; // no certificate written this session: not a graduation
+        return; // no certificate for this playname: not a graduate
     };
     let marker = build_certificate_marker(&cfg.playname, &cert);
-    if handle.data(channel, marker).await.is_ok() {
-        let _ = std::fs::write(&reported, b"");
-    }
+    let _ = handle.data(channel, marker).await;
 }
+
+#[cfg(test)]
+#[path = "host_test.rs"]
+mod host_test;

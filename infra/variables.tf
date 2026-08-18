@@ -68,7 +68,6 @@ variable "BROGUE_IMAGE_TAG" {
 variable "BASHQUEST_IMAGE_TAG" {
   description = "Docker image for late-bashquest, the BashQuest door host (e.g., ghcr.io/org/late-bashquest:sha-abc123)."
   type        = string
-  default     = ""
 }
 
 variable "USURPER_IMAGE_TAG" {

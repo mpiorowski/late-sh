@@ -99,6 +99,7 @@ jobs:
       dcss_image_tag: ${{ steps.dcss_image.outputs.image_tag }}
       usurper_image_tag: ${{ steps.usurper_image.outputs.image_tag }}
       brogue_image_tag: ${{ steps.brogue_image.outputs.image_tag }}
+      bashquest_image_tag: ${{ steps.bashquest_image.outputs.image_tag }}
     steps:
       - name: setup_kubectl
         uses: azure/setup-kubectl@v5
@@ -150,6 +151,12 @@ jobs:
           tag=$(kubectl get deployment late-brogue -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: get_bashquest_image_tag
+        id: bashquest_image
+        run: |
+          tag=$(kubectl get deployment late-bashquest -n default -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "image_tag=$tag" >> "$GITHUB_OUTPUT"
+
   terraform_bootstrap:
     name: terraform_bootstrap_codekeep
     if: ${{ needs.check_deployment.outputs.exists == 'false' }}
@@ -167,6 +174,7 @@ jobs:
       dcss_image_tag: ${{ needs.get_images.outputs.dcss_image_tag }}
       usurper_image_tag: ${{ needs.get_images.outputs.usurper_image_tag }}
       brogue_image_tag: ${{ needs.get_images.outputs.brogue_image_tag }}
+      bashquest_image_tag: ${{ needs.get_images.outputs.bashquest_image_tag }}
       environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || (github.event.release.prerelease && 'staging' || 'production') }}
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
       targets: kubernetes_deployment_v1.late_codekeep kubernetes_service_v1.late_codekeep_sv

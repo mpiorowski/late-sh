@@ -61,11 +61,21 @@ impl BashquestGraduate {
         Ok(inserted == 1)
     }
 
-    /// Every graduate, oldest first -- for the public gallery sync.
+    /// Every graduate whose account still exists, oldest first -- for the
+    /// public gallery sync.
+    ///
+    /// `user_id IS NULL` means the account was deleted (the column is
+    /// `ON DELETE SET NULL`, so the row itself survives as a historical fact).
+    /// Those are filtered out here rather than dropped from the table: this
+    /// feed is republished to a public page keyed on the player's handle, and
+    /// someone who deletes their late.sh account should stop being published
+    /// by it.
     pub async fn list_all(client: &impl deadpool_postgres::GenericClient) -> Result<Vec<Self>> {
         let rows = client
             .query(
-                "SELECT * FROM bashquest_graduates ORDER BY created ASC",
+                "SELECT * FROM bashquest_graduates
+                 WHERE user_id IS NOT NULL
+                 ORDER BY created ASC",
                 &[],
             )
             .await?;
