@@ -14,6 +14,7 @@ fn row(slot: Option<&str>, equipped: bool) -> InvView {
         compare: String::new(),
         compare_pct: None,
         category: "Weapons",
+        desc: "A well-balanced blade.",
     }
 }
 

@@ -801,22 +801,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Stream URL + QR modal: any key or click closes it. It sits above
-    // everything except the announcements: the URL it shows was just
-    // requested, so nothing else should swallow the dismissal.
+    // Stream URL + QR modal: Esc closes it and nothing else does. The modal
+    // carries hand-copied capability values (the watch link, the WHIP server
+    // and bearer token), so a stray keystroke while reading them must not
+    // take the values off the screen. Esc lands in `dispatch_escape`; every
+    // other event is swallowed here. It sits above everything except the
+    // announcements, so nothing else steals the keys either.
     if app.stream_modal.is_some() {
-        if matches!(
-            event,
-            ParsedInput::Byte(_)
-                | ParsedInput::Char(_)
-                | ParsedInput::Arrow(_)
-                | ParsedInput::Mouse(MouseEvent {
-                    kind: MouseEventKind::Down,
-                    ..
-                })
-        ) {
-            app.stream_modal = None;
-        }
         return;
     }
 
@@ -2067,10 +2058,10 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
-    // A lone Esc never reaches the any-key gate in `handle_parsed_input`
-    // (it dispatches here via the pending-escape flush instead), so the
-    // stream URL modal needs its own arm, first, mirroring its position
-    // above everything else in that gate.
+    // A lone Esc never reaches the swallow-everything gate in
+    // `handle_parsed_input` (it dispatches here via the pending-escape flush
+    // instead), so this arm is the stream URL modal's only way out and comes
+    // first, mirroring its position above everything else in that gate.
     if app.stream_modal.is_some() {
         app.stream_modal = None;
         return;
@@ -2408,13 +2399,13 @@ fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
 }
 
 pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Option<uuid::Uuid>) {
-    use crate::app::files::image_upload::{download_and_reupload_url, is_file_upload_configured};
-    if !is_file_upload_configured() {
+    use crate::app::files::image_upload::download_and_reupload_url;
+    let Some(files) = app.chat.files_config().cloned() else {
         app.banner = Some(crate::app::common::primitives::Banner::error(
             "File uploads are disabled",
         ));
         return;
-    }
+    };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     if let Some(banner) = app.chat.begin_image_upload(room_id, rx) {
@@ -2422,7 +2413,7 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
         return;
     }
     tokio::spawn(async move {
-        let result = download_and_reupload_url(url)
+        let result = download_and_reupload_url(&files, url)
             .await
             .map_err(|e| e.to_string());
         let _ = tx.send(result);

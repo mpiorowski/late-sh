@@ -4,8 +4,8 @@
 # replicas MUST stay 1: one RWO volume holds every account's save (see
 # codekeep.tf), and the host's one-live-child-per-account lease is process-local,
 # so a second replica would let two children race the same game.json.
-# The host pod is always deployed (like service-ssh/nethack/dcss); the door's
-# enable flag only gates the CLIENT (service-ssh's LATE_CODEKEEP_ENABLED).
+# The host pod is always deployed (like service-ssh/nethack/dcss); whether the
+# door shows up in the TUI is a late-ssh config.rs profile literal.
 resource "kubernetes_deployment_v1" "late_codekeep" {
   metadata {
     name = "late-codekeep"

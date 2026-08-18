@@ -16,11 +16,8 @@
 # hangup-save/lock concern the way a real multi-writer game would have.
 
 locals {
-  # BASHQUEST_ENABLED arrives as an empty string from CI when the GitHub
-  # variable is unset; default it on. This gates only the CLIENT door
-  # (service-ssh's LATE_BASHQUEST_ENABLED); the late-bashquest host pod is
-  # always deployed.
-  bashquest_enabled = trimspace(var.BASHQUEST_ENABLED) != "" ? trimspace(var.BASHQUEST_ENABLED) : "1"
+  # Whether the bashquest door shows up in the TUI is a profile literal in
+  # late-ssh/src/config.rs; the late-bashquest host pod is always deployed.
 
   # The child HOME on the PVC; bashquest.sh writes everything under
   # $HOME/.bashquest. MUST match LATE_BASHQUEST_DATA_DIR's default baked into
@@ -33,7 +30,7 @@ locals {
   # service-ssh. Host == the Service name (same namespace, see
   # service-bashquest.tf); port == the host's SSH listener.
   bashquest_service_host = "late-bashquest-sv"
-  bashquest_port         = "2329"
+  bashquest_port         = "2330"
 }
 
 # prevent_destroy keeps every player's progress across redeploys. Mounted by

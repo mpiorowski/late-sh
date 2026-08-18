@@ -12,12 +12,13 @@ use anyhow::Context;
 use askama::Template;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use late_core::telemetry::TracedExt;
+use serde::Deserialize;
 
 use crate::{AppState, error::AppError, metrics};
 
@@ -50,16 +51,28 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/golive/{token}/state", post(golive_state_handler))
 }
 
-/// Capability ids are hex/dash tokens minted by late-ssh. Anything else is
-/// rejected before it can be interpolated into an internal API path.
+/// Capability ids are base64url tokens minted by late-ssh (`registry.rs`'s
+/// `capability_id`), so the alphabet is `[A-Za-z0-9_-]`. Anything else is
+/// rejected before it can be interpolated into an internal API path. The
+/// watcher id the watch page mints for itself is a browser `randomUUID`, which
+/// is a subset of the same set.
 fn valid_capability_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[derive(Template)]
 #[template(path = "pages/live/watch.html")]
 struct WatchPage<'a> {
     stream_id: &'a str,
+}
+
+#[derive(Deserialize)]
+struct WatchGrantParams {
+    watcher_id: String,
 }
 
 #[derive(Template)]
@@ -97,11 +110,27 @@ async fn watch_state_handler(
     proxy_get(&state, &id, &format!("/api/stream/watch/{id}")).await
 }
 
+/// The page's stable watcher id rides through to late-ssh, which turns it
+/// into the viewer's LiveKit identity so retries reuse one participant. It
+/// is validated here too, since it is interpolated into the internal query
+/// string: same alnum/dash shape as a capability id.
 async fn watch_grant_handler(
     Path(id): Path<String>,
+    Query(params): Query<WatchGrantParams>,
     State(state): State<AppState>,
 ) -> Result<Response, AppError> {
-    proxy_get(&state, &id, &format!("/api/stream/watch/{id}/grant")).await
+    if !valid_capability_id(&params.watcher_id) {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    }
+    proxy_get(
+        &state,
+        &id,
+        &format!(
+            "/api/stream/watch/{id}/grant?watcher_id={}",
+            params.watcher_id
+        ),
+    )
+    .await
 }
 
 async fn watch_heartbeat_handler(

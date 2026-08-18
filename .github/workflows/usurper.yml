@@ -155,17 +155,3 @@ jobs:
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment/late-usurper -n default --timeout=180s
-
-      - name: verify_door_enabled
-        run: |
-          # LATE_USURPER_ENABLED is a CLIENT flag: it lives on service-ssh
-          # (which reaches the host over SSH), NOT on the late-usurper host
-          # pod. Read it there, mirroring dcss.yml.
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_USURPER_ENABLED || true)
-          echo "LATE_USURPER_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::Usurper door is not enabled (LATE_USURPER_ENABLED=${enabled})" ;;
-          esac

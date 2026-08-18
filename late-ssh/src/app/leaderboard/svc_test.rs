@@ -67,6 +67,7 @@ fn initial_snapshot_is_retained_without_subscribers() {
         user_id: Uuid::from_u128(1),
         value: 42,
         rank: 1,
+        note: None,
     };
 
     service.publish(LeaderboardData {

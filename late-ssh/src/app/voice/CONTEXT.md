@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh voice channels — LiveKit-backed CLI voice, SSH TUI controls/status, and pair-WS voice control
 - Primary audience: LLM agents working in `late-ssh/src/app/voice`, `late-cli/src/voice.rs`, or pair-WS voice messages
-- Last updated: 2026-08-14 (CLI voice is mic-only on the subscribe side: `late-cli` unsubscribes non-microphone remote audio and every `stream-*` publisher, whatever source label it carries. The `SCREEN_SHARE_AUDIO` label set at CreateIngress is advisory; consumers classify program audio by the `stream-*` identity since the label may not survive transcoding-off passthrough; see §6/§7 and `../stream/CONTEXT.md`)
+- Last updated: 2026-08-15 (A room ban now refuses a voice ticket: `checked_join_ticket` checks `RoomBan` alongside membership, so a ban takes the microphone and not just the chat. This is what makes a stream owner's `/ban` bite, since a public room can be re-entered from the rail; see §3/§5 and `../stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 - Related context: `../../../../late-cli/CONTEXT.md`, `../audio/CONTEXT.md`
@@ -48,7 +48,7 @@ Cross-crate touchpoints:
 - `late-ssh/src/app/input.rs` — global voice key routing: `Ctrl+V` join/leave, `Ctrl+T` mute/unmute, with Artboard opting out.
 - `late-ssh/src/app/chat/ui.rs` — chat and game surfaces embed `draw_voice_strip` when a voice channel is present.
 - `late-ssh/src/app/render.rs` — builds `VoiceRoomView` with snapshot, current user, and CLI capability.
-- `late-ssh/src/config.rs` / `main.rs` — `LATE_VOICE_*` / `LATE_LIVEKIT_*` config, `VoiceService` construction, stale participant pruning every 30s.
+- `late-ssh/src/config.rs` / `main.rs` — `VoiceConfig` profile literals plus `LATE_LIVEKIT_API_KEY`/`LATE_LIVEKIT_API_SECRET` env secrets, `VoiceService` construction, stale participant pruning every 30s.
 - `late-cli/src/voice.rs` — CLI LiveKit media runtime.
 - `late-cli/src/ws.rs` — advertises `"voice"` capability, handles voice pair-control events, sends `voice_state` every 15s and on speaking-state changes.
 - `late-cli/src/main.rs::run_ws_pairing` — creates one `VoiceRuntimeState` before its pair-WS retry loop and passes it into each `run_viz_ws` attempt, so pair-WS reconnects do not implicitly leave LiveKit.
@@ -63,7 +63,7 @@ Keep `mod.rs` declaration-only.
 `VoiceService` is an in-memory control/status service. It does not carry media and does not talk to LiveKit at runtime except by minting JWTs.
 
 Main types:
-- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{LATE_VOICE_ROOM}-{voice_channel_id}`.
+- `VoiceConfig` — enabled flag, LiveKit URL/key/secret, and LiveKit room base name. Each voice channel uses `{room_name}-{voice_channel_id}` (base name `late-voice` in every profile).
 - `VoiceSnapshot` — `{ enabled, livekit_url, rooms }`, delivered via `watch`. `rooms` is keyed by `voice_channels.id`.
 - `VoiceParticipant` — `{ user_id, username, muted, deafened, speaking, updated_at }`.
 - `VoiceClientState` — inbound CLI state shape `{ joined, room, muted, deafened, speaking }`.
@@ -72,7 +72,7 @@ Main types:
 Public API:
 - `new(config)` — initializes an empty snapshot.
 - `snapshot()` / `subscribe()` — read or watch current TUI-visible state.
-- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel and target chat-room membership before minting a CLI ticket.
+- `checked_join_ticket(voice_channel_id, user_id, username, muted, deafened)` — verifies the enabled voice channel, target chat-room membership, and the absence of an active room ban before minting a CLI ticket. The ban check is not redundant with membership: banning drops membership, but a public room (a streamer's above all) can be re-entered from the rail, so without it a banned user walks back in and is handed a `canPublish` ticket.
 - `join_ticket(voice_channel_id, user_id, username, muted, deafened)` — low-level LiveKit JWT minting for the native CLI after callers have authorized the join. Grants: `roomJoin=true`, `canPublish=true`, `canSubscribe=true`, `canPublishData=true`, `roomCreate=false`.
 - `apply_client_state(user_id, username, state)` — accepts CLI `voice_state` only for the user's most recently server-ticketed voice channel; removes the participant if `joined=false`, if `room` is missing/unrecognized or lacks the configured base-name plus UUID suffix, or if the parsed voice channel was not ticketed for that user.
 - `update_local_state(...)` — optimistic server-side mirror used after TUI mute/deafen/join actions so the UI responds immediately.
@@ -173,7 +173,8 @@ Current UX gaps worth addressing:
 
 Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
-- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones).
+- Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones). A *ban* additionally refuses future tickets for that channel (see `checked_join_ticket` in §3); a kick does not, so a kicked user may rejoin and speak again.
+- A stream room's owner can reach this without staff, through `/ban` in their own room. See `../stream/CONTEXT.md` §6.
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
 - `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.
@@ -275,18 +276,9 @@ ingresses lives entirely in `../stream` — this service only speaks the API.
 
 ## 8. Config, Infra, and Background Tasks
 
-Config env vars (`late-ssh/src/config.rs`):
-- `LATE_VOICE_ENABLED` — defaults false in config parsing.
-- `LATE_LIVEKIT_URL` — required when voice is enabled. Client-facing URL,
-  handed to browsers in join grants.
-- `LATE_LIVEKIT_API_URL` — required when voice is enabled. Server-to-server
-  Twirp base (RemoveParticipant, Ingress API). Split from the client URL:
-  in dev the browser needs `ws://localhost:7880` while late-ssh runs in a
-  container where `localhost` is itself, so it uses `http://livekit:7880`;
-  in prod it points at the cluster-internal `http://livekit-sv`.
-- `LATE_LIVEKIT_API_KEY` — required when voice is enabled.
-- `LATE_LIVEKIT_API_SECRET` — required when voice is enabled.
-- `LATE_VOICE_ROOM` — optional; default `late-voice`.
+Config (`late-ssh/src/config.rs`):
+- Voice enabled-ness, the client-facing LiveKit URL (`ws://localhost:7880` dev, `wss://rtc.late.sh` prod), the server-to-server Twirp base (`http://livekit:7880` dev, `http://livekit-sv` prod), and the room base name are profile literals in `late-ssh/src/config.rs`; every current profile enables voice. The two URLs are split because their audiences differ: browsers and the CLI reach LiveKit from the host or the public edge, while late-ssh reaches it from inside the container network.
+- `LATE_LIVEKIT_API_KEY` / `LATE_LIVEKIT_API_SECRET` — env secrets, required at startup.
 
 Production infra:
 - `infra/livekit.tf` manages the LiveKit deployment.

@@ -20,9 +20,11 @@ async fn proxies_forward_upstream_404_instead_of_500() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
@@ -37,7 +39,7 @@ async fn proxies_forward_upstream_404_instead_of_500() {
     let client = reqwest::Client::new();
     for path in [
         "/live/deadbeef/state",
-        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=abc-123",
         "/golive/deadbeef/grant",
     ] {
         let response = client
@@ -46,6 +48,22 @@ async fn proxies_forward_upstream_404_instead_of_500() {
             .await
             .expect("proxy get");
         assert_eq!(response.status(), 404, "GET {path}");
+    }
+
+    // The watcher id is interpolated into the internal query string and
+    // becomes a LiveKit identity upstream, so an absent or off-shape one is
+    // refused here instead of being forwarded.
+    for path in [
+        "/live/deadbeef/grant",
+        "/live/deadbeef/grant?watcher_id=",
+        "/live/deadbeef/grant?watcher_id=a%2Fb",
+    ] {
+        let response = client
+            .get(format!("http://{addr}{path}"))
+            .send()
+            .await
+            .expect("proxy get");
+        assert_eq!(response.status(), 400, "GET {path}");
     }
     let response = client
         .post(format!("http://{addr}/golive/deadbeef/state"))
@@ -100,9 +118,11 @@ async fn golive_grant_proxy_exchanges_the_claim_cookie() {
 
     let state = crate::AppState {
         config: crate::config::Config {
+            env: crate::config::Env::Dev,
             port: 0,
             ssh_internal_url: format!("http://{upstream_addr}"),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            db: DbConfig::default(),
         },
         db: Db::new(&DbConfig::default()).expect("lazy db"),
         http_client: reqwest::Client::new(),
@@ -152,7 +172,13 @@ async fn golive_grant_proxy_exchanges_the_claim_cookie() {
 }
 
 #[test]
-fn capability_ids_are_hex_dash_tokens_only() {
+fn capability_ids_are_base64url_tokens_only() {
+    // What late-ssh actually mints: base64url over 16 random bytes. Both
+    // non-alphanumeric characters of that alphabet have to pass, or a stream
+    // whose id happens to contain one 404s on its own watch page.
+    assert!(valid_capability_id("HdRl3AJfRhWc7-BdvUEFrQ"));
+    assert!(valid_capability_id("HdRl3AJfRhWc7_BdvUEFrQ"));
+    // A browser `randomUUID` watcher id, and the hex form minted before.
     assert!(valid_capability_id("0198a2f4c3f07f4e8a7bde12ab34cd56"));
     assert!(valid_capability_id("abc-123"));
 
@@ -162,6 +188,9 @@ fn capability_ids_are_hex_dash_tokens_only() {
     assert!(!valid_capability_id("a/b"));
     assert!(!valid_capability_id("a?b=1"));
     assert!(!valid_capability_id("a%2e%2e"));
+    // Base64 padding is not part of the no-pad alphabet, and `+`/`/` are the
+    // standard-alphabet characters this deliberately does not accept.
+    assert!(!valid_capability_id("HdRl3AJfRhWc7+BdvUEFrQ=="));
     assert!(!valid_capability_id(&"a".repeat(65)));
 }
 
@@ -186,6 +215,18 @@ fn watch_and_golive_pages_render_with_the_id_embedded() {
     assert!(
         watch.contains("id=\"fullscreen-btn\""),
         "fullscreen control"
+    );
+    // The grant fetch carries the page's watcher id, so every retry from
+    // one viewer joins LiveKit under the same identity.
+    assert!(
+        watch.contains("grant?watcher_id="),
+        "the grant fetch carries the watcher id"
+    );
+    // A dropped connection must be recoverable in place: telling the viewer
+    // to reload was a dead end the page could never leave on its own.
+    assert!(
+        !watch.contains("reload to retry"),
+        "a lost connection reconnects instead of demanding a reload"
     );
 
     let golive = super::GoLivePage {

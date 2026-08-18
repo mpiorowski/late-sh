@@ -54,7 +54,7 @@ Core model touchpoints:
 
 App/service touchpoints:
 - `late-ssh/src/main.rs` creates one `IrcRegistry`, injects it into `ChatService` and `ProfileService`, and spawns `ircd::serve::run` when `state.config.irc.enabled`.
-- `late-ssh/src/config.rs` owns `LATE_IRC_*` parsing.
+- `late-ssh/src/config.rs` owns `IrcConfig` as profile literals (no `LATE_IRC_*` env vars).
 - `late-ssh/src/app/chat/svc.rs` is the authoritative send/moderation/event service. IRC must use it instead of duplicating write paths.
 - `late-ssh/src/app/profile/svc.rs` mints/revokes IRC tokens and disconnects live IRC sessions when token/account state changes.
 - `late-ssh/src/moderation/session_effects.rs` disconnects IRC sessions for server kick/ban effects.
@@ -84,18 +84,17 @@ If IRC is split later, the split must include a cross-process event/control desi
 ## 4. Config And Listener
 
 Config:
-- `IrcConfig::default()` is disabled by default.
-- The root Makefile opts local dev in with `LATE_IRC_ENABLED=1` and plaintext `LATE_IRC_PORT=6667`.
+- Every profile sets `irc.enabled = true`; there is no `Default` impl.
+- The dev profiles enable plaintext IRC on 6667 (6668 for dev2); the Makefile only keeps the matching compose port mapping.
 - Docker Compose publishes the IRC port on `service-ssh`.
-- TLS is enabled only when both `LATE_IRC_TLS_CERT` and `LATE_IRC_TLS_KEY` are set.
-- When IRC is enabled with TLS cert/key and `LATE_IRC_PORT` is unset, the default port is 6697; otherwise the default is 6667.
-- Partial TLS cert/key env is validated only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
+- TLS is enabled only when the profile sets both `tls_cert_path` and `tls_key_path` (prod: the mounted `irc-tls` secret, port 6697; dev: none, plaintext).
+- A partial TLS cert/key pair is rejected by `Config::validate()` only when IRC itself is enabled, so disabled IRC must not break SSH/API startup.
 
 Listener behavior:
 - `serve.rs` binds `0.0.0.0:{port}`.
 - If TLS config is present, each accepted socket is wrapped with rustls before registration.
-- `LATE_IRC_PROXY_PROTOCOL` enables trusted PROXY v1 client-IP resolution before
-  rustls. Only transport peers in `LATE_IRC_PROXY_TRUSTED_CIDRS` may supply a
+- The profile's `irc.proxy_protocol` enables trusted PROXY v1 client-IP resolution before
+  rustls. Only transport peers in `irc.proxy_trusted_cidrs` may supply a
   header; untrusted peers are treated as direct clients.
 - A trusted peer that sends `PROXY UNKNOWN` or omits a header may still
   authenticate by account, but its transport address is not treated as a

@@ -4,7 +4,7 @@ fn disabled_state() -> State {
     State::new(
         uuid::Uuid::nil(),
         "127.0.0.1".to_string(),
-        2329,
+        2330,
         String::new(),
         "xterm".to_string(),
         false,

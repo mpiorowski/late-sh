@@ -101,6 +101,7 @@ const fn room(command: RoomScopedCommand) -> Command {
 const COMMANDS: &[Command] = &[
     global("active", "list users online right now"),
     global("aquarium", "toggle aquarium (/aquarium feed to feed)"),
+    global("ban", "ban from your room (/ban @user [7d] [reason])"),
     global("binds", "open the chat guide (same as ?)"),
     global("brb", "go AFK and mute audio (/brb back in 5)"),
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
@@ -139,6 +140,7 @@ const COMMANDS: &[Command] = &[
     global("shop", "open the shop (badges, effects, companions)"),
     global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
     global("tea", "post tea cup"),
+    global("unban", "lift a room ban (/unban @user)"),
     global("unfriend", "remove a friend mark (/unfriend @user)"),
     global("unignore", "unmute a user (/unignore @user)"),
     global("upload", "upload an image by url (/upload <url>)"),

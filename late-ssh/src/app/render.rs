@@ -169,6 +169,9 @@ struct DrawContext<'a> {
     /// This account's character slots, for the character-select landing.
     lateania_slots: Vec<crate::app::door::lateania::svc::SlotSummary>,
     lateania_slot_cursor: usize,
+    /// The backtick-detach recency window is live: Lateania counts as a
+    /// game in progress on the hub sidebar.
+    lateania_live: bool,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -304,6 +307,9 @@ struct DrawContext<'a> {
 
 impl App {
     pub fn render(&mut self) -> anyhow::Result<Vec<u8>> {
+        // Computed up front: the method borrows all of `self`, which would
+        // collide with the mutable field borrows the view structs hold below.
+        let lateania_live = self.lateania_recently_active();
         // Clear last-frame mouse hit-test rects so screens that don't draw
         // them this frame can't leave a stale target behind.
         self.last_pet_strip_pet_rect.set(None);
@@ -1004,6 +1010,7 @@ impl App {
                         lateania_online: self.lateania_service.player_count(),
                         lateania_slots: self.lateania_service.character_slots(self.user_id),
                         lateania_slot_cursor: self.lateania_slot_cursor,
+                        lateania_live,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1371,6 +1378,7 @@ impl App {
                         lateania_online: ctx.lateania_online,
                         lateania_slots: ctx.lateania_slots.clone(),
                         lateania_slot_cursor: ctx.lateania_slot_cursor,
+                        lateania_live: ctx.lateania_live,
                         nethack_live: ctx
                             .nethack_state
                             .as_deref()
@@ -2306,12 +2314,15 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
             " thanks for hanging out ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
-        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+        spans.push(Span::styled("☕", Style::default().fg(theme::AMBER())));
     }
+    // The link carries its own blank cell on each side: this line is drawn
+    // over the bottom border, so without them the `─` glyphs on either side
+    // get swallowed into the URL by terminals that linkify what they see.
     let url = if include_protocol {
-        "https://ko-fi.com/mateuszpiorowski "
+        " https://ko-fi.com/mateuszpiorowski "
     } else {
-        "ko-fi.com/mateuszpiorowski "
+        " ko-fi.com/mateuszpiorowski "
     };
     spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
     Line::from(spans).right_aligned()

@@ -10,6 +10,7 @@ mod host;
 mod identity;
 mod playname;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;

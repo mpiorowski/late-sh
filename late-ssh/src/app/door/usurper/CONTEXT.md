@@ -41,7 +41,7 @@ Core shape (mirrors DCSS unless noted):
 - **Teardown**: on client disconnect or host SIGTERM with a live child, SIGHUP then a 3s grace then SIGKILL. Unlike crawl there is no hangup-save to protect, the game writes the world to disk as it goes, but the shape (and the `watch`-broadcast pod shutdown with `SHUTDOWN_GRACE` 8s) matches the other hosts. A hard-killed session can leave a stale online entry; the game's own kick-out ages it and the boot sweep clears it.
 - **Boot-time seeding + sweeps** (`seed.rs`, run by `main.rs` before serving): copy files missing from the game dir out of the image's `/opt/usurper/seed` template (never overwriting, the live world survives image upgrades), then delete `DATA/MAINT.FLG` (the maintenance lock; left behind by a mid-maintenance crash it would wedge the whole door) and `NODE/ONLINERS.DAT` (the who-is-playing table; provably stale at boot).
 
-The door is gated behind `LATE_USURPER_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
+The door is gated by the `usurper_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
 ---
 
@@ -80,7 +80,7 @@ Cross-module wiring (client side) mirrors dcss exactly: `app/state.rs` (`usurper
 ## 3. Config And Deploy [VOLATILE]
 
 ### Client (env → `Config` → `SessionConfig` → `App`)
-- `LATE_USURPER_ENABLED` (default `false`), `LATE_USURPER_HOST` (default `127.0.0.1`; compose `service-usurper`, prod `late-usurper-sv`), `LATE_USURPER_PORT` (default `2326`), `LATE_USURPER_SECRET` (must equal the host's; required when enabled).
+- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-usurper`, prod `late-usurper-sv`, port 2326); `LATE_USURPER_SECRET` is the only env the client reads (must equal the host's).
 
 ### Host (`late-usurper` env)
 - `LATE_USURPER_SECRET` (required), `LATE_USURPER_BIN` (default `/opt/usurper/bin/USURPER.EXE`), `LATE_USURPER_GAME_DIR` (default `/var/lib/late-usurper`; the PVC in prod), `LATE_USURPER_SEED_DIR` (default `/opt/usurper/seed`), `LATE_USURPER_LISTEN_ADDR`, `LATE_USURPER_PORT` (default `2326`), `LATE_USURPER_IDLE_TIMEOUT`, `LATE_USURPER_MAX_NODES` (default `10`).

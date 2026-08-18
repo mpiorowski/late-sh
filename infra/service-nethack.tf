@@ -15,9 +15,9 @@
 #
 # replicas MUST stay 1: one RWO volume holds the shared bones + per-player saves
 # (see nethack.tf for the single-node / lock-file reasoning, which carries over).
-# The host pod is always deployed (like service-ssh/web); the door's enable flag
-# only gates the CLIENT (service-ssh's LATE_NETHACK_ENABLED, which shows the door
-# available/unavailable to users). Keeping the host unconditional means its image
+# The host pod is always deployed (like service-ssh/web); whether the door shows
+# up as available to users in the TUI is a late-ssh config.rs profile literal.
+# Keeping the host unconditional means its image
 # always exists in-cluster, so the deploy workflows can read it with a plain
 # `kubectl get` (no bootstrap fallback) just like the ssh/web images.
 
@@ -82,7 +82,7 @@ resource "kubernetes_deployment_v1" "late_nethack" {
           image = var.NETHACK_IMAGE_TAG
           command = [
             "sh", "-c",
-            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path} && rm -f ${local.nethack_var_path}/?lock.*",
+            "mkdir -p ${local.nethack_var_path}/save && touch ${local.nethack_var_path}/record ${local.nethack_var_path}/logfile ${local.nethack_var_path}/xlogfile ${local.nethack_var_path}/livelog ${local.nethack_var_path}/perm && chown -R late:late ${local.nethack_var_path} && rm -f ${local.nethack_var_path}/?lock.*",
           ]
 
           security_context {

@@ -55,7 +55,7 @@ permissions:
 # The published door image tag. Must match the pin in the root Dockerfile's
 # nethack-build stage; bump both together on any recipe change.
 env:
-  DOOR_IMAGE_TAG: 5.0.0-r1
+  DOOR_IMAGE_TAG: 5.0.0-r2
 
 jobs:
   build_validate:
@@ -188,13 +188,3 @@ jobs:
             test -w /var/games/nethack-var/record
             echo "save dir OK:" && ls -la /var/games/nethack-var
           '
-
-      - name: verify_door_enabled
-        run: |
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_NETHACK_ENABLED || true)
-          echo "LATE_NETHACK_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::NetHack door is not enabled (LATE_NETHACK_ENABLED=${enabled})" ;;
-          esac

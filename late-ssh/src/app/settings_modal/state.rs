@@ -107,9 +107,10 @@ pub(crate) enum TweakRow {
     RightSidebar,
     RoomListSidebar,
     PetStrip,
-    // Compose / Music / Display / Startup groups.
+    // Compose / Display / Startup groups. There is deliberately no music-mute
+    // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
+    // and a second control here would be a second source of truth for them.
     ComposerKeepFocused,
-    StartWithMusicMuted,
     FlagFallback,
     LandOnHome,
     // Input group.
@@ -117,14 +118,13 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 10] = [
+    pub(crate) const ALL: [TweakRow; 9] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
         TweakRow::RoomListSidebar,
         TweakRow::PetStrip,
         TweakRow::ComposerKeepFocused,
-        TweakRow::StartWithMusicMuted,
         TweakRow::FlagFallback,
         TweakRow::LandOnHome,
         TweakRow::InteractionMode,
@@ -814,9 +814,6 @@ impl SettingsModalState {
             }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
-            }
-            TweakRow::StartWithMusicMuted => {
-                self.draft.start_with_music_muted ^= true;
             }
             TweakRow::FlagFallback => {
                 self.draft.show_flag_fallback ^= true;

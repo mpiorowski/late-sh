@@ -100,6 +100,14 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         flavor_headline(),
         flavor_quote(),
         Line::from(""),
+        landing::heading("Rewards"),
+        landing::stat("Orb of Zot", "10,000 chips + DCO badge, once per account", 14),
+        landing::stat("Escape", "20,000 chips + DCW badge, once per account", 14),
+        Line::from(Span::styled(
+            "  Play again any time, but these chip payouts are lifetime claims.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::from(""),
         landing::heading("Launch"),
     ]);
     lines.extend(launch);

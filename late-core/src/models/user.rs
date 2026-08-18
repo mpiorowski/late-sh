@@ -593,6 +593,10 @@ impl User {
                           WHEN 'lateania_kaethyr_ascendant' THEN 'LKA'
                           WHEN 'nethack_amulet' THEN 'NHA'
                           WHEN 'nethack_ascension' THEN 'NHY'
+                          WHEN 'dcss_orb' THEN 'DCO'
+                          WHEN 'dcss_win' THEN 'DCW'
+                          WHEN 'brogue_escape' THEN 'BRE'
+                          WHEN 'brogue_mastery' THEN 'BRM'
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           ELSE (
                             CASE category
@@ -620,6 +624,10 @@ impl User {
                                    WHEN 'nethack_amulet' THEN 14
                                    WHEN 'nethack_ascension' THEN 15
                                    WHEN 'greendragon_dragon' THEN 16
+                                   WHEN 'dcss_orb' THEN 17
+                                   WHEN 'dcss_win' THEN 18
+                                   WHEN 'brogue_escape' THEN 19
+                                   WHEN 'brogue_mastery' THEN 20
                                    ELSE 99
                                  END
                     ) AS badges
@@ -628,7 +636,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'greendragon_dragon')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -1094,18 +1102,23 @@ fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
     // Collapse the lesser milestone when its superseding one is present:
     // Kaethyr Ascendant implies Yssgar implies the Frontier King implies the
-    // Archdemon, and an Ascension implies the Amulet. Profile views still show
-    // all; chat author labels show only the highest.
+    // Archdemon, an Ascension implies the Amulet, a DCSS escape implies the
+    // Orb pickup, and a Brogue mastery implies the escape. Profile views
+    // still show all; chat author labels show only the highest.
     let has_kaethyr = raw.split_whitespace().any(|badge| badge == "LKA");
     let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
     let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
     let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
+    let has_dcss_win = raw.split_whitespace().any(|badge| badge == "DCW");
+    let has_brogue_mastery = raw.split_whitespace().any(|badge| badge == "BRM");
     let badges = raw
         .split_whitespace()
         .filter(|badge| !(has_kaethyr && matches!(*badge, "LYS" | "LKN" | "LMG")))
         .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
         .filter(|badge| !(has_frontier_king && *badge == "LMG"))
         .filter(|badge| !(has_ascension && *badge == "NHA"))
+        .filter(|badge| !(has_dcss_win && *badge == "DCO"))
+        .filter(|badge| !(has_brogue_mastery && *badge == "BRE"))
         .collect::<Vec<_>>()
         .join(" ");
     (!badges.is_empty()).then_some(badges)

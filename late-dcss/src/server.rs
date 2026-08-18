@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::host::{HostConfig, PtyHost};
 use crate::identity::derive_client_key;
 use crate::playname;
+use crate::stats::{self, StatsHost};
 
 /// Shared, connection-independent server state.
 struct Shared {
@@ -52,9 +53,21 @@ impl russh::server::Server for Server {
             cols: 80,
             rows: 24,
             rc: None,
+            stats_cursors: None,
             host: None,
         }
     }
+}
+
+/// What this SSH session runs: a crawl child on a PTY (a player), or the
+/// log-streaming stats session (late-ssh's ingestion client, authenticated as
+/// the reserved `late_stats` username).
+enum SessionHost {
+    Game(PtyHost),
+    /// Held only so its drop (client EOF/close) ends the stream task.
+    Stats {
+        _host: StatsHost,
+    },
 }
 
 pub(crate) struct ClientHandler {
@@ -70,8 +83,10 @@ pub(crate) struct ClientHandler {
     /// request (`Some("")` = clear the stored file). `None` when the client
     /// never sent one (an older late-ssh): leave any existing file alone.
     rc: Option<String>,
-    /// The running crawl child, once the shell is requested.
-    host: Option<PtyHost>,
+    /// The stats client's per-file byte offsets, raw from its env request.
+    stats_cursors: Option<String>,
+    /// The running crawl child or stats stream, once the shell is requested.
+    host: Option<SessionHost>,
 }
 
 fn reject() -> Auth {
@@ -185,13 +200,20 @@ impl Handler for ClientHandler {
         variable_value: &str,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // The one env var this host takes: the account's pushed rc. Anything
-        // else is ignored (the child env is a hard allowlist regardless).
+        // The two env vars this host takes: the account's pushed rc, and the
+        // stats client's cursors. Anything else is ignored (the child env is
+        // a hard allowlist regardless).
         if variable_name == crate::rc::RC_ENV_VAR {
             match crate::rc::decode_rc(variable_value) {
                 Ok(rc) => self.rc = Some(rc),
                 Err(reason) => tracing::warn!(reason, "ignoring pushed rc"),
             }
+        } else if variable_name == stats::CURSORS_ENV_VAR {
+            // A large cursor set arrives split across several requests.
+            self.stats_cursors = Some(stats::append_cursors(
+                self.stats_cursors.take(),
+                variable_value,
+            ));
         }
         Ok(())
     }
@@ -211,6 +233,20 @@ impl Handler for ClientHandler {
         // session handle from here on.
         let _ = self.channel.take();
 
+        // The reserved stats username gets the log stream, never a game child.
+        if playname == stats::STATS_USERNAME {
+            self.host = Some(SessionHost::Stats {
+                _host: StatsHost::spawn(
+                    self.shared.data_dir.clone(),
+                    self.stats_cursors.take(),
+                    session.handle(),
+                    channel,
+                    self.shared.shutdown_rx.clone(),
+                ),
+            });
+            return Ok(());
+        }
+
         // crawl's ncursesw aborts on a TERM it has no terminfo for; fall back to
         // a universal one so clients on exotic terminals still play.
         let term = effective_term(&self.term);
@@ -222,7 +258,7 @@ impl Handler for ClientHandler {
             );
         }
 
-        self.host = Some(PtyHost::spawn(
+        self.host = Some(SessionHost::Game(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
                 data_dir: self.shared.data_dir.clone(),
@@ -235,7 +271,7 @@ impl Handler for ClientHandler {
             session.handle(),
             channel,
             self.shared.shutdown_rx.clone(),
-        ));
+        )));
         Ok(())
     }
 
@@ -245,8 +281,10 @@ impl Handler for ClientHandler {
         data: &[u8],
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(host) = &self.host {
-            host.send_input(data.to_vec());
+        match &self.host {
+            Some(SessionHost::Game(host)) => host.send_input(data.to_vec()),
+            // The stats stream is one-way; client bytes carry nothing.
+            Some(SessionHost::Stats { .. }) | None => {}
         }
         Ok(())
     }
@@ -260,8 +298,11 @@ impl Handler for ClientHandler {
         _pix_height: u32,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(host) = &self.host {
-            host.resize(col_width.max(1) as u16, row_height.max(1) as u16);
+        match &self.host {
+            Some(SessionHost::Game(host)) => {
+                host.resize(col_width.max(1) as u16, row_height.max(1) as u16);
+            }
+            Some(SessionHost::Stats { .. }) | None => {}
         }
         Ok(())
     }

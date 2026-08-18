@@ -143,16 +143,3 @@ jobs:
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment/late-codekeep -n default --timeout=180s
-
-      - name: verify_door_enabled
-        run: |
-          # LATE_CODEKEEP_ENABLED is a client flag on service-ssh, not on the
-          # late-codekeep host pod.
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_CODEKEEP_ENABLED || true)
-          echo "LATE_CODEKEEP_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::CodeKeep door is not enabled (LATE_CODEKEEP_ENABLED=${enabled})" ;;
-          esac

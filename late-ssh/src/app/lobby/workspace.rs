@@ -1,10 +1,12 @@
 //! The backtick workspace cycle: Home chat -> each daily board waiting on
 //! your move -> each house table you're seated at -> each Arcade daily
-//! puzzle you've started but not finished -> each live (detached-capable)
-//! roguelike door game -> back to Home chat. The one key that spans the
-//! Lobby game domains, the Arcade dailies, and the roguelike doors: inside
-//! a running roguelike the same backtick detaches (the game keeps running)
-//! and hops onward.
+//! puzzle you've started but not finished -> each live door game (a
+//! recently-detached Lateania world, then the running roguelikes) -> back
+//! to Home chat. The one key that spans the Lobby game domains, the Arcade
+//! dailies, and the door games: inside a running roguelike the same
+//! backtick detaches (the game keeps running) and hops onward; inside an
+//! active Lateania world it leaves (autosave) and keeps the door on the
+//! cycle for a few minutes so hopping back re-joins the character.
 
 use uuid::Uuid;
 
@@ -26,15 +28,17 @@ pub(crate) enum GameWorkspace {
     DailyBoard(Uuid),
     HouseTable(HouseTable),
     Arcade(ArcadeStop),
-    /// A running roguelike door, identified by its live-game screen
-    /// (Nethack/Dcss/Brogue). The turn-based child idles on its host while
-    /// detached, so hopping in resumes exactly where the player left off.
+    /// A live door game, identified by its live-game screen. For the
+    /// roguelikes (Nethack/Dcss/Brogue) the turn-based child idles on its
+    /// host while detached, so hopping in resumes exactly where the player
+    /// left off. For Lateania "live" means detached recently: hopping in
+    /// re-joins the autosaved character.
     Door(Screen),
 }
 
 /// Backtick: hop Home chat -> each match waiting on your move (nearest
 /// deadline first) -> each house table you're seated at (roster order) ->
-/// each unfinished Arcade daily (lobby order) -> each live roguelike door
+/// each unfinished Arcade daily (lobby order) -> each live door game
 /// (hub sidebar order) -> back to Home chat.
 pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
     let current = match app.screen {
@@ -59,6 +63,14 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
         // `App::handle_input` (backtick is otherwise forwarded raw to the
         // game); `set_screen` keeps the running state alive on the hop out.
         Screen::Nethack | Screen::Dcss | Screen::Brogue => GameWorkspace::Door(app.screen),
+        // An active Lateania world reaches here through the detach action in
+        // `lateania::screen::handle_active_lateania_key`, which arms the
+        // recency window first; the hop-out screen switch tears the session
+        // down (autosave + world leave) rather than keeping it running.
+        Screen::Lateania => match app.lateania_state.is_some() {
+            true => GameWorkspace::Door(Screen::Lateania),
+            false => return false,
+        },
         _ => return false,
     };
     let my_turn_ids: Vec<Uuid> = app
@@ -111,8 +123,13 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
                     crate::app::lobby::house::input::leave_table(app, Screen::Dashboard);
                 }
                 // A roguelike door detaches on a plain screen switch; nothing
-                // to close.
-                Screen::Arcade | Screen::Nethack | Screen::Dcss | Screen::Brogue => {
+                // to close. Lateania's screen switch runs its own teardown
+                // (autosave + world leave) inside `set_screen`.
+                Screen::Arcade
+                | Screen::Nethack
+                | Screen::Dcss
+                | Screen::Brogue
+                | Screen::Lateania => {
                     app.set_screen(Screen::Dashboard);
                 }
                 _ => {
@@ -147,21 +164,33 @@ pub(crate) fn cycle_game_workspace(app: &mut App) -> bool {
             true
         }
         GameWorkspace::Door(screen) => {
-            // The running door state is still on the App (kept by
-            // `set_screen`'s detach rule), so switching screens is the whole
-            // resume: the vt100 parser holds the live frame and the next draw
-            // re-sizes the remote PTY if the viewport changed.
+            // For the roguelikes the running door state is still on the App
+            // (kept by `set_screen`'s detach rule), so switching screens is
+            // the whole resume: the vt100 parser holds the live frame and the
+            // next draw re-sizes the remote PTY if the viewport changed.
             app.set_screen(screen);
+            // Lateania has no detached session: the hop-out saved and removed
+            // the character, so hopping in re-joins the remembered slot
+            // directly, skipping the character-select landing.
+            if screen == Screen::Lateania {
+                app.enter_lateania();
+            }
             true
         }
     }
 }
 
-/// The roguelike doors with a live (running, attached or detached) game, in
-/// hub sidebar order. Only running games participate: a door sitting on its
-/// launcher is not a workspace.
+/// The door games that count as live stops, in hub sidebar order. For the
+/// roguelikes that means a running (attached or detached) game: a door
+/// sitting on its launcher is not a workspace. Lateania has no detached
+/// session, so its test is the recency window a backtick detach arms: hop
+/// out and the door stays on the cycle for a few minutes, hopping in
+/// re-joins the saved character.
 fn live_door_stops(app: &App) -> Vec<Screen> {
     let mut stops = Vec::new();
+    if app.lateania_recently_active() {
+        stops.push(Screen::Lateania);
+    }
     if app
         .dcss_state
         .as_ref()

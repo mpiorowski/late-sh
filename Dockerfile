@@ -18,11 +18,11 @@ ARG DEBIAN_VERSION=bookworm
 # (.github/workflows/<door>.yml). Pinning them here by tag means a door recipe
 # rebuilds only when its own Dockerfile changes, never on ordinary image
 # builds. Bump a tag when that door's recipe or upstream version changes.
-FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r1 AS nethack-build
+FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
-FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r1 AS dcss-build
+FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
-FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r2 AS brogue-build
+FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3 AS brogue-build
 FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
 FROM ghcr.io/mpiorowski/late-sh/door-bashquest:v1 AS bashquest-build
 
@@ -525,7 +525,9 @@ RUN mkdir -p /usr/games && ln -sf /opt/dcss/bin/crawl /usr/games/crawl
 COPY --from=builder-dcss /app/late-dcss-bin /app/late-dcss
 USER late
 
-EXPOSE 2325
+# 2325: the game over SSH. 2329: the read-only crawl-file publisher for the
+# public DCSS tooling (late-dcss/src/publish.rs).
+EXPOSE 2325 2329
 
 CMD ["/app/late-dcss"]
 
@@ -596,6 +598,6 @@ COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
 COPY --from=builder-bashquest /app/late-bashquest-bin /app/late-bashquest
 USER late
 
-EXPOSE 2329
+EXPOSE 2330
 
 CMD ["/app/late-bashquest"]

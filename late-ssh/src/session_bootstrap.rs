@@ -394,7 +394,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         key_layout,
         audio_service: state.audio_service.clone(),
         voice_service: state.voice_service.clone(),
-        stream_service: Some(state.stream_service.clone()),
+        stream_service: state.stream_service.clone(),
         chat_service: state.chat_service.clone(),
         translation_service: state.translation_service.clone(),
         notification_service: state.notification_service.clone(),
@@ -466,15 +466,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         nethack_host: state.config.nethack_host.clone(),
         nethack_port: state.config.nethack_port,
         nethack_secret: state.config.nethack_secret.clone(),
-        nethack_awards: Some(crate::app::door::nethack::award::NethackAwards::new(
-            state.chip_service.clone(),
-            state.db.clone(),
+        nethack_activity: Some(
             crate::app::activity::publisher::ActivityPublisher::new(
                 state.db.clone(),
                 state.activity_feed.clone(),
             )
             .with_username_directory(state.username_directory.clone()),
-        )),
+        ),
         dcss_enabled: state.config.dcss_enabled,
         dcss_host: state.config.dcss_host.clone(),
         dcss_port: state.config.dcss_port,
@@ -511,6 +509,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         active_users: Some(state.active_users.clone()),
         clubhouse_lobby: Some(state.clubhouse_lobby.clone()),
         mention_ladders: state.mention_ladders.clone(),
+        files: state.config.files.clone(),
         scratchpad_registry: Some(state.scratchpad_registry.clone()),
         clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
             &user.settings,

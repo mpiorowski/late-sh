@@ -102,7 +102,7 @@ pub fn draw_qr_overlay(frame: &mut Frame, area: Rect, url: &str, title: &str, su
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled("  Press any key to close.", dim)),
+            Line::from(Span::styled("  Press Esc to close.", dim)),
             Line::from(""),
         ])
         .centered(),

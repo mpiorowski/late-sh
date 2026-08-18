@@ -3,7 +3,25 @@
 ## Metadata
 - Domain: "watch me" streaming rooms — the `/golive` screen-share broadcast, the in-process stream registry, stream rooms, publisher/watch capability URLs, and the rail's `stream` section
 - Primary audience: LLM agents working in `late-ssh/src/app/stream`, the `/golive`/`/watch` commands, the `/api/stream/*` routes, or `late-web/src/pages/live`
-- Last updated: 2026-08-14 (One audio path per sound: the CLI voice runtime
+- Last updated: 2026-08-17 (Capability ids are base64url over the same v4
+  UUID bytes instead of 32-char hex: 122 bits either way, 22 characters
+  instead of 32, so a watch link fits a chat room header that used to drop
+  it. `late-web`'s `valid_capability_id` now accepts `_` along with `-`.
+  See §2 `registry.rs`. Previously: stream owners moderate their own room:
+  `/ban @user [duration] [reason]` and `/unban @user` in the stream room run
+  the same `ModerationService` room action as staff, authorized by a narrow
+  `STREAM_OWNER` cap set resolved from `game_kind='stream'` +
+  `created_by`. Ban rather than kick, because a public room is re-enterable.
+  A room ban now also refuses a voice ticket, so it takes the microphone and
+  not just the chat. An active ban placed by staff stays out of the
+  streamer's reach: neither liftable nor overwritable. See §6. Previously:
+  watch-page reconnect: the viewer's
+  LiveKit identity is now `viewer-{watcher_id}` from the page's stable id
+  instead of a fresh random per grant fetch, connect failures back off
+  instead of retrying every 10s forever, a failed `Room` is disposed instead
+  of abandoned, and a dropped connection reconnects in place instead of
+  dead-ending on "reload to retry". See §3.3 and §7. Previously: one audio
+  path per sound: the CLI voice runtime
   now plays human microphones only — program audio (the OBS ingress mix,
   the console's screen-share audio) and every `stream-*` publisher are
   unsubscribed, killing the streamer-hears-their-own-OBS echo and CLI
@@ -34,7 +52,13 @@ one activity line.
 Owned by this domain:
 - `registry.rs` — the process-global `StreamRegistry`: one stream per user,
   phase machine (`Pending -> Live -> Grace`), watcher heartbeats, publisher
-  heartbeats/grace, capability ids, and the `StreamPublisher` kind
+  heartbeats/grace, capability ids (`capability_id()`: base64url over a v4
+  UUID's 16 bytes — 122 bits in 22 characters. Unguessable *is* the access
+  model, so the entropy is non-negotiable; the encoding is not, and the short
+  form exists because a 32-char hex id made the watch link too wide for the
+  chat room header to render at all. The alphabet is `[A-Za-z0-9_-]`, which
+  `late-web`'s `valid_capability_id` gate must keep accepting — dropping `_`
+  would 404 roughly half of all streams), and the `StreamPublisher` kind
   (`Console` vs `Obs(ObsIngress)` — the publisher kinds conflict instead of
   silently rewiring; `/golive stop` switches). In-memory only, single
   replica, dies with the process (scratchpad-registry tier).
@@ -43,7 +67,11 @@ Owned by this domain:
   `WentLive` announcement, the event channel back to sessions, the ingress
   status poll, the sweeper.
 - `ui.rs` — the OBS handoff overlay (`/golive obs`: WHIP server URL +
-  bearer token + watch link, hand-copied into OBS, dismissed by any key).
+  bearer token + watch link, hand-copied into OBS). **Esc is the only way
+  out**, for it and for the `/golive`/`/watch` QR modal alike: the values
+  are read off the screen and typed elsewhere, so a stray keystroke must not
+  take them away. Every other event is swallowed while either is up
+  (`app/input.rs`, the gate above everything but the announcements).
 - The `/golive [title|stop]`, `/golive obs [title]`, and `/watch @user`
   composer commands (parsed in `chat/state.rs`, drained by
   `App::tick_stream` in `app/state.rs`).
@@ -127,8 +155,11 @@ Cross-domain touchpoints:
   change), the rail's `RoomSection::Stream` (under Core, above
   Cyberspace/Channels, visible from `/golive` on), the `▶LIVE` author
   presence badge (live streams only), the stream header block above the
-  room's chat (title, watcher count, watch-URL nudge), and the stream-room
-  arm in `select_room_slot` (lazy join on first open).
+  room's chat (title, watcher count, watch-URL nudge; the URL carries a
+  trailing space so it never lands in the last column, where terminal link
+  detection swallows the pane border `│` or the `────` rule below it and
+  hands the clicker a 404), and the stream-room arm in `select_room_slot`
+  (lazy join on first open).
 - `app/voice/ui.rs::OnAirView` — the ⦿ ON AIR strip marker while the
   room's stream is live. The CLI voice roster is the complete speaker
   list: no browser mic exists, so there is no separate on-air roster line.
@@ -163,7 +194,23 @@ Cross-domain touchpoints:
 3. Watch pages resolve `/live/{id}`, poll state (10s), heartbeat (15s;
    45s TTL drives the "N watching" count), and subscribe with an anonymous
    hidden grant. Playback defaults on (autoplay permitting, see §4.1);
-   publishing from a page is impossible by grant.
+   publishing from a page is impossible by grant. The page's `watcher_id`
+   (a random per-page-load browser UUID) is both the heartbeat key and,
+   as `viewer-{watcher_id}`, the viewer's LiveKit identity: the grant fetch
+   carries it and `StreamService::watch_grant` requires it. It used to mint
+   `viewer-{random}` per fetch, so a viewer whose media path kept failing
+   left a new ghost participant in the room every 10 seconds with nothing
+   tying the attempts together; reusing the id also makes a reconnect
+   *replace* the stale participant instead of racing it. The id is
+   shape-checked (`registry::valid_watcher_id`, alnum + dash, <= 64) at both
+   the late-web proxy and the late-ssh API, since it reaches a LiveKit
+   identity. Connect failures back off (10s, 20s, 40s, capped at 60s,
+   reset on success) and a dropped connection clears the room so the state
+   poll reconnects in place: "reload to retry" was a dead end the page could
+   never leave on its own. Note the two halves take different network paths
+   (the page over HTTPS to `late.sh`, media over WebRTC to `rtc.late.sh`),
+   so a working page with no picture is a normal failure mode and the status
+   line says so after three failures.
 3a. OBS variant: `/golive obs [title]` runs the same registration but mints
    a WHIP ingress (reused on re-runs; a same-user race deletes the loser)
    and shows a modal with the WHIP server URL + bearer token to paste into
@@ -271,6 +318,10 @@ Cross-domain touchpoints:
   announcement.
 - `ui_test.rs` — the OBS overlay renders every hand-copied value unclipped
   and survives a tiny terminal.
+- `input_flow_test.rs::only_esc_closes_the_stream_modal`: keys, Enter, and
+  a left click all leave the handoff modal up; Esc closes it.
+- `chat/ui_test.rs::stream_header_never_lets_the_watch_url_touch_the_right_edge`:
+  the header row's watch URL always ends one column short of the edge.
 - `chat/state_internal_test.rs` — `/golive` parse routing (console vs `obs`
   vs `stop`) and the title clamp.
 - `activity/filter_test.rs` — the `is watching` line ships to #lounge and
@@ -286,13 +337,32 @@ Cross-domain touchpoints:
 - `chat/svc_test.rs::mod_stream_ban_ends_the_live_stream_and_persists_the_block`
   — `/mod ban stream` tears a live stream out of the registry and writes the
   row; `/mod unban stream` clears it.
+- Stream-owner moderation (§6): `policy_test.rs` pins the `STREAM_OWNER`
+  caps and that ownership never widens a moderator's reach;
+  `chat/svc_test.rs` covers the streamer banning and unbanning a regular,
+  a viewer holding nothing in someone else's room, staff being out of
+  reach, a private room's owner *not* gaining the ban, a non-stream game
+  room having no owner-moderator, a banned user failing to rejoin, a
+  streamer being refused both lifting and overwriting an active staff ban
+  (`a_streamer_cannot_lift_or_replace_a_staff_ban_on_their_room`), and a
+  chat `/ban` landing on the room the actor sits in rather than a
+  slug-namesake topic room (chat commands carry the room id);
+  `voice/svc_test.rs::a_room_banned_user_is_refused_a_voice_ticket` pins
+  the microphone half; `chat/state_internal_test.rs` covers the
+  `/ban @user [duration] [reason]` parse (duration slot vs reason).
 - `api_test.rs::stream_endpoints_serve_the_watch_and_publish_flow` — the
   whole HTTP flow end to end against a real registry + DB, including the
-  404s for dead capability ids.
+  404s for dead capability ids and the watch grant's identity contract:
+  the token's `sub` is `viewer-{watcher_id}`, a retry with the same watcher
+  id reuses it, a different watcher is a different participant, and a
+  missing or off-shape watcher id is a 400 (asserted by decoding the JWT,
+  since the identity is what LiveKit dedupes participants by).
 - `late-web/src/pages/live/live_test.rs` — capability-id validation (the
   proxy-path injection gate), page rendering (audio-on defaults, voices
-  toggle, volume, fullscreen pinned; the go-live page has no browser mic),
-  upstream-status forwarding, and the claim cookie exchange.
+  toggle, volume, fullscreen pinned; the grant fetch carries the watcher id;
+  no "reload to retry" dead end; the go-live page has no browser mic),
+  the watcher-id gate on the grant proxy, upstream-status forwarding, and
+  the claim cookie exchange.
 - `late-cli/src/voice_test.rs` — the `keep_remote_audio` policy: other
   users' mics play; `stream-*` publishers (any source label) and all
   program audio never do.
@@ -328,6 +398,46 @@ user id). `ModerationInfra` carries the `StreamService` for all of it.
 - `/mod` room tools (ban, kick-from-room, slow mode) work on the stream
   chat room like any other room, but they do not touch the media: the
   publisher's grant comes from the per-stream token, not room membership.
+
+### The streamer's own tools
+
+A streamer moderates their own room without staff. `/ban @user [duration]
+[reason]` and `/unban @user`, typed in the stream room, run the same
+`ModerationService` room action as the mod surface: same audit log, same
+voice revoke, same live-session notify. Authorization is resolved in
+`resolve_room_ownership` (`moderation/service.rs`), the one place room
+actions are authorized, which grants `STREAM_OWNER` caps (kick + ban +
+unban, `moderation/policy.rs`) when the room is `game_kind='stream'` and
+`created_by` is the actor. Two deliberate narrowings there:
+
+- **Ban, not just kick.** A stream room is public, so a kicked viewer walks
+  back in from the rail. The ban is the only thing that holds; `/kick` is
+  kept for the "settle down" case.
+- **`created_by`, never the derived `ChatRoom::owner_id`.** That helper
+  succeeds to the earliest remaining member, which on a public room would
+  hand a passing viewer the streamer's powers. The check is also scoped to
+  `game_kind='stream'` so a daily match's challenger does not inherit
+  powers over their own opponent.
+
+Ownership carries no rank (`Permissions::can` still compares tiers), so a
+streamer cannot touch staff, and the grant is per-action, never standing.
+Staff *decisions* are equally out of reach: when the cap came from ownership
+rather than rank, an active ban placed by another actor refuses both
+`/unban` and a re-`/ban` (`room_action` checks the existing row's
+`actor_user_id`), so a streamer cannot lift a staff ban or overwrite a
+permanent one with a softer one. An expired staff ban is history and does
+not block a fresh streamer ban.
+
+A room ban takes the microphone too: `ensure_user_can_join_voice`
+(`voice/svc.rs`) refuses a banned user a voice ticket. Membership alone
+could not carry this, since banning drops membership but a public room is
+re-enterable. `ChatRoomMember::join` refuses banned users for every join
+path, so the room door needs nothing extra.
+
+Out of reach by design: anonymous `/live/{id}` watch pages carry no identity
+to ban. They also cannot speak (`canPublish=false`), so a banned viewer can
+lurk on the page but not make noise. Ending the stream is the only lever
+against the anonymous audience.
 - A minted LiveKit token stays valid for an hour; the force-disconnect plus
   the refusal on the next `/golive` is what makes any of these bite now.
 
@@ -340,5 +450,25 @@ user id). `ModerationInfra` carries the `StreamService` for all of it.
 - A renamed streamer keeps their room under the old `{username}-live` slug
   (cosmetic only: the slug is not shown anywhere user-facing).
 - Splash tips carry no `/golive` line yet.
+- "N watching" counts heartbeats, which are page presence, not media. A
+  viewer stuck on "could not connect" still counts, so the streamer's number
+  can overstate who is actually seeing the picture. Deliberate for now (the
+  page is the audience signal, and watch pages are anonymous by design), but
+  it is why a broken viewer is invisible from the streamer's side.
+- The node's UDP receive buffer is the kernel default and LiveKit says so at
+  every boot: `UDP receive buffer is too small for a production set-up
+  {current: 425984, suggested: 5000000}`. A screen share fanned out to
+  several subscribers overruns it, which reads as sustained loss on *every*
+  viewer (nack ratios around 0.4-0.5 in the congestion logs), not just the
+  one with a bad link. Fix is `net.core.rmem_max`/`rmem_default` on the
+  host; it cannot come from the pod, since a hostNetwork pod may not set
+  `net.*` sysctls, and it has no home in this repo (the RKE2 script is
+  one-shot bootstrap, not a reconciler).
+- TURN is enabled (`infra/livekit.tf`: UDP 3478, TLS 5349, relay range
+  30000-40000) and clients do allocate relay candidates, but there is no
+  TURN on 443: nginx owns that port. A viewer behind a firewall that permits
+  only 443 has no path. Separately, ICE prefers a direct host pair, so a
+  path that comes up and *then* dies is not rescued by TURN without an ICE
+  restart; that is what the page's reconnect now covers.
 - The tavern TV prop, arena spectator reuse, and a public `late.sh/live`
   stay future work (see STREAM.md).

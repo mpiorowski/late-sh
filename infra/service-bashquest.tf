@@ -14,8 +14,8 @@
 #
 # replicas MUST stay 1: one RWO volume holds every player's save (see
 # bashquest.tf). The host pod is always deployed (like service-ssh/dcss/
-# dopewars); the door's enable flag only gates the CLIENT
-# (service-ssh's LATE_BASHQUEST_ENABLED). Keeping the host unconditional means
+# dopewars); whether the door shows up in the TUI is a late-ssh config.rs
+# profile literal. Keeping the host unconditional means
 # its image always exists in-cluster, so the deploy workflows can read it with
 # a plain `kubectl get` (no bootstrap fallback) just like the other images.
 
@@ -83,7 +83,7 @@ resource "kubernetes_deployment_v1" "late_bashquest" {
           name  = "late-bashquest"
 
           port {
-            container_port = 2329
+            container_port = 2330
             name           = "bashquest"
           }
 
@@ -182,11 +182,11 @@ resource "kubernetes_service_v1" "late_bashquest_sv" {
     }
 
     # Cluster-internal only: reached by service-ssh at
-    # late-bashquest-sv:2329. Not exposed via ingress or the ssh-tcp
+    # late-bashquest-sv:2330. Not exposed via ingress or the ssh-tcp
     # LoadBalancer.
     port {
       name        = "bashquest"
-      port        = 2329
+      port        = 2330
       target_port = "bashquest"
     }
   }

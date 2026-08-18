@@ -1,4 +1,4 @@
-use late_core::models::leaderboard::{DailyPuzzle, RankedEntry, ScoreGame};
+use late_core::models::leaderboard::{DailyPuzzle, DoorGame, RankedEntry, ScoreGame};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use uuid::Uuid;
@@ -21,6 +21,7 @@ fn entry(rank: i64, username: &str, user_id: Uuid, value: i64) -> RankedEntry {
         user_id,
         rank,
         value,
+        note: None,
     }
 }
 
@@ -206,8 +207,9 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
     let state = LeaderboardPageState::new();
     let (lines, selected_line) = rail_lines(&state);
 
-    // Bespoke boards under "Boards", then one header per roster group, each
-    // preceded by a blank separator.
+    // The bespoke boards lead under "Boards", every game board follows under
+    // "Games", then one header per roster group, each preceded by a blank
+    // separator.
     assert!(text(&lines[0]).contains("Boards"), "{}", text(&lines[0]));
     assert!(
         text(&lines[1]).starts_with(" > "),
@@ -215,15 +217,28 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[1])
     );
     assert_eq!(selected_line, 1);
-    assert_eq!(text(&lines[3]), "");
+    // The two bespoke boards, then a blank and the "Games" header.
+    let games_header = 1 + 2 + 1;
+    assert_eq!(text(&lines[games_header - 1]), "");
     assert!(
-        text(&lines[4]).contains("Daily Wins"),
+        text(&lines[games_header]).contains("Games"),
         "{}",
-        text(&lines[4])
+        text(&lines[games_header])
     );
 
-    // Header at 4, daily boards at 5..5+N, blank, then the High Scores header.
-    let high_scores_header = 5 + DailyPuzzle::ALL.len() + 1;
+    // The Games group: the two Lateania boards plus each door's board
+    // triple, blank, then the Daily Wins group.
+    let games_rows = 2 + 3 * DoorGame::ALL.len();
+    let daily_header = games_header + games_rows + 1 + 1;
+    assert_eq!(text(&lines[daily_header - 1]), "");
+    assert!(
+        text(&lines[daily_header]).contains("Daily Wins"),
+        "{}",
+        text(&lines[daily_header])
+    );
+
+    // Daily boards after their header, blank, then the High Scores header.
+    let high_scores_header = daily_header + 1 + DailyPuzzle::ALL.len() + 1;
     assert_eq!(text(&lines[high_scores_header - 1]), "");
     assert!(
         text(&lines[high_scores_header]).contains("High Scores"),
@@ -231,10 +246,45 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[high_scores_header])
     );
 
-    // Three headers and two separators around the full board list, nothing else.
+    // Score boards after their header, blank, then the Reference header
+    // (just the trailing Badge Guide entry).
+    let reference_header = high_scores_header + 1 + ScoreGame::ALL.len() + 1;
+    assert_eq!(text(&lines[reference_header - 1]), "");
+    assert!(
+        text(&lines[reference_header]).contains("Reference"),
+        "{}",
+        text(&lines[reference_header])
+    );
+
+    // Five headers and four separators around the full board list, nothing else.
     assert_eq!(
         lines.len(),
-        state.boards().len() + 3 + 2,
+        state.boards().len() + 5 + 4,
         "every board renders exactly once"
     );
+}
+
+#[test]
+fn lateania_rows_show_the_class_note_until_width_runs_short() {
+    let board = Board::LateaniaAdventurers;
+    let mut adventurer = entry(1, "mat", viewer(), 50);
+    adventurer.note = Some("Runemaster".to_string());
+
+    let roomy = text(&entry_line(&adventurer, board, false, 40));
+    assert!(roomy.contains("mat · Runemaster"), "{roomy}");
+    assert!(roomy.ends_with("lvl 50"), "{roomy}");
+
+    // Too narrow for the note: the name keeps the room, the note vanishes.
+    let tight = text(&entry_line(&adventurer, board, false, 18));
+    assert!(!tight.contains("Runemaster"), "{tight}");
+    assert!(tight.contains("mat"), "{tight}");
+    assert!(tight.ends_with("lvl 50"), "{tight}");
+
+    let zone = text(&entry_line(
+        &entry(2, "bob", viewer(), 14),
+        Board::LateaniaFrontier,
+        false,
+        30,
+    ));
+    assert!(zone.ends_with("zone 14"), "{zone}");
 }

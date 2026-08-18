@@ -54,7 +54,7 @@ impl Config {
             secret,
             listen_addr: optional("LATE_BASHQUEST_LISTEN_ADDR")
                 .unwrap_or_else(|| "0.0.0.0".to_string()),
-            port: optional_parse("LATE_BASHQUEST_PORT", 2329)?,
+            port: optional_parse("LATE_BASHQUEST_PORT", 2330)?,
             idle_timeout: optional_parse("LATE_BASHQUEST_IDLE_TIMEOUT", 3600)?,
         })
     }

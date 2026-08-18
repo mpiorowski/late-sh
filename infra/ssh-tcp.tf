@@ -28,11 +28,4 @@ resource "kubernetes_manifest" "nginx_tcp_config" {
       })
     }
   }
-
-  lifecycle {
-    precondition {
-      condition     = !local.irc_enabled_bool || !local.irc_proxy_emit_bool || local.irc_proxy_accept_bool
-      error_message = "IRC_PROXY_EMIT requires IRC_PROXY_ACCEPT while IRC is enabled. Deploy parser acceptance before enabling proxy emission."
-    }
-  }
 }

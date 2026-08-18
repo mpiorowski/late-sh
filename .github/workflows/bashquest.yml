@@ -154,17 +154,3 @@ jobs:
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment/late-bashquest -n default --timeout=180s
-
-      - name: verify_door_enabled
-        run: |
-          # LATE_BASHQUEST_ENABLED is a CLIENT flag: it lives on service-ssh
-          # (which reaches the host over SSH), NOT on the late-bashquest host
-          # pod. Read it there, mirroring dopewars.yml/dcss.yml.
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_BASHQUEST_ENABLED || true)
-          echo "LATE_BASHQUEST_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::bashquest door is not enabled (LATE_BASHQUEST_ENABLED=${enabled})" ;;
-          esac

@@ -12,6 +12,7 @@ mod identity_test;
 mod playname;
 mod rc;
 mod server;
+mod stats;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         bin = %config.bin,
         data_dir = %config.data_dir,
+        var_dir = %config.var_dir,
         listen = %config.listen_addr,
         port = config.port,
         "late-nethack host starting"

@@ -262,12 +262,15 @@ fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
         " thanks for hanging out ☕ https://ko-fi.com/mateuszpiorowski "
     );
 
+    // Each fallback keeps the blank cell on both sides of the link: the title
+    // is drawn over the bottom border, so a URL flush against `─` gets the
+    // glyph linkified along with it.
     let url_only = app_frame_sponsor_title(full_width - 1).expect("url-only sponsor should fit");
-    assert_eq!(line_text(&url_only), "https://ko-fi.com/mateuszpiorowski ");
+    assert_eq!(line_text(&url_only), " https://ko-fi.com/mateuszpiorowski ");
 
     let short_url =
         app_frame_sponsor_title(url_width - 1).expect("protocol-stripped sponsor should fit");
-    assert_eq!(line_text(&short_url), "ko-fi.com/mateuszpiorowski ");
+    assert_eq!(line_text(&short_url), " ko-fi.com/mateuszpiorowski ");
 
     let hidden = app_frame_sponsor_title(short_url_width - 1);
     assert!(hidden.is_none());

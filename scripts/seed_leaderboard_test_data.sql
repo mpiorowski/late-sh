@@ -125,6 +125,9 @@ DELETE FROM minesweeper_daily_wins w USING seed_players p WHERE w.user_id = p.us
 DELETE FROM rubiks_cube_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM le_word_daily_wins w USING seed_players p WHERE w.user_id = p.user_id;
 DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
+DELETE FROM mud_characters c USING seed_players p WHERE c.user_id = p.user_id;
+DELETE FROM door_runs r USING seed_players p WHERE r.user_id = p.user_id;
+DELETE FROM door_milestones m USING seed_players p WHERE m.user_id = p.user_id;
 
 -- Balances and a multi-event monthly chip ledger. Shop spending is present but
 -- intentionally excluded by the production monthly-earners query.
@@ -375,6 +378,142 @@ FROM seed_players p
 CROSS JOIN LATERAL generate_series(1, 20 + (49 - p.idx) * 4) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
 
+-- Lateania characters for the Games boards: paired levels so the experience
+-- tiebreak is visible, classes cycling the full roster, and the top half of
+-- the field carrying Frontier rooms (2000..=2999, 50 per zone) at spread
+-- depths. The blob shape mirrors the game's save schema; unknown fields
+-- default on load, and these users never log in anyway.
+INSERT INTO mud_characters (user_id, data)
+SELECT
+    p.user_id,
+    jsonb_build_object(
+        'version', 17,
+        'class', (ARRAY[
+            'warrior', 'mage', 'cleric', 'rogue', 'ranger', 'druid',
+            'necromancer', 'bard', 'monk', 'paladin', 'warlock', 'berserker',
+            'beastlord', 'skald', 'runemaster', 'valewalker', 'spiritmaster'
+        ])[1 + (p.idx % 17)],
+        'level', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2),
+        'xp', GREATEST(3, 50 - ((p.idx - 1) / 2) * 2) * 40000 + (48 - p.idx) * 977,
+        'hp', 200,
+        'gold', 50 * p.idx,
+        'visited',
+        CASE
+            WHEN p.idx <= 24 THEN jsonb_build_array(1, 5, 12, 2000, 2000 + (24 - p.idx) * 41)
+            ELSE jsonb_build_array(1, 5, 12)
+        END
+    )
+FROM seed_players p
+ON CONFLICT (user_id) DO UPDATE SET
+    data = EXCLUDED.data,
+    updated = current_timestamp;
+
+-- DCSS door boards: the first six players are winners (their runs end at the
+-- surface, depth 1, the way crawl really stamps a win), even indexes died
+-- this month and odd ones long ago, and every seventh player quit (quits stay
+-- off the wins board). source_file carries a seed: prefix so the global
+-- unique (game, source_file, source_offset) key can never collide with lines
+-- the real ingestion pipe lands.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'dcss',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 2 = 0 THEN (p.idx % 20) ELSE 40 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx <= 6 THEN 'win'
+        WHEN p.idx % 7 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    2000000 - p.idx * 37000,
+    CASE WHEN p.idx <= 6 THEN 1 ELSE GREATEST(2, 28 - (p.idx % 27)) END,
+    30000 + p.idx * 700,
+    '{}'::jsonb,
+    'seed:logfile',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 36;
+
+-- The winners' Orb milestones carry the real dive depth, exercising the dive
+-- board's milestones-over-runs union (a surface exit alone would rank them
+-- at depth 1).
+INSERT INTO door_milestones (game, user_id, kind, occurred_at, raw, source_file, source_offset)
+SELECT
+    'dcss',
+    p.user_id,
+    'orb',
+    current_timestamp - CASE WHEN p.idx % 2 = 0 THEN (p.idx % 20) ELSE 40 + p.idx END * interval '1 day',
+    jsonb_build_object('absdepth', (28 - p.idx)::text),
+    'seed:milestones',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 6;
+
+-- NetHack door boards, same shape shifted by four so the two doors' boards
+-- don't mirror each other: the first four players ascended (NetHack's maxlvl
+-- is already the deepest level reached, so no milestone union is needed —
+-- winners carry a real depth on the run row itself).
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'nethack',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 2 = 1 THEN (p.idx % 18) ELSE 35 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx BETWEEN 5 AND 8 THEN 'win'
+        WHEN p.idx % 9 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    3200000 - p.idx * 61000,
+    CASE WHEN p.idx BETWEEN 5 AND 8 THEN 45 + p.idx ELSE GREATEST(2, 30 - (p.idx % 29)) END,
+    45000 + p.idx * 900,
+    '{}'::jsonb,
+    'seed:xlogfile',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 32;
+
+-- The ascenders' Amulet pickup milestones (no depth payload; NetHack's dive
+-- board reads run maxlvl only).
+INSERT INTO door_milestones (game, user_id, kind, occurred_at, raw, source_file, source_offset)
+SELECT
+    'nethack',
+    p.user_id,
+    'amulet',
+    current_timestamp - CASE WHEN p.idx % 2 = 1 THEN (p.idx % 18) ELSE 35 + p.idx END * interval '1 day',
+    '{}'::jsonb,
+    'seed:livelog',
+    p.idx
+FROM seed_players p
+WHERE p.idx BETWEEN 5 AND 8;
+
+-- Brogue door boards, shifted again so no two doors mirror: players 9-11
+-- escaped, 12-13 mastered (both count on the wins board), every eleventh
+-- quit. Brogue has no milestone stream and the run row's deepestLevel is
+-- already the run maximum, so no milestone union is needed. The source_file
+-- mirrors the real per-player frame id shape.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT
+    'brogue',
+    p.user_id,
+    current_timestamp - CASE WHEN p.idx % 3 = 0 THEN (p.idx % 15) ELSE 30 + p.idx END * interval '1 day',
+    CASE
+        WHEN p.idx BETWEEN 9 AND 11 THEN 'win'
+        WHEN p.idx BETWEEN 12 AND 13 THEN 'mastery'
+        WHEN p.idx % 11 = 0 THEN 'quit'
+        ELSE 'death'
+    END,
+    24000 - p.idx * 430,
+    CASE
+        WHEN p.idx BETWEEN 9 AND 11 THEN 26
+        WHEN p.idx BETWEEN 12 AND 13 THEN 40
+        ELSE GREATEST(2, 24 - (p.idx % 23))
+    END,
+    9000 + p.idx * 300,
+    '{}'::jsonb,
+    'seed:players/lb_seed_' || p.idx || '/BrogueRunHistory.txt',
+    p.idx
+FROM seed_players p
+WHERE p.idx <= 28;
+
 -- Non-destructive current-player enrichment.
 INSERT INTO user_chips (user_id, balance)
 SELECT user_id, 7500 FROM seed_current_player
@@ -468,6 +607,42 @@ SELECT c.user_id, current_date - g.n, 1 + (g.n % 6)
 FROM seed_current_player c
 CROSS JOIN generate_series(0, 6) AS g(n)
 ON CONFLICT (user_id, puzzle_date) DO NOTHING;
+
+-- A mid-rank Lateania character, only when the player has none: a real save
+-- must never be overwritten, so this is insert-or-nothing, not upsert.
+INSERT INTO mud_characters (user_id, data)
+SELECT
+    user_id,
+    jsonb_build_object(
+        'version', 17,
+        'class', 'ranger',
+        'level', 29,
+        'xp', 29 * 40000,
+        'hp', 300,
+        'gold', 800,
+        'visited', jsonb_build_array(1, 5, 12, 2000, 2400)
+    )
+FROM seed_current_player
+ON CONFLICT (user_id) DO NOTHING;
+
+-- A representative mid-field DCSS death; real ingested runs are untouched
+-- (distinct seed: source_file).
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'dcss', user_id, current_timestamp - interval '3 days', 'death', 214000, 15, 41000, '{}'::jsonb, 'seed:logfile', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
+
+-- And a mid-field NetHack death to match.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'nethack', user_id, current_timestamp - interval '5 days', 'death', 388000, 18, 52000, '{}'::jsonb, 'seed:xlogfile', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
+
+-- And a mid-field Brogue death.
+INSERT INTO door_runs (game, user_id, ended_at, result, score, depth, turns, raw, source_file, source_offset)
+SELECT 'brogue', user_id, current_timestamp - interval '4 days', 'death', 12400, 14, 6200, '{}'::jsonb, 'seed:players/current/BrogueRunHistory.txt', 999999
+FROM seed_current_player
+ON CONFLICT (game, source_file, source_offset) DO NOTHING;
 
 INSERT INTO le_word_daily_wins (user_id, puzzle_date, score)
 SELECT c.user_id, current_date - 400 + g.n * 9, 1 + (g.n % 6)

@@ -3,9 +3,9 @@
 # =============================================================================
 
 locals {
-  livekit_host      = "${local.livekit_subdomain}.${var.DOMAIN}"
+  livekit_host      = "${local.livekit_subdomain}.${local.domain}"
   livekit_url       = "wss://${local.livekit_host}"
-  livekit_whip_host = "${local.livekit_whip_subdomain}.${var.DOMAIN}"
+  livekit_whip_host = "${local.livekit_whip_subdomain}.${local.domain}"
 
   livekit_config = yamlencode({
     port = 7880

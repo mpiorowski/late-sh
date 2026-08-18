@@ -12,12 +12,16 @@ use crate::app::{
     lobby::house::{
         game_ui::{
             draw_game_frame_with_info_sidebar, draw_game_overlay, info_label_value, info_tagline,
-            key_hint, payout_cooldown_label,
+            key_hint,
         },
         ssnake::{
             levels::{Cell, MAX_HEIGHT, SsnakeLevel},
-            state::{MAX_SEATS, Motion, Pos, SsnakeColor, SsnakeOutcome, SsnakePhase, State},
-            svc::{SSNAKE_WIN_CHIPS, SSNAKE_WIN_PAYOUT_COOLDOWN, SsnakeSnapshot},
+            settings::{
+                SSNAKE_BONUS_FOOD_MULTIPLIER, SSNAKE_CLEAR_CHIPS, SSNAKE_CRASH_CHIPS,
+                SSNAKE_EDGE_BONUS_CHIPS, SSNAKE_FOOD_CHIPS,
+            },
+            state::{MAX_SEATS, Motion, Pos, SsnakeColor, SsnakePhase, State},
+            svc::{SsnakeChipKind, SsnakePlayerSnapshot, SsnakeSnapshot},
         },
     },
 };
@@ -32,10 +36,24 @@ use crate::usernames::UsernameLookup;
 // as a small box; the map itself never changes.
 
 const SIDEBAR_WIDTH: u16 = 28;
+/// Usable columns inside the sidebar: `draw_info_sidebar` indents by 2 off
+/// its own left border. Every line is fitted to this so none of them wrap,
+/// which is what lets `sidebar_height` count rows exactly.
+const SIDEBAR_TEXT_WIDTH: usize = SIDEBAR_WIDTH as usize - 2;
+
+/// Truncate to `width` columns, marking the cut so a clipped name does not
+/// read as someone's actual handle.
+fn fit(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
 
 // ── Arena palette ──────────────────────────────────────────────
-// Very block, always two snakes: green and red. Walls keep the DOS
-// brick-brown of the original; warp tunnels hint in dim blue.
+// Very block, up to five snakes. Walls keep the DOS brick-brown of the
+// original; warp tunnels hint in dim blue.
 const ARENA_BG: Color = Color::Rgb(12, 14, 18);
 const WALL: Color = Color::Rgb(146, 92, 46);
 const WARP: Color = Color::Rgb(42, 62, 96);
@@ -47,9 +65,18 @@ const BLUE_HEAD: Color = Color::Rgb(96, 196, 255);
 const BLUE_BODY: Color = Color::Rgb(40, 110, 176);
 const PURPLE_HEAD: Color = Color::Rgb(198, 118, 255);
 const PURPLE_BODY: Color = Color::Rgb(122, 62, 170);
+// The fifth snake sits in blue-green, far enough from both the yellow-green
+// of seat one and the sky blue of seat three to read at a glance.
+const CYAN_HEAD: Color = Color::Rgb(86, 240, 226);
+const CYAN_BODY: Color = Color::Rgb(30, 140, 134);
+// Food reads on two independent channels so the two bonuses never get
+// mistaken for each other: hue says what it pays (gold plain, pink triple),
+// and pulsing is reserved for the one that ends the lap. Nothing else on the
+// board blinks.
 const POINT: Color = Color::Rgb(255, 200, 84);
-const LIFE_POINT: Color = Color::Rgb(255, 108, 198);
-const LIFE_POINT_BLINK: Color = Color::Rgb(255, 214, 240);
+const BONUS_FOOD: Color = Color::Rgb(255, 108, 198);
+const FINAL_FOOD: Color = Color::Rgb(255, 116, 24);
+const FINAL_FOOD_BLINK: Color = Color::Rgb(255, 248, 220);
 
 pub fn preferred_height(state: &State, area: Rect) -> u16 {
     let arena_rows = state
@@ -66,12 +93,38 @@ pub fn preferred_height(state: &State, area: Rect) -> u16 {
         .unwrap_or(MAX_HEIGHT.div_ceil(2) as u16);
     // +2 border, +2 breathing room so the board never sits cramped against
     // the pane edges (centering turns the slack into margins).
-    (arena_rows + 4).min(area.height.max(1))
+    let arena_need = arena_rows + 4;
+
+    // The sidebar is unscrolled, so the only way to guarantee its text is
+    // readable is to ask for a pane tall enough to hold it. Chat keeps its
+    // floor either way — this table's chat is the least-used part of it, but
+    // it must not vanish.
+    let need = arena_need.max(sidebar_height(state));
+    let ceiling = area
+        .height
+        .saturating_sub(CHAT_FLOOR)
+        .max(arena_need.min(area.height));
+    need.min(ceiling).min(area.height.max(1)).max(1)
 }
+
+/// Rows the sidebar wants: every line it would render, plus nothing. Lines
+/// are built for real rather than counted by hand so the two can never drift
+/// — and because every line is truncated to the sidebar width, none of them
+/// wrap, which makes the count exact.
+fn sidebar_height(state: &State) -> u16 {
+    let empty = std::collections::HashMap::new();
+    let lookup = UsernameLookup::new(&empty, None);
+    info_lines(state, &lookup).len() as u16
+}
+
+/// Rows always left to the embedded chat plus its spacer, however much the
+/// game would like. Deliberately small: people come to this table to play,
+/// and the chat is one keypress from the room's own screen.
+const CHAT_FLOOR: u16 = 6;
 
 /// Rows the embedded chat keeps when the zoomed arena claims the rest of
 /// the screen (plus the one-row spacer above it).
-const ZOOM_CHAT_FLOOR: u16 = 8;
+const ZOOM_CHAT_FLOOR: u16 = CHAT_FLOOR;
 
 /// Whether the pane should be sized for the 2x zoom: the doubled arena must
 /// fit beside the sidebar, and chat below must keep at least its floor.
@@ -137,6 +190,11 @@ fn draw_compact(frame: &mut Frame, area: Rect, state: &State) {
             snapshot.seat_limit, level_name, snapshot.speed_label
         ))
         .alignment(Alignment::Center),
+        Line::from(format!(
+            "this food: {} · crash -{SSNAKE_CRASH_CHIPS}",
+            snapshot.food_chips()
+        ))
+        .alignment(Alignment::Center),
     ];
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -182,28 +240,47 @@ fn draw_arena(frame: &mut Frame, area: Rect, state: &State) {
 
     let border_color = match snapshot.phase {
         SsnakePhase::Running => theme::AMBER(),
-        SsnakePhase::Finished => theme::SUCCESS(),
-        SsnakePhase::Waiting => theme::BORDER(),
+        SsnakePhase::Idle => theme::BORDER(),
     };
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(status_line(snapshot))
         .title_alignment(Alignment::Center)
         .style(Style::default().bg(ARENA_BG));
+    // Payout pops ride the bottom border, out of the playfield: arcade
+    // feedback that never covers a cell you are about to steer into.
+    if let Some(pops) = chip_pop_line(state) {
+        block = block.title_bottom(pops.right_aligned());
+    }
     let inner = block.inner(arena);
     frame.render_widget(block, arena);
     frame.render_widget(Paragraph::new(board_lines(snapshot, level, scale)), inner);
 
-    if snapshot.phase == SsnakePhase::Finished {
-        let (heading, subtitle, color) = outcome_overlay(snapshot);
-        draw_game_overlay(frame, inner, heading, &subtitle, color);
+    // The countdown goes over the board, not off in the sidebar: it is the
+    // one moment the player has nothing to do but look at the new arena.
+    if snapshot.is_frozen() {
+        let (heading, color) = countdown_overlay(snapshot);
+        draw_game_overlay(frame, inner, heading, &level.name, color);
     }
 }
 
+/// The post-shuffle countdown, one second a step: 3, 2, 1, then GO on the
+/// last second before steering unlocks.
+fn countdown_overlay(snapshot: &SsnakeSnapshot) -> (&'static str, Color) {
+    match snapshot.freeze_millis_left {
+        millis if millis > 3_000 => ("3", theme::AMBER()),
+        millis if millis > 2_000 => ("2", theme::AMBER()),
+        millis if millis > 1_000 => ("1", theme::AMBER()),
+        _ => ("GO", theme::SUCCESS()),
+    }
+}
+
+/// Fallback splash for the arena pane when no level could be loaded at all
+/// (every level asset failed to parse). The arena normally always has a
+/// board, even with nobody sitting at it.
 fn waiting_lines(state: &State) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
-    let seated = snapshot.seats.iter().filter(|seat| seat.is_some()).count();
     vec![
         Line::raw(""),
         Line::from(Span::styled(
@@ -213,22 +290,14 @@ fn waiting_lines(state: &State) -> Vec<Line<'static>> {
         Line::raw(""),
         Line::from(Span::styled(
             format!(
-                "Up to {} snakes, one arena, shared food.",
+                "Up to {} snakes, one endless arena, shared food.",
                 snapshot.seat_limit
             ),
             Style::default().fg(theme::TEXT_DIM()),
         )),
-        Line::from(Span::styled(
-            format!("{} · {} pace", snapshot.arena_choice, snapshot.speed_label),
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
         Line::raw(""),
         Line::from(Span::styled(
-            if seated >= 2 {
-                "Press n to start."
-            } else {
-                "Press s to take a seat."
-            },
+            "No arena could be loaded.",
             Style::default().fg(theme::AMBER()),
         )),
     ]
@@ -290,12 +359,7 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
         }
     }
     if let Some(point) = snapshot.point {
-        let blink = snapshot.tick_count.is_multiple_of(2);
-        colors[point.y as usize * level.width + point.x as usize] = if snapshot.life_point {
-            if blink { LIFE_POINT } else { LIFE_POINT_BLINK }
-        } else {
-            POINT
-        };
+        colors[point.y as usize * level.width + point.x as usize] = food_color(snapshot);
     }
     for seat_index in 0..MAX_SEATS {
         let player = &snapshot.players[seat_index];
@@ -319,6 +383,23 @@ fn cell_colors(snapshot: &SsnakeSnapshot, level: &SsnakeLevel) -> Vec<Color> {
     colors
 }
 
+/// Which food is on the board, in one glance. Only the lap-ending food
+/// pulses — pink sits still, so a blinking cell always means "this one
+/// reshuffles the arena" and never "this one pays triple".
+fn food_color(snapshot: &SsnakeSnapshot) -> Color {
+    if snapshot.is_final_food() {
+        return if snapshot.tick_count.is_multiple_of(2) {
+            FINAL_FOOD
+        } else {
+            FINAL_FOOD_BLINK
+        };
+    }
+    if snapshot.bonus_food {
+        return BONUS_FOOD;
+    }
+    POINT
+}
+
 fn paint(colors: &mut [Color], level: &SsnakeLevel, pos: Pos, color: Color) {
     let index = pos.y as usize * level.width + pos.x as usize;
     if index < colors.len() {
@@ -328,79 +409,187 @@ fn paint(colors: &mut [Color], level: &SsnakeLevel, pos: Pos, color: Color) {
 
 // ── Info sidebar ───────────────────────────────────────────────
 
+/// The sidebar is a plain unscrolled `Paragraph`, so anything past the pane
+/// height is silently clipped. Order is therefore load-bearing: the keys go
+/// first (a newcomer needs them before anything else), then who is playing,
+/// then the live payout numbers, and only then the rules — which also live
+/// in the `?` guide, so they are the safe thing to lose off the bottom.
 fn info_lines(state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
-    let mut lines = vec![
-        info_tagline("The 90s DOS classic,"),
-        info_tagline("now head to head."),
-        Line::raw(""),
-        section_header("Snakes"),
-    ];
+    let moving = snapshot.moving_snakes;
+    let mut lines = control_lines(state);
+    lines.push(Line::raw(""));
+    lines.push(section_header("Snakes"));
+
+    // Every seat gets its colour row, taken or not: the roster is how a
+    // spectator learns which snake would be theirs, and the pane is now
+    // sized to fit it.
     for seat in 0..snapshot.seat_limit.min(MAX_SEATS) {
         lines.extend(player_lines(seat, state, usernames));
     }
+
     lines.push(Line::raw(""));
-    let arena_name = match (snapshot.phase, snapshot.level.as_ref()) {
-        (SsnakePhase::Running, Some(level)) => level.name.clone(),
-        _ => snapshot.arena_choice.clone(),
-    };
-    lines.push(info_label_value("Arena", arena_name, theme::TEXT_BRIGHT()));
-    if snapshot.phase == SsnakePhase::Running {
-        lines.push(info_label_value(
-            "Food left",
-            snapshot.points_left.max(0).to_string(),
-            POINT,
-        ));
+    lines.push(info_label_value(
+        "Arena",
+        fit(
+            snapshot
+                .level
+                .as_ref()
+                .map(|level| level.name.as_str())
+                .unwrap_or("none"),
+            SIDEBAR_TEXT_WIDTH - 11,
+        ),
+        theme::TEXT_BRIGHT(),
+    ));
+    lines.extend([
+        info_label_value("Food left", snapshot.points_left.max(0).to_string(), POINT),
+        info_label_value("Pace", snapshot.speed_label.clone(), theme::AMBER()),
+        // The multiplier is the whole point of the room, so it gets the live
+        // arithmetic spelled out rather than a bare rate.
+        info_label_value(
+            "Moving now",
+            format!("{moving} snake{}", if moving == 1 { "" } else { "s" }),
+            theme::TEXT_BRIGHT(),
+        ),
+        info_label_value(
+            "This food",
+            snapshot.food_chips().to_string(),
+            theme::SUCCESS(),
+        ),
+        info_tagline(&food_breakdown(snapshot)),
+        info_label_value(
+            "Arena clear",
+            format!(
+                "{SSNAKE_CLEAR_CHIPS} × {} = {}",
+                moving.max(1),
+                snapshot.clear_chips()
+            ),
+            theme::SUCCESS(),
+        ),
+        info_label_value("Crash", format!("-{SSNAKE_CRASH_CHIPS}"), theme::ERROR()),
+    ]);
+    if let Some(skip) = skip_status(snapshot) {
+        lines.push(skip);
     }
     lines.extend([
-        info_label_value("Pace", snapshot.speed_label.clone(), theme::AMBER()),
-        info_label_value("Prize", SSNAKE_WIN_CHIPS.to_string(), theme::SUCCESS()),
-        info_label_value(
-            "Cooldown",
-            payout_cooldown_label(SSNAKE_WIN_PAYOUT_COOLDOWN),
-            theme::TEXT_DIM(),
-        ),
-        info_label_value("State", state_label(snapshot), theme::SUCCESS()),
         Line::raw(""),
-        section_header("How it plays"),
-        info_tagline("Eat food, grow, don't crash."),
-        info_tagline("Pink food grants a life."),
-        info_tagline("Crash: lose a life, respawn."),
-        info_tagline("Last food ends the match;"),
-        info_tagline("highest score wins."),
-        Line::raw(""),
-        section_header("Controls"),
+        section_header("House rules"),
+        info_tagline("Food pays times the MOVING"),
+        info_tagline("snakes — parked ones count"),
+        info_tagline("for nobody."),
+        info_tagline(&format!(
+            "Pink {SSNAKE_BONUS_FOOD_MULTIPLIER}x, +{SSNAKE_EDGE_BONUS_CHIPS} per wall it"
+        )),
+        info_tagline("touches. Blinking orange food"),
+        info_tagline("ends the arena for a bonus."),
+        info_tagline(&format!("Crash -{SSNAKE_CRASH_CHIPS}. Standing up while")),
+        info_tagline("moving costs the same — no"),
+        info_tagline("bailing out of a crash."),
+        info_tagline("Your take is pending until"),
+        info_tagline("you stand up; that is when"),
+        info_tagline("it reaches your balance."),
     ]);
-    if state.seat_index().is_some() {
-        if snapshot.phase == SsnakePhase::Running {
-            lines.push(key_hint("arrows/wasd", "steer"));
-        } else {
-            lines.push(key_hint("arrows/[ ]", "choose arena"));
-            lines.push(key_hint("n", "start match"));
-        }
-        lines.extend([key_hint("l", "leave seat"), key_hint("q", "leave room")]);
-    } else {
-        lines.extend([
-            key_hint("s/space", "take a seat"),
-            key_hint("q", "leave room"),
-        ]);
-    }
     lines
 }
 
-/// Two lines per seated player during a match; one line while waiting.
+fn control_lines(state: &State) -> Vec<Line<'static>> {
+    control_block(state.seat_index().is_some())
+}
+
+/// The skip tally, or why the key will not do anything right now. `None`
+/// while the table is empty and there is nobody to reach consensus with.
+fn skip_status(snapshot: &SsnakeSnapshot) -> Option<Line<'static>> {
+    let (cast, seated) = snapshot.skip_tally();
+    if seated == 0 {
+        return None;
+    }
+    if snapshot.skip_cooldown_millis_left > 0 {
+        return Some(info_label_value(
+            "Skip vote",
+            format!("in {}s", snapshot.skip_cooldown_secs_left()),
+            theme::TEXT_DIM(),
+        ));
+    }
+    Some(info_label_value(
+        "Skip vote",
+        format!("{cast}/{seated}"),
+        if cast > 0 {
+            theme::AMBER()
+        } else {
+            theme::TEXT_DIM()
+        },
+    ))
+}
+
+/// The whole keybinding guide, and deliberately the same four rows whether
+/// or not you are seated: a spectator deciding whether to join needs to see
+/// what they would be able to do, not just how to sit.
+fn control_block(seated: bool) -> Vec<Line<'static>> {
+    // Dim the row that is not available right now rather than hiding it, so
+    // the block never changes shape under the reader.
+    let hint = |key: &str, desc: &str, available: bool| {
+        if available {
+            key_hint(key, desc)
+        } else {
+            Line::from(Span::styled(
+                format!("{key:<12}{desc}"),
+                Style::default().fg(theme::TEXT_FAINT()),
+            ))
+        }
+    };
+    vec![
+        section_header("Controls"),
+        hint("s / space", "sit down", !seated),
+        hint("arrows/wasd", "steer", seated),
+        hint("v", "vote skip", seated),
+        hint("l", "stand up", seated),
+        key_hint("q", "leave table"),
+        info_tagline("Your snake waits until you"),
+        info_tagline("steer it. No U-turns."),
+    ]
+}
+
+/// Where the number above came from, in one 28-column line: the base, the
+/// wall-edge bonus this particular food happens to carry, the pink multiple,
+/// and the moving-snake count. Terms that are not in play are left out so
+/// the common case reads as short as it is.
+fn food_breakdown(snapshot: &SsnakeSnapshot) -> String {
+    let mut parts = vec![format!("  {SSNAKE_FOOD_CHIPS}")];
+    if snapshot.food_wall_edges > 0 {
+        parts.push(format!(
+            "+{} edge",
+            SSNAKE_EDGE_BONUS_CHIPS * snapshot.food_wall_edges
+        ));
+    }
+    if snapshot.bonus_food {
+        parts.push(format!("×{SSNAKE_BONUS_FOOD_MULTIPLIER} pink"));
+    }
+    if snapshot.moving_snakes > 1 {
+        parts.push(format!("×{} moving", snapshot.moving_snakes));
+    }
+    parts.join(" ")
+}
+
+/// Two lines per seated player: who they are, then what the arena has paid
+/// them since they sat down and whether they are actually slithering.
 fn player_lines(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> Vec<Line<'static>> {
     let snapshot = state.snapshot();
     let color = SsnakeColor::for_seat(seat);
     let user = snapshot.seats[seat];
     let is_self = user.is_some_and(|uid| state.is_self(uid));
-    let name = match user {
-        Some(uid) => usernames
-            .get(&uid)
-            .cloned()
-            .unwrap_or_else(|| "snake".to_string()),
-        None => "open".to_string(),
-    };
+    // Row 1 spends 2 cols on the self marker and 7 on the colour, so a long
+    // handle has to be cut: letting it wrap would silently add a row and
+    // push the bottom of the sidebar off the pane.
+    let name = fit(
+        &match user {
+            Some(uid) => usernames
+                .get(&uid)
+                .cloned()
+                .unwrap_or_else(|| "snake".to_string()),
+            None => "open".to_string(),
+        },
+        SIDEBAR_TEXT_WIDTH - 9,
+    );
     let player = &snapshot.players[seat];
 
     // Row 1: marker + color label + name.
@@ -418,60 +607,46 @@ fn player_lines(seat: usize, state: &State, usernames: &UsernameLookup<'_>) -> V
         Span::styled(name, player_name_style(user, is_self)),
     ]);
 
-    // Row 2 (active match only): score left, hearts right — own clean row so
-    // name length never competes with the hearts.
-    if snapshot.phase != SsnakePhase::Waiting && user.is_some() {
-        let stats_line = if player.eliminated {
-            Line::from(Span::styled(
-                "  eliminated".to_string(),
-                Style::default().fg(theme::TEXT_DIM()),
-            ))
-        } else {
-            let mut spans: Vec<Span<'static>> = vec![Span::styled(
-                format!("  {} pts  ", player.score),
-                Style::default().fg(theme::TEXT_DIM()),
-            )];
-            spans.extend(heart_spans(player.lives, snapshot));
-            Line::from(spans)
-        };
-        vec![name_line, stats_line]
+    // Row 2 (seated only): session earnings and whether this snake is
+    // counting toward everyone's multiplier.
+    if user.is_some() {
+        vec![name_line, earnings_line(player, snapshot.skip_votes[seat])]
     } else {
         vec![name_line]
     }
 }
 
-/// Lives as hearts, Traffic-style: filled red hearts for remaining lives,
-/// hollow dim hearts for lives lost off the level's starting count.
-fn heart_spans(lives: i32, snapshot: &SsnakeSnapshot) -> Vec<Span<'static>> {
-    const MAX_HEART_GLYPHS: i32 = 8;
-    let lives = lives.max(0);
-    let max_lives = snapshot
-        .level
-        .as_ref()
-        .map(|level| level.lives)
-        .unwrap_or(lives);
-    let lost = max_lives.saturating_sub(lives).max(0);
-
-    if lives + lost > MAX_HEART_GLYPHS {
-        return vec![Span::styled(
-            format!("♥ x{lives}"),
-            Style::default()
-                .fg(theme::ERROR())
-                .add_modifier(Modifier::BOLD),
-        )];
+/// What the seat has run up since sitting down, plus the multiplier status.
+/// The word is "pending" on purpose: none of it is in the player's balance
+/// until they stand up, and a counter that read "chips" next to a number they
+/// cannot spend yet would be a lie. `parked` is the one that matters
+/// socially: it is why a full table can still be paying the lone rate.
+fn earnings_line(player: &SsnakePlayerSnapshot, voted_skip: bool) -> Line<'static> {
+    let (state_text, state_color) = match player.motion {
+        Motion::Moving(_) => ("moving", theme::SUCCESS()),
+        Motion::Dying => ("crashed", theme::ERROR()),
+        Motion::Idle => ("parked", theme::TEXT_DIM()),
+    };
+    let chips_color = if player.chips < 0 {
+        theme::ERROR()
+    } else {
+        theme::TEXT_DIM()
+    };
+    let mut spans = vec![
+        Span::styled(
+            format!("  {:+} pending  ", player.chips),
+            Style::default().fg(chips_color),
+        ),
+        Span::styled(state_text.to_string(), Style::default().fg(state_color)),
+    ];
+    // Who is already waiting on the rest of the table to agree.
+    if voted_skip {
+        spans.push(Span::styled(
+            " skip".to_string(),
+            Style::default().fg(theme::AMBER()),
+        ));
     }
-    vec![
-        Span::styled(
-            "♥ ".repeat(lives as usize),
-            Style::default()
-                .fg(theme::ERROR())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "♡ ".repeat(lost as usize),
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
-    ]
+    Line::from(spans)
 }
 
 fn player_name_style(user: Option<Uuid>, is_self: bool) -> Style {
@@ -499,10 +674,13 @@ fn section_header(text: &str) -> Line<'static> {
 
 /// Rendered as the arena border title so the board itself stays clean.
 fn status_line(snapshot: &SsnakeSnapshot) -> Line<'static> {
-    let color = match snapshot.phase {
-        SsnakePhase::Running => theme::AMBER(),
-        SsnakePhase::Finished => theme::SUCCESS(),
-        SsnakePhase::Waiting => theme::TEXT_DIM(),
+    let color = if snapshot.is_frozen() {
+        theme::SUCCESS()
+    } else {
+        match snapshot.phase {
+            SsnakePhase::Running => theme::AMBER(),
+            SsnakePhase::Idle => theme::TEXT_DIM(),
+        }
     };
     Line::from(Span::styled(
         format!(" {} ", status_text(snapshot)),
@@ -510,55 +688,64 @@ fn status_line(snapshot: &SsnakeSnapshot) -> Line<'static> {
     ))
 }
 
+/// The arena border title. While the board is turning it carries the two
+/// live numbers a player needs — food remaining and what the one on the
+/// board pays; during the post-shuffle hold it counts down instead, and
+/// idle it falls back to the last thing that happened.
 fn status_text(snapshot: &SsnakeSnapshot) -> String {
-    match snapshot.outcome {
-        Some(SsnakeOutcome::Winner { seat_index }) => {
-            format!("{} wins", SsnakeColor::for_seat(seat_index).label())
-        }
-        Some(SsnakeOutcome::Draw) => "Draw".to_string(),
-        // The sidebar already names the arena; keep the title to the one
-        // number that matters mid-match.
-        None if snapshot.phase == SsnakePhase::Running => {
-            format!("{} food left", snapshot.points_left.max(0))
-        }
-        None => snapshot.status_message.clone(),
+    // The count itself is on the board; the title just says why nothing moves.
+    if snapshot.is_frozen() {
+        return "New arena — get ready".to_string();
     }
+    if snapshot.phase == SsnakePhase::Running {
+        if snapshot.is_final_food() {
+            return format!(
+                "LAST food · {} chips + {} clear",
+                snapshot.food_chips(),
+                snapshot.clear_chips()
+            );
+        }
+        // "each" would be a lie: every food is priced on its own walls, and
+        // the pink roll, so the title quotes the one actually on the board.
+        return format!(
+            "{} food left · this one: {} chips",
+            snapshot.points_left.max(0),
+            snapshot.food_chips()
+        );
+    }
+    snapshot.status_message.clone()
 }
 
-fn state_label(snapshot: &SsnakeSnapshot) -> String {
-    match snapshot.outcome {
-        Some(SsnakeOutcome::Winner { seat_index }) => {
-            format!("{} won", SsnakeColor::for_seat(seat_index).label())
-        }
-        Some(SsnakeOutcome::Draw) => "draw".to_string(),
-        None => match snapshot.phase {
-            SsnakePhase::Running => "running".to_string(),
-            SsnakePhase::Waiting => "waiting".to_string(),
-            SsnakePhase::Finished => "finished".to_string(),
-        },
+/// The live payout pops, oldest first, as one right-aligned border strip.
+/// `None` while nothing has landed recently, which is most frames.
+fn chip_pop_line(state: &State) -> Option<Line<'static>> {
+    let pops = state.chip_pops();
+    if pops.is_empty() {
+        return None;
     }
+    let mut spans = vec![Span::raw(" ")];
+    for pop in pops {
+        let color = if pop.delta < 0 {
+            theme::ERROR()
+        } else {
+            theme::SUCCESS()
+        };
+        spans.push(Span::styled(
+            format!("{:+}{} ", pop.delta, chip_pop_suffix(pop.kind)),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
+    Some(Line::from(spans))
 }
 
-fn outcome_overlay(snapshot: &SsnakeSnapshot) -> (&'static str, String, Color) {
-    match snapshot.outcome {
-        Some(SsnakeOutcome::Winner { seat_index }) => (
-            "Winner",
-            format!(
-                "{} wins · press n",
-                SsnakeColor::for_seat(seat_index).label()
-            ),
-            theme::SUCCESS(),
-        ),
-        Some(SsnakeOutcome::Draw) => (
-            "Draw",
-            "dead even · press n".to_string(),
-            theme::TEXT_MUTED(),
-        ),
-        None => (
-            "Match over",
-            "press n to play again".to_string(),
-            theme::AMBER(),
-        ),
+/// What the pop calls itself. Plain food is the common case and stays bare,
+/// so the eye only stops on the ones worth stopping for.
+fn chip_pop_suffix(kind: SsnakeChipKind) -> &'static str {
+    match kind {
+        SsnakeChipKind::Food => "",
+        SsnakeChipKind::BonusFood => " pink",
+        SsnakeChipKind::ArenaClear => " cleared",
+        SsnakeChipKind::Crash => " crash",
     }
 }
 
@@ -575,15 +762,16 @@ fn key_line(state: &State) -> Line<'static> {
         ));
     };
 
+    // One row, so unlike the sidebar block this one only carries the keys
+    // that do something right now.
     let mut spans = Vec::new();
     if seated {
         hint(&mut spans, "arrows/wasd", "steer");
-        hint(&mut spans, "n", "start");
-        hint(&mut spans, "l", "leave seat");
+        hint(&mut spans, "l", "stand up");
     } else {
-        hint(&mut spans, "s/space", "take a seat");
+        hint(&mut spans, "s/space", "sit down");
     }
-    hint(&mut spans, "q", "leave room");
+    hint(&mut spans, "q", "leave table");
 
     if let Some(last) = spans.last_mut() {
         let trimmed = last.content.trim_end().to_string();
@@ -604,6 +792,7 @@ fn head_color_of(color: SsnakeColor) -> Color {
         SsnakeColor::Red => RED_HEAD,
         SsnakeColor::Blue => BLUE_HEAD,
         SsnakeColor::Purple => PURPLE_HEAD,
+        SsnakeColor::Cyan => CYAN_HEAD,
     }
 }
 
@@ -613,6 +802,7 @@ fn body_color(seat: usize) -> Color {
         SsnakeColor::Red => RED_BODY,
         SsnakeColor::Blue => BLUE_BODY,
         SsnakeColor::Purple => PURPLE_BODY,
+        SsnakeColor::Cyan => CYAN_BODY,
     }
 }
 

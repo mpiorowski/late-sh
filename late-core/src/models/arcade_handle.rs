@@ -65,6 +65,24 @@ pub enum ClaimOutcome {
 }
 
 impl ArcadeHandle {
+    /// The live account behind a handle, matched case-insensitively (the
+    /// door hosts' log files carry the handle as the playname). Graveyard
+    /// rows (`user_id` NULL after account deletion) return `None`: their log
+    /// lines must never attribute to anyone.
+    pub async fn find_user_by_handle(
+        client: &impl deadpool_postgres::GenericClient,
+        handle: &str,
+    ) -> Result<Option<Uuid>> {
+        let row = client
+            .query_opt(
+                "SELECT user_id FROM arcade_handles
+                 WHERE lower(handle) = lower($1) AND user_id IS NOT NULL",
+                &[&handle],
+            )
+            .await?;
+        Ok(row.and_then(|r| r.get("user_id")))
+    }
+
     /// The account's claimed handle, if any.
     pub async fn find_by_user_id(
         client: &impl deadpool_postgres::GenericClient,

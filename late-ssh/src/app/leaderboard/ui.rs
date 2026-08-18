@@ -2,22 +2,22 @@
 //! monthly and all-time standings on the right. One renderer serves every
 //! board; per-board facts (title, hint, windows) come from `state::Board`.
 
-use late_core::models::leaderboard::{LeaderboardData, RankedEntry};
+use late_core::models::leaderboard::{DoorGame, LeaderboardData, RankedEntry};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
-use crate::app::common::{
-    primitives::{hint_line, thousands},
-    theme,
+use crate::app::{
+    common::{primitives::hint_line, theme},
+    profile_modal::badges,
 };
 
-use super::state::{Board, LeaderboardPageState};
+use super::state::{Board, LeaderboardPageState, Standings};
 
 const RAIL_WIDTH: u16 = 24;
 const WINDOW_GAP_MAX: u16 = 3;
@@ -71,25 +71,43 @@ fn draw_rail(frame: &mut Frame, area: Rect, state: &LeaderboardPageState) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
 }
 
-/// The board rail. The bespoke boards lead under one "Boards" header; the
-/// roster boards get one header per group. Returns the built lines and the
+/// The board rail. The bespoke boards lead under a "Boards" header, every
+/// game board follows under "Games" (Lateania, then the door triples), and
+/// the roster boards get one header per group. Returns the built lines and the
 /// index of the selected row, so the caller can keep it scrolled into view.
 fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
     let boards = state.boards();
+    let first_game = boards.iter().position(|board| {
+        matches!(
+            board,
+            Board::DoorWins(_)
+                | Board::DoorDepth(_)
+                | Board::DoorScore(_)
+                | Board::LateaniaAdventurers
+                | Board::LateaniaFrontier
+        )
+    });
     let first_daily = boards
         .iter()
         .position(|board| matches!(board, Board::Daily(_)));
     let first_score = boards
         .iter()
         .position(|board| matches!(board, Board::Score(_)));
+    let badge_guide = boards
+        .iter()
+        .position(|board| matches!(board, Board::BadgeGuide));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = 0usize;
     for (index, board) in boards.iter().copied().enumerate() {
-        let header = if Some(index) == first_daily {
+        let header = if Some(index) == first_game {
+            Some("Games")
+        } else if Some(index) == first_daily {
             Some("Daily Wins")
         } else if Some(index) == first_score {
             Some("High Scores")
+        } else if Some(index) == badge_guide {
+            Some("Reference")
         } else if index == 0 {
             Some("Boards")
         } else {
@@ -139,9 +157,16 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
         rows[1],
     );
 
-    let monthly = board.monthly(view.data);
-    match board.all_time(view.data) {
-        Some(all_time) => {
+    if matches!(board, Board::BadgeGuide) {
+        frame.render_widget(
+            Paragraph::new(badges::guide_lines()).wrap(Wrap { trim: false }),
+            rows[3],
+        );
+        return;
+    }
+
+    match board.standings(view.data) {
+        Standings::Paired { monthly, all_time } => {
             let capacity = (rows[3].height as usize).saturating_sub(1);
             let columns = standings_columns(
                 rows[3],
@@ -151,8 +176,14 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
             draw_window(frame, columns[0], "monthly", monthly, board, view.user_id);
             draw_window(frame, columns[1], "all-time", all_time, board, view.user_id);
         }
-        None => {
-            draw_window(frame, rows[3], "this month", monthly, board, view.user_id);
+        Standings::MonthlyOnly(entries) => {
+            draw_window(frame, rows[3], "this month", entries, board, view.user_id);
+        }
+        Standings::AllTimeOnly(entries) => {
+            draw_window(frame, rows[3], "all time", entries, board, view.user_id);
+        }
+        Standings::Snapshot(entries) => {
+            draw_window(frame, rows[3], "right now", entries, board, view.user_id);
         }
     }
 }
@@ -320,45 +351,68 @@ fn entry_line(entry: &RankedEntry, board: Board, own: bool, width: usize) -> Lin
     };
 
     let rank = format!("  #{:<3}", entry.rank);
-    let value = entry_value(entry, board);
+    let value = board.format_value(entry.value);
+
+    // The note is decoration: it renders only when the row fits untruncated
+    // with it, otherwise the name keeps the room.
+    let fixed = rank.chars().count() + value.chars().count() + 2;
+    let note = entry
+        .note
+        .as_deref()
+        .map(|note| format!(" · {note}"))
+        .filter(|note| entry.username.chars().count() + note.chars().count() + fixed <= width);
+    let note_width = note.as_ref().map_or(0, |note| note.chars().count());
 
     // Right-align within the window's compact content width, leaving two cells
     // between the longest visible name and its value.
-    let name_budget = width.saturating_sub(rank.chars().count() + value.chars().count() + 2);
+    let name_budget =
+        width.saturating_sub(rank.chars().count() + note_width + value.chars().count() + 2);
     let name = truncate(&entry.username, name_budget);
-    let pad =
-        width.saturating_sub(rank.chars().count() + name.chars().count() + value.chars().count());
-    Line::from(vec![
+    let pad = width.saturating_sub(
+        rank.chars().count() + name.chars().count() + note_width + value.chars().count(),
+    );
+    let mut spans = vec![
         Span::styled(rank, rank_style),
         Span::styled(name, name_style),
-        Span::raw(" ".repeat(pad.max(2))),
-        Span::styled(value, Style::default().fg(theme::TEXT_BRIGHT())),
-    ])
+    ];
+    if let Some(note) = note {
+        spans.push(Span::styled(note, Style::default().fg(theme::TEXT_DIM())));
+    }
+    spans.push(Span::raw(" ".repeat(pad.max(2))));
+    spans.push(Span::styled(
+        value,
+        Style::default().fg(theme::TEXT_BRIGHT()),
+    ));
+    Line::from(spans)
 }
 
 fn entry_natural_width(entry: &RankedEntry, board: Board) -> usize {
     let rank_width = format!("  #{:<3}", entry.rank).chars().count();
-    let value_width = entry_value(entry, board).chars().count();
+    let value_width = board.format_value(entry.value).chars().count();
+    let note_width = entry
+        .note
+        .as_deref()
+        .map_or(0, |note| " · ".chars().count() + note.chars().count());
 
-    rank_width + entry.username.chars().count() + 2 + value_width
-}
-
-fn entry_value(entry: &RankedEntry, board: Board) -> String {
-    let mut value = thousands(entry.value);
-    let label = board.value_label();
-    if !label.is_empty() {
-        value.push(' ');
-        value.push_str(label);
-    }
-    value
+    rank_width + entry.username.chars().count() + note_width + 2 + value_width
 }
 
 fn empty_copy(board: Board) -> &'static str {
     match board {
+        Board::LateaniaAdventurers => "no adventurers yet, roll a character in the Games hub",
+        Board::LateaniaFrontier => "no one has braved the Frontier yet",
+        Board::DoorWins(DoorGame::Dcss) => "no wins yet, the Orb awaits",
+        Board::DoorWins(DoorGame::Nethack) => "no ascensions yet, the Amulet awaits",
+        Board::DoorWins(DoorGame::Brogue) => "no escapes yet, depth 26 awaits",
+        Board::DoorDepth(_) => "no dives recorded yet",
+        Board::DoorScore(_) => "no scored runs yet",
         Board::TopChips => "no chip earnings yet this month",
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::Daily(_) => "no wins yet, be the first",
         Board::Score(_) => "no scores yet, be the first",
+        // Unreachable: draw_detail special-cases BadgeGuide before calling
+        // standings, so empty_copy never sees it.
+        Board::BadgeGuide => "",
     }
 }
 

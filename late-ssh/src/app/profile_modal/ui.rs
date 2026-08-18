@@ -363,10 +363,6 @@ fn build_overview_lines(state: &ProfileModalState, width: usize) -> Vec<Line<'st
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(section_heading("Badge Codes"));
-    lines.extend(badges::legend_lines());
-
     lines
 }
 

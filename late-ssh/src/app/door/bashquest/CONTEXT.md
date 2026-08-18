@@ -34,7 +34,7 @@ Core shape:
 - While Running, raw client bytes are forwarded straight to the host→child (minus mouse/paste noise) — bashquest.sh, not late.sh, interprets keys. There is **no** key remap: bashquest.sh is menu- and prompt-driven, not modal like a roguelike, so there's no help key worth intercepting. There is also **no detach**: unlike the roguelike doors, leaving the screen always tears the session down (see §3), matching Usurper/dopewars' shape rather than nethack/DCSS/brogue's.
 - **Persistence: a single shared, persistent HOME**, not per-player (unlike nethack/DCSS's per-`-u`/`-name` playground). bashquest.sh keeps `users.db` and every player's `<name>.save` under `$HOME/.bashquest`; every session gets the *same* `LATE_BASHQUEST_DATA_DIR` as `HOME`, because bashquest.sh's own in-game leaderboard (`leaderboard()`) only means anything if every late.sh player's save lands in the same place. bashquest.sh saves continuously — after nearly every state-changing action (wrong answer, hint, skip, level/tier complete, graduation), not just on explicit logout — so there is **no SIGHUP-save dance** on the host: teardown is a plain kill, same as dopewars, and the worst case loss is the single in-flight unanswered challenge.
 
-The door is gated behind `LATE_BASHQUEST_ENABLED` (default `false`); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
+The door is gated by the `bashquest_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client).
 
 ---
 
@@ -120,14 +120,11 @@ Input capture contract (client side):
 
 ## 6. Configuration And Deploy [VOLATILE]
 
-### Client config (env → `Config` → `SessionConfig` → `App`)
-- `LATE_BASHQUEST_ENABLED` (default `false`): when false, `connect` is a no-op and the launcher shows "Currently unavailable".
-- `LATE_BASHQUEST_HOST` (default `127.0.0.1`): the host service. In compose it's `service-bashquest`; in prod the Service `late-bashquest-sv`.
-- `LATE_BASHQUEST_PORT` (default `2329`).
-- `LATE_BASHQUEST_SECRET`: shared secret; **must equal the host's**. Required when enabled.
+### Client config (`late-ssh/src/config.rs` profile → `SessionConfig` → `App`)
+- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-bashquest`, prod `late-bashquest-sv`, port 2330); `LATE_BASHQUEST_SECRET` is the only env the client reads (must equal the host's).
 
 ### Host config (`late-bashquest` env)
-- `LATE_BASHQUEST_SECRET` (required), `LATE_BASHQUEST_BIN` (default `/usr/local/bin/bashquest.sh`), `LATE_BASHQUEST_DATA_DIR` (default `/var/lib/late-bashquest`, the one shared persistent HOME on the PVC), `LATE_BASHQUEST_LISTEN_ADDR` (default `0.0.0.0`), `LATE_BASHQUEST_PORT` (default `2329`), `LATE_BASHQUEST_IDLE_TIMEOUT`.
+- `LATE_BASHQUEST_SECRET` (required), `LATE_BASHQUEST_BIN` (default `/usr/local/bin/bashquest.sh`), `LATE_BASHQUEST_DATA_DIR` (default `/var/lib/late-bashquest`, the one shared persistent HOME on the PVC), `LATE_BASHQUEST_LISTEN_ADDR` (default `0.0.0.0`), `LATE_BASHQUEST_PORT` (default `2330`), `LATE_BASHQUEST_IDLE_TIMEOUT`.
 
 ### Binary sourcing — **pinned commit, not a compiled build**
 - Unlike every other door, there is nothing to compile: `bashquest.sh` is fetched by exact commit SHA and SHA-256-verified in `docker/doors/bashquest.Dockerfile` (`bashquest-build` stage), then `chmod 0755`'d. Bump `BASHQUEST_COMMIT`/`BASHQUEST_URL`/`BASHQUEST_SHA256` together when pulling in a newer upstream version, and update `NOTICE`.
@@ -135,13 +132,13 @@ Input capture contract (client side):
 
 ### Images (Dockerfile)
 - `base` copies the verified script to `/usr/local/bin/bashquest.sh` (from the `bashquest-build` stage) so `dev-bashquest` (which derives from `base`) can run it; prod ships the same copy in `runtime-bashquest`. `late-bashquest` (the host binary) builds in its own `builder-bashquest` cargo-chef stage, same shape as every other door host.
-- `Makefile` + `.env` thread `LATE_BASHQUEST_ENABLED=1` / `LATE_BASHQUEST_HOST=service-bashquest` / `_PORT=2329` / `_SECRET` / `_DATA_DIR` (mirroring the dopewars/DCSS block).
+- The committed `.env.dev` / `.env.dev2` templates carry the host-side settings compose passes to `service-bashquest` (`LATE_BASHQUEST_PORT` / `_SECRET` / `_DATA_DIR`), mirroring the dopewars/DCSS block; the client's host and port are profile literals, not env.
 
 ### Prod (Kubernetes / terraform)
-- `infra/service-bashquest.tf`: the `late-bashquest` Deployment (replicas **1**, `runtime-bashquest` image, `bashquest-save` PVC mounted at the shared HOME, a `bashquest-save-seed` initContainer that chowns the mount to `late`, `RUST_LOG`/`LATE_BASHQUEST_SECRET`/`LATE_BASHQUEST_DATA_DIR` env) + `late-bashquest-sv` ClusterIP Service on 2329. **Deployed unconditionally**; kill-before-create rollout (`maxSurge=0`/`maxUnavailable=1`) so the old pod releases the RWO volume before the new one mounts it.
+- `infra/service-bashquest.tf`: the `late-bashquest` Deployment (replicas **1**, `runtime-bashquest` image, `bashquest-save` PVC mounted at the shared HOME, a `bashquest-save-seed` initContainer that chowns the mount to `late`, `RUST_LOG`/`LATE_BASHQUEST_SECRET`/`LATE_BASHQUEST_DATA_DIR` env) + `late-bashquest-sv` ClusterIP Service on 2330. **Deployed unconditionally**; kill-before-create rollout (`maxSurge=0`/`maxUnavailable=1`) so the old pod releases the RWO volume before the new one mounts it.
 - `infra/bashquest.tf`: the RWO `bashquest-save` PVC (`local-path`, 256Mi, `prevent_destroy`) + the host/port/data-dir locals.
 - `infra/secrets.tf`: `bashquest-identity-secret` (random 64-char), injected into **both** service-ssh and late-bashquest so they derive the same key.
-- `infra/service-ssh.tf` injects the client env (`LATE_BASHQUEST_HOST/PORT/SECRET/ENABLED`).
+- `infra/service-ssh.tf` injects the client's only env, `LATE_BASHQUEST_SECRET`.
 - `replicas` must stay 1 (one RWO volume holds every player's shared save data; assumes the single-node `local-path` cluster).
 - `terraform.yml`'s `bashquest_image_tag` input is **optional** (unlike every other door's `required: true`), to avoid a coordinated breaking change across all nine existing `deploy_*.yml` callers in one PR — see the comment in `.github/workflows/terraform.yml`. Only `deploy_infra.yml` and `deploy_bashquest.yml` supply a real value; every other door's own `terraform_bootstrap` job is `-target`-scoped to just that door's resources, so an empty value there is never read.
 - CI: `.github/workflows/deploy_bashquest.yml` builds and rolls out BashQuest, and only BashQuest, for `-bashquest` releases, mirroring `deploy_dcss.yml` exactly (image-only `kubectl set image` on the existing deployment, or a targeted terraform bootstrap on first deploy). `.github/workflows/bashquest.yml` build-validates `docker/doors/bashquest.Dockerfile` (fetch + checksum + `bash -n` smoke test) and publishes the pinned `door-bashquest` image on main pushes.

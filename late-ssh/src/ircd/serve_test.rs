@@ -37,7 +37,7 @@ impl IrcTestServer {
         Self::start_with_irc_config(IrcConfig {
             enabled: true,
             port: 0,
-            ..IrcConfig::default()
+            ..crate::test_helpers::test_irc_config()
         })
         .await
     }
@@ -48,7 +48,7 @@ impl IrcTestServer {
             port: 0,
             proxy_protocol: true,
             proxy_trusted_cidrs: vec!["127.0.0.0/8".parse().expect("trusted proxy CIDR")],
-            ..IrcConfig::default()
+            ..crate::test_helpers::test_irc_config()
         })
         .await
     }
@@ -61,7 +61,7 @@ impl IrcTestServer {
             port: 0,
             proxy_protocol: true,
             proxy_trusted_cidrs: vec!["10.42.0.0/16".parse().expect("trusted proxy CIDR")],
-            ..IrcConfig::default()
+            ..crate::test_helpers::test_irc_config()
         })
         .await
     }

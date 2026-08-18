@@ -6,9 +6,11 @@ use tokio::sync::oneshot;
 
 fn test_state(audio_base_url: String) -> AppState {
     let config = Config {
+        env: crate::config::Env::Dev,
         port: 0,
         ssh_internal_url: "http://127.0.0.1:9".to_string(),
         audio_base_url,
+        db: DbConfig::default(),
     };
     AppState {
         config,

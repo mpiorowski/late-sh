@@ -43,9 +43,11 @@ use crate::app::games::chips::svc::ChipService;
 use crate::authz::{Caps, Permissions, Tier};
 use crate::ircd::registry::IrcRegistry;
 use crate::metrics;
+use crate::moderation::command::RoomModAction;
 use crate::moderation::event::ModerationEvent;
 use crate::moderation::service::{
-    ModerationInfra, ModerationService, ensure_message_permission, target_tier_for_user_id,
+    ModerationInfra, ModerationService, RoomModRequest, ensure_message_permission,
+    target_tier_for_user_id,
 };
 use crate::moderation::session_effects::ModerationSessionEffects;
 use crate::session::SessionRegistry;
@@ -812,17 +814,18 @@ pub enum ChatEvent {
         room_slug: String,
         username: String,
     },
-    KickSucceeded {
+    RoomModSucceeded {
         user_id: Uuid,
         room_slug: String,
         username: String,
+        action: RoomModAction,
     },
     RoomInfoUpdated {
         user_id: Uuid,
         room_id: Uuid,
         room_slug: String,
     },
-    KickFailed {
+    RoomModFailed {
         user_id: Uuid,
         message: String,
     },
@@ -3662,7 +3665,7 @@ impl ChatService {
         Ok(room.id)
     }
 
-    async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
+    pub(crate) async fn join_game_room(&self, user_id: Uuid, room_id: Uuid) -> Result<Uuid> {
         let client = self.db.get().await?;
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -3679,6 +3682,8 @@ impl ChatService {
         {
             anyhow::bail!("this match chat is players only");
         }
+        // A ban is what keeps someone out of a public game room, and
+        // `ChatRoomMember::join` is where that is enforced for every join path.
         ChatRoomMember::join(&client, room.id, user_id).await?;
         Ok(room.id)
     }
@@ -4112,42 +4117,37 @@ impl ChatService {
         );
     }
 
-    /// Remove a user from a room via `/kick`. The work is the moderation
-    /// service's room kick, so ownership, staff rank, the audit log and the
-    /// target's live session all behave exactly as they do from the mod
-    /// surface.
-    pub fn kick_from_room_task(
+    /// Run `/kick`, `/ban` or `/unban` against a room. The work is the
+    /// moderation service's room action, so ownership, staff rank, the audit
+    /// log and the target's live session all behave exactly as they do from
+    /// the mod surface.
+    pub(crate) fn room_mod_task(
         &self,
         user_id: Uuid,
         permissions: Permissions,
-        room_slug: String,
-        target_username: String,
+        request: RoomModRequest,
     ) {
         let service = self.clone();
+        let action = request.action;
+        let target_username = request.username.clone();
         let span = info_span!(
-            "chat.kick_from_room_task",
+            "chat.room_mod_task",
             user_id = %user_id,
-            room_slug = %room_slug,
+            action = action.past_tense(),
+            room = ?request.room,
             target = %target_username
         );
         tokio::spawn(
             async move {
                 let moderation = service.moderation_service();
-                let event = match moderation
-                    .kick_from_room(
+                let event = match moderation.room_command(user_id, permissions, request).await {
+                    Ok(done) => ChatEvent::RoomModSucceeded {
                         user_id,
-                        permissions,
-                        room_slug.clone(),
-                        target_username.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => ChatEvent::KickSucceeded {
-                        user_id,
-                        room_slug,
+                        room_slug: done.room_slug,
                         username: target_username,
+                        action,
                     },
-                    Err(e) => ChatEvent::KickFailed {
+                    Err(e) => ChatEvent::RoomModFailed {
                         user_id,
                         message: e.to_string(),
                     },

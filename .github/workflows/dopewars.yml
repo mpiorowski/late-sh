@@ -162,17 +162,3 @@ jobs:
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment/late-dopewars -n default --timeout=180s
-
-      - name: verify_door_enabled
-        run: |
-          # LATE_DOPEWARS_ENABLED is a CLIENT flag: it lives on service-ssh (which
-          # reaches the host over SSH), NOT on the late-dopewars host pod. Read it
-          # there, mirroring nethack.yml.
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_DOPEWARS_ENABLED || true)
-          echo "LATE_DOPEWARS_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::dopewars door is not enabled (LATE_DOPEWARS_ENABLED=${enabled})" ;;
-          esac

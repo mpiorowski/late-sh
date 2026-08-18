@@ -55,7 +55,7 @@ permissions:
 # The published door image tag. Must match the pin in the root Dockerfile's
 # brogue-build stage; bump both together on any recipe change.
 env:
-  DOOR_IMAGE_TAG: 1.15.1-r2
+  DOOR_IMAGE_TAG: 1.15.1-r3
 
 jobs:
   build_validate:
@@ -148,17 +148,3 @@ jobs:
 
       - name: wait_for_rollout
         run: kubectl rollout status deployment/late-brogue -n default --timeout=180s
-
-      - name: verify_door_enabled
-        run: |
-          # LATE_BROGUE_ENABLED is a CLIENT flag: it lives on service-ssh
-          # (which reaches the host over SSH), NOT on the late-brogue host pod.
-          # Read it there, mirroring dcss.yml.
-          POD=$(kubectl get pod -l app=service-ssh -n default -o jsonpath='{.items[0].metadata.name}')
-          echo "service-ssh pod: ${POD}"
-          enabled=$(kubectl exec "${POD}" -- printenv LATE_BROGUE_ENABLED || true)
-          echo "LATE_BROGUE_ENABLED=${enabled}"
-          case "$(echo "${enabled}" | tr '[:upper:]' '[:lower:]')" in
-            1|true|yes|on) echo "door enabled" ;;
-            *) echo "::warning::Brogue door is not enabled (LATE_BROGUE_ENABLED=${enabled})" ;;
-          esac

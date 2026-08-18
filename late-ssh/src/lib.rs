@@ -4,6 +4,8 @@ mod api_test;
 pub mod app;
 pub mod authz;
 pub mod config;
+#[cfg(test)]
+mod config_test;
 pub mod dartboard;
 pub mod ircd;
 pub mod metrics;

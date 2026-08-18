@@ -23,7 +23,7 @@ use crate::app::chat::work::svc::WorkService;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::hub::dailies::svc::QuestService;
 use crate::app::hub::shop::svc::ShopService;
-use crate::app::hub::svc::LeaderboardService;
+use crate::app::leaderboard::svc::LeaderboardService;
 use crate::app::pet::svc::PetService;
 use crate::app::profile::svc::ProfileService;
 use crate::app::voice::svc::VoiceService;
