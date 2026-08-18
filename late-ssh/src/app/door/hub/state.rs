@@ -16,6 +16,7 @@ pub enum HubGame {
     Usurper,
     GreenDragon,
     Dopewars,
+    Bashquest,
     Codekeep,
     Darkroom,
 }
@@ -45,7 +46,7 @@ impl HubGroup {
 impl HubGame {
     /// Selector order, top to bottom: the house game first, the roguelikes by
     /// stature, the BBS doors led by Green Dragon, then the back room.
-    pub const ALL: [HubGame; 10] = [
+    pub const ALL: [HubGame; 11] = [
         HubGame::Lateania,
         HubGame::Dcss,
         HubGame::Nethack,
@@ -53,6 +54,7 @@ impl HubGame {
         HubGame::GreenDragon,
         HubGame::Usurper,
         HubGame::Dopewars,
+        HubGame::Bashquest,
         HubGame::Darkroom,
         HubGame::Rebels,
         HubGame::Codekeep,
@@ -68,6 +70,7 @@ impl HubGame {
             HubGame::Usurper => "Usurper",
             HubGame::GreenDragon => "Green Dragon",
             HubGame::Dopewars => "dopewars",
+            HubGame::Bashquest => "BashQuest",
             HubGame::Codekeep => "CodeKeep",
             HubGame::Darkroom => crate::app::door::darkroom::data::TITLE,
         }
@@ -77,7 +80,9 @@ impl HubGame {
         match self {
             HubGame::Lateania => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::GreenDragon | HubGame::Usurper | HubGame::Dopewars => HubGroup::Doors,
+            HubGame::GreenDragon | HubGame::Usurper | HubGame::Dopewars | HubGame::Bashquest => {
+                HubGroup::Doors
+            }
             HubGame::Darkroom | HubGame::Rebels | HubGame::Codekeep => HubGroup::BackRoom,
         }
     }
@@ -96,6 +101,7 @@ impl HubGame {
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars
+            | HubGame::Bashquest
             | HubGame::Codekeep
             | HubGame::Darkroom => None,
         }

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-16 (composer `/ban` and `/unban` join `/kick` as room moderation commands routed through `ModerationService::room_command`; chat-originated room actions now name the room by id instead of slug, and an ownership-granted ban can no longer touch an active staff ban; see Room Membership Commands items 5-6 and `stream/CONTEXT.md` §6)
+- Last updated: 2026-08-17 (the room header's stream row now sizes its title and watcher count from the measured watch-link width instead of a hardcoded guess, so the watch URL renders instead of being the thing that gets dropped; see §11 Room Header. Previously: composer `/ban` and `/unban` join `/kick` as room moderation commands routed through `ModerationService::room_command`; chat-originated room actions now name the room by id instead of slug, and an ownership-granted ban can no longer touch an active staff ban; see Room Membership Commands items 5-6 and `stream/CONTEXT.md` §6)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -481,6 +481,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 ### Room Header
 
 `ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row with a `/rules` hint when the room has rules, and a closing rule that separates the block from the conversation. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
+- The stream row (`stream_header_line`) fits everything around its watch link, not the other way round: `row_with_hint` drops a hint it cannot fit rather than wrapping it, and here the hint *is* the URL. So the hint is measured first, the title clips to whatever is left, and the ` · N watching` count drops when even that is not enough. A `watch: https://…/live/<id>` plus its load-bearing trailing cell runs 51 columns, which is why stream capability ids moved from 32-char hex to 22-char base64url (`stream/CONTEXT.md` §2): at hex width the link almost never rendered, and a title budget guessed ahead of the hint (a hardcoded `width - 30`) meant the link was what got dropped rather than the title. The watcher count survives down to 73 columns.
 - `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
 ---

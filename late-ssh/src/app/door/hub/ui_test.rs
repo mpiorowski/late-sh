@@ -17,7 +17,7 @@ fn clicks_select_games_and_ignore_chrome() {
     assert_eq!(sidebar_hit_test(body, 0, 5, 3), None);
     assert_eq!(sidebar_hit_test(body, 0, 5, 4), Some(0));
     assert_eq!(sidebar_hit_test(body, 0, 5, 7), Some(1));
-    // Last games: Rebels at y=18, CodeKeep at y=19.
+    // Last games: A Dark Room at y=18, Rebels at y=19.
     assert_eq!(sidebar_hit_test(body, 0, 5, 18), Some(8));
     assert_eq!(sidebar_hit_test(body, 0, 5, 19), Some(9));
     // The rule column and the landing pane are not selectable.
@@ -31,11 +31,11 @@ fn clicks_select_games_and_ignore_chrome() {
 /// the hit test follows the same window.
 #[test]
 fn hit_test_follows_the_scroll_window() {
-    // Height 10: 8 sidebar rows visible of 19, selection on the last game
+    // Height 10: 8 sidebar rows visible of 20, selection on the last game
     // slides the window to the bottom of the list.
     let body = Rect::new(0, 0, 80, 10);
-    // Window starts at row 11 (Green Dragon), so y=1 lands on it...
-    assert_eq!(sidebar_hit_test(body, 9, 5, 1), Some(4));
+    // Window starts at row 12 (Usurper), so y=1 lands on it...
+    assert_eq!(sidebar_hit_test(body, 10, 5, 1), Some(5));
     // ...and the selected CodeKeep row is visible at the window's bottom.
-    assert_eq!(sidebar_hit_test(body, 9, 5, 8), Some(9));
+    assert_eq!(sidebar_hit_test(body, 10, 5, 8), Some(10));
 }

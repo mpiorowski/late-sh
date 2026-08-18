@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
             let _ = shutdown_tx.send(true);
             // Hold the process open long enough for the bridges to run NetHack's
             // hangup-save. Exceeds host.rs's per-child HANGUP_SAVE_GRACE and must
-            // stay under the pod's terminationGracePeriodSeconds (service-nethack.tf).
+            // stay under the pod's terminationGracePeriodSeconds (infra/doors.tf).
             tokio::time::sleep(SHUTDOWN_GRACE).await;
             tracing::info!("shutdown grace elapsed; exiting");
         }

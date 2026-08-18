@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 /// second; the bound just stops a wedged child from pinning teardown forever.
 /// Must stay under the host pod's `terminationGracePeriodSeconds` so a pod-wide
 /// SIGTERM can drain every child (see `main.rs` SHUTDOWN_GRACE and
-/// infra/service-brogue.tf).
+/// infra/doors.tf).
 const HANGUP_SAVE_GRACE: Duration = Duration::from_secs(5);
 
 /// Why the bridge loop stopped; decides whether teardown must SIGHUP-save.

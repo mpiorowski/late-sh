@@ -246,10 +246,20 @@ fn rail_groups_boards_under_headers_at_roster_boundaries() {
         text(&lines[high_scores_header])
     );
 
-    // Four headers and three separators around the full board list, nothing else.
+    // Score boards after their header, blank, then the Reference header
+    // (just the trailing Badge Guide entry).
+    let reference_header = high_scores_header + 1 + ScoreGame::ALL.len() + 1;
+    assert_eq!(text(&lines[reference_header - 1]), "");
+    assert!(
+        text(&lines[reference_header]).contains("Reference"),
+        "{}",
+        text(&lines[reference_header])
+    );
+
+    // Five headers and four separators around the full board list, nothing else.
     assert_eq!(
         lines.len(),
-        state.boards().len() + 4 + 3,
+        state.boards().len() + 5 + 4,
         "every board renders exactly once"
     );
 }

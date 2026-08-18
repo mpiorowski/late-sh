@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-Last updated: 2026-08-06 (SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
+Last updated: 2026-08-18 (added Pain Point 8: stream egress is the first cost that scales with *viewers* rather than sessions, the go-live publish ceiling is now pinned in code, and the OBS/WHIP path is still uncapped by construction. Previously 2026-08-06: SCALE.md is now the single home for performance findings: absorbed root CONTEXT.md's §8.5 input-lag notes into Pain Point 1 and the discover-room CNPG CPU-saturation observation into DB Hot Queries; root context keeps only current-state contracts and routes perf here. Next infra step is unchanged: add a second cluster node and move everything except `service-ssh` off `server-1`)
 
 This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
@@ -33,6 +33,15 @@ Application deployments:
   - Current Terraform/live resources: request `100m/128Mi`, limit `500m/512Mi`
 - `liquidsoap`: 1 replica
   - Encodes local playlist mounts for Icecast
+- `livekit`: 1 replica, `host_network: true`
+  - Voice SFU and `/golive` video fan-out
+  - Host ports: 7881 TCP and 7882 UDP (RTC), 3478 UDP and 5349 TCP (TURN)
+  - Current Terraform limit: 1 CPU, 1 GiB. Cheap by design: it forwards packets, it does not transcode
+  - No `limit:` block in the server config, so LiveKit's node defaults apply (`num_tracks` 400/CPU up to 8000, `bytes_per_sec` 1 GB/s). Both are far above what the node's NIC can serve, so LiveKit will never be the thing that says no. See Pain Point 8
+- `livekit-ingress`: 1 replica, `host_network: true`
+  - WHIP ingest for `/golive obs`, transcoding disabled (packet forwarder)
+- `redis`: 1 replica (`valkey/valkey:8-alpine`, service name `redis-sv`)
+  - LiveKit <-> ingress message bus only. The LiveKit server refuses Ingress API calls without it. Not application state, not a cache
 - `postgres`: CloudNativePG, 2 instances
   - Primary: `postgres-1`
   - Current Terraform/live memory limit: 4 GiB
@@ -233,6 +242,78 @@ Still open, all much smaller now:
 **Do not widen `CHAT_REFRESH_INTERVAL` as a cheap win.** It looks like a free 3x, and it is not: the poll is the only writer of unread badges (see the second structural problem above), so tripling the interval triples worst-case badge latency for every room the user is not looking at. That is the primary signal in the product.
 
 No new infrastructure is needed and none is wanted here. The events already exist and already reach every session; the bug is that the client discards them and re-derives the state from Postgres on a timer. A broker (NATS, Redis pub/sub) would add a hop to a pipeline that already works and would not remove one of those 22M queries.
+
+### 8. Stream egress scales with viewers, not sessions
+
+Recorded 2026-08-18 after an audit prompted by a user question, not by an
+incident. Nothing here has hurt yet; the point is to know where the cliff is
+before streams get an audience.
+
+Every other pain point on this list scales with concurrent *sessions*. This one
+does not. LiveKit is an SFU: a publisher uploads once and the server re-sends
+that stream once per subscriber, so node egress is roughly
+`publisher_bitrate × viewers`. One streamer with 20 viewers costs the node more
+outbound traffic than the entire TUI fleet does. Nothing else in this document
+has a multiplier of that shape.
+
+There is no transcoding anywhere in the path (`enable_transcoding: false` at
+CreateIngress, `late-ssh/src/app/voice/svc.rs`), which is the right call for a
+CPU-bound node: the `livekit` pod stays a packet forwarder on a 1 CPU limit.
+The cost lands entirely on bandwidth and on the node's packet path.
+
+**The browser `/golive` path is now capped.** It used to publish at the JS SDK
+default, `ScreenSharePresets.h1080fps15` (1080p, 2.5 Mbps, 15 fps), because
+`setScreenShareEnabled` was called with no publish options. It now pins
+`screenShareEncoding` to 1.5 Mbps at 15 fps with `contentHint: 'detail'`
+(`late-web/src/pages/live/golive.html`, asserted in `live_test.rs`). A terminal
+share is text, not motion, so the picture is unchanged and every viewer costs
+40% less. Simulcast stays on (SDK default), which adds a half-resolution layer
+so a weak viewer steps down instead of dropping packets.
+
+**The OBS/WHIP path is uncapped, by construction.** With transcoding off there
+is no encoder in the path, so LiveKit can neither clamp the bitrate nor build
+simulcast layers. Whatever OBS is configured to send is what every viewer gets,
+all or nothing, and a viewer who cannot keep up just loses packets. A streamer
+who sets 20 Mbps in OBS is a 20 Mbps per-viewer bill with no server-side
+opinion about it. The fix is not to enable transcoding: that puts a per-stream
+encoder on the shared node and trades a bandwidth cost we are not yet paying
+for CPU that competes with `service-ssh` sessions, which is the actual scaling
+unit (Pain Point 1). The cheap version is telling the streamer what to set, in
+the OBS handoff modal that already shows the WHIP URL and token
+(`late-ssh/src/app/stream/ui.rs`).
+
+**The bill is not the constraint, the node is.** Hetzner EU includes about
+20 TB/month with overage around EUR 1/TB. At the pinned 1.5 Mbps, ten viewers
+for an hour is about 6.75 GB, so roughly 3000 viewer-hours before the first
+euro. What binds first is the node's packet handling: LiveKit already logs
+`UDP receive buffer is too small for a production set-up {current: 425984,
+suggested: 5000000}` at every boot, and a screen share fanned to several
+subscribers shows nack ratios of 0.4-0.5 in the congestion logs, on *every*
+viewer rather than one bad link. That is a host sysctl
+(`net.core.rmem_max`/`rmem_default`) and it cannot come from the pod, since a
+hostNetwork pod may not set `net.*` sysctls. Full note in
+`late-ssh/src/app/stream/CONTEXT.md` §7.
+
+Open, in the order they would start to matter:
+
+1. **No stream telemetry.** There is no `record_stream_*` metric family, so
+   watcher counts and peaks are readable only from logs and registry state.
+   The first thing to build if streams get regular viewers, because everything
+   below is unmeasurable without it. Also noted in the stream context §7.
+2. **The UDP receive buffer.** Already producing symptoms at current traffic.
+   Host-level fix, no home in this repo today (the RKE2 script is one-shot
+   bootstrap, not a reconciler).
+3. **No OBS bitrate guidance or enforcement.** Copy in the handoff modal is the
+   zero-cost version; detect-and-warn off the existing `poll_obs_publishers`
+   sweep is the next step up.
+4. **No `limit:` block in the LiveKit server config.** Worth adding as a node
+   circuit breaker, but be clear about what it buys: `bytes_per_sec` is a node
+   limit that refuses new tracks once saturated, not a per-stream cap, so it
+   protects the box without stopping one streamer from hogging it.
+5. **LiveKit shares `server-1` with `service-ssh`.** It is on the move list for
+   the second node (Immediate Next Work item 3), which matters more once media
+   traffic is real: today the fan-out competes for the same NIC as every SSH
+   session.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 

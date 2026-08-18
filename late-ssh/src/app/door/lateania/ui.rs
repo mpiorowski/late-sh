@@ -19,13 +19,15 @@ use crate::usernames::UsernameLookup;
 use super::{
     appearance,
     classes::Class,
-    state::{ClickAction, Heading, Panel, State},
-    svc::{LeaderboardEntry, LogKind, PlayerView, SectionRow},
-    world::{Dir, MapCell, MiniMap},
+    state::{ClickAction, Heading, MapMode, Panel, State},
+    svc::{LeaderboardEntry, LogKind, MobView, PlayerView, QuestKind, QuestView, SectionRow},
+    world::{Dir, MapCell, MiniMap, RoomId},
 };
 
 const SIDE_WIDE: u16 = 34;
 const SIDE_NARROW: u16 = 28;
+
+// ---- Screen entry: which layout this terminal gets -----------------------
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &UsernameLookup<'_>) {
     let view = state.view();
@@ -82,6 +84,19 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
         return;
     }
 
+    // The journal and the board are text-heavy; given a wide terminal they
+    // expand to full-screen column layouts the same way, and fall back to
+    // the side panel when cramped. Cursor, keys, and tracking are identical
+    // in both renderings.
+    if state.panel() == Panel::Quests && area.width >= 100 && area.height >= 20 {
+        draw_journal_screen(frame, area, state, &view);
+        return;
+    }
+    if state.panel() == Panel::Board && area.width >= 100 && area.height >= 20 {
+        draw_board_screen(frame, area, state, &view);
+        return;
+    }
+
     let side_w = if area.width >= 84 {
         SIDE_WIDE
     } else {
@@ -110,6 +125,8 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     draw_log(frame, cols[0], &view);
     draw_side(frame, cols[1], state, &view, usernames);
 }
+
+// ---- The clickable action bar along the bottom row -----------------------
 
 /// One chip on the combat action bar: its label, the action a click triggers,
 /// and whether it is ready (dim when a spell can't be paid for right now).
@@ -270,7 +287,10 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     // Last frame's clickable chips are stale now; a bar that isn't drawn this
     // frame (map open, cramped view) must leave nothing behind to click.
     state.clear_combat_hits();
-    if view.classed && state.map_open() && map_fits(body) {
+    let land_page = state.map_open() && state.map_mode() == MapMode::Lands;
+    if view.classed && land_page && lands_fit(body) {
+        draw_land_map(frame, body, state, &view);
+    } else if view.classed && state.map_open() && !land_page && map_fits(body) {
         draw_world_map(frame, body, state, &view);
     } else {
         // A classed adventurer gets a clickable action bar on the bottom row -
@@ -319,6 +339,8 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State, usernames: &Usern
     }
 }
 
+// ---- Does the map fit, and the small shared name/style lookups -----------
+
 /// The ways up and down. Deliberately loud (the brightest thing on the map
 /// after `@`): these are the exits the flat grid cannot draw as corridors, and
 /// in a world where every zone chains to the next one by a stair they are what
@@ -333,6 +355,14 @@ fn stair_style() -> Style {
 /// inspector, and footer cost 4 rows before a single cell of map, and the
 /// legend needs the width. Below this, `draw_game` takes over: the text atlas
 /// in the side panel down to 50x9, then compact mode.
+/// The land map needs enough width to hold a branch chip, the trunk, and
+/// another branch chip side by side; narrower than that and the picture clips
+/// instead of informing, so the text atlas serves instead. Height is looser,
+/// since `[` / `]` scroll the map.
+fn lands_fit(area: Rect) -> bool {
+    area.width >= 76 && area.height >= 12
+}
+
 fn map_fits(area: Rect) -> bool {
     // The footer grew by two lines (the symbol and marker legends split
     // apart) to make room for a fuller legend; bump the floor to match, so
@@ -348,6 +378,8 @@ fn land_label(name: &str) -> &str {
     let name = name.split(" & ").next().unwrap_or(name);
     name.split(", ").next().unwrap_or(name)
 }
+
+// ---- The overhead field: biomes, ground tiles, POI arrows (5.1) ----------
 
 fn biome_style(biome: super::world::Biome) -> (char, Color) {
     use super::world::Biome;
@@ -797,6 +829,563 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     );
 }
 
+/// The land map: an atlas of the whole realm, every country drawn where it
+/// sits and every road between two countries drawn as a line. The two great
+/// hubs are walled keeps; everything else is a name on the road that reaches
+/// it. It carries no bosses, no gate titles, and no level bands on purpose.
+/// The question it answers is "how do I get there"; what *opens* a road is
+/// still something you find by walking to it. Every land is named, walked or
+/// not, because the name of a country was never the secret.
+fn draw_land_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let mut lines = land_map_lines(&view.atlas, area.height as usize);
+    // `[` / `]` scroll, clamped so the last line can reach the top but no
+    // further; on a short terminal the map is taller than the body.
+    let max_off = lines.len().saturating_sub(area.height as usize);
+    let off = state.list_scroll().min(max_off);
+    state.set_list_scroll(off);
+    frame.render_widget(Paragraph::new(lines.split_off(off)), area);
+}
+
+// ---- The atlas: where each land sits, and which roads join them ----------
+//
+// The picture is *drawn*, not derived. A map that lays itself out is a graph,
+// and a graph of an eighteen-country world with two ten-road hubs reads as a
+// list however it is arranged - three earlier attempts (an indented tree, a
+// fan of unattached columns, a trunk with spurs) all failed the same way. So
+// the placement below is cartography: hand-set rows and columns, chosen so
+// gentle country sits north of the road and the deep dark sits south of it.
+//
+// What is *not* authored is which lands touch. `ROADS` may only name pairs
+// that `worldmap::land_links` derives from the room graph, and must name all
+// of them; `the_atlas_draws_every_road_in_the_world_and_invents_none` fails
+// the build if the map and the world ever disagree. Adding a country means
+// finding it a place here - which is the point, since a map nobody placed it
+// on is a map that quietly lost it.
+
+/// The canvas the atlas is drawn on. Wider than this and `lands_fit` would
+/// have to refuse more terminals; the layout is built to end at column 74.
+const MAP_W: usize = 76;
+const MAP_H: usize = 13;
+
+/// How a land's label meets the road that reaches it. Left-hand lands *end* at
+/// their anchor and grow leftward, right-hand ones *start* at it, so a depth
+/// counter gaining a digit pushes the name away from the road instead of
+/// shoving the road it is attached to.
+#[derive(Clone, Copy)]
+enum At {
+    Ends(usize),
+    Starts(usize),
+    Centered(usize),
+}
+
+/// A land drawn as a name on the map.
+struct Place {
+    region: &'static str,
+    row: usize,
+    at: At,
+}
+
+/// A land drawn as a walled keep: the two hubs every road runs through.
+struct Keep {
+    region: &'static str,
+    top: usize,
+    left: usize,
+    bottom: usize,
+    right: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Leg {
+    Up(usize),
+    Down(usize),
+    Left(usize),
+    Right(usize),
+}
+
+/// One road: the two lands it joins, where it leaves, and how it runs. It
+/// starts on the keep wall (or beside a name) and each leg carries it that
+/// many cells; corners and wall junctions are worked out from the turns.
+struct Road {
+    a: &'static str,
+    b: &'static str,
+    from: (usize, usize),
+    legs: &'static [Leg],
+}
+
+const KEEPS: &[Keep] = &[
+    Keep {
+        region: "The Overworld & Capitals",
+        top: 3,
+        left: 20,
+        bottom: 5,
+        right: 42,
+    },
+    Keep {
+        region: "Embergate & the King's Road",
+        top: 3,
+        left: 56,
+        bottom: 5,
+        right: 74,
+    },
+];
+
+const PLACES: &[Place] = &[
+    // North of the road: the countries a living adventurer walks to.
+    Place {
+        region: "Aelunor, the Faewood",
+        row: 0,
+        at: At::Ends(16),
+    },
+    Place {
+        region: "Silvael",
+        row: 0,
+        at: At::Ends(27),
+    },
+    Place {
+        region: "The Wildbound Waste",
+        row: 1,
+        at: At::Ends(23),
+    },
+    Place {
+        region: "Wayfarer's Hollow",
+        row: 1,
+        at: At::Ends(63),
+    },
+    Place {
+        region: "The Sunderlakes",
+        row: 2,
+        at: At::Ends(19),
+    },
+    // Between the two keeps, because it opens off both of them.
+    Place {
+        region: "City Districts",
+        row: 2,
+        at: At::Starts(43),
+    },
+    Place {
+        region: "Broceliande, the Greenwood",
+        row: 4,
+        at: At::Ends(17),
+    },
+    // South of the road: the dark, and the way down into it.
+    Place {
+        region: "The Sunken Catacombs",
+        row: 6,
+        at: At::Ends(19),
+    },
+    Place {
+        region: "The Frontier",
+        row: 6,
+        at: At::Ends(55),
+    },
+    Place {
+        region: "Thornwood Hollows",
+        row: 7,
+        at: At::Ends(23),
+    },
+    Place {
+        region: "Hearthward Close",
+        row: 7,
+        at: At::Ends(63),
+    },
+    Place {
+        region: "The Drowned Caverns",
+        row: 8,
+        at: At::Ends(27),
+    },
+    Place {
+        region: "The Sundered Reaches",
+        row: 9,
+        at: At::Centered(39),
+    },
+    Place {
+        region: "Kaelmyr, the Ashen Reach",
+        row: 12,
+        at: At::Centered(39),
+    },
+];
+
+const ROADS: &[Road] = &[
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Embergate & the King's Road",
+        from: (4, 42),
+        legs: &[Leg::Right(14)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sunderlakes",
+        from: (3, 23),
+        legs: &[Leg::Up(1), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Wildbound Waste",
+        from: (3, 27),
+        legs: &[Leg::Up(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Silvael",
+        from: (3, 31),
+        legs: &[Leg::Up(3), Leg::Left(2)],
+    },
+    Road {
+        a: "Silvael",
+        b: "Aelunor, the Faewood",
+        from: (0, 18),
+        legs: &[Leg::Right(1)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "City Districts",
+        from: (3, 39),
+        legs: &[Leg::Up(1), Leg::Right(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "City Districts",
+        from: (3, 60),
+        legs: &[Leg::Up(1), Leg::Left(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "Wayfarer's Hollow",
+        from: (3, 67),
+        legs: &[Leg::Up(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Broceliande, the Greenwood",
+        from: (4, 20),
+        legs: &[Leg::Left(1)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sunken Catacombs",
+        from: (5, 23),
+        legs: &[Leg::Down(1), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "Thornwood Hollows",
+        from: (5, 27),
+        legs: &[Leg::Down(2), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Drowned Caverns",
+        from: (5, 31),
+        legs: &[Leg::Down(3), Leg::Left(2)],
+    },
+    Road {
+        a: "The Overworld & Capitals",
+        b: "The Sundered Reaches",
+        from: (5, 39),
+        legs: &[Leg::Down(3)],
+    },
+    Road {
+        a: "The Sundered Reaches",
+        b: "Kaelmyr, the Ashen Reach",
+        from: (10, 39),
+        legs: &[Leg::Down(1)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "The Frontier",
+        from: (5, 59),
+        legs: &[Leg::Down(1), Leg::Left(2)],
+    },
+    Road {
+        a: "Embergate & the King's Road",
+        b: "Hearthward Close",
+        from: (5, 67),
+        legs: &[Leg::Down(2), Leg::Left(2)],
+    },
+];
+
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+const LEFT: u8 = 4;
+const RIGHT: u8 = 8;
+
+/// A styled character grid. Names and walls go down first, roads after, so a
+/// road arriving at a keep can read the wall it lands on and turn it into the
+/// right junction rather than punching a hole through it.
+struct Canvas {
+    cells: Vec<(char, Style)>,
+}
+
+impl Canvas {
+    fn new() -> Self {
+        Canvas {
+            cells: vec![(' ', Style::default()); MAP_W * MAP_H],
+        }
+    }
+
+    fn ch(&self, row: usize, col: usize) -> char {
+        self.cells[row * MAP_W + col].0
+    }
+
+    fn set(&mut self, row: usize, col: usize, ch: char, style: Style) {
+        if row < MAP_H && col < MAP_W {
+            self.cells[row * MAP_W + col] = (ch, style);
+        }
+    }
+
+    fn write(&mut self, row: usize, col: usize, text: &str, style: Style) {
+        for (i, ch) in text.chars().enumerate() {
+            self.set(row, col + i, ch, style);
+        }
+    }
+
+    /// A land's label: its short name, then how many of its zones you have
+    /// walked. Depth is in zones rather than rooms because a country can be
+    /// three zones deep on 2% of its rooms, and depth is the number that says
+    /// how far in you are.
+    fn label(&mut self, region: &str, row: usize, at: At, progress: &Progress) -> usize {
+        let name = land_chip_name(region);
+        let entered = progress.get(region).copied().and_then(|p| p.chain);
+        let depth = entered.map(|(walked, zones)| format!("  {walked}/{zones}"));
+        let width = name.chars().count() + depth.as_ref().map_or(0, |d| d.chars().count());
+        let col = match at {
+            At::Ends(end) => (end + 1).saturating_sub(width),
+            At::Starts(start) => start,
+            At::Centered(mid) => mid.saturating_sub(width / 2),
+        };
+        self.write(row, col, &name, land_style(progress.get(region).copied()));
+        if let Some(depth) = depth {
+            let dim = match entered {
+                Some((walked, _)) if walked > 0 => theme::AMBER_DIM(),
+                _ => theme::TEXT_DIM(),
+            };
+            self.write(
+                row,
+                col + name.chars().count(),
+                &depth,
+                Style::default().fg(dim),
+            );
+        }
+        col
+    }
+
+    fn keep(&mut self, keep: &Keep, progress: &Progress) {
+        let wall = Style::default().fg(theme::BORDER());
+        for col in keep.left + 1..keep.right {
+            self.set(keep.top, col, '\u{2500}', wall);
+            self.set(keep.bottom, col, '\u{2500}', wall);
+        }
+        for row in keep.top + 1..keep.bottom {
+            self.set(row, keep.left, '\u{2502}', wall);
+            self.set(row, keep.right, '\u{2502}', wall);
+        }
+        self.set(keep.top, keep.left, '\u{256D}', wall);
+        self.set(keep.top, keep.right, '\u{256E}', wall);
+        self.set(keep.bottom, keep.left, '\u{2570}', wall);
+        self.set(keep.bottom, keep.right, '\u{256F}', wall);
+        let name = land_chip_name(keep.region).to_uppercase();
+        let mid = (keep.left + keep.right) / 2;
+        let col = mid - name.chars().count() / 2;
+        self.write(
+            (keep.top + keep.bottom) / 2,
+            col,
+            &name,
+            land_style(progress.get(keep.region).copied()).add_modifier(Modifier::BOLD),
+        );
+    }
+
+    /// A road runs in the wall colour once both the lands it joins are walked,
+    /// and faint until then, so the picture separates the roads you know from
+    /// the ones you have only been told about.
+    fn road(&mut self, road: &Road, progress: &Progress) {
+        let known = |region: &str| {
+            progress
+                .get(region)
+                .is_some_and(|p: &&super::world::RegionProgress| p.explored > 0)
+        };
+        let ink = match known(road.a) && known(road.b) {
+            true => theme::BORDER(),
+            false => theme::TEXT_FAINT(),
+        };
+        let mut cells: Vec<((usize, usize), u8)> = vec![(road.from, 0)];
+        let (mut row, mut col) = road.from;
+        for leg in road.legs {
+            let (out, back, n) = match *leg {
+                Leg::Up(n) => (UP, DOWN, n),
+                Leg::Down(n) => (DOWN, UP, n),
+                Leg::Left(n) => (LEFT, RIGHT, n),
+                Leg::Right(n) => (RIGHT, LEFT, n),
+            };
+            for _ in 0..n {
+                if let Some(last) = cells.last_mut() {
+                    last.1 |= out;
+                }
+                match *leg {
+                    Leg::Up(_) => row -= 1,
+                    Leg::Down(_) => row += 1,
+                    Leg::Left(_) => col -= 1,
+                    Leg::Right(_) => col += 1,
+                }
+                cells.push(((row, col), back));
+            }
+        }
+        for ((row, col), dirs) in cells {
+            self.stroke(row, col, dirs, ink);
+        }
+    }
+
+    /// One cell of road. A cell that lands on a keep wall becomes the junction
+    /// where that road leaves the city; anywhere else it is a straight run or
+    /// the corner the two directions make.
+    fn stroke(&mut self, row: usize, col: usize, dirs: u8, ink: Color) {
+        let ch = match self.ch(row, col) {
+            '\u{2500}' if dirs & DOWN != 0 => '\u{252C}', // ─ + down  = ┬
+            '\u{2500}' => '\u{2534}',                     // ─ + up    = ┴
+            '\u{2502}' if dirs & RIGHT != 0 => '\u{251C}', // │ + right = ├
+            '\u{2502}' => '\u{2524}',                     // │ + left  = ┤
+            _ => match dirs {
+                d if d == UP | LEFT => '\u{256F}',    // ╯
+                d if d == UP | RIGHT => '\u{2570}',   // ╰
+                d if d == DOWN | LEFT => '\u{256E}',  // ╮
+                d if d == DOWN | RIGHT => '\u{256D}', // ╭
+                d if d & (UP | DOWN) != 0 => '\u{2502}',
+                _ => '\u{2500}',
+            },
+        };
+        self.set(row, col, ch, Style::default().fg(ink));
+    }
+
+    /// The grid as lines, each run of same-styled cells one span, trailing
+    /// blanks dropped so a short row costs nothing.
+    fn lines(&self) -> Vec<Line<'static>> {
+        (0..MAP_H)
+            .map(|row| {
+                let cells = &self.cells[row * MAP_W..(row + 1) * MAP_W];
+                let end = cells
+                    .iter()
+                    .rposition(|(c, _)| *c != ' ')
+                    .map_or(0, |i| i + 1);
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                for &(ch, style) in &cells[..end] {
+                    match spans.last_mut() {
+                        Some(last) if last.style == style => last.content.to_mut().push(ch),
+                        _ => spans.push(Span::styled(ch.to_string(), style)),
+                    }
+                }
+                Line::from(spans)
+            })
+            .collect()
+    }
+}
+
+type Progress<'a> = std::collections::HashMap<&'a str, &'a super::world::RegionProgress>;
+
+/// The whole picture. Its width is fixed by the layout, and `lands_fit`
+/// refuses to draw it into anything narrower, so `height` is the only thing
+/// the terminal decides here: whether the scroll key is worth mentioning.
+/// Split from the render so the layout can be read in a test rather than only
+/// on a screen.
+fn land_map_lines(atlas: &[super::world::RegionProgress], height: usize) -> Vec<Line<'static>> {
+    let progress: Progress = atlas.iter().map(|r| (r.name, r)).collect();
+    let mut canvas = Canvas::new();
+    for keep in KEEPS {
+        canvas.keep(keep, &progress);
+    }
+    for place in PLACES {
+        canvas.label(place.region, place.row, place.at, &progress);
+    }
+    for road in ROADS {
+        canvas.road(road, &progress);
+    }
+
+    let total = atlas.len();
+    let walked = atlas.iter().filter(|r| r.explored > 0).count();
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "THE LANDS OF LATEANIA",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("   {walked} of {total} walked"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Every line is a road you can walk. Numbers are zones you have entered.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::raw(""),
+    ];
+    lines.extend(canvas.lines());
+    lines.push(Line::raw(""));
+
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let mut ways = vec![Span::styled("Only the Ways reach:  ", dim)];
+    for (i, region) in super::worldmap::portal_lands().iter().enumerate() {
+        if i > 0 {
+            ways.push(Span::styled(
+                " \u{00B7} ",
+                Style::default().fg(theme::BORDER()),
+            ));
+        }
+        ways.push(Span::styled(
+            land_chip_name(region),
+            land_style(progress.get(region).copied()),
+        ));
+    }
+    lines.push(Line::from(ways));
+    // The Ways line is the only place the portal-only lands appear at all, so
+    // it gets air around it rather than reading as the legend's first row.
+    lines.push(Line::raw(""));
+    // Colour is the only thing separating a land you have seen from one you
+    // have not, so say what it means rather than leaving it to be guessed.
+    lines.push(Line::from(vec![
+        Span::styled("walked", Style::default().fg(theme::TEXT_BRIGHT())),
+        Span::styled("  \u{00B7}  ", Style::default().fg(theme::BORDER())),
+        Span::styled("not yet", Style::default().fg(theme::TEXT_FAINT())),
+        Span::styled("  \u{00B7}  ", Style::default().fg(theme::BORDER())),
+        Span::styled(
+            "where you stand",
+            Style::default()
+                .fg(theme::MENTION())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::raw(""));
+    // Only offer the scroll key when there is something below the fold.
+    let label = match lines.len() + 1 > height {
+        true => "back to the room  [ ] scroll",
+        false => "back to the room",
+    };
+    lines.push(hint("m", label));
+    lines
+}
+
+/// A land name as the map labels it: the atlas title without its trailing
+/// clause and without a leading "The", so "Kaelmyr, the Ashen Reach" reads as
+/// "Kaelmyr" and the picture fits a terminal.
+fn land_chip_name(region: &str) -> String {
+    land_label(region)
+        .strip_prefix("The ")
+        .unwrap_or(land_label(region))
+        .to_string()
+}
+
+fn land_style(progress: Option<&super::world::RegionProgress>) -> Style {
+    match progress {
+        Some(p) if p.here => Style::default()
+            .fg(theme::MENTION())
+            .add_modifier(Modifier::BOLD),
+        Some(p) if p.explored > 0 => Style::default().fg(theme::TEXT_BRIGHT()),
+        _ => Style::default().fg(theme::TEXT_FAINT()),
+    }
+}
+
+// ---- The overhead map page: viewport, legend, and compass (5.1) ----------
+
 fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, poi_arrows, world_coords};
@@ -912,8 +1501,25 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         .fg(Color::Rgb(210, 120, 90))
         .add_modifier(Modifier::BOLD);
     let link_style = Style::default().fg(theme::BORDER_DIM());
+    let quest_style = Style::default()
+        .fg(theme::SUCCESS())
+        .add_modifier(Modifier::BOLD);
     // The room the player marked, resolved once per frame rather than per cell.
     let dest_room = state.dest_room();
+    // Active-quest targets, when the overlay is on (`q`). Same-block targets
+    // get a `!` on their cell or a border arrow; cross-block ones are only
+    // counted - across reserved blocks an arrow's direction means nothing.
+    let quest_targets: Vec<super::world::RoomId> = if state.map_quests() {
+        view.quests
+            .iter()
+            .filter(|q| !q.done)
+            .filter_map(|q| q.target)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let quest_cells: std::collections::HashSet<super::world::RoomId> =
+        quest_targets.iter().copied().collect();
 
     let mut cells: Vec<Vec<(String, Style)>> = canvas
         .iter()
@@ -949,6 +1555,10 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
                             .fg(theme::SUCCESS())
                             .add_modifier(Modifier::BOLD),
                     ),
+                    // An active quest's target room, when the overlay is on.
+                    // Below the marked destination (a deliberate mark beats a
+                    // standing hint) but above the boss star.
+                    Tile::Room(id) if quest_cells.contains(id) => ("!".to_string(), quest_style),
                     Tile::Room(id) => match poi(*id) {
                         Some(p) if p.boss.is_some() => ("\u{2605}".to_string(), boss_style),
                         Some(p) if p.tameable.is_some() => ("\u{2665}".to_string(), tame_style),
@@ -971,6 +1581,31 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
             *cell = (arrow.glyph.to_string(), style);
         }
     }
+    // The green arrow is the one you chose, and it works exactly like the
+    // amber ones: a straight-line direction to the *tracked* destination,
+    // drawn only while it sits within `PAN_LIMIT` (same land, where the
+    // coordinate delta is a real spatial relationship). Crucially this needs
+    // no `visited` at all, so it points at a boss you have never found -
+    // which is the whole job of tracking a quest. Beyond this land there is
+    // no honest direction to draw, so the journal names the region to
+    // venture into instead. Drawn after (over) the amber arrows: a border
+    // cell can only say one thing, and where-you're-going beats
+    // where-a-boss-is.
+    if let Some(dest) = dest_room {
+        let (dest_arrows, _) = super::worldmap::quest_arrows(coords, center, cols, height, &[dest]);
+        for arrow in hug_poi_arrows(dest_arrows, &canvas) {
+            if let Some(cell) = cells.get_mut(arrow.row).and_then(|r| r.get_mut(arrow.col)) {
+                *cell = (arrow.glyph.to_string(), quest_style);
+            }
+        }
+    }
+    // Cross-land quest targets are counted in the footer instead of pointed
+    // at with a meaningless direction.
+    let quests_beyond = if quest_targets.is_empty() {
+        0
+    } else {
+        super::worldmap::quest_arrows(coords, center, cols, height, &quest_targets).1
+    };
 
     // Land labels: name each explored region once, near the centroid of its
     // rooms in view, so you can see which land is which at a glance. Only lands
@@ -1140,7 +1775,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let dim = Style::default().fg(theme::TEXT_DIM());
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "wasd pan · <> level · x mark destination · Enter re-centre · m close",
+            "wasd pan · <> level · x mark destination · q quests · Enter re-centre · m close",
             dim,
         )])),
         rows[3],
@@ -1174,23 +1809,36 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
         rows[4],
     );
 
-    // Footer line 3: marker legend (bosses, tames, notable foes, gather
-    // nodes, and the border arrow for an off-screen one of those).
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
-            Span::styled(" boss  ", dim),
-            Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
-            Span::styled(" tame  ", dim),
-            Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
-            Span::styled(" notable foe  ", dim),
-            Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
-            Span::styled(" gather  ", dim),
-            Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
-            Span::styled(" one of these, off-map", dim),
-        ])),
-        rows[5],
-    );
+    // Footer line 3: marker legend (quests, bosses, tames, notable foes,
+    // gather nodes, and the border arrow for an off-screen one of those).
+    let mut marker_legend = vec![
+        Span::styled("!", quest_style),
+        Span::styled(" quest  ", dim),
+        Span::styled("\u{2605}", Style::default().fg(Color::Rgb(250, 210, 90))),
+        Span::styled(" boss  ", dim),
+        Span::styled("\u{2665}", Style::default().fg(Color::Rgb(230, 140, 160))),
+        Span::styled(" tame  ", dim),
+        Span::styled("\u{25c6}", Style::default().fg(Color::Rgb(210, 120, 90))),
+        Span::styled(" notable foe  ", dim),
+        Span::styled("\u{2692}", Style::default().fg(Color::Rgb(150, 200, 120))),
+        Span::styled(" gather  ", dim),
+        Span::styled("\u{2192}", Style::default().fg(theme::AMBER_DIM())),
+        Span::styled(" one of these, off-map  ", dim),
+        Span::styled("\u{2691}\u{2192}", quest_style),
+        Span::styled(" tracked", dim),
+    ];
+    if quests_beyond > 0 {
+        // An honest count instead of a dishonest arrow: these targets sit in
+        // other lands, where a border direction would mean nothing.
+        marker_legend.push(Span::styled(
+            format!(
+                "  \u{00b7} {quests_beyond} quest{} beyond this land (track: j)",
+                if quests_beyond == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(theme::SUCCESS()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(marker_legend)), rows[5]);
 
     // Footer line 4: terrain key, showing only the biomes actually in view so it
     // stays legible instead of listing every biome in the world.
@@ -1232,6 +1880,8 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     }
     frame.render_widget(Paragraph::new(Line::from(key)), rows[6]);
 }
+
+// ---- The one-time gates: class select and archetype select ---------------
 
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
     let cursor = cursor.min(Class::ALL.len() - 1);
@@ -1378,6 +2028,8 @@ fn draw_archetype_select(frame: &mut Frame, area: Rect, view: &PlayerView) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
+// ---- The side column: log, compact mode, and list scrolling --------------
+
 fn side_paragraph(lines: Vec<Line<'static>>) -> Paragraph<'static> {
     Paragraph::new(lines).wrap(Wrap { trim: false })
 }
@@ -1433,7 +2085,11 @@ fn draw_log(frame: &mut Frame, area: Rect, view: &PlayerView) {
         return;
     }
 
-    let context_lines = current_room_context(view, area.width as usize);
+    // Mid-fight the room prose gives way to the battle frame: the foe's full
+    // name, both sides' meters, and active effects. It reverts the moment the
+    // fight ends.
+    let context_lines = battle_context(view, area.width as usize)
+        .unwrap_or_else(|| current_room_context(view, area.width as usize));
     let recent_reserve = if area.height < 18 { 5 } else { 8 };
     let context_h = (context_lines.len() as u16)
         .min(area.height.saturating_sub(recent_reserve + 1))
@@ -1479,7 +2135,7 @@ fn draw_side(
         Panel::Shop => shop_panel(&state.shop_rows(), view, state.cursor()),
         Panel::Examine => examine_panel(view, state.cursor()),
         Panel::Titles => titles_panel(view, state.cursor()),
-        Panel::Quests => (quests_panel(view), None),
+        Panel::Quests => quests_panel(view, state.cursor(), state.dest_room()),
         Panel::Follow => follow_panel(view, state.cursor(), usernames),
         Panel::Stable => stable_panel(view, state.cursor()),
         Panel::Taming => taming_panel(view, state.cursor()),
@@ -1617,6 +2273,8 @@ fn wrapped_rows(text: &str, width: usize) -> usize {
     rows
 }
 
+// ---- The room side panel, and the titles panel ---------------------------
+
 fn draw_room_side(
     frame: &mut Frame,
     area: Rect,
@@ -1641,6 +2299,30 @@ fn draw_room_side(
         rows[0]
     };
 
+    // Mid-fight the field layout's side panel becomes the battle frame - the
+    // classic layout keeps the room summary here, since its main column
+    // already swaps to `battle_context`. Its rows carry their own click
+    // actions (foes to switch the lock, ability rows to cast).
+    let fighting =
+        view.mobs.iter().any(|m| m.targeted) || view.occupants.iter().any(|o| o.targeted);
+    if !with_minimap && fighting {
+        let (lines, hits) = battle_side_panel(view, usernames, panel_area.width as usize);
+        for (idx, action) in hits {
+            if (idx as u16) < panel_area.height {
+                state.record_combat_hit(
+                    Rect {
+                        x: panel_area.x,
+                        y: panel_area.y + idx as u16,
+                        width: panel_area.width,
+                        height: 1,
+                    },
+                    action,
+                );
+            }
+        }
+        frame.render_widget(Paragraph::new(lines), panel_area);
+        return;
+    }
     let (lines, foe_hits, player_hits) =
         room_panel(view, usernames, panel_area.width as usize, state.heading());
     // Make each visible foe row clickable: its rect is where the panel (drawn
@@ -1719,45 +2401,561 @@ fn titles_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
     (lines, sel_line)
 }
 
-/// Quest journal: Frontier zone clears plus active board bounties.
-fn quests_panel(view: &PlayerView) -> Vec<Line<'static>> {
+// ---- The quest journal and the bounty board ------------------------------
+
+/// Quest journal, in reading order: what the player is doing right now (the
+/// starter step and accepted bounties), then the Long Road - the realm's spine
+/// of great bosses - then the Frontier's zone quests once its gate titles are
+/// held (sealed, they collapse to a single line instead of twenty rows of
+/// endgame noise). A list panel: Enter on a row with a target tracks it on the
+/// compass and world map.
+fn quests_panel(
+    view: &PlayerView,
+    cursor: usize,
+    tracked: Option<RoomId>,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut lines = vec![section("Quest Journal")];
-    let frontier_total = view.quests.iter().filter(|q| q.frontier).count();
-    let done = view.quests.iter().filter(|q| q.frontier && q.done).count();
-    lines.push(Line::from(Span::styled(
-        format!("  {done}/{frontier_total} zones cleared"),
-        Style::default().fg(theme::TEXT_DIM()),
-    )));
-    lines.push(Line::raw(""));
-    for q in &view.quests {
+    // Keys up top where they can't scroll away - the Long Road below makes
+    // this the longest panel in the game.
+    lines.push(hint("w/s", "move  Enter track on map  j close"));
+    let mut sel_line = None;
+    lines.push(section("In progress"));
+    if view.quests.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  nothing underway - the boards in each capital post daily work",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    for (i, q) in view.quests.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
         let (mark, color) = if q.done {
             ("[x]", theme::SUCCESS())
         } else {
             ("[ ]", theme::AMBER())
         };
-        lines.push(Line::from(Span::styled(
-            format!("{mark} {}", q.name),
-            Style::default().fg(color),
-        )));
+        let is_tracked = q.target.is_some() && q.target == tracked;
+        let mut row_style = Style::default().fg(color);
+        if selected {
+            row_style = row_style
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { ">" } else { " " };
+        let mut spans = vec![Span::styled(
+            format!("{marker}{mark} {}", q.name),
+            row_style,
+        )];
+        if is_tracked {
+            spans.push(Span::styled(
+                " \u{2691} tracked".to_string(),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        lines.push(Line::from(spans));
         lines.push(Line::from(Span::styled(
             format!("    {}", q.desc),
             Style::default().fg(theme::TEXT_DIM()),
         )));
+        if let Some(place) = quest_place_note(q.target, view) {
+            lines.push(Line::from(Span::styled(
+                format!("    {place}"),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("    reward: {}", q.reward),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
     }
     lines.push(Line::raw(""));
+
+    lines.push(section("The Long Road"));
     lines.push(Line::from(Span::styled(
-        "  Frontier: Champion title + bounty",
+        "  every crown between you and the realm's end",
         Style::default().fg(theme::TEXT_DIM()),
     )));
+    // The road rows continue the cursor list after the quests, so w/s can
+    // walk (and scroll) the whole panel and Enter can track a crown's lair.
+    for (ri, step) in view.road.iter().enumerate() {
+        let selected = view.quests.len() + ri == cursor;
+        if selected {
+            sel_line = Some(lines.len());
+        }
+        let (mark, mut style) = if step.done {
+            ("[x]", Style::default().fg(theme::SUCCESS()))
+        } else if step.current {
+            (
+                "[>]",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("[ ]", Style::default().fg(theme::TEXT_DIM()))
+        };
+        if selected {
+            style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { ">" } else { " " };
+        let mut spans = vec![Span::styled(format!("{marker}{mark} {}", step.boss), style)];
+        if step.target.is_some() && step.target == tracked {
+            spans.push(Span::styled(
+                " \u{2691} tracked".to_string(),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        lines.push(Line::from(spans));
+        // Only the tracked crown carries the place note: it is the row where
+        // "why is there no arrow on my map" actually gets asked, and nine of
+        // these would bury the panel.
+        if step.target.is_some()
+            && step.target == tracked
+            && let Some(place) = quest_place_note(step.target, view)
+        {
+            lines.push(Line::from(Span::styled(
+                format!("    {place}"),
+                Style::default().fg(theme::AMBER_DIM()),
+            )));
+        }
+        let mut detail = format!("    {}", step.place);
+        if !step.unlocks.is_empty() {
+            detail.push_str(&format!(" - opens {}", step.unlocks));
+        }
+        lines.push(Line::from(Span::styled(
+            detail,
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
     lines.push(Line::from(Span::styled(
-        "  Boards: examine one to pick a bounty to accept or claim",
+        "  side countries need no crown: the Sunderlakes (fishing), Broceliande \
+         (taming), Aelunor, the Archipelago, the Wildbound Waste (pvp)",
         Style::default().fg(theme::TEXT_DIM()),
     )));
     lines.push(Line::raw(""));
-    lines.push(hint("j", "close"));
-    lines.push(hint("[ ]", "scroll"));
-    lines
+
+    if view.frontier_open {
+        let frontier_total = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier)
+            .count();
+        let done = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier && q.done)
+            .count();
+        lines.push(Line::from(Span::styled(
+            format!("  Frontier: {done}/{frontier_total} zones cleared (listed above)"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  The Frontier - sealed: it opens to the Archdemon's Bane bearing \
+             all three living-dark seals",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    (lines, sel_line)
 }
+
+/// Render a full-screen column, skipping enough leading lines to keep the
+/// selection (if any) in view. Lines are pre-wrapped by the caller, so one
+/// logical line is one terminal row and the offset arithmetic is exact.
+fn render_scrolled(frame: &mut Frame, rect: Rect, lines: Vec<Line<'static>>, sel: Option<usize>) {
+    let h = rect.height as usize;
+    let off = match sel {
+        Some(s) if s + 3 > h => (s + 3 - h).min(lines.len()),
+        _ => 0,
+    };
+    let shown: Vec<Line> = lines.into_iter().skip(off).collect();
+    frame.render_widget(Paragraph::new(shown), rect);
+}
+
+/// Where a quest's target lies, for the journal. The green map arrow is a
+/// straight-line direction, so it can only be drawn while the target sits in
+/// the same land (within `PAN_LIMIT`, the one case where a coordinate
+/// direction is a real spatial relationship). A target beyond that gets no
+/// arrow, and this is the line that says why: it names the region to venture
+/// into, and whether the player has ever set foot in it.
+fn quest_place_note(target: Option<RoomId>, view: &PlayerView) -> Option<String> {
+    let target = target?;
+    let (region, _) = super::world::region_atlas_entry(target)?;
+    let coords = super::worldmap::world_coords();
+    let same_land = match (view.room.and_then(|r| coords.get(&r)), coords.get(&target)) {
+        (Some(here), Some(there)) => {
+            here.z == there.z
+                && (here.x - there.x).abs() <= super::worldmap::PAN_LIMIT
+                && (here.y - there.y).abs() <= super::worldmap::PAN_LIMIT
+        }
+        _ => false,
+    };
+    let unfound = view
+        .atlas
+        .iter()
+        .find(|r| r.name == region)
+        .is_some_and(|r| r.explored == 0);
+    Some(match (same_land, unfound) {
+        (true, _) => format!("in {region}"),
+        (false, true) => format!("in {region} - venture there and the map will point the way"),
+        (false, false) => {
+            format!("in {region} - too far for the map to point; head that way first")
+        }
+    })
+}
+
+/// One journal quest as its full-view rows: the name row (cursor and tracked
+/// decoration included) with the wrapped description, where it lies, and the
+/// reward under it.
+fn quest_entry_rows(
+    q: &QuestView,
+    view: &PlayerView,
+    selected: bool,
+    tracked: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let (mark, color) = if q.done {
+        ("[x]", theme::SUCCESS())
+    } else {
+        ("[ ]", theme::AMBER())
+    };
+    let mut row_style = Style::default().fg(color);
+    if selected {
+        row_style = row_style
+            .bg(theme::BG_SELECTION())
+            .add_modifier(Modifier::BOLD);
+    }
+    let marker = if selected { ">" } else { " " };
+    let mut spans = vec![Span::styled(
+        format!("{marker}{mark} {}", q.name),
+        row_style,
+    )];
+    if tracked {
+        spans.push(Span::styled(
+            " \u{2691} tracked".to_string(),
+            Style::default().fg(theme::SUCCESS()),
+        ));
+    }
+    let mut rows = vec![Line::from(spans)];
+    rows.extend(side_text_wrap(&q.desc, theme::TEXT_DIM(), width));
+    if let Some(place) = quest_place_note(q.target, view) {
+        rows.extend(side_text_wrap(&place, theme::AMBER_DIM(), width));
+    }
+    rows.push(Line::from(Span::styled(
+        format!("    reward: {}", q.reward),
+        Style::default().fg(theme::BADGE_GOLD()),
+    )));
+    rows
+}
+
+/// The journal as a full view (wide terminals): the sidebar squeezes three
+/// sections into one thin column; given room they become columns - active
+/// work, the Long Road, the Frontier - with the same cursor, keys, and
+/// tracking as the sidebar `quests_panel`, which still serves cramped
+/// terminals.
+fn draw_journal_screen(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let tracked = state.dest_room();
+    let cursor = state.cursor();
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Quest Journal",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            hint("w/s", "move  Enter track on map  j close"),
+            Line::raw(""),
+        ]),
+        rows[0],
+    );
+    let cols = Layout::horizontal([
+        Constraint::Percentage(38),
+        Constraint::Percentage(34),
+        Constraint::Percentage(28),
+    ])
+    .split(rows[1]);
+
+    // Column 1: active work - the starter step and accepted bounties.
+    let w1 = (cols[0].width as usize).saturating_sub(2);
+    let mut work: Vec<Line> = vec![section("In progress")];
+    let mut work_sel = None;
+    let mut any_active = false;
+    for (i, q) in view.quests.iter().enumerate() {
+        if q.kind == QuestKind::Frontier {
+            continue;
+        }
+        any_active = true;
+        let selected = i == cursor;
+        if selected {
+            work_sel = Some(work.len());
+        }
+        work.extend(quest_entry_rows(
+            q,
+            view,
+            selected,
+            q.target.is_some() && q.target == tracked,
+            w1,
+        ));
+        work.push(Line::raw(""));
+    }
+    if !any_active {
+        work.push(Line::from(Span::styled(
+            "  nothing underway - the boards in each capital post daily work",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    render_scrolled(frame, cols[0], work, work_sel);
+
+    // Column 2: the Long Road, with the ungated side countries below it.
+    let w2 = (cols[1].width as usize).saturating_sub(2);
+    let mut road: Vec<Line> = vec![section("The Long Road")];
+    let mut road_sel = None;
+    road.push(Line::from(Span::styled(
+        "  every crown between you and the realm's end",
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    for (ri, step) in view.road.iter().enumerate() {
+        let selected = view.quests.len() + ri == cursor;
+        if selected {
+            road_sel = Some(road.len());
+        }
+        let (mark, mut style) = if step.done {
+            ("[x]", Style::default().fg(theme::SUCCESS()))
+        } else if step.current {
+            (
+                "[>]",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            ("[ ]", Style::default().fg(theme::TEXT_DIM()))
+        };
+        if selected {
+            style = style.bg(theme::BG_SELECTION()).add_modifier(Modifier::BOLD);
+        }
+        let marker = if selected { ">" } else { " " };
+        let mut spans = vec![Span::styled(format!("{marker}{mark} {}", step.boss), style)];
+        if step.target.is_some() && step.target == tracked {
+            spans.push(Span::styled(
+                " \u{2691} tracked".to_string(),
+                Style::default().fg(theme::SUCCESS()),
+            ));
+        }
+        road.push(Line::from(spans));
+        // See the sidebar twin: only the tracked crown explains its arrow.
+        if step.target.is_some()
+            && step.target == tracked
+            && let Some(place) = quest_place_note(step.target, view)
+        {
+            road.extend(side_text_wrap(&place, theme::AMBER_DIM(), w2));
+        }
+        let mut detail = step.place.to_string();
+        if !step.unlocks.is_empty() {
+            detail.push_str(&format!(" - opens {}", step.unlocks));
+        }
+        road.extend(side_text_wrap(&detail, theme::TEXT_DIM(), w2));
+    }
+    road.push(Line::raw(""));
+    road.extend(side_text_wrap(
+        "side countries need no crown: the Sunderlakes (fishing), Broceliande \
+         (taming), Aelunor, the Archipelago, the Wildbound Waste (pvp)",
+        theme::TEXT_DIM(),
+        w2,
+    ));
+    render_scrolled(frame, cols[1], road, road_sel);
+
+    // Column 3: the Frontier - its twenty zone quests once open, one sealed
+    // line until then.
+    let w3 = (cols[2].width as usize).saturating_sub(2);
+    let mut frontier: Vec<Line> = vec![section("The Frontier")];
+    let mut frontier_sel = None;
+    if view.frontier_open {
+        let total = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier)
+            .count();
+        let done = view
+            .quests
+            .iter()
+            .filter(|q| q.kind == QuestKind::Frontier && q.done)
+            .count();
+        frontier.push(Line::from(Span::styled(
+            format!("  {done}/{total} zones cleared"),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        for (i, q) in view.quests.iter().enumerate() {
+            if q.kind != QuestKind::Frontier {
+                continue;
+            }
+            let selected = i == cursor;
+            if selected {
+                frontier_sel = Some(frontier.len());
+            }
+            frontier.extend(quest_entry_rows(
+                q,
+                view,
+                selected,
+                q.target.is_some() && q.target == tracked,
+                w3,
+            ));
+        }
+    } else {
+        frontier.extend(side_text_wrap(
+            "sealed: it opens to the Archdemon's Bane bearing all three \
+             living-dark seals",
+            theme::TEXT_DIM(),
+            w3,
+        ));
+    }
+    render_scrolled(frame, cols[2], frontier, frontier_sel);
+}
+
+/// The board as a full view (wide terminals): a master-detail split - the
+/// postings list on the left, the highlighted posting's full story on the
+/// right. Same cursor and keys as the sidebar `board_panel`, which still
+/// serves cramped terminals.
+fn draw_board_screen(frame: &mut Frame, area: Rect, state: &State, view: &PlayerView) {
+    let Some(board) = &view.board else {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "No board here.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            area,
+        );
+        return;
+    };
+    let cursor = state.cursor();
+    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "Quest Board",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            )),
+            hint("w/s", "select  Enter claim (READY) / accept  o back"),
+            Line::raw(""),
+        ]),
+        rows[0],
+    );
+    if board.entries.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "No bounties posted right now. Make progress on what you're \
+                 already carrying, or come back later.",
+                Style::default().fg(theme::TEXT_DIM()),
+            ))),
+            rows[1],
+        );
+        return;
+    }
+    let cols =
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).split(rows[1]);
+
+    // Left: the postings, one row each.
+    let list_w = cols[0].width as usize;
+    let mut list: Vec<Line> = Vec::new();
+    let mut sel = None;
+    for (i, e) in board.entries.iter().enumerate() {
+        let selected = i == cursor;
+        if selected {
+            sel = Some(list.len());
+        }
+        let (tag, tag_color) = if e.ready {
+            ("READY", theme::SUCCESS())
+        } else if e.locked {
+            ("sealed", theme::ERROR())
+        } else {
+            ("~Lv", theme::AMBER_DIM())
+        };
+        let tag_text = if tag == "~Lv" {
+            format!("  ~Lv{}", e.suggested_level)
+        } else {
+            format!("  [{tag}]")
+        };
+        let base_fg = if e.locked {
+            theme::TEXT_DIM()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
+        let name_style = if selected {
+            Style::default()
+                .fg(base_fg)
+                .bg(theme::BG_SELECTION())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(base_fg)
+        };
+        let marker = if selected { "> " } else { "  " };
+        let name_w = list_w.saturating_sub(marker.len() + tag_text.chars().count() + 1);
+        list.push(Line::from(vec![
+            Span::styled(
+                format!("{marker}{}", truncate_chars(&e.title, name_w)),
+                name_style,
+            ),
+            Span::styled(tag_text, Style::default().fg(tag_color)),
+        ]));
+    }
+    render_scrolled(frame, cols[0], list, sel);
+
+    // Right: the highlighted posting in full.
+    let detail_w = (cols[1].width as usize).saturating_sub(2);
+    let mut detail: Vec<Line> = Vec::new();
+    if let Some(e) = board.entries.get(cursor) {
+        detail.push(Line::from(Span::styled(
+            e.title.clone(),
+            Style::default()
+                .fg(if e.locked {
+                    theme::TEXT_DIM()
+                } else {
+                    theme::TEXT_BRIGHT()
+                })
+                .add_modifier(Modifier::BOLD),
+        )));
+        detail.push(Line::from(Span::styled(
+            format!("  a fair fight around Lv{}", e.suggested_level),
+            Style::default().fg(theme::AMBER_DIM()),
+        )));
+        detail.push(Line::raw(""));
+        detail.extend(side_text_wrap(&e.blurb, LAT_TEXT, detail_w));
+        detail.push(Line::raw(""));
+        detail.extend(side_text_wrap(
+            &format!("task: {}", e.objective),
+            theme::AMBER(),
+            detail_w,
+        ));
+        detail.extend(side_text_wrap(&e.hint, theme::TEXT_DIM(), detail_w));
+        detail.push(Line::raw(""));
+        detail.push(Line::from(Span::styled(
+            format!("  reward: {}", e.reward),
+            Style::default().fg(theme::BADGE_GOLD()),
+        )));
+        if e.ready {
+            detail.push(Line::from(Span::styled(
+                "  READY - Enter turns it in",
+                Style::default().fg(theme::SUCCESS()),
+            )));
+        } else if e.locked {
+            detail.extend(side_text_wrap(
+                "sealed - the ground this names refuses you at the door; its \
+                 gate opens further down the Long Road (j)",
+                theme::ERROR(),
+                detail_w,
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(detail), cols[1]);
+}
+
+// ---- The leaderboard, vitals, and the room / battle panels ---------------
 
 /// One leaderboard row: rank, level + class abbreviation, name, then the
 /// board's own value column (already formatted by the caller, since its
@@ -1918,7 +3116,8 @@ fn room_panel(
     let mut lines = vitals(view);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
-    lines.extend(side_text_wrap(&view.zone, LAT_TEXT, width));
+    // The zone plus its level band, so one glance answers "do I belong here".
+    lines.extend(side_text_wrap(&zone_with_band(view), LAT_TEXT, width));
     // The living-world clock: time of day and weather. A phase glyph plus a
     // danger colour during dusk/night (when mobs hit 25% harder) makes the
     // clock legible at a glance instead of reading as pure flavour text.
@@ -2046,6 +3245,16 @@ fn room_panel(
         };
         lines.extend(side_kv_wrap("compass", &text, color, width));
     }
+    // A merchant standing here: called out on its own line, not buried in "Of
+    // note", so a shop room can't be walked past without noticing it.
+    if let Some(shop) = &view.shop {
+        lines.extend(side_kv_wrap(
+            "shop",
+            &format!("{} ({})", shop.shop_name, shop.npc_name),
+            theme::SUCCESS(),
+            width,
+        ));
+    }
     if !view.features.is_empty() {
         lines.push(section("Of note"));
         for feat in &view.features {
@@ -2065,9 +3274,6 @@ fn room_panel(
     }
     if !view.mobs.is_empty() {
         lines.push(section("Foes"));
-        // Reserve room for the leading `Lv## ` and the HP meter, so foe names
-        // get whatever width is left in the panel.
-        let name_w = (width.saturating_sub(13)).clamp(6, 16);
         for mob in &view.mobs {
             let mut weight = if mob.boss {
                 Modifier::BOLD
@@ -2084,19 +3290,49 @@ fn room_panel(
             } else {
                 "  "
             };
-            let labelled = format!("Lv{:<2} {}", mob.level, mob.name);
+            let name_style = Style::default()
+                .fg(rarity_color(&mob.rank))
+                .add_modifier(weight);
+            // The full name, wrapped - "a scrawny …" told nobody what they
+            // were fighting. First line carries the marker (and the click
+            // target); continuations hang indented under it.
+            let wrap_w = width.saturating_sub(4).max(6);
+            let wrapped = wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w);
             foe_hits.push((lines.len(), mob.id));
-            lines.push(roster_row(
-                marker,
-                &labelled,
-                mob.hp,
-                mob.max_hp,
-                Style::default()
-                    .fg(rarity_color(&mob.rank))
-                    .add_modifier(weight),
-                name_w,
-                "",
-            ));
+            for (i, part) in wrapped.into_iter().enumerate() {
+                let prefix = if i == 0 { marker } else { "    " };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{part}"),
+                    name_style,
+                )));
+            }
+            // The health line: a wider meter plus real numbers, with the one
+            // status that changes what to do next (a stunned foe is free hits).
+            let mut meter_spans = vec![
+                Span::raw("    "),
+                Span::styled(
+                    format!(
+                        "{} {}/{}",
+                        meter(mob.hp, mob.max_hp, 10),
+                        mob.hp,
+                        mob.max_hp
+                    ),
+                    Style::default().fg(hp_color(mob.hp, mob.max_hp)),
+                ),
+            ];
+            if mob.dot_stacks > 0 {
+                meter_spans.push(Span::styled(
+                    format!(" bleed x{}", mob.dot_stacks),
+                    Style::default().fg(theme::SUCCESS()),
+                ));
+            }
+            if mob.stunned {
+                meter_spans.push(Span::styled(
+                    " stunned".to_string(),
+                    Style::default().fg(theme::AMBER_GLOW()),
+                ));
+            }
+            lines.push(Line::from(meter_spans));
         }
     }
     if !view.occupants.is_empty() {
@@ -2233,6 +3469,224 @@ fn room_panel(
     (lines, foe_hits, player_hits)
 }
 
+/// The side panel while a fight is on, in the field layout: the room summary
+/// gives way to a battle frame - your vitals, the locked foe's full name,
+/// nature, and wide meter, your battle effects and companion, your ability
+/// roster with live costs and readiness, and the room's other foes for
+/// switching targets. The classic layout keeps the room summary, since its
+/// main column already carries `battle_context`. Returns each clickable row's
+/// line index with its action (switch the lock, cast an ability).
+fn battle_side_panel(
+    view: &PlayerView,
+    usernames: &UsernameLookup<'_>,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<(usize, ClickAction)>) {
+    let mut hits: Vec<(usize, ClickAction)> = Vec::new();
+    let mut lines = vitals(view);
+    lines.push(Line::raw(""));
+    lines.push(section("Battle"));
+    let wrap_w = width.saturating_sub(4).max(6);
+    // The panel draws without terminal wrapping (each row must stay one line
+    // so clicks map to rows), so every line here is pre-wrapped or sized to
+    // fit: meters shrink to leave room for their numbers, prose goes through
+    // `side_text_wrap`, ability detail truncates.
+    let hp_meter_line = |label: &'static str, hp: i32, max_hp: i32| {
+        let nums = format!("{hp}/{max_hp}");
+        let meter_w = width
+            .saturating_sub(5 + UnicodeWidthStr::width(nums.as_str()) + 1)
+            .clamp(6, 22);
+        Line::from(vec![
+            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                format!("{} {nums}", meter(hp, max_hp, meter_w)),
+                Style::default().fg(hp_color(hp, max_hp)),
+            ),
+        ])
+    };
+    if let Some(mob) = view.mobs.iter().find(|m| m.targeted) {
+        let name_style = Style::default()
+            .fg(rarity_color(&mob.rank))
+            .add_modifier(Modifier::BOLD);
+        let marker = if mob.boss { "\u{2021} " } else { "\u{00bb} " };
+        hits.push((lines.len(), ClickAction::AttackMob(mob.id)));
+        for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = if i == 0 { marker } else { "    " };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{part}"),
+                name_style,
+            )));
+        }
+        lines.push(hp_meter_line("  HP ", mob.hp, mob.max_hp));
+        let mut traits: Vec<String> = vec![mob.rank.clone()];
+        traits.push(format!("strikes with {}", mob.school));
+        if let Some(weak) = mob.weak {
+            traits.push(format!("weak to {weak}"));
+        }
+        if let Some(resist) = mob.resist {
+            traits.push(format!("shrugs off {resist}"));
+        }
+        lines.extend(side_text_wrap(
+            &traits.join(" \u{00b7} "),
+            theme::TEXT_DIM(),
+            width,
+        ));
+        let mut afflicted: Vec<String> = Vec::new();
+        if mob.dot_stacks > 0 {
+            afflicted.push(format!("bleeding x{}", mob.dot_stacks));
+        }
+        if mob.stunned {
+            afflicted.push("stunned".to_string());
+        }
+        if !afflicted.is_empty() {
+            lines.extend(side_text_wrap(
+                &format!("afflicted: {}", afflicted.join(" \u{00b7} ")),
+                theme::SUCCESS(),
+                width,
+            ));
+        }
+    } else if let Some(occ) = view.occupants.iter().find(|o| o.targeted) {
+        let name = usernames
+            .get(&occ.user_id)
+            .cloned()
+            .unwrap_or_else(|| "your rival".to_string());
+        let name_style = Style::default()
+            .fg(theme::ERROR())
+            .add_modifier(Modifier::BOLD);
+        for (i, part) in wrap_log_text(&format!("Lv{} {name}", occ.level), wrap_w)
+            .into_iter()
+            .enumerate()
+        {
+            let prefix = if i == 0 { "\u{00bb} " } else { "    " };
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{part}"),
+                name_style,
+            )));
+        }
+        lines.push(hp_meter_line("  HP ", occ.hp, occ.max_hp));
+        lines.push(Line::from(Span::styled(
+            "  duel",
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+    }
+    // Your own battle state, when there is any to show.
+    let mut effects: Vec<String> = Vec::new();
+    if view.shield > 0 {
+        effects.push(format!("shield {}", view.shield));
+    }
+    if view.empower > 0 {
+        effects.push(format!("empowered +{}", view.empower));
+    }
+    if view.stunned {
+        effects.push("stunned".to_string());
+    }
+    if !effects.is_empty() {
+        lines.extend(side_text_wrap(
+            &format!("you: {}", effects.join(" \u{00b7} ")),
+            theme::AMBER_GLOW(),
+            width,
+        ));
+    }
+    // Your companion fighting alongside.
+    if let Some(pet) = &view.pet {
+        let (text, color) = if pet.downed {
+            (format!("{} {} downed", pet.glyph, pet.name), theme::ERROR())
+        } else {
+            (
+                format!("{} {} {}/{}", pet.glyph, pet.name, pet.hp, pet.max_hp),
+                hp_color(pet.hp, pet.max_hp),
+            )
+        };
+        lines.extend(side_text_wrap(&text, color, width));
+        // Its unlocked auto-skills, so what fires by itself is no mystery.
+        if !pet.downed && !pet.skills.is_empty() {
+            let names = pet
+                .skills
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.extend(side_text_wrap(
+                &format!("    auto: {names}"),
+                theme::AMBER_DIM(),
+                width,
+            ));
+        }
+    }
+    // The ability roster, with live costs and readiness - what the bottom
+    // action bar has no room to say. Each row casts on click, like its key.
+    if !view.abilities.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Abilities"));
+        for a in &view.abilities {
+            // Slot 10 is cast with `0`, matching the keybind; show that digit.
+            let key = if a.slot == 10 { 0 } else { a.slot };
+            let (key_style, name_color) = if a.ready {
+                (theme::punch_through(theme::AMBER()), theme::TEXT_BRIGHT())
+            } else {
+                (
+                    theme::punch_through(theme::BORDER_DIM()),
+                    theme::TEXT_FAINT(),
+                )
+            };
+            hits.push((lines.len(), ClickAction::Ability(a.slot)));
+            let key_label = format!(" {key} ");
+            let name = format!(" {}", a.name);
+            let used =
+                UnicodeWidthStr::width(key_label.as_str()) + UnicodeWidthStr::width(name.as_str());
+            let detail = truncate_chars(
+                &format!("  {}c {}", a.cost, a.effect),
+                width.saturating_sub(used),
+            );
+            lines.push(Line::from(vec![
+                Span::styled(key_label, key_style),
+                Span::styled(
+                    name,
+                    Style::default().fg(name_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(detail, Style::default().fg(theme::TEXT_DIM())),
+            ]));
+        }
+    }
+    // The room's other foes, so a click can switch the lock mid-fight.
+    let others: Vec<&MobView> = view.mobs.iter().filter(|m| !m.targeted).collect();
+    if !others.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(section("Also here"));
+        for mob in others {
+            let marker = if mob.boss { "\u{2021} " } else { "  " };
+            let name_style = Style::default().fg(rarity_color(&mob.rank));
+            hits.push((lines.len(), ClickAction::AttackMob(mob.id)));
+            for (i, part) in wrap_log_text(&format!("Lv{} {}", mob.level, mob.name), wrap_w)
+                .into_iter()
+                .enumerate()
+            {
+                let prefix = if i == 0 { marker } else { "    " };
+                lines.push(Line::from(Span::styled(
+                    format!("{prefix}{part}"),
+                    name_style,
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "    {} {}/{}",
+                    meter(mob.hp, mob.max_hp, 10),
+                    mob.hp,
+                    mob.max_hp
+                ),
+                Style::default().fg(hp_color(mob.hp, mob.max_hp)),
+            )));
+        }
+        lines.push(hint("click", "switch target"));
+    }
+    lines.push(Line::raw(""));
+    lines.push(hint("space/x", "strike  z flee"));
+    lines.push(hint("Q", "quaff a potion"));
+    (lines, hits)
+}
+
 /// The overhead minimap section: a small map of the explored neighbourhood,
 /// painted in the bottom corner of the Room panel.
 fn minimap_lines(map: &MiniMap) -> Vec<Line<'static>> {
@@ -2288,6 +3742,8 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
     }
     Span::styled(glyph.to_string(), style)
 }
+
+// ---- The character sheet -------------------------------------------------
 
 /// Full-width character dashboard (the `c` panel when the terminal is roomy).
 /// A class portrait and vitals bars on the left, ability scores as dot ratings
@@ -2572,6 +4028,8 @@ fn skills_block(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
+// ---- Meters, stars, portraits, and the class palette ---------------------
+
 /// A labelled filled meter line, e.g. `HP   ███████░░░`.
 fn bar_line(label: &str, cur: i32, max: i32, color: Color) -> Line<'static> {
     Line::from(vec![
@@ -2851,6 +4309,8 @@ fn composed_portrait(
     )));
     lines
 }
+
+// ---- The panel behind each key: pack, shop, craft, tame, atlas -----------
 
 fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vitals(view);
@@ -3393,23 +4853,40 @@ fn board_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option<
         let marker = if selected { ">" } else { " " };
         let (tag, tag_color) = if e.ready {
             ("READY", theme::SUCCESS())
+        } else if e.locked {
+            ("sealed", theme::ERROR())
         } else {
             ("available", theme::AMBER())
         };
+        // A sealed posting reads dim: its hunting ground refuses the player at
+        // the door, so it is information, not an offer.
+        let base_fg = if e.locked {
+            theme::TEXT_DIM()
+        } else {
+            theme::TEXT_BRIGHT()
+        };
         let name_style = if selected {
             Style::default()
-                .fg(theme::TEXT_BRIGHT())
+                .fg(base_fg)
                 .bg(theme::BG_SELECTION())
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT_BRIGHT())
+            Style::default().fg(base_fg)
         };
         lines.push(Line::from(vec![
             Span::styled(format!("{marker} {}", e.title), name_style),
             Span::styled(format!("  [{tag}]"), Style::default().fg(tag_color)),
+            Span::styled(
+                format!("  ~Lv{}", e.suggested_level),
+                Style::default().fg(theme::AMBER_DIM()),
+            ),
         ]));
         lines.push(Line::from(Span::styled(
             format!("    {} ({})", e.blurb, e.objective),
+            Style::default().fg(theme::TEXT_DIM()),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    {}", e.hint),
             Style::default().fg(theme::TEXT_DIM()),
         )));
         lines.push(Line::from(Span::styled(
@@ -3617,6 +5094,18 @@ fn atlas_panel(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::BADGE_GOLD()),
             ));
         }
+        // The region's real mob-level band, so the atlas doubles as a "where
+        // should I be" chart.
+        if let Some((lo, hi)) = r.levels {
+            head.push(Span::styled(
+                if lo == hi {
+                    format!("  Lv {lo}")
+                } else {
+                    format!("  Lv {lo}-{hi}")
+                },
+                Style::default().fg(theme::AMBER_DIM()),
+            ));
+        }
         if r.here {
             head.push(Span::styled(
                 "  \u{25C8} you are here",
@@ -3676,13 +5165,26 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
             "Step through to any waystone you know of.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
-        Line::raw(""),
     ];
-    // Continent gates come first in the destination list, then the villages,
-    // then the islands.
-    let continent_count = super::world::CONTINENT_WAYSTONES.len();
+    // A mainland gate you have never stood in is not on the network yet. Say
+    // how many are missing without naming them, so the player learns the Ways
+    // run further than this list and still has to walk to find out where.
+    if portal.unknown_gates > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "The Ways answer to {} of {} far gates; walk to the rest.",
+                portal.known_gates,
+                portal.known_gates + portal.unknown_gates
+            ),
+            Style::default().fg(theme::TEXT_FAINT()),
+        )));
+    }
+    lines.push(Line::raw(""));
+    // Known continent gates come first in the destination list, then the
+    // villages, then the islands.
+    let continent_count = portal.known_gates;
     let village_count = super::archipelago::VILLAGES.len();
-    for (i, (label, _room, here, sealed)) in portal.entries.iter().enumerate() {
+    for (i, (label, _room, here)) in portal.entries.iter().enumerate() {
         let selected = i == cursor;
         if selected {
             sel_line = Some(lines.len());
@@ -3700,17 +5202,9 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
             )));
         }
         let marker = if selected { ">" } else { " " };
-        let suffix = if *here {
-            "  (here)"
-        } else if *sealed {
-            "  (sealed)"
-        } else {
-            ""
-        };
+        let suffix = if *here { "  (here)" } else { "" };
         let style = if *here {
             Style::default().fg(theme::TEXT_DIM())
-        } else if *sealed {
-            Style::default().fg(theme::TEXT_FAINT())
         } else if selected {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
@@ -3719,7 +5213,7 @@ fn portal_panel(view: &PlayerView, cursor: usize) -> (Vec<Line<'static>>, Option
         } else {
             Style::default().fg(theme::TEXT_BRIGHT())
         };
-        let style = if selected && (*here || *sealed) {
+        let style = if selected && *here {
             style.patch(theme::selection_style())
         } else {
             style
@@ -3894,6 +5388,8 @@ fn wrap_plain(s: &str, width: usize) -> Vec<String> {
     out
 }
 
+// ---- The footer hint row -------------------------------------------------
+
 fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     let mut lines = vec![section("Commands")];
     if view.dead {
@@ -3972,7 +5468,7 @@ fn footer_hints(view: &PlayerView) -> Vec<Line<'static>> {
     lines
 }
 
-// ---- helpers -------------------------------------------------------------
+// ---- The log: wrapping, collapsing, and the recent tail ------------------
 
 fn wrapped_log_tail(view: &PlayerView, width: usize, height: usize) -> Vec<Line<'static>> {
     if width == 0 || height == 0 {
@@ -4074,6 +5570,152 @@ fn separator_line(width: usize) -> Line<'static> {
     Line::from(Span::styled(line, Style::default().fg(theme::BORDER())))
 }
 
+// ---- The main column's room and battle context ---------------------------
+
+/// The left column's battle frame, shown in place of the room context while a
+/// fight is on: the foe's full name and nature, both sides' vitals as wide
+/// meters, and every active effect that changes what to press next. The room
+/// prose can wait; mid-swing, this is what the column is for.
+fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>> {
+    let meter_w = width.saturating_sub(18).clamp(10, 30);
+    let (name, name_style, level, traits, hp, max_hp, afflicted) =
+        if let Some(mob) = view.mobs.iter().find(|m| m.targeted) {
+            let mut traits: Vec<String> = vec![mob.rank.clone()];
+            traits.push(format!("strikes with {}", mob.school));
+            if let Some(weak) = mob.weak {
+                traits.push(format!("weak to {weak}"));
+            }
+            if let Some(resist) = mob.resist {
+                traits.push(format!("shrugs off {resist}"));
+            }
+            let mut afflicted: Vec<String> = Vec::new();
+            if mob.dot_stacks > 0 {
+                afflicted.push(format!("bleeding x{}", mob.dot_stacks));
+            }
+            if mob.stunned {
+                afflicted.push("stunned".to_string());
+            }
+            let marker = if mob.boss { "\u{2021} " } else { "" };
+            (
+                format!("{marker}{}", mob.name),
+                Style::default()
+                    .fg(rarity_color(&mob.rank))
+                    .add_modifier(Modifier::BOLD),
+                mob.level,
+                traits,
+                mob.hp,
+                mob.max_hp,
+                afflicted,
+            )
+        } else {
+            let occ = view.occupants.iter().find(|o| o.targeted)?;
+            (
+                "your rival".to_string(),
+                Style::default()
+                    .fg(theme::ERROR())
+                    .add_modifier(Modifier::BOLD),
+                occ.level,
+                vec!["duel".to_string()],
+                occ.hp,
+                occ.max_hp,
+                Vec::new(),
+            )
+        };
+
+    let mut lines = vec![section("Battle")];
+    lines.push(Line::from(vec![
+        Span::styled(name, name_style),
+        Span::styled(
+            format!("   Lv{level}"),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", traits.join(" \u{00b7} ")),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  HP   ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            format!("{} {hp}/{max_hp}", meter(hp, max_hp, meter_w)),
+            Style::default().fg(hp_color(hp, max_hp)),
+        ),
+    ]));
+    if !afflicted.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  afflicted: {}", afflicted.join(" \u{00b7} ")),
+            Style::default().fg(theme::SUCCESS()),
+        )));
+    }
+    lines.push(Line::from(Span::styled(
+        "\u{2500}".repeat(width.min(60)),
+        Style::default().fg(theme::BORDER_DIM()),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("  You  ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            format!(
+                "{} {}/{}",
+                meter(view.hp, view.max_hp, meter_w),
+                view.hp,
+                view.max_hp
+            ),
+            Style::default().fg(hp_color(view.hp, view.max_hp)),
+        ),
+    ]));
+    if view.max_resource > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<4} ", short_resource(&view.resource_name)),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(
+                format!(
+                    "{} {}/{}",
+                    meter(view.resource, view.max_resource, meter_w),
+                    view.resource,
+                    view.max_resource
+                ),
+                Style::default().fg(theme::MENTION()),
+            ),
+        ]));
+    }
+    let mut effects: Vec<String> = Vec::new();
+    if view.shield > 0 {
+        effects.push(format!("shield {}", view.shield));
+    }
+    if view.empower > 0 {
+        effects.push(format!("empowered +{}", view.empower));
+    }
+    if view.stunned {
+        effects.push("stunned".to_string());
+    }
+    if !effects.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", effects.join(" \u{00b7} ")),
+            Style::default().fg(theme::AMBER_GLOW()),
+        )));
+    }
+    Some(lines)
+}
+
+/// The zone name plus its derived mob-level band ("King's Road · Lv 2-5"),
+/// so danger reads at a glance wherever the zone is named.
+fn zone_with_band(view: &PlayerView) -> String {
+    match view.zone_band {
+        Some((lo, hi)) if lo == hi => format!("{} \u{00b7} Lv {lo}", view.zone),
+        Some((lo, hi)) => format!("{} \u{00b7} Lv {lo}-{hi}", view.zone),
+        None => view.zone.clone(),
+    }
+}
+
+/// A short label for a class resource, for the battle frame's meter gutter.
+fn short_resource(name: &str) -> String {
+    let mut label: String = name.chars().take(4).collect();
+    label.make_ascii_uppercase();
+    label
+}
+
 fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![
         section("Now"),
@@ -4085,7 +5727,7 @@ fn current_room_context(view: &PlayerView, width: usize) -> Vec<Line<'static>> {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  {}", view.zone),
+                format!("  {}", zone_with_band(view)),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]),
@@ -4139,6 +5781,8 @@ fn context_list(label: &str, value: String, color: ratatui::style::Color) -> Lin
         Span::styled(value, Style::default().fg(color)),
     ])
 }
+
+// ---- Text helpers: wrapping, sections, hints, and vitals -----------------
 
 fn side_kv_wrap(
     label: &str,
@@ -4356,6 +6000,8 @@ fn hp_color(hp: i32, max_hp: i32) -> ratatui::style::Color {
     }
 }
 
+// ---- The follow panel ----------------------------------------------------
+
 /// Follow panel: a selectable list of adventurers in the room. Enter follows the
 /// highlighted one (or stops, if you are already following them).
 fn follow_panel(
@@ -4469,6 +6115,9 @@ fn follow_panel(
 // Lateania reads in its own warm, parchment-toned prose so the world feels
 // distinct from the cool chat UI around it. Body/description text uses these;
 // headers, rarity, and interactables keep their own accents.
+
+// ---- The Lateania palette, and the kind-to-colour lookups ----------------
+
 const LAT_TEXT: Color = Color::Rgb(0xdc, 0xc9, 0xa4);
 const LAT_TEXT_DIM: Color = Color::Rgb(0xac, 0x9b, 0x79);
 

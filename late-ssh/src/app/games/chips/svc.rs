@@ -151,6 +151,21 @@ impl ChipService {
         }
     }
 
+    /// One ledger move for a named [`ChipMove`], with no reward template and
+    /// no cooldown behind it: the perpetual Super Snake arena settles every
+    /// food, arena clear, and crash the instant it happens. `None` means a
+    /// debit the balance could not cover.
+    pub async fn apply_move(
+        &self,
+        user_id: Uuid,
+        chip_move: ChipMove,
+        amount: i64,
+    ) -> anyhow::Result<Option<i64>> {
+        let client = self.db.get().await?;
+        let chips = UserChips::apply(&**client, user_id, chip_move, amount, None).await?;
+        Ok(chips.map(|chips| chips.balance))
+    }
+
     pub async fn transfer_chips(
         &self,
         sender_id: Uuid,

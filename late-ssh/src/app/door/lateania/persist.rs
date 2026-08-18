@@ -17,7 +17,7 @@ use super::classes::Class;
 use super::stats::AbilityScores;
 use super::world::RoomId;
 
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
 const WORLD_SCHEMA_VERSION: u32 = 1;
 
 pub struct SavedCharacterInit {
@@ -57,6 +57,12 @@ pub struct SavedCharacterInit {
     pub rpg_mode: bool,
     /// Lifetime adventurers slain in the Wildbound Waste's pvp rooms.
     pub pvp_kills: i64,
+    /// Index of the next uncompleted starter-chain quest (== chain length once
+    /// the chain is done).
+    pub starter_stage: u8,
+    /// Kills counted toward the current starter-chain stage, if it is a slay
+    /// stage.
+    pub starter_kills: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -167,6 +173,14 @@ pub struct SavedCharacter {
     /// pre-Wildbound-Waste (schema < 18) saves.
     #[serde(default)]
     pub pvp_kills: i64,
+    /// Index of the next uncompleted starter-chain quest; 0 for pre-v19 saves
+    /// (hydration marks the chain complete for characters past level 10, so
+    /// veterans are not handed the tutorial chain).
+    #[serde(default)]
+    pub starter_stage: u8,
+    /// Kill progress within the current starter-chain stage; 0 for pre-v19 saves.
+    #[serde(default)]
+    pub starter_kills: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -256,6 +270,8 @@ impl SavedCharacter {
             taming_xp: init.taming_xp,
             rpg_mode: init.rpg_mode,
             pvp_kills: init.pvp_kills,
+            starter_stage: init.starter_stage,
+            starter_kills: init.starter_kills,
         }
     }
 
