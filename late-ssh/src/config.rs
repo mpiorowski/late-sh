@@ -147,6 +147,13 @@ pub struct Config {
     pub dopewars_host: String,
     pub dopewars_port: u16,
     pub dopewars_secret: String,
+    /// BashQuest door game: reached over SSH like dcss, identity carried by
+    /// the arcade handle. `enabled` gates only the client; the host
+    /// (`late-bashquest`) is deployed unconditionally.
+    pub bashquest_enabled: bool,
+    pub bashquest_host: String,
+    pub bashquest_port: u16,
+    pub bashquest_secret: String,
     /// CodeKeep: The Pale door game (host `late-codekeep`).
     pub codekeep_enabled: bool,
     pub codekeep_host: String,
@@ -368,6 +375,10 @@ impl Config {
             dopewars_host: "service-dopewars".to_string(),
             dopewars_port: 2324,
             dopewars_secret: required("LATE_DOPEWARS_SECRET")?,
+            bashquest_enabled: true,
+            bashquest_host: "service-bashquest".to_string(),
+            bashquest_port: 2330,
+            bashquest_secret: required("LATE_BASHQUEST_SECRET")?,
             codekeep_enabled: true,
             codekeep_host: "service-codekeep".to_string(),
             codekeep_port: 2328,
@@ -470,6 +481,10 @@ impl Config {
             dopewars_host: "late-dopewars-sv".to_string(),
             dopewars_port: 2324,
             dopewars_secret: required("LATE_DOPEWARS_SECRET")?,
+            bashquest_enabled: true,
+            bashquest_host: "late-bashquest-sv".to_string(),
+            bashquest_port: 2330,
+            bashquest_secret: required("LATE_BASHQUEST_SECRET")?,
             codekeep_enabled: true,
             codekeep_host: "late-codekeep-sv".to_string(),
             codekeep_port: 2328,
@@ -504,6 +519,7 @@ impl Config {
             ("brogue", self.brogue_enabled, &self.brogue_secret),
             ("usurper", self.usurper_enabled, &self.usurper_secret),
             ("dopewars", self.dopewars_enabled, &self.dopewars_secret),
+            ("bashquest", self.bashquest_enabled, &self.bashquest_secret),
             ("codekeep", self.codekeep_enabled, &self.codekeep_secret),
         ];
         for (name, enabled, secret) in door_secrets {
@@ -633,6 +649,13 @@ impl Config {
             port = self.dopewars_port,
             has_secret = !self.dopewars_secret.is_empty(),
             "dopewars: dopewars door-game host (late-dopewars) target and status"
+        );
+        tracing::info!(
+            enabled = self.bashquest_enabled,
+            host = %self.bashquest_host,
+            port = self.bashquest_port,
+            has_secret = !self.bashquest_secret.is_empty(),
+            "bashquest: BashQuest door-game host (late-bashquest) target and status"
         );
         tracing::info!(
             enabled = self.codekeep_enabled,

@@ -67,6 +67,7 @@ pub enum Screen {
     Dcss,
     Brogue,
     Dopewars,
+    Bashquest,
     Codekeep,
     Usurper,
     GreenDragon,
@@ -108,6 +109,7 @@ impl Screen {
             | Screen::Dcss
             | Screen::Brogue
             | Screen::Dopewars
+            | Screen::Bashquest
             | Screen::Codekeep
             | Screen::Usurper
             | Screen::GreenDragon
@@ -133,6 +135,7 @@ impl Screen {
             | Screen::Dcss
             | Screen::Brogue
             | Screen::Dopewars
+            | Screen::Bashquest
             | Screen::Codekeep
             | Screen::Usurper
             | Screen::GreenDragon
@@ -183,6 +186,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Dcss => "DCSS",
         Screen::Brogue => "Brogue",
         Screen::Dopewars => "dopewars",
+        Screen::Bashquest => "BashQuest",
         Screen::Codekeep => "CodeKeep",
         Screen::Usurper => "Usurper",
         Screen::GreenDragon => "Green Dragon",

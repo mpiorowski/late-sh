@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "late-bashquest",
     "late-brogue",
     "late-cli",
     "late-codekeep",

@@ -158,7 +158,21 @@
                 return;
             }
             try {
-                await room.localParticipant.setScreenShareEnabled(true, { audio: true });
+                // Bandwidth, not CPU, is what a stream costs us: the SFU
+                // re-sends the publisher's bitrate once per viewer, so this
+                // ceiling is the whole fan-out bill. The SDK default is
+                // ScreenSharePresets.h1080fps15 (2.5 Mbps); a terminal share
+                // is text, not motion, so 1.5 Mbps at the same 15fps looks
+                // the same and costs 40% less per viewer. `detail` tells the
+                // encoder to spend its budget on sharpness over framerate,
+                // which is the right trade for a TUI. Simulcast stays on
+                // (SDK default): it adds a half-resolution layer so a weak
+                // viewer steps down instead of dropping packets.
+                await room.localParticipant.setScreenShareEnabled(
+                    true,
+                    { audio: true, contentHint: 'detail' },
+                    { screenShareEncoding: { maxBitrate: 1500000, maxFramerate: 15 } }
+                );
             } catch (e) {
                 setStatus('screen share was cancelled.');
                 return;

@@ -18,6 +18,17 @@ locals {
   door_cpu_limit      = "1000m"
   door_memory_limit   = "1Gi"
 
+  # Image per component. Images are deployed with `kubectl set image`
+  # (deploy_service.yml) and every deployment ignores image changes, so this
+  # value only matters when a deployment is CREATED: a door bootstrap passes
+  # exactly that door's tag in var.IMAGE_TAGS, and anything else falls back to
+  # a :bootstrap placeholder (a fresh disaster-recovery apply then needs one
+  # release per component to roll real images out).
+  image_tags = {
+    for component in ["ssh", "web", "nethack", "dopewars", "codekeep", "dcss", "usurper", "brogue", "bashquest"] :
+    component => lookup(var.IMAGE_TAGS, component, "ghcr.io/mpiorowski/late-sh/late-${component}:bootstrap")
+  }
+
   # The root domain and public subdomains are code, not variables: changing a
   # hostname must land as a reviewed diff here and in the late-ssh/late-web
   # prod profiles together (they hardcode late.sh / rtc.late.sh).

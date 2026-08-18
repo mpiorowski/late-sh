@@ -1,32 +1,20 @@
 name: terraform_apply
 
+# Reusable terraform apply. Image tags are NOT required here: every
+# deployment ignores image changes (lifecycle blocks in infra), so applies
+# never touch a running component's image. The image_tags input exists only
+# for first-create paths (a door bootstrap passes just that door's tag);
+# components absent from the map fall back to a :bootstrap placeholder that
+# matters only if the resource is being created.
+
 on:
   workflow_call:
     inputs:
-      ssh_image_tag:
-        required: true
+      image_tags:
+        description: "JSON map of component name to full image ref, only needed when the apply creates deployments (e.g. a door bootstrap). Example: {\"bashquest\": \"ghcr.io/org/late-bashquest:v1.2.3-bashquest\"}"
+        required: false
         type: string
-      web_image_tag:
-        required: true
-        type: string
-      nethack_image_tag:
-        required: true
-        type: string
-      dopewars_image_tag:
-        required: true
-        type: string
-      codekeep_image_tag:
-        required: true
-        type: string
-      dcss_image_tag:
-        required: true
-        type: string
-      usurper_image_tag:
-        required: true
-        type: string
-      brogue_image_tag:
-        required: true
-        type: string
+        default: "{}"
       environment:
         required: false
         type: string
@@ -49,14 +37,7 @@ jobs:
     env:
       TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
-      TF_VAR_SSH_IMAGE_TAG: ${{ inputs.ssh_image_tag }}
-      TF_VAR_WEB_IMAGE_TAG: ${{ inputs.web_image_tag }}
-      TF_VAR_NETHACK_IMAGE_TAG: ${{ inputs.nethack_image_tag }}
-      TF_VAR_DOPEWARS_IMAGE_TAG: ${{ inputs.dopewars_image_tag }}
-      TF_VAR_CODEKEEP_IMAGE_TAG: ${{ inputs.codekeep_image_tag }}
-      TF_VAR_DCSS_IMAGE_TAG: ${{ inputs.dcss_image_tag }}
-      TF_VAR_USURPER_IMAGE_TAG: ${{ inputs.usurper_image_tag }}
-      TF_VAR_BROGUE_IMAGE_TAG: ${{ inputs.brogue_image_tag }}
+      TF_VAR_IMAGE_TAGS: ${{ inputs.image_tags }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
@@ -118,13 +99,16 @@ jobs:
             -target=helm_release.barman_cloud_plugin \
             -target=helm_release.local_path_provisioner
 
+      # Targets can contain quoted module instance keys (module.door["dcss"]),
+      # so build argv as an array; the quotes are part of the address, not
+      # shell syntax.
       - name: terraform_apply
         working-directory: ./infra
         env:
           TARGETS: ${{ inputs.targets }}
         run: |
-          args=""
+          args=()
           for t in $TARGETS; do
-            args="$args -target=$t"
+            args+=("-target=$t")
           done
-          terraform apply -auto-approve $args
+          terraform apply -auto-approve "${args[@]}"

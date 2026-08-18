@@ -171,6 +171,9 @@ impl HouseTableClient {
             Self::Blackjack(state) => Some(state.balance()),
             Self::Asterion(_) => None,
             Self::Tron(_) => None,
+            // The arena banks nothing until you stand up, so it has no
+            // balance to report: what a seat has run up so far is shown in
+            // its sidebar row, where it reads as the unbanked figure it is.
             Self::Ssnake(_) => None,
         }
     }
@@ -183,7 +186,9 @@ impl HouseTableClient {
             }
             Self::Asterion(_) => false,
             Self::Tron(_) => false,
-            Self::Ssnake(_) => false,
+            // The arena never contradicts the ledger, so external balance
+            // changes (a shop purchase, a gift) are always the newer truth.
+            Self::Ssnake(_) => true,
         }
     }
 

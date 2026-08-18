@@ -30,44 +30,10 @@ variable "GRAFANA_URL" {
 # Service Images
 # =============================================================================
 
-variable "SSH_IMAGE_TAG" {
-  description = "Docker image for late-ssh (e.g., ghcr.io/org/late-ssh:sha-abc123)."
-  type        = string
-}
-
-variable "WEB_IMAGE_TAG" {
-  description = "Docker image for late-web (e.g., ghcr.io/org/late-web:sha-abc123)."
-  type        = string
-}
-
-variable "NETHACK_IMAGE_TAG" {
-  description = "Docker image for late-nethack, the NetHack door host (e.g., ghcr.io/org/late-nethack:sha-abc123)."
-  type        = string
-}
-
-variable "DOPEWARS_IMAGE_TAG" {
-  description = "Docker image for late-dopewars, the dopewars door host (e.g., ghcr.io/org/late-dopewars:sha-abc123)."
-  type        = string
-}
-
-variable "CODEKEEP_IMAGE_TAG" {
-  description = "Docker image for late-codekeep, the CodeKeep door host."
-  type        = string
-}
-
-variable "DCSS_IMAGE_TAG" {
-  description = "Docker image for late-dcss, the DCSS door host (e.g., ghcr.io/org/late-dcss:sha-abc123)."
-  type        = string
-}
-
-variable "BROGUE_IMAGE_TAG" {
-  description = "Docker image for late-brogue, the Brogue door host (e.g., ghcr.io/org/late-brogue:sha-abc123)."
-  type        = string
-}
-
-variable "USURPER_IMAGE_TAG" {
-  description = "Docker image for late-usurper, the Usurper door host (e.g., ghcr.io/org/late-usurper:sha-abc123)."
-  type        = string
+variable "IMAGE_TAGS" {
+  description = "Component name -> full image ref (keys: ssh, web, and each door in doors.tf). Deploys never go through terraform: deploy_service.yml rolls images with kubectl set image and every deployment ignores image changes. Pass a key only when an apply must CREATE that deployment (a door bootstrap); anything missing falls back to a :bootstrap placeholder that matters only on first create."
+  type        = map(string)
+  default     = {}
 }
 
 # =============================================================================

@@ -1,6 +1,7 @@
 // Door-game source domain. `hub` is the user-facing Games screen that lands and
 // launches the individual door games (Lateania, Rebels, NetHack, Green Dragon).
 pub mod arcade;
+pub mod bashquest;
 pub mod brogue;
 pub mod codekeep;
 pub mod darkroom;

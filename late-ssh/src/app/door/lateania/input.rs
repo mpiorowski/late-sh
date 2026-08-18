@@ -25,7 +25,8 @@
 //     Resurrection rite on a fallen adventurer in the room (holy/nature classes).
 //   - World: y works a resource node here (chop/mine/fish/forage/skin);
 //     u opens the crafting panel where a craft station stands.
-//   - Map: m overview atlas (pan around); x marks the crosshair room as
+//   - Map: m cycles overhead field (pan around) -> land graph (which country
+//     touches which, and how deep each one runs) -> closed; x marks the crosshair room as
 //     where you're headed, and the room panel then names the next exit to
 //     take until you get there; M toggles RPG mode (the live walk-around
 //     field beside the room) on/off - off is a plain text MUD.
@@ -185,6 +186,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
 
     // Number keys: select a list row when a list panel is open, else use an ability.
@@ -272,6 +274,14 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
                 state.toggle_map_dest();
                 return InputAction::Handled;
             }
+            b'q' => {
+                // Toggle the active-quest overlay (`!` markers and border
+                // arrows for quest targets). Captured here so a taming room
+                // can't swallow the key while the map is open; `Q` stays
+                // quaff, map open or not.
+                state.toggle_map_quests();
+                return InputAction::Handled;
+            }
             _ => {}
         }
     }
@@ -341,8 +351,9 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             InputAction::Handled
         }
         b'm' => {
-            // Toggle the whole-world overview atlas (pan-around map).
-            state.toggle_panel(Panel::Map);
+            // Cycle the map: the pan-around overhead field, then the land graph
+            // (every country and the roads between them), then closed.
+            state.cycle_map();
             InputAction::Handled
         }
         b'M' => {
@@ -507,7 +518,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> InputAction {
             state.flee();
             InputAction::Handled
         }
-        // Manual scroll for cursor-less text panels (character/abilities/quests).
+        // Manual scroll for cursor-less text panels (character/leaderboard).
         // List panels auto-follow their cursor, so these are no-ops there.
         b'[' => {
             state.scroll_text_up();
@@ -566,6 +577,7 @@ pub fn handle_arrow(state: &mut State, key: u8) -> bool {
             | Panel::Appearance
             | Panel::Crafting
             | Panel::Abilities
+            | Panel::Quests
     );
     match key {
         b'A' => {

@@ -1,0 +1,153 @@
+name: terraform_plan
+
+# Read-only terraform plan against the live cluster state, using the same
+# environment secrets the apply workflows use. Two purposes:
+#   - a dispatchable dry run: pick a branch and an environment in the Actions
+#     tab and see exactly what an apply from that ref would do (e.g. verify a
+#     state refactor plans as moves, not create/destroy, before merging).
+#   - a destroy gate: the job FAILS if the plan wants to delete anything.
+#     prevent_destroy already guards the PVCs at apply time; this catches the
+#     rest (deployments, services, secrets) at review time.
+#
+# Also runs automatically on PRs that touch infra/. Plans never write state,
+# so racing a deploy is harmless (worst case: a stale read).
+
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - .github/workflows/terraform_plan.yml
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment whose cluster/secrets to plan against"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+      targets:
+        description: "Optional space-separated resource addresses to scope the plan (e.g. module.door)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: terraform_plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment || 'production' }}
+    env:
+      TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+      TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+      TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
+      TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
+      TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      TF_VAR_YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      TF_VAR_LIVEKIT_IMAGE: ${{ vars.LIVEKIT_IMAGE }}
+      TF_VAR_LIVEKIT_LOG_LEVEL: ${{ vars.LIVEKIT_LOG_LEVEL }}
+      TF_VAR_LIVEKIT_API_KEY: ${{ vars.LIVEKIT_API_KEY }}
+      TF_VAR_LIVEKIT_RTC_TCP_PORT: ${{ vars.LIVEKIT_RTC_TCP_PORT }}
+      TF_VAR_LIVEKIT_RTC_UDP_PORT: ${{ vars.LIVEKIT_RTC_UDP_PORT }}
+      TF_VAR_LIVEKIT_RTC_USE_EXTERNAL_IP: ${{ vars.LIVEKIT_RTC_USE_EXTERNAL_IP }}
+      TF_VAR_LIVEKIT_TURN_ENABLED: ${{ vars.LIVEKIT_TURN_ENABLED }}
+      TF_VAR_LIVEKIT_TURN_UDP_PORT: ${{ vars.LIVEKIT_TURN_UDP_PORT }}
+      TF_VAR_LIVEKIT_TURN_TLS_PORT: ${{ vars.LIVEKIT_TURN_TLS_PORT }}
+      TF_VAR_IRC_PROXY_EMIT: ${{ vars.IRC_PROXY_EMIT }}
+      TF_VAR_S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      TF_VAR_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+      TF_VAR_S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
+      TF_VAR_DB_BACKUPS_BUCKET: ${{ vars.DB_BACKUPS_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: set_kubeconfig_path_for_terraform
+        run: echo "TF_VAR_KUBE_CONFIG_PATH=$KUBECONFIG" >> "$GITHUB_ENV"
+
+      - name: setup_terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: terraform_init
+        working-directory: ./infra
+        run: terraform init
+
+      - name: terraform_validate
+        working-directory: ./infra
+        run: terraform validate
+
+      # Same argv handling as terraform.yml: quoted module instance keys are
+      # part of the address, not shell syntax. The plan file stays on the
+      # runner (it can embed secret values) and is only parsed, never
+      # uploaded.
+      - name: terraform_plan
+        working-directory: ./infra
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          args=()
+          for t in $TARGETS; do
+            args+=("-target=$t")
+          done
+          terraform plan -input=false -no-color -out=plan.out "${args[@]}"
+
+      # The gate: fail on any planned delete (including delete-and-recreate).
+      # A resource that should genuinely go away must be removed from state
+      # deliberately, not slipped through a routine apply.
+      - name: assert_no_destroys
+        working-directory: ./infra
+        run: |
+          terraform show -json plan.out > plan.json
+
+          deletes=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete")) | .address] | .[]' plan.json)
+          moves=$(jq -r '[.resource_changes[]? | select(.previous_address != null) | "\(.previous_address) -> \(.address)"] | .[]' plan.json)
+          adds=$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' plan.json)
+          changes=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
+
+          {
+            echo "## terraform plan"
+            echo ""
+            echo "- create: $adds"
+            echo "- update in place: $changes"
+            if [ -n "$moves" ]; then
+              echo ""
+              echo "### moves"
+              echo '```'
+              echo "$moves"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$deletes" ]; then
+            {
+              echo ""
+              echo "### PLANNED DESTROYS (gate failed)"
+              echo '```'
+              echo "$deletes"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::plan wants to destroy resources:"
+            echo "$deletes"
+            exit 1
+          fi
+
+          echo "no destroys planned"

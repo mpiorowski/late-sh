@@ -2194,6 +2194,83 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
     assert!(!row.contains("/rules"));
 }
 
+fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::LiveStreamView {
+    crate::app::stream::registry::LiveStreamView {
+        user_id: Uuid::from_u128(1),
+        username: "mat".to_string(),
+        title: title.to_string(),
+        room_id: Uuid::from_u128(2),
+        voice_channel_id: Uuid::from_u128(3),
+        stream_id: "s1".to_string(),
+        live: true,
+        watching: 3,
+        watch_url: watch_url.to_string(),
+    }
+}
+
+/// A real stream id is 16 random bytes in base64url (`registry::capability_id`),
+/// so `watch: <url>` plus its trailing cell runs 51 columns, wider than the
+/// slack an ordinary chat pane has left over. The link is the point of the
+/// row, so the title and then the watcher count yield to it; a budget guessed
+/// ahead of the hint used to push the URL off the row entirely.
+const REAL_WATCH_URL: &str = "https://late.sh/live/HdRl3AJfRhWc7_BdvUEFrQ";
+
+#[test]
+fn stream_header_clips_the_title_rather_than_drop_the_watch_url() {
+    const WIDTH: usize = 110;
+    let stream = live_stream(
+        "a stream title long enough to swallow the whole row on its own, and then some",
+        REAL_WATCH_URL,
+    );
+
+    let line = super::stream_header_line(&stream, WIDTH);
+    let text = line.to_string();
+    assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
+    assert!(text.starts_with("● LIVE "), "{text:?}");
+    assert!(text.contains('…'), "the title is what gives way: {text:?}");
+    assert!(
+        text.contains("· 3 watching"),
+        "there is room for the count here: {text:?}"
+    );
+    // The hint's own trailing cell is still the last thing on the row, so the
+    // URL never ends flush against whatever the terminal paints next.
+    assert!(
+        text.ends_with(&format!("{REAL_WATCH_URL} ")),
+        "the link keeps its blank cell: {text:?}"
+    );
+}
+
+/// Below 73 columns the watcher count goes too: a link nobody can see is
+/// worse than a count nobody misses. That floor was 83 while ids were hex.
+#[test]
+fn stream_header_drops_the_watcher_count_before_the_watch_url() {
+    const WIDTH: usize = 70;
+    let stream = live_stream("bug hunt", REAL_WATCH_URL);
+
+    let line = super::stream_header_line(&stream, WIDTH);
+    let text = line.to_string();
+    assert!(text.contains(REAL_WATCH_URL), "the link survives: {text:?}");
+    assert!(!text.contains("watching"), "the count yielded: {text:?}");
+    assert!(line.width() <= WIDTH, "{}", line.width());
+
+    // One column higher than the floor the count needs, it comes back.
+    let roomy = super::stream_header_line(&stream, 73).to_string();
+    assert!(roomy.contains("· 3 watching"), "{roomy:?}");
+    assert!(roomy.contains(REAL_WATCH_URL), "{roomy:?}");
+}
+
+#[test]
+fn stream_header_keeps_a_short_title_whole() {
+    let stream = live_stream("bug hunt", "https://late.sh/live/abc");
+    let text = super::stream_header_line(&stream, 80).to_string();
+    assert!(text.contains("bug hunt"), "{text:?}");
+    assert!(!text.contains('…'), "nothing to clip: {text:?}");
+    assert!(
+        text.trim_end().ends_with("https://late.sh/live/abc"),
+        "{text:?}"
+    );
+}
+
 #[test]
 fn unread_badge_shows_exact_counts_below_the_cap() {
     assert_eq!(format_unread_badge(1), "1");

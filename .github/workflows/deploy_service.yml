@@ -1,0 +1,188 @@
+name: deploy_service
+
+# Generic deploy for every in-cluster component: the ssh and web services and
+# each door-game host. The naming convention makes one workflow cover all of
+# them; from a component name everything else is derived:
+#
+#   crate/package:  late-<component>
+#   image:          ghcr.io/<repo>/late-<component>:<release_tag>
+#   docker target:  runtime-<component> (root Dockerfile)
+#   deployment:     service-<component> for ssh/web, late-<component> for doors
+#
+# Flow: ci -> build image -> image-only kubectl rollout. Terraform never runs
+# on the happy path: the deployments ignore image changes (see the lifecycle
+# blocks in infra), so kubectl set image is the deploy mechanism, and manifest
+# changes ship through deploy_infra releases instead.
+#
+# First deploy of a new door (deployment does not exist yet): a terraform
+# apply scoped with -target to module.door["<component>"], which creates that
+# door's resources and touches nothing else. ssh/web have no bootstrap path
+# here; a cluster without them is built by deploy_infra.
+#
+# Called by release.yml on published releases; workflow_dispatch is the manual
+# redeploy/bootstrap lever.
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: "Component to deploy (ssh, web, or a door game)"
+        required: true
+        type: string
+      release_tag:
+        description: "Release tag to deploy"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Component to deploy"
+        required: true
+        type: choice
+        options:
+          - ssh
+          - web
+          - nethack
+          - dopewars
+          - codekeep
+          - dcss
+          - usurper
+          - brogue
+          - bashquest
+      release_tag:
+        description: "Release tag to deploy, for example v0.27.11-bashquest"
+        required: true
+        type: string
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+    with:
+      package: late-${{ inputs.component }}
+      source_ref: ${{ inputs.release_tag }}
+
+  build:
+    name: build_image
+    needs: ci
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      registry: ghcr.io
+      image_name: late-${{ inputs.component }}
+      image_tag: ${{ inputs.release_tag }}
+      context: .
+      dockerfile: ./Dockerfile
+      docker_target: runtime-${{ inputs.component }}
+      environment: ${{ inputs.environment }}
+      source_ref: ${{ inputs.release_tag }}
+
+  # Decides between the two deploy paths from live cluster state: the
+  # deployment exists -> image-only kubectl update; it does not exist (first
+  # deploy of a new door) -> targeted terraform bootstrap. Missing ssh/web is
+  # not a bootstrap case but a broken cluster, so it fails loudly instead.
+  check_deployment:
+    name: check_deployment_exists
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ inputs.environment }}
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+      deployment: ${{ steps.check.outputs.deployment }}
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: check
+        id: check
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          case "$COMPONENT" in
+            ssh|web) deployment="service-$COMPONENT" ;;
+            *) deployment="late-$COMPONENT" ;;
+          esac
+          echo "deployment=$deployment" >> "$GITHUB_OUTPUT"
+
+          if kubectl get deployment "$deployment" -n default >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            case "$COMPONENT" in
+              ssh|web)
+                echo "::error::deployment $deployment does not exist; bootstrap the cluster via deploy_infra"
+                exit 1
+                ;;
+            esac
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Image-only deploy: touch nothing but this component's containers ('*='
+  # covers the seed init_container on door hosts, which runs the same image).
+  # Manifest changes (env, resources, PVCs) ship through deploy_infra instead.
+  deploy:
+    name: deploy_image
+    if: ${{ needs.check_deployment.outputs.exists == 'true' }}
+    needs: [build, check_deployment]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.component }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - name: setup_kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: set_kubernetes_context
+        uses: azure/k8s-set-context@v5
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: set_image
+        run: |
+          kubectl set image deployment/${{ needs.check_deployment.outputs.deployment }} -n default \
+            '*=${{ needs.build.outputs.image_tag }}'
+
+      - name: wait_for_rollout
+        run: kubectl rollout status deployment ${{ needs.check_deployment.outputs.deployment }} -n default --timeout=180s
+
+  # Bootstrap path for a door's first deploy: a terraform apply scoped to
+  # exactly this door's module instance (its PVC, identity secret, deployment,
+  # and service) plus their dependencies; it touches nothing else.
+  bootstrap:
+    name: terraform_bootstrap
+    if: ${{ needs.check_deployment.outputs.exists == 'false' }}
+    needs: [build, check_deployment]
+    uses: ./.github/workflows/terraform.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      image_tags: '{"${{ inputs.component }}": "${{ needs.build.outputs.image_tag }}"}'
+      environment: ${{ inputs.environment }}
+      source_ref: ${{ inputs.release_tag }}
+      targets: module.door["${{ inputs.component }}"]
