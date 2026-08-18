@@ -24,6 +24,8 @@ use std::sync::OnceLock;
 use super::damage::{DamageProfile, DamageType};
 use super::skills::{CraftSkill, GatherSkill};
 
+// ---- Core world types: directions, rooms, spawns, behaviour --------------
+
 /// Compass and vertical directions a player can move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
@@ -225,7 +227,13 @@ pub struct World {
     pub start_room: RoomId,
     /// Spawn id -> behavior. Missing entries are [`MobBehavior::Sentinel`].
     pub behaviors: HashMap<u32, MobBehavior>,
+    /// Zone name -> (min, max) displayed level of the mobs homed there, derived
+    /// once at seed time from the spawns themselves so it can never drift from
+    /// the real danger. Zones with no mobs (towns, havens) have no entry.
+    zone_bands: HashMap<&'static str, (i32, i32)>,
 }
+
+// ---- The atlas regions: what counts as a land, and how deep --------------
 
 /// One region's exploration line in the world atlas.
 #[derive(Clone, Copy, Debug)]
@@ -243,6 +251,15 @@ pub struct RegionProgress {
     pub here: bool,
     /// Named bosses lairing in the region (where the great loot is).
     pub bosses: usize,
+    /// The (min, max) displayed level of the mobs homed in the region, or None
+    /// where nothing hostile lives.
+    pub levels: Option<(i32, i32)>,
+    /// For a region built as a chain of zones (`LAND_CHAINS`): how many of its
+    /// zones the player has set foot in, and how many there are. `None` for a
+    /// region with no chain, which the land map then draws as a single node.
+    /// This is depth, not room count: a land can be 3 zones deep on 2% of its
+    /// rooms, and depth is the number that tells a player how far they are.
+    pub chain: Option<(usize, usize)>,
 }
 
 /// The world's major regions for the atlas, each `(name, id-lo, id-hi, tier,
@@ -355,6 +372,77 @@ const REGIONS: &[(&str, RoomId, RoomId, &str, &str)] = &[
     ),
 ];
 
+/// Every atlas region name, in the order the atlas lists them (roughly the
+/// journey outward). The land map lays its tree out in this order, so the two
+/// views read in the same sequence.
+pub fn region_names() -> Vec<&'static str> {
+    REGIONS.iter().map(|&(name, ..)| name).collect()
+}
+
+/// The regions built as a chain of zones, each `(region name, first room,
+/// rooms reserved per zone, zone count)`. Only the name is written out here;
+/// every number comes from the generator's own consts, so a land that grows a
+/// zone grows here too. A land absent from this table draws as a single node.
+const LAND_CHAINS: &[(&str, RoomId, RoomId, usize)] = &[
+    (
+        "The Frontier",
+        FRONTIER_BASE,
+        FRONTIER_W * FRONTIER_H,
+        FRONTIER_ZONES,
+    ),
+    (
+        "The Sundered Reaches",
+        REACHES_BASE,
+        REACHES_ZONE_STRIDE,
+        REACHES_ZONES,
+    ),
+    (
+        "Kaelmyr, the Ashen Reach",
+        KAELMYR_BASE,
+        KAELMYR_ZONE_STRIDE,
+        KAELMYR_ZONES,
+    ),
+    (
+        "The Sunderlakes",
+        LAKES_BASE,
+        LAKES_ZONE_STRIDE,
+        LAKES_ZONES,
+    ),
+    (
+        "Broceliande, the Greenwood",
+        BROCELIANDE_BASE,
+        BROCELIANDE_ZONE_STRIDE,
+        BROCELIANDE_ZONES,
+    ),
+    (
+        "Aelunor, the Faewood",
+        AELUNOR_BASE,
+        AELUNOR_ZONE_STRIDE,
+        AELUNOR_ZONES,
+    ),
+    (
+        "The Wildbound Waste",
+        WILDBOUND_BASE,
+        WILDBOUND_BIOME_STRIDE,
+        3,
+    ),
+];
+
+/// How deep into a chained land the player has walked: zones with at least one
+/// visited room, out of the land's zone count. `None` for an unchained land.
+fn chain_depth(region: &str, visited: &HashSet<RoomId>) -> Option<(usize, usize)> {
+    let &(_, base, stride, zones) = LAND_CHAINS.iter().find(|(name, ..)| *name == region)?;
+    let entered = (0..zones)
+        .filter(|z| {
+            let lo = base + (*z as RoomId) * stride;
+            visited.iter().any(|id| (lo..lo + stride).contains(id))
+        })
+        .count();
+    Some((entered, zones))
+}
+
+// ---- World queries: rooms, zones, and atlas progress ---------------------
+
 impl World {
     /// The behavior assigned to a spawn id, defaulting to `Sentinel`.
     pub fn behavior_of(&self, spawn_id: u32) -> MobBehavior {
@@ -365,6 +453,13 @@ impl World {
 impl World {
     pub fn room(&self, id: RoomId) -> Option<&Room> {
         self.rooms.get(&id)
+    }
+
+    /// The (min, max) displayed level of the mobs homed in a zone, or None for
+    /// zones without mobs (towns, havens). One glance answers "do I belong
+    /// here" - the whole world is self-labelling, no authored data to drift.
+    pub fn zone_band(&self, zone: &str) -> Option<(i32, i32)> {
+        self.zone_bands.get(zone).copied()
     }
 
     /// The whole-world atlas: exploration progress for every major region. For
@@ -386,6 +481,15 @@ impl World {
                     .iter()
                     .filter(|s| s.boss && (lo..hi).contains(&s.home))
                     .count();
+                let levels = self
+                    .spawns
+                    .iter()
+                    .filter(|s| (lo..hi).contains(&s.home))
+                    .map(|s| s.level())
+                    .fold(None, |band: Option<(i32, i32)>, l| match band {
+                        Some((min, max)) => Some((min.min(l), max.max(l))),
+                        None => Some((l, l)),
+                    });
                 RegionProgress {
                     name,
                     tier,
@@ -394,6 +498,8 @@ impl World {
                     explored: explored.min(total),
                     here: (lo..hi).contains(&current),
                     bosses,
+                    levels,
+                    chain: chain_depth(name, visited),
                 }
             })
             .collect()
@@ -533,6 +639,8 @@ impl World {
         }
     }
 }
+
+// ---- The minimap grid drawn in the room panel ----------------------------
 
 /// What a single char-cell of the overhead minimap shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2079,6 +2187,8 @@ pub fn features_at(room: RoomId) -> Vec<&'static Feature> {
     by_room.get(&room).cloned().unwrap_or_default()
 }
 
+// ---- Waystones: the Ways menu, and what it will carry you to -------------
+
 const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue light, the air \
     inside it rippling like a heat-haze over water. Step through and it will carry you in a \
     breath to any other waystone you know of - the far villages, the drowned isles of the \
@@ -2086,37 +2196,42 @@ const PORTAL_DESC: &str = "A ring of standing waystones hums with a soft blue li
 
 /// The mainland waystones: Embergate's square plus each far country's safe
 /// gate room, so a recall to town never means re-walking a whole gate chain.
-/// The third field names the title the walking gate into that land demands;
-/// the Ways enforce the same lock (`svc::travel` re-checks it and the menu
-/// shows sealed gates dimmed), so fast travel can never skip a progression
-/// gate. A drift test in `svc.rs` keeps these titles equal to the gate consts.
-pub const CONTINENT_WAYSTONES: &[(&str, RoomId, Option<&str>)] = &[
-    ("Embergate, the Town Square", 1, None),
-    ("the Sunderlakes landing", LAKES_BASE, None),
-    ("Broceliande, the forest gate", BROCELIANDE_BASE, None),
-    (
-        "the Sundered Reaches sea-gate",
-        REACHES_BASE,
-        Some("Bane of the King Who Was Promised Nothing"),
-    ),
-    (
-        "Cinderfall Shore, Kaelmyr",
-        KAELMYR_BASE,
-        Some("Bane of Yssgar, the Sundering Deep"),
-    ),
-    ("Last Watch, the Wildbound Waste", WILDBOUND_BASE, None),
+/// These carry no progression rules of their own. A title is permission to
+/// *enter* a land and is checked exactly once, where you walk in
+/// (`svc::can_cross_progression_gate`); a waystone is permission to *skip the
+/// trip*, and opens only once the player has stood in it (`waystone_is_known`).
+/// The sealed continents need no second check here: a visited set cannot hold
+/// a Reaches or Kaelmyr room unless the walking gate already let the player by.
+pub const CONTINENT_WAYSTONES: &[(&str, RoomId)] = &[
+    ("Embergate, the Town Square", 1),
+    ("the Sunderlakes landing", LAKES_BASE),
+    ("Broceliande, the forest gate", BROCELIANDE_BASE),
+    ("the Sundered Reaches sea-gate", REACHES_BASE),
+    ("Cinderfall Shore, Kaelmyr", KAELMYR_BASE),
+    ("Last Watch, the Wildbound Waste", WILDBOUND_BASE),
 ];
 
 /// Every destination the Ways can offer: the mainland continent gates first,
-/// then the archipelago villages and island landings (which need no title).
-pub fn waystone_destinations() -> Vec<(&'static str, RoomId, Option<&'static str>)> {
-    let mut out: Vec<(&'static str, RoomId, Option<&'static str>)> = CONTINENT_WAYSTONES.to_vec();
-    out.extend(
-        super::archipelago::portal_destinations()
-            .into_iter()
-            .map(|(label, room)| (label, room, None)),
-    );
+/// then the archipelago villages and island landings. Filter with
+/// `waystone_is_known` before showing or honouring one.
+pub fn waystone_destinations() -> Vec<(&'static str, RoomId)> {
+    let mut out: Vec<(&'static str, RoomId)> = CONTINENT_WAYSTONES.to_vec();
+    out.extend(super::archipelago::portal_destinations());
     out
+}
+
+/// Whether the Ways will carry this player to `dest`. A mainland gate answers
+/// only once they have stood in it, so fast travel shortens a road already
+/// walked instead of replacing the walk. The archipelago is always open: its
+/// villages and island landings have no directional exits at all, so a
+/// visited rule would orphan the whole region, and nothing in progression
+/// routes through it.
+pub fn waystone_is_known(dest: RoomId, visited: &HashSet<RoomId>) -> bool {
+    if CONTINENT_WAYSTONES.iter().any(|(_, room)| *room == dest) {
+        visited.contains(&dest)
+    } else {
+        true
+    }
 }
 
 /// Portal (and, for the villages, fountain) features for the runtime-generated
@@ -2129,7 +2244,7 @@ fn waystone_features() -> &'static [Feature] {
         let mut v = Vec::new();
         // The mainland gateways into the network: Embergate's square plus each
         // far country's safe gate room.
-        for (_, room, _) in CONTINENT_WAYSTONES {
+        for (_, room) in CONTINENT_WAYSTONES {
             let name = if *room == 1 {
                 "the town waystone"
             } else {
@@ -2212,6 +2327,8 @@ pub fn craft_stations_at(room: RoomId) -> Vec<CraftSkill> {
         })
         .collect()
 }
+
+// ---- Wildlife: critters you can feed, and the perks they leave -----------
 
 /// A small benefit a Boon creature confers while you share its room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2857,6 +2974,8 @@ pub fn critters_at(room: RoomId) -> Vec<&'static CritterSpawn> {
 pub fn critter_index(c: &CritterSpawn) -> Option<usize> {
     WILDLIFE.iter().position(|w| std::ptr::eq(w, c))
 }
+
+// ---- Resource nodes: what you chop, mine, fish, forage, and skin ---------
 
 /// A harvestable resource node fixed to a room: a tree stand, an ore vein, a
 /// fishing spot, or a herb/skinning patch. Modelled exactly like wildlife -
@@ -3730,6 +3849,8 @@ pub fn nodes_at(room: RoomId) -> Vec<&'static ResourceNode> {
 pub fn node_index(n: &ResourceNode) -> Option<usize> {
     NODES.iter().position(|x| std::ptr::eq(x, n))
 }
+
+// ---- seed_world: the authored core, then every extension wing ------------
 
 fn room(
     id: RoomId,
@@ -5563,13 +5684,18 @@ pub fn seed_world() -> World {
                 Some(DamageType::Holy),
             ),
         },
-        // Final boss
+        // Final boss of the authored core (the Frontier and the continents were
+        // hung past him later). Damage sits at ~1.6x the trash of his approach,
+        // matching every other boss on this ladder: at the old 48 he was the
+        // only one you could out-tank rather than out-play, a sponge players
+        // walked through. `Spawn::level()` is unchanged by this (he stays Lv61
+        // until 1140 power, i.e. damage 85), so the ladder's numbers hold.
         MobSpawn {
             id: 73,
             name: "the Archdemon Mal'gareth",
             home: 110,
             max_hp: 800,
-            damage: 48,
+            damage: 58,
             xp: 1500,
             respawn_secs: 600,
             loot: &[1009, 1119, 1205, 1401],
@@ -5678,11 +5804,29 @@ pub fn seed_world() -> World {
 
     tune_spawn_balance(&mut spawns);
 
+    // Per-zone level bands, read off the tuned spawns so the numbers players
+    // see ("King's Road · Lv 2-5") always reflect what actually prowls there.
+    let mut zone_bands: HashMap<&'static str, (i32, i32)> = HashMap::new();
+    for s in &spawns {
+        let Some(room) = rooms.get(&s.home) else {
+            continue;
+        };
+        let level = s.level();
+        zone_bands
+            .entry(room.zone)
+            .and_modify(|(lo, hi)| {
+                *lo = (*lo).min(level);
+                *hi = (*hi).max(level);
+            })
+            .or_insert((level, level));
+    }
+
     World {
         rooms,
         spawns,
         start_room: 1,
         behaviors,
+        zone_bands,
     }
 }
 
@@ -7082,6 +7226,12 @@ const FRONTIER_SPAWN_ID_START: u32 = 900_000;
 /// gateway stair.
 pub fn frontier_entrance_room() -> RoomId {
     FRONTIER_BASE
+}
+
+/// The safe entrance cell of Frontier zone `z` (0-based), for tracking a zone
+/// quest on the world map.
+pub fn frontier_zone_entrance(z: usize) -> RoomId {
+    FRONTIER_BASE + (z as u32) * FRONTIER_W * FRONTIER_H
 }
 
 pub fn is_frontier_room(id: RoomId) -> bool {
@@ -10786,13 +10936,25 @@ const WILDBOUND_BIOMES: [WildboundBiome; 3] = [
 /// The drop table for a Wildbound Waste tier: borrows the Frontier catalog
 /// (which already spans early-endgame through the game's toughest numbers)
 /// rather than authoring a bespoke item set, same shortcut `broceliande_loot`
-/// takes. Bosses always draw from the catalog's top tier.
+/// takes.
+///
+/// Every table here is keyed to the biome's own `loot_base`, the apex boss
+/// included: one affix ladder past its deepest regular, and never the
+/// catalog's top tier (hence the `- 2` clamp, which holds however `loot_base`
+/// is retuned later). The boss branch used to hand all three apexes
+/// `FRONTIER_TIERS - 1`, which paid the ~1500hp Duskmire boss - walked to off
+/// the Sahra Wastes, at gentle overworld multipliers, with no title anywhere
+/// on the road, and dropping guaranteed (`svc::roll_loot` never rolls for a
+/// boss) - exactly what the King Who Was Promised Nothing guards at ~11700hp
+/// behind twenty Frontier zones and four Bane titles. The crown's table stays
+/// the crown's.
 fn wildbound_loot(loot_base: usize, tier: usize, boss: bool) -> &'static [u32] {
-    if boss {
-        super::items::frontier_loot(super::items::FRONTIER_TIERS - 1)
+    let tier = if boss {
+        loot_base + WILDBOUND_TIER_AFFIX.len()
     } else {
-        super::items::frontier_loot((loot_base + tier).min(super::items::FRONTIER_TIERS - 1))
-    }
+        loot_base + tier
+    };
+    super::items::frontier_loot(tier.min(super::items::FRONTIER_TIERS - 2))
 }
 
 /// Build the Wildbound Waste: three chained biomes (rooms 30000+), each a
@@ -12602,6 +12764,8 @@ fn house_room_desc(upper: bool, entrance: bool) -> &'static str {
     }
 }
 
+// ---- The overworld: the Greatroad and three capitals (rooms 600+) --------
+
 /// The overworld: 100 rooms of new biomes radiating from Embergate's South Gate
 /// down the Greatroad, plus the three capital cities - Tasmania (harbor),
 /// Melvanala (mountain lake), and Matlatesh (desert) - each a safe haven with a
@@ -13624,6 +13788,8 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         p(D::Lightning, Some(D::Lightning), Some(D::Frost)),
     );
 }
+
+// ---- The loot tables the region generators draw from ---------------------
 
 /// Common low-tier drop pool shared by wandering wing mobs.
 const COMMON_LOOT: &[u32] = &[1000, 1100, 1103, 1300];

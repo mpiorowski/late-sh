@@ -35,13 +35,13 @@ resource "kubernetes_deployment_v1" "service_ssh" {
       spec {
         termination_grace_period_seconds = 21600
 
-        # NetHack now runs in the dedicated late-nethack pod (service-nethack.tf),
-        # which owns the nethack-save PVC + seed init_container. service-ssh only
-        # needs network reach to it; the host address is a late-ssh config.rs
-        # prod-profile literal (late-nethack-sv).
+        # Every door game runs in its own late-<game> pod (doors.tf), which
+        # owns that game's save PVC + seed init_container. service-ssh only
+        # needs network reach to them; the host addresses are late-ssh
+        # config.rs prod-profile literals (late-<game>-sv).
 
         container {
-          image = var.SSH_IMAGE_TAG
+          image = local.image_tags["ssh"]
           name  = "service-ssh"
 
           port {
@@ -178,7 +178,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_NETHACK_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.nethack_identity_secret.metadata[0].name
+                name = module.door["nethack"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -188,7 +188,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_DOPEWARS_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.dopewars_identity_secret.metadata[0].name
+                name = module.door["dopewars"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -198,7 +198,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_CODEKEEP_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.codekeep_identity_secret.metadata[0].name
+                name = module.door["codekeep"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -218,7 +218,17 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_DCSS_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.dcss_identity_secret.metadata[0].name
+                name = module.door["dcss"].identity_secret_name
+                key  = "secret"
+              }
+            }
+          }
+
+          env {
+            name = "LATE_BASHQUEST_SECRET"
+            value_from {
+              secret_key_ref {
+                name = module.door["bashquest"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -228,7 +238,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_BROGUE_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.brogue_identity_secret.metadata[0].name
+                name = module.door["brogue"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -238,7 +248,7 @@ resource "kubernetes_deployment_v1" "service_ssh" {
             name = "LATE_USURPER_SECRET"
             value_from {
               secret_key_ref {
-                name = kubernetes_secret_v1.usurper_identity_secret.metadata[0].name
+                name = module.door["usurper"].identity_secret_name
                 key  = "secret"
               }
             }
@@ -357,6 +367,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
         }
       }
     }
+  }
+
+  # Images are deployed with `kubectl set image` (deploy_service.yml), never
+  # by terraform applies, so a full apply must not roll the service back to
+  # whatever tag it was created with.
+  lifecycle {
+    ignore_changes = [
+      spec[0].template[0].spec[0].container[0].image,
+    ]
   }
 }
 

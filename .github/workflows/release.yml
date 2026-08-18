@@ -1,0 +1,102 @@
+name: release
+
+# The single entry point for release deploys. Every published release lands
+# here once; the route job parses the tag suffix and hands off to exactly one
+# deploy workflow:
+#
+#   v0.27.11            -> deploy_service (component ssh, the default)
+#   v0.27.11-web        -> deploy_service (component web)
+#   v0.27.11-<game>     -> deploy_service (component <game>)
+#   v0.27.11-cli        -> deploy_cli
+#   v0.27.11-infra      -> deploy_infra
+#
+# An unrecognized suffix deploys ssh, matching the old behavior where the
+# suffix-less deploy workflow claimed everything the named ones did not.
+# Prerelease flags map to the staging environment, releases to production.
+#
+# Adding a game: add its name to the case list below, to deploy_service.yml's
+# dispatch choices, and to doors.yml's game list.
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  route:
+    name: route
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      component: ${{ steps.route.outputs.component }}
+      environment: ${{ steps.route.outputs.environment }}
+    steps:
+      - name: route
+        id: route
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          suffix="${TAG##*-}"
+          case "$suffix" in
+            web|nethack|dopewars|codekeep|dcss|usurper|brogue|bashquest|cli|infra)
+              component="$suffix"
+              ;;
+            *)
+              component="ssh"
+              ;;
+          esac
+
+          environment="production"
+          if [ "$PRERELEASE" = "true" ]; then
+            environment="staging"
+          fi
+
+          echo "tag $TAG -> component=$component environment=$environment"
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+
+  service:
+    name: deploy_${{ needs.route.outputs.component }}
+    needs: route
+    if: ${{ needs.route.outputs.component != 'cli' && needs.route.outputs.component != 'infra' }}
+    uses: ./.github/workflows/deploy_service.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      component: ${{ needs.route.outputs.component }}
+      release_tag: ${{ github.event.release.tag_name }}
+      environment: ${{ needs.route.outputs.environment }}
+
+  cli:
+    name: deploy_cli
+    needs: route
+    if: ${{ needs.route.outputs.component == 'cli' }}
+    uses: ./.github/workflows/deploy_cli.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      environment: ${{ needs.route.outputs.environment }}
+
+  infra:
+    name: deploy_infra
+    needs: route
+    if: ${{ needs.route.outputs.component == 'infra' }}
+    uses: ./.github/workflows/deploy_infra.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      release_tag: ${{ github.event.release.tag_name }}
+      environment: ${{ needs.route.outputs.environment }}

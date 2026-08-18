@@ -14,16 +14,23 @@ ARG DEBIAN_VERSION=bookworm
 # Stage 0: Door game binaries - prebuilt images from docker/doors/
 # ==============================================================================
 # Each door game's upstream runtime artifact is prepared by its own Dockerfile
-# under docker/doors/ and its own workflow that builds and pushes the image
-# (.github/workflows/<door>.yml). Pinning them here by tag means a door recipe
+# under docker/doors/ and built/published by the doors workflow
+# (.github/workflows/doors.yml). Pinning them here by tag means a door recipe
 # rebuilds only when its own Dockerfile changes, never on ordinary image
-# builds. Bump a tag when that door's recipe or upstream version changes.
+# builds.
+#
+# THE TAGS BELOW ARE THE SINGLE SOURCE OF TRUTH: doors.yml parses each pin out
+# of this file and publishes ghcr door-<game> at exactly that tag, so a pin
+# bump and its recipe change ship in the same commit and cannot drift apart.
+# Bump the pin whenever a door's recipe or upstream version changes; the same
+# tag must never be re-pushed with new content.
 FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build
 FROM ghcr.io/mpiorowski/late-sh/door-brogue:1.15.1-r3 AS brogue-build
 FROM ghcr.io/mpiorowski/late-sh/door-codekeep:1.0.9-r1 AS codekeep-build
+FROM ghcr.io/mpiorowski/late-sh/door-bashquest:v1 AS bashquest-build
 
 # ==============================================================================
 # Stage 0: Base - Common system dependencies
@@ -74,6 +81,14 @@ RUN mkdir -p /usr/games \
 # defaults to /usr/games/dopewars.
 COPY --from=dopewars-build /dopewars /usr/games/dopewars
 
+# BashQuest door game: served over SSH by the late-bashquest host (see late-ssh
+# bashquest proxy). It's a plain Bash script (no compilation, no extra runtime
+# deps beyond bash itself, already present in this image), pinned and
+# checksum-verified in the bashquest-build stage. Lives here so dev-bashquest
+# (which derives from `base`) can run it; prod ships it in runtime-bashquest.
+# LATE_BASHQUEST_BIN defaults to /usr/local/bin/bashquest.sh.
+COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
+
 # DCSS door game: served over SSH by the late-dcss host (see late-ssh dcss
 # proxy). The from-source console binary + data tree live here so dev-dcss
 # (which derives from `base`) can run it; prod ships it in runtime-dcss. Its
@@ -111,6 +126,7 @@ COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
 COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
 COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
+COPY late-bashquest/Cargo.toml late-bashquest/Cargo.toml
 COPY late-webview/Cargo.toml late-webview/Cargo.toml
 COPY vendor vendor
 
@@ -118,7 +134,7 @@ COPY vendor vendor
 # built in these images (CLI-only YouTube helper), but it is a workspace member
 # and a late-cli path dependency, so its manifest and target stubs must exist
 # for `cargo metadata` to resolve the workspace.
-RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-webview/src && \
+RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src late-webview/src && \
     echo "fn main() {}" > late-core/src/lib.rs && \
     echo "fn main() {}" > late-ssh/src/main.rs && \
     echo "fn main() {}" > late-web/src/main.rs && \
@@ -129,6 +145,7 @@ RUN mkdir -p late-core/src late-ssh/src late-web/src late-cli/src late-codekeep/
     echo "fn main() {}" > late-brogue/src/main.rs && \
     echo "fn main() {}" > late-dopewars/src/main.rs && \
     echo "fn main() {}" > late-usurper/src/main.rs && \
+    echo "fn main() {}" > late-bashquest/src/main.rs && \
     echo "" > late-webview/src/lib.rs && \
     echo "fn main() {}" > late-webview/src/main.rs
 
@@ -164,7 +181,8 @@ COPY late-dcss/Cargo.toml late-dcss/Cargo.toml
 COPY late-brogue/Cargo.toml late-brogue/Cargo.toml
 COPY late-dopewars/Cargo.toml late-dopewars/Cargo.toml
 COPY late-usurper/Cargo.toml late-usurper/Cargo.toml
-RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src && \
+COPY late-bashquest/Cargo.toml late-bashquest/Cargo.toml
+RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src late-dcss/src late-brogue/src late-dopewars/src late-usurper/src late-bashquest/src && \
     echo "fn main() {}" > late-cli/src/main.rs && \
     echo "" > late-webview/src/lib.rs && \
     echo "fn main() {}" > late-webview/src/main.rs && \
@@ -173,7 +191,8 @@ RUN mkdir -p late-cli/src late-webview/src late-codekeep/src late-nethack/src la
     echo "fn main() {}" > late-dcss/src/main.rs && \
     echo "fn main() {}" > late-brogue/src/main.rs && \
     echo "fn main() {}" > late-dopewars/src/main.rs && \
-    echo "fn main() {}" > late-usurper/src/main.rs
+    echo "fn main() {}" > late-usurper/src/main.rs && \
+    echo "fn main() {}" > late-bashquest/src/main.rs
 # Build deployable binaries only (late-cli and late-webview excluded - local
 # CLI tooling; the webview helper ships via deploy_cli.yml, not these images).
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
@@ -275,6 +294,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --release -p late-usurper && \
     cp /app/target/release/late-usurper /app/late-usurper-bin
 
+FROM door-builder-base AS builder-bashquest
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json -p late-bashquest
+COPY --from=planner /app /app
+COPY late-bashquest late-bashquest
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p late-bashquest && \
+    cp /app/target/release/late-bashquest /app/late-bashquest-bin
+
 # ==============================================================================
 # Stage 3b: Dev base - Rust toolchain + dev deps
 # ==============================================================================
@@ -304,6 +336,12 @@ CMD ["cargo", "watch", "-w", "late-nethack", "-x", "run -p late-nethack"]
 # so the default LATE_DOPEWARS_BIN (/usr/games/dopewars) resolves here.
 FROM dev-base AS dev-dopewars
 CMD ["cargo", "watch", "-w", "late-dopewars", "-x", "run -p late-dopewars"]
+
+# BashQuest host: serves the game over SSH (see late-bashquest). dev-base
+# derives from `base`, which already has the pinned bashquest.sh, so the
+# default LATE_BASHQUEST_BIN (/usr/local/bin/bashquest.sh) resolves here.
+FROM dev-base AS dev-bashquest
+CMD ["cargo", "watch", "-w", "late-bashquest", "-x", "run -p late-bashquest"]
 
 # CodeKeep host: Bun + the lockfile-pinned npm package live only in this target.
 FROM dev-base AS dev-codekeep
@@ -548,3 +586,24 @@ USER late
 EXPOSE 2327
 
 CMD ["/app/late-brogue"]
+
+# ==============================================================================
+# Stage 4i: Runtime BashQuest - the late-bashquest host (game served over SSH)
+# ==============================================================================
+# Owns everything the game needs: the pinned, checksum-verified bashquest.sh
+# (no extra runtime deps beyond bash, already in runtime-base's Debian slim
+# image), and the writable playground HOME (/var/lib/late-bashquest; backed by
+# a PVC in prod so the shared users.db and every player's save under
+# $HOME/.bashquest survive restarts). No ncurses/terminfo concerns: bashquest.sh
+# emits plain ANSI directly, not curses. LATE_BASHQUEST_BIN defaults to
+# /usr/local/bin/bashquest.sh, LATE_BASHQUEST_DATA_DIR to that playground path.
+FROM runtime-base AS runtime-bashquest
+USER root
+RUN mkdir -p /var/lib/late-bashquest && chown late:late /var/lib/late-bashquest
+COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
+COPY --from=builder-bashquest /app/late-bashquest-bin /app/late-bashquest
+USER late
+
+EXPOSE 2330
+
+CMD ["/app/late-bashquest"]

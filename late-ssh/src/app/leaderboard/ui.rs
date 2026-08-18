@@ -8,11 +8,14 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use uuid::Uuid;
 
-use crate::app::common::{primitives::hint_line, theme};
+use crate::app::{
+    common::{primitives::hint_line, theme},
+    profile_modal::badges,
+};
 
 use super::state::{Board, LeaderboardPageState, Standings};
 
@@ -90,6 +93,9 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
     let first_score = boards
         .iter()
         .position(|board| matches!(board, Board::Score(_)));
+    let badge_guide = boards
+        .iter()
+        .position(|board| matches!(board, Board::BadgeGuide));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut selected_line = 0usize;
@@ -100,6 +106,8 @@ fn rail_lines(state: &LeaderboardPageState) -> (Vec<Line<'static>>, usize) {
             Some("Daily Wins")
         } else if Some(index) == first_score {
             Some("High Scores")
+        } else if Some(index) == badge_guide {
+            Some("Reference")
         } else if index == 0 {
             Some("Boards")
         } else {
@@ -148,6 +156,14 @@ fn draw_detail(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
         ])),
         rows[1],
     );
+
+    if matches!(board, Board::BadgeGuide) {
+        frame.render_widget(
+            Paragraph::new(badges::guide_lines()).wrap(Wrap { trim: false }),
+            rows[3],
+        );
+        return;
+    }
 
     match board.standings(view.data) {
         Standings::Paired { monthly, all_time } => {
@@ -394,6 +410,9 @@ fn empty_copy(board: Board) -> &'static str {
         Board::ArcadeWins => "no daily puzzle wins yet this month",
         Board::Daily(_) => "no wins yet, be the first",
         Board::Score(_) => "no scores yet, be the first",
+        // Unreachable: draw_detail special-cases BadgeGuide before calling
+        // standings, so empty_copy never sees it.
+        Board::BadgeGuide => "",
     }
 }
 

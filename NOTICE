@@ -107,6 +107,53 @@ GPLv2 compliance notes:
     and rebuild that source.
 
 
+BashQuest
+---------
+
+late.sh hosts BashQuest as a door game (the "BashQuest" screen). Unlike every
+other door in this file, bashquest.sh is a native late.sh original, not a
+foreign upstream program: it was written by Tony "Hardlygospel" Hosaroygard
+and is not otherwise part of the late.sh codebase or its FSL license. The
+script is fetched and pinned in the Dockerfile ("bashquest-build" stage) and
+ships in the "runtime-bashquest" image, where the late-bashquest host runs it
+as a child process; players reach it remotely over the late.sh SSH server.
+
+  Program:    BashQuest (bashquest.sh)
+  License:    GNU General Public License, version 3 (GPL-3.0)
+              https://www.gnu.org/licenses/gpl-3.0.html
+  Copyright:  Copyright (C) 2026 Tony Hosaroygard
+  Upstream:   https://github.com/hardlygospel/bashquest
+  Installed:  Fetched by commit pin from the upstream repository in the
+              Dockerfile ("bashquest-build" stage). The fetched file's
+              SHA-256 is verified (sha256sum -c, fail-closed) before use.
+  Source:     The complete, corresponding machine-readable source is the
+              pinned upstream commit recorded in the Dockerfile
+              (BASHQUEST_COMMIT / BASHQUEST_URL / BASHQUEST_SHA256), also
+              available from the upstream repository above. Our build recipe
+              is docker/doors/bashquest.Dockerfile.
+  Modified:   No. The script is used exactly as published; the only late.sh
+              addition is the BASHQUEST_AUTOLOGIN environment variable
+              bashquest.sh itself supports (an opt-in, backward-compatible
+              feature added upstream specifically to support this
+              integration, not a fork or patch).
+
+GPLv3 compliance notes:
+
+  - bashquest.sh's own copyright and license notices are part of the upstream
+    source and are left intact.
+  - late.sh does not distribute copies of bashquest.sh to players; it only
+    lets them play it over the network. GPLv3 does have a stronger
+    anti-circumvention posture than GPLv2 in places, but no network-service
+    copyleft clause either, so remote play does not trigger a
+    source-distribution obligation.
+  - If you redistribute a build of late.sh that includes bashquest.sh (for
+    example, by publishing the runtime-bashquest Docker image), GPLv3
+    requires you to also make the corresponding source available. Keep the
+    pinned "Source" pointer above (the exact upstream commit we fetch) and
+    the docker/doors/bashquest.Dockerfile build recipe with the distribution
+    so recipients can obtain and rebuild that source.
+
+
 CodeKeep: The Pale
 ------------------
 

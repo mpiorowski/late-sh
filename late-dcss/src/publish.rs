@@ -10,7 +10,7 @@
 // Shape:
 // - Everything is served natively under `/crawl/...`, so the ingress needs no
 //   rewrite annotation: a Prefix path rule on the apex host out-ranks
-//   late-web's `/` catch-all by nginx longest-match (infra/service-dcss.tf).
+//   late-web's `/` catch-all by nginx longest-match (infra/doors.tf).
 // - `GET /crawl/` documents the layout for whoever opens it in a browser.
 // - `GET /crawl/logfile`, `GET /crawl/milestones` serve the two shared xlog
 //   files, with `Range` support so a fetcher can pull only what was appended

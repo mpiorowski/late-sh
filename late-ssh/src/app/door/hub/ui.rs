@@ -27,6 +27,7 @@ pub struct HubView<'a> {
     pub brogue_enabled: bool,
     pub usurper_enabled: bool,
     pub dopewars_enabled: bool,
+    pub bashquest_enabled: bool,
     pub codekeep_enabled: bool,
     /// Players currently in the Lateania world, shown on its landing card.
     pub lateania_online: usize,
@@ -58,6 +59,7 @@ impl HubView<'_> {
             | HubGame::Usurper
             | HubGame::GreenDragon
             | HubGame::Dopewars
+            | HubGame::Bashquest
             | HubGame::Darkroom
             | HubGame::Codekeep => false,
         }
@@ -197,6 +199,13 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
         }
         HubGame::Dopewars => {
             crate::app::door::dopewars::render::draw_landing(frame, body[1], view.dopewars_enabled);
+        }
+        HubGame::Bashquest => {
+            crate::app::door::bashquest::render::draw_landing(
+                frame,
+                body[1],
+                view.bashquest_enabled,
+            );
         }
         HubGame::Darkroom => {
             crate::app::door::darkroom::screen::draw_landing(frame, body[1], view.delete_confirm);

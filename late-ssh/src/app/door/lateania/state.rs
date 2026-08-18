@@ -48,7 +48,9 @@ pub enum Panel {
     Examine,
     /// Earned titles: select one and press Enter to display it (or clear it).
     Titles,
-    /// The quest journal: the Frontier zone quests and their status (read-only).
+    /// The quest journal: the active starter step, accepted bounties, the Long
+    /// Road, and (once open) the Frontier zone quests. A list panel: Enter on
+    /// a row tracks its target on the compass/map.
     Quests,
     /// Adventurers in the room: select one and press Enter to auto-follow them.
     Follow,
@@ -128,6 +130,18 @@ fn is_leave_confirm_pending(until: Option<Instant>, now: Instant) -> bool {
 /// and the walk it produced (`None` when no known-ground route exists).
 type CachedRoute = ((RoomId, RoomId), Option<Route>);
 
+/// The two pages of the `m` map. `m` cycles closed -> Field -> Lands -> closed,
+/// so one key walks the whole map from where your feet are to how the world
+/// hangs together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMode {
+    /// The room-level overhead field: your own neighbourhood, one land at a time.
+    Field,
+    /// The land graph: every country and the roads between them, no bosses and
+    /// no gates. The question it answers is "how do I get there".
+    Lands,
+}
+
 pub struct State {
     user_id: Uuid,
     session_id: Uuid,
@@ -167,10 +181,16 @@ pub struct State {
     /// player. Reset whenever the panel changes, so opening the map always
     /// re-centres on them.
     map_camera: MapCamera,
+    /// Which page of the map `m` is showing. Always reopens on the field, so
+    /// `m` means the same thing every time it is pressed from the room.
+    map_mode: MapMode,
     /// A room the player has marked to travel back to (`x` on the map's
-    /// crosshair). Local to the session and never persisted: it is a note to
-    /// oneself, not world truth.
+    /// crosshair, or Enter on a journal quest row). Local to the session and
+    /// never persisted: it is a note to oneself, not world truth.
     map_dest: Option<RoomId>,
+    /// Whether the world map overlays active-quest targets (`!` markers and
+    /// border arrows). Toggled with `q` while the map is open; on by default.
+    map_quests: bool,
     /// The last route computed, keyed by the (standing in, heading for) pair it
     /// was computed for. A route only changes when one of those two changes, so
     /// caching on that pair keeps the walk off the render path: the panel is
@@ -209,7 +229,9 @@ impl State {
             chat_buffer: None,
             leave_confirm_until: None,
             map_camera: MapCamera::default(),
+            map_mode: MapMode::Field,
             map_dest: None,
+            map_quests: true,
             route_cache: RefCell::new(None),
         };
         state.svc.join_task(user_id, session_id);
@@ -309,6 +331,32 @@ impl State {
         self.panel == Panel::Map
     }
 
+    /// Which page of the map is showing.
+    pub fn map_mode(&self) -> MapMode {
+        self.map_mode
+    }
+
+    /// `m`: closed -> the overhead field -> the land graph -> closed. One key
+    /// walks the whole map, from the ground under your feet out to how the
+    /// countries hang together.
+    pub fn cycle_map(&mut self) {
+        match (self.panel == Panel::Map, self.map_mode) {
+            (false, _) => {
+                self.map_mode = MapMode::Field;
+                self.set_panel(Panel::Map);
+            }
+            (true, MapMode::Field) => {
+                self.map_mode = MapMode::Lands;
+                self.cursor = 0;
+                self.list_scroll.set(0);
+            }
+            (true, MapMode::Lands) => {
+                self.map_mode = MapMode::Field;
+                self.set_panel(Panel::Room);
+            }
+        }
+    }
+
     /// Flip between the live-map RPG view and the plain text MUD view. The
     /// preference lives on the character (persisted), so this routes through the
     /// service; the next snapshot carries the new value into the view.
@@ -378,6 +426,27 @@ impl State {
     /// The room the player marked, for drawing it on the map.
     pub fn dest_room(&self) -> Option<RoomId> {
         self.map_dest
+    }
+
+    /// Whether the map overlays active-quest targets.
+    pub fn map_quests(&self) -> bool {
+        self.map_quests
+    }
+
+    /// Flip the map's quest overlay (`q` while the map is open).
+    pub fn toggle_map_quests(&mut self) {
+        self.map_quests = !self.map_quests;
+    }
+
+    /// Track (or untrack) a quest's target room from the journal: Enter on a
+    /// row with a target marks it exactly like `x` on the map's crosshair, so
+    /// the compass line under the exits starts guiding toward it.
+    fn toggle_quest_track(&mut self, target: RoomId) {
+        self.map_dest = match self.map_dest {
+            Some(current) if current == target => None,
+            _ => Some(target),
+        };
+        self.route_cache.replace(None);
     }
 
     /// Where the player marked they're going, and how to get there from the
@@ -506,6 +575,9 @@ impl State {
             Panel::Housing => self.view().housing.map(|h| h.entries.len()).unwrap_or(0),
             Panel::Portal => self.view().portal.map(|p| p.entries.len()).unwrap_or(0),
             Panel::Board => self.view().board.map(|b| b.entries.len()).unwrap_or(0),
+            // The journal cursor walks the active quests and then the Long
+            // Road's milestones, so the panel's long tail stays reachable.
+            Panel::Quests => self.view().quests.len() + self.view().road.len(),
             Panel::Appearance => self.view().appearance.len(),
             // These panels' cursors walk headers + visible items, not the raw list.
             Panel::Inventory | Panel::Shop | Panel::Crafting => self.active_rows().len(),
@@ -923,6 +995,24 @@ impl State {
                 }
             }
             Panel::Titles => self.svc.set_active_title_task(self.user_id, self.cursor),
+            Panel::Quests => {
+                // Track the highlighted quest - or Long Road crown - on the
+                // compass/map (or untrack it if it is already the marked
+                // destination). Rows without a single meaningful place stay
+                // inert.
+                let target = {
+                    let view = self.view();
+                    let quests = view.quests.len();
+                    if self.cursor < quests {
+                        view.quests.get(self.cursor).and_then(|q| q.target)
+                    } else {
+                        view.road.get(self.cursor - quests).and_then(|s| s.target)
+                    }
+                };
+                if let Some(target) = target {
+                    self.toggle_quest_track(target);
+                }
+            }
             Panel::Follow => self.follow_selected(),
             Panel::Stable => {
                 if let Some(stable) = self.view().stable
@@ -952,10 +1042,8 @@ impl State {
             }
             Panel::Portal => {
                 if let Some(portal) = self.view().portal
-                    && let Some((_, room, _, _)) = portal.entries.get(self.cursor)
+                    && let Some((_, room, _)) = portal.entries.get(self.cursor)
                 {
-                    // Sealed gates are still sent; the service answers with
-                    // why the way refuses.
                     self.svc.travel_task(self.user_id, *room);
                     self.panel = Panel::Room;
                 }

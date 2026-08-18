@@ -487,6 +487,9 @@ impl App {
         if let Some(state) = self.dopewars_state.as_mut() {
             state.tick();
         }
+        if let Some(state) = self.bashquest_state.as_mut() {
+            state.tick();
+        }
         if let Some(state) = self.codekeep_state.as_mut() {
             state.tick();
         }
@@ -556,6 +559,16 @@ impl App {
                 .dopewars_state
                 .as_ref()
                 .is_none_or(|s| !s.is_running() && !s.in_exit_grace())
+        {
+            self.set_screen(Screen::Games);
+        }
+        if self.screen == Screen::Bashquest
+            && self
+                .bashquest_state
+                .as_ref()
+                // `awaiting_handle` holds the screen through the arcade-name
+                // lookup and claim prompt, which run before any game does.
+                .is_none_or(|s| !s.is_running() && !s.in_exit_grace() && !s.awaiting_handle())
         {
             self.set_screen(Screen::Games);
         }

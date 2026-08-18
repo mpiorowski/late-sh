@@ -104,81 +104,12 @@ resource "kubernetes_secret_v1" "rebels_identity_secret" {
 }
 
 # =============================================================================
-# NetHack Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-nethack. The same value is injected
-# into BOTH the service-ssh client (LATE_NETHACK_SECRET) and the late-nethack
-# host pod, which each derive the same ed25519 key from it (see late-nethack).
-
-resource "random_password" "nethack_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "nethack_identity_secret" {
-  metadata {
-    name = "nethack-identity-secret"
-  }
-
-  data = {
-    secret = random_password.nethack_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
-# dopewars Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-dopewars. The same value is injected
-# into BOTH the service-ssh client (LATE_DOPEWARS_SECRET) and the late-dopewars
-# host pod, which each derive the same ed25519 key from it (see late-dopewars).
-
-resource "random_password" "dopewars_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "dopewars_identity_secret" {
-  metadata {
-    name = "dopewars-identity-secret"
-  }
-
-  data = {
-    secret = random_password.dopewars_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
-# CodeKeep Door Identity Seed
-# =============================================================================
-
-resource "random_password" "codekeep_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "codekeep_identity_secret" {
-  metadata {
-    name = "codekeep-identity-secret"
-  }
-
-  data = {
-    secret = random_password.codekeep_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
 # Chat Log HMAC Key
 # =============================================================================
 # HMAC key late-ssh uses to derive the R2 object key for a user's saved daily
 # chat log ("save daily chat logs" setting). Unlike the door identity seeds
-# above, this isn't shared with another pod - it's consumed only by
-# service-ssh, which both writes and reads the logs itself.
+# in the door module, this isn't shared with another pod - it's consumed only
+# by service-ssh, which both writes and reads the logs itself.
 
 resource "random_password" "chat_log_secret" {
   length  = 64
@@ -197,78 +128,8 @@ resource "kubernetes_secret_v1" "chat_log_secret" {
   type = "Opaque"
 }
 
-# =============================================================================
-# DCSS Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-dcss. The same value is injected
-# into BOTH the service-ssh client (LATE_DCSS_SECRET) and the late-dcss host
-# pod, which each derive the same ed25519 key from it (see late-dcss).
-
-resource "random_password" "dcss_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "dcss_identity_secret" {
-  metadata {
-    name = "dcss-identity-secret"
-  }
-
-  data = {
-    secret = random_password.dcss_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
-# Brogue Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-brogue. The same value is injected
-# into BOTH the service-ssh client (LATE_BROGUE_SECRET) and the late-brogue
-# host pod, which each derive the same ed25519 key from it (see late-brogue).
-
-resource "random_password" "brogue_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "brogue_identity_secret" {
-  metadata {
-    name = "brogue-identity-secret"
-  }
-
-  data = {
-    secret = random_password.brogue_identity_secret.result
-  }
-
-  type = "Opaque"
-}
-
-# =============================================================================
-# Usurper Door Identity Seed
-# =============================================================================
-# Shared secret authorizing late-ssh -> late-usurper. The same value is
-# injected into BOTH the service-ssh client (LATE_USURPER_SECRET) and the
-# late-usurper host pod, which each derive the same ed25519 key from it (see
-# late-usurper).
-
-resource "random_password" "usurper_identity_secret" {
-  length  = 64
-  special = false
-}
-
-resource "kubernetes_secret_v1" "usurper_identity_secret" {
-  metadata {
-    name = "usurper-identity-secret"
-  }
-
-  data = {
-    secret = random_password.usurper_identity_secret.result
-  }
-
-  type = "Opaque"
-}
+# Door-game identity seeds (nethack, dopewars, codekeep, dcss, bashquest,
+# brogue, usurper) live in the door module; see doors.tf.
 
 # =============================================================================
 # Icecast Passwords

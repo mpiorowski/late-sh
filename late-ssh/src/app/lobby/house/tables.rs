@@ -14,8 +14,7 @@ use uuid::Uuid;
 use crate::app::lobby::house::{
     blackjack::settings::BlackjackTableSettings,
     poker::settings::{PokerPace, PokerTableSettings},
-    ssnake::settings::{SsnakeSpeed, SsnakeTableSettings},
-    ssnake::svc::SSNAKE_WIN_CHIPS,
+    ssnake::settings::{SSNAKE_FOOD_CHIPS, SsnakeSpeed, SsnakeTableSettings},
     tron::settings::{TronMode, TronSpeed, TronTableSettings},
     tron::svc::TRON_WIN_CHIPS,
 };
@@ -70,7 +69,7 @@ impl HouseTable {
             Self::Blackjack => "house shoe · 10-chip stake",
             Self::Asterion => "escape the maze, dodge the minotaur",
             Self::Tron => "light cycles · quick · glitch",
-            Self::Ssnake => "snake arena · warp tunnels",
+            Self::Ssnake => "endless arena · join or leave any time",
         }
     }
 
@@ -82,14 +81,16 @@ impl HouseTable {
     /// Asterion's is a DB-backed `RewardTemplate` (migration
     /// `056_create_quests.sql`, key `asterion_daily_escape`) with no Rust
     /// constant to read live, so its 4000-chip `reward_chips` value is
-    /// mirrored here by hand. `None` means the row leaves this column blank.
+    /// mirrored here by hand. Super Snake has no fixed prize at all: it pays
+    /// per food, scaled by how many snakes are moving, so the row advertises
+    /// the base rate. `None` means the row leaves this column blank.
     pub fn price_label(self) -> Option<String> {
         match self {
             Self::Poker => Some("pot varies".to_string()),
             Self::Blackjack => Some("2x · bj 3:2".to_string()),
             Self::Asterion => Some("4000 chips/day".to_string()),
             Self::Tron => Some(format!("{TRON_WIN_CHIPS} chips")),
-            Self::Ssnake => Some(format!("{SSNAKE_WIN_CHIPS} chips")),
+            Self::Ssnake => Some(format!("{SSNAKE_FOOD_CHIPS}/food × snakes")),
         }
     }
 
@@ -123,7 +124,7 @@ impl HouseTable {
             Self::Blackjack => 4,
             Self::Asterion => 12,
             Self::Tron => 4,
-            Self::Ssnake => 4,
+            Self::Ssnake => 5,
         }
     }
 
@@ -131,8 +132,8 @@ impl HouseTable {
     /// Blackjack: the 10-chip stake, standard pace. Tron: quick speed,
     /// glitch mode (owner-preserved). Super Snake: relaxed speed (SSH
     /// round-trips eat into reaction time, so the DOS classic pace is too
-    /// hot), all four seats, random arena (seated players cycle it between
-    /// matches). Asterion has no settings.
+    /// hot) and all five seats; the arena reshuffles itself on every clear,
+    /// so there is no level to configure. Asterion has no settings.
     pub fn poker_settings() -> PokerTableSettings {
         PokerTableSettings {
             pace: PokerPace::Standard,
@@ -155,8 +156,7 @@ impl HouseTable {
     pub fn ssnake_settings() -> SsnakeTableSettings {
         SsnakeTableSettings {
             speed: SsnakeSpeed::Relaxed,
-            level: None,
-            seats: 4,
+            seats: 5,
         }
     }
 

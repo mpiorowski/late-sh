@@ -11,7 +11,7 @@ pub(crate) struct Config {
     /// The writable playground (VAR_PLAYGROUND compiled into the binary):
     /// saves, bones, locks, and the append-only xlogfile/livelog the stats
     /// session streams. Must match the compile-time path in
-    /// docker/doors/nethack.Dockerfile and the PVC mount in infra/nethack.tf.
+    /// docker/doors/nethack.Dockerfile and the PVC mount in infra/doors.tf.
     pub(crate) var_dir: String,
     /// Shared secret. The single authorized client key is derived from this; it
     /// must match late-ssh's `LATE_NETHACK_SECRET`.

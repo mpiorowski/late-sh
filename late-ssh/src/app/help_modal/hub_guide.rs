@@ -1,7 +1,11 @@
 use asterion_core::MAX_MAZE_ID;
 
 use crate::app::lobby::house::{
-    ssnake::svc::{SSNAKE_WIN_CHIPS, SSNAKE_WIN_PAYOUT_COOLDOWN},
+    ssnake::settings::{
+        SSNAKE_BONUS_FOOD_MULTIPLIER, SSNAKE_CLEAR_CHIPS, SSNAKE_CRASH_CHIPS,
+        SSNAKE_CRASH_LENGTH_PENALTY_PCT, SSNAKE_EDGE_BONUS_CHIPS, SSNAKE_FOOD_CHIPS,
+        SSNAKE_SKIP_COOLDOWN,
+    },
     tron::svc::{TRON_WIN_CHIPS, TRON_WIN_PAYOUT_COOLDOWN},
 };
 use late_core::models::{
@@ -303,7 +307,7 @@ fn room_game_sections() -> Vec<GuideSection> {
                 "The row shows live occupancy; empty tables are always joinable.".to_string(),
                 "q or Esc leaves the table screen; your seat follows that game's rules."
                     .to_string(),
-                "Only Poker and Blackjack put your chips at risk. Everywhere else the winner is paid by the house and losers lose nothing."
+                "Only Poker and Blackjack put your chips at risk, and Super Snake docks a small fee per crash. Everywhere else the winner is paid by the house and losers lose nothing."
                     .to_string(),
             ],
         },
@@ -404,16 +408,38 @@ fn room_game_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Super Snake",
             body: vec![
-                "Four-seat snake arena with warp tunnels, relaxed speed.".to_string(),
+                "A five-seat snake arena that never stops: nobody starts it, nobody wins it, and there is no round to wait for."
+                    .to_string(),
+                "Sit down mid-flight and you spawn well clear of the other snakes; stand up any time.".to_string(),
                 format!(
-                    "Wins pay {SSNAKE_WIN_CHIPS} chips, one payout per {} minutes.",
-                    SSNAKE_WIN_PAYOUT_COOLDOWN.as_secs() / 60
+                    "Every food is worth {SSNAKE_FOOD_CHIPS} chips times the number of snakes MOVING when you eat it."
+                ),
+                "What the arena owes you runs up in the seat row as a pending figure; it reaches your balance when you stand up, and the idle kick banks it for you if you just disconnect."
+                    .to_string(),
+                "Snakes that are seated but not moving count for nobody, so idling at a seat pays zero and inflates nothing."
+                    .to_string(),
+                format!(
+                    "Food touching an arena wall pays +{SSNAKE_EDGE_BONUS_CHIPS} per wall before any multiplier, so a corner pickup is worth more than one in open floor."
+                ),
+                format!("Pink food pays {SSNAKE_BONUS_FOOD_MULTIPLIER}x the usual rate."),
+                format!(
+                    "The orange food is the arena's last: eating it pays {SSNAKE_CLEAR_CHIPS} chips times the same multiplier and reshuffles the board to a new random level."
+                ),
+                "The new board counts 3, 2, 1, GO on screen before anyone can steer, so a key pressed on the old arena cannot drive you into a wall you have not seen."
+                    .to_string(),
+                format!(
+                    "Crashing costs {SSNAKE_CRASH_CHIPS} chips and respawns you {SSNAKE_CRASH_LENGTH_PENALTY_PCT}% shorter; there are no lives to lose, and shedding length is how a snake too long to steer gets back under control."
+                ),
+                format!(
+                    "v votes to skip the arena. It changes only once every seated player has voted, and no more than once every {}s — on a table of one you are the whole vote, so the cooldown is what stops anyone rerolling until they get the level they farm fastest.",
+                    SSNAKE_SKIP_COOLDOWN.as_secs()
                 ),
                 "s, Space, or Enter sits when not seated.".to_string(),
-                "n starts another round.".to_string(),
-                "w/a/s/d, hjkl, or arrows steer while seated.".to_string(),
-                "[ and ] browse the arena between matches.".to_string(),
-                "l leaves seat; q or Esc leaves the table.".to_string(),
+                "w/a/s/d, h, or arrows steer while seated.".to_string(),
+                format!(
+                    "l leaves your seat, but standing up while your snake is moving costs the same {SSNAKE_CRASH_CHIPS} chips as a crash — you cannot bail out of one for free. Stand up parked and it is free."
+                ),
+                "q or Esc leaves the table screen; your snake keeps its seat and keeps going.".to_string(),
             ],
         },
         GuideSection {
