@@ -43,7 +43,6 @@ impl russh::server::Server for Server {
     fn new_client(&mut self, _peer: Option<std::net::SocketAddr>) -> ClientHandler {
         ClientHandler {
             shared: self.shared.clone(),
-            authorized: false,
             playname: None,
             channel: None,
             term: "xterm-256color".to_string(),
@@ -56,10 +55,10 @@ impl russh::server::Server for Server {
 
 pub(crate) struct ClientHandler {
     shared: Arc<Shared>,
-    /// Set once the shared-secret-derived key checks out.
-    authorized: bool,
     /// The account's arcade handle, captured from the SSH username at auth
     /// time and re-sanitized. Becomes `BASHQUEST_AUTOLOGIN` for the child.
+    /// `Some` only after the shared-secret key check passes, so it doubles as
+    /// the authorization record: one field, so the two cannot disagree.
     playname: Option<String>,
     /// Session channel, set on open and consumed when the shell starts.
     channel: Option<Channel<Msg>>,
@@ -146,18 +145,18 @@ impl Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let _ = session.channel_success(channel);
 
-        if !self.authorized {
+        // A playname is recorded only by a successful `auth_publickey`, so its
+        // absence means the shell request arrived unauthenticated. russh does
+        // not deliver one before auth, so this is an impossible state: fail the
+        // session loudly rather than launching the child under a fallback name.
+        let Some(playname) = self.playname.clone() else {
             tracing::error!("shell requested before authentication");
             return Err(anyhow::anyhow!("unauthenticated shell request"));
-        }
+        };
+
         // Drop the stored Channel handle; we drive the channel by id via the
         // session handle from here on.
         let _ = self.channel.take();
-
-        let playname = self.playname.clone().unwrap_or_else(|| {
-            tracing::warn!("shell requested with no captured playname; falling back");
-            playname::sanitize("")
-        });
 
         self.host = Some(PtyHost::spawn(
             HostConfig {
@@ -221,3 +220,7 @@ impl Handler for ClientHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "server_test.rs"]
+mod server_test;
