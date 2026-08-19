@@ -65,3 +65,13 @@ ON CONFLICT (key) DO UPDATE SET
     cooldown_seconds = EXCLUDED.cooldown_seconds,
     active = true,
     updated = current_timestamp;
+
+-- Badge rows recorded while these two crowns were badge-only hold
+-- score_value = 0. Re-record them at the flat payout so the badge history
+-- reads in chips like the other crowns. This touches the badge display only:
+-- the chips themselves stay re-kill only, paid through the templates above
+-- the next time the boss falls (these holders have no lifetime claim row).
+UPDATE profile_awards
+SET score_value = 10000
+WHERE category IN ('lateania_sundering_deep', 'lateania_kaethyr_ascendant')
+  AND score_value = 0;

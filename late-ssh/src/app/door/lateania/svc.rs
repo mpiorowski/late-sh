@@ -2079,8 +2079,9 @@ impl LateaniaService {
         let activity = self.activity.clone();
         let db = self.db.clone();
         tokio::spawn(async move {
-            // The badge's recorded score is the chip amount for paying bosses
-            // and 0 for badge-only crowns like Yssgar.
+            // The badge's recorded score is the crown's chip amount; every
+            // crown pays now, so the fallback 0 only covers a payout-less
+            // achievement, which no current crown is.
             let mut badge_score = 0_i64;
             let mut grant_badge = true;
             if let Some(pay) = achievement.payout {

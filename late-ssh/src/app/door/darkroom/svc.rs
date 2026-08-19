@@ -77,7 +77,10 @@ impl DarkroomService {
         Self {
             inner: Arc::new(Inner {
                 db,
-                seq: AtomicU64::new(0),
+                // Gates start at watermark 0, and `commit_save` drops any
+                // seq <= watermark, so the first seq handed out must be 1:
+                // at 0 the process's first save is silently discarded.
+                seq: AtomicU64::new(1),
                 gates: StdMutex::new(HashMap::new()),
                 activity,
                 chips,
@@ -158,9 +161,15 @@ impl DarkroomService {
                     return;
                 }
             };
-            // Already claimed on an earlier run — nothing more to do.
+            // Already claimed on an earlier run: the chips stay suppressed,
+            // but the badge insert below still runs (it is `NOT EXISTS`
+            // idempotent), so a badge insert that failed on the crediting run
+            // heals on a later escape instead of being lost for good.
             if !grant.credited {
-                return;
+                tracing::info!(
+                    user_id = %user_id,
+                    "suppressed darkroom escape chips because lifetime payout was already claimed"
+                );
             }
 
             let badge = award_badge(DARKROOM_ESCAPE_AWARD_CATEGORY, 1);

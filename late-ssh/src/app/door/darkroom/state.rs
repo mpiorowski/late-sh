@@ -393,9 +393,11 @@ impl State {
             Some(Flight::Won) => {
                 self.flight = None;
                 self.view = View::Ship;
-                if let Some(game) = self.game.as_ref() {
-                    self.ending = Some(Ending::for_run(game));
-                }
+                let game = self
+                    .game
+                    .as_ref()
+                    .expect("a flight cannot exist without a loaded game");
+                self.ending = Some(Ending::for_run(game));
                 self.svc.reward_escape(self.user_id);
                 self.svc.delete_game(self.user_id);
                 true

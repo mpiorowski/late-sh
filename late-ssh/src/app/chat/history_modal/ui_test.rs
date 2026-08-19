@@ -37,7 +37,12 @@ fn opened_with(bodies: &[&str]) -> ChatHistoryModalState {
         .enumerate()
         .map(|(index, body)| message(index as u64, body))
         .collect();
-    state.apply_page(request_id, HistoryDirection::Older, messages, HashMap::new());
+    state.apply_page(
+        request_id,
+        HistoryDirection::Older,
+        messages,
+        HashMap::new(),
+    );
     state
 }
 

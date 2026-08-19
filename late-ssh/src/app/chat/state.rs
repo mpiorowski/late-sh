@@ -2032,8 +2032,12 @@ impl ChatState {
             request_id,
         );
         let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
-        self.service
-            .load_history_anchor_task(self.user_id, request_id, message_id, exclude_user_ids);
+        self.service.load_history_anchor_task(
+            self.user_id,
+            request_id,
+            message_id,
+            exclude_user_ids,
+        );
     }
 
     /// Title for the history modal. A public-room mention can point at a room

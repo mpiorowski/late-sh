@@ -26,8 +26,8 @@ fn lateania_boss_awards_have_profile_badge_codes() {
         "20000 chips"
     );
     assert_eq!(
-        format_score_value(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 0),
-        "Yssgar slain"
+        format_score_value(LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY, 10_000),
+        "10000 chips"
     );
     assert_eq!(
         award_badge(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, 1),
@@ -38,8 +38,8 @@ fn lateania_boss_awards_have_profile_badge_codes() {
         "Lateania Kaethyr Ascendant"
     );
     assert_eq!(
-        format_score_value(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, 0),
-        "Kaethyr Ascendant slain"
+        format_score_value(LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, 10_000),
+        "10000 chips"
     );
 }
 
