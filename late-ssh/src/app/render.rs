@@ -1806,6 +1806,12 @@ impl App {
             );
         }
 
+        // Drawn after the search modal: a jump too old to land in the room
+        // opens history over the top of whatever was showing.
+        if ctx.chat_state.history_modal.is_open() {
+            crate::app::chat::history_modal::ui::draw(frame, inner, &ctx.chat_state.history_modal);
+        }
+
         if ctx.room_info_modal_open {
             room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
         }

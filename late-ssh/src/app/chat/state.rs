@@ -29,6 +29,8 @@ use ratatui_textarea::{CursorMove, Input, TextArea, WrapMode};
 use tokio::sync::{broadcast::error::TryRecvError, mpsc, watch};
 use uuid::Uuid;
 
+use late_core::models::chat_message::HistoryDirection;
+
 use crate::app::ai::ladder::MentionLadders;
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::Overlay;
@@ -48,7 +50,7 @@ use crate::usernames::UsernameResolver;
 
 use super::{
     commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
-    cyberspace, discover, feeds, news, notifications,
+    cyberspace, discover, feeds, history_modal, news, notifications,
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, ReportKind, RoomMemberListItem},
@@ -691,9 +693,13 @@ pub struct ChatState {
     /// (not on the modal) because ChatState owns the chat event receiver.
     pub(crate) message_search: MessageSearch,
     /// A search hit the user asked to jump to before its room tail was
-    /// loaded: `(room_id, message_id)`. Resolved (or dropped with a banner)
-    /// when that room's tail lands.
+    /// loaded: `(room_id, message_id)`. Resolved when that room's tail lands,
+    /// or handed to the history modal if the message turns out to sit further
+    /// back than the tail reaches.
     pending_search_jump: Option<(Uuid, Uuid)>,
+    /// Paginated room history. Owned here, like `message_search`, because
+    /// ChatState owns the chat event receiver its pages arrive on.
+    pub(crate) history_modal: history_modal::state::ChatHistoryModalState,
     pub(crate) showcase_selected: bool,
     pub(crate) showcase: showcase::state::State,
     pub(crate) work_selected: bool,
@@ -931,6 +937,7 @@ impl ChatState {
             discover: discover::state::State::new(),
             message_search: MessageSearch::default(),
             pending_search_jump: None,
+            history_modal: history_modal::state::ChatHistoryModalState::default(),
             showcase_selected: false,
             showcase: showcase::state::State::new(
                 showcase_service,
@@ -1942,6 +1949,78 @@ impl ChatState {
         self.pending_search_jump = Some((room_id, message_id));
     }
 
+    /// Open the history modal at a room's newest messages (the `/history`
+    /// path).
+    pub(crate) fn open_history_at_tail(&mut self, room_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.history_modal
+            .open_at_tail(room_id, self.history_room_label(room_id), request_id);
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_page_task(
+            self.user_id,
+            request_id,
+            room_id,
+            None,
+            HistoryDirection::Older,
+            exclude_user_ids,
+        );
+    }
+
+    /// Open the history modal centered on one message: the destination for a
+    /// search hit or mention that sits further back than the live room tail
+    /// reaches.
+    pub(crate) fn open_history_at_message(&mut self, room_id: Uuid, message_id: Uuid) {
+        let request_id = Uuid::now_v7();
+        self.history_modal.open_at_message(
+            room_id,
+            self.history_room_label(room_id),
+            message_id,
+            request_id,
+        );
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_anchor_task(
+            self.user_id,
+            request_id,
+            room_id,
+            message_id,
+            exclude_user_ids,
+        );
+    }
+
+    /// Title for the history modal. A public-room mention can point at a room
+    /// the rail has never listed, so an unknown room gets a neutral label
+    /// rather than blocking the open.
+    fn history_room_label(&self, room_id: Uuid) -> String {
+        crate::app::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
+    }
+
+    /// Fetch the next page if the viewport has reached that edge. Called
+    /// after every scroll; `wants_page` owns the "is there more, and is a
+    /// fetch already running" decision.
+    pub(crate) fn request_history_page_if_needed(&mut self, direction: HistoryDirection) {
+        if !self.history_modal.wants_page(direction) {
+            return;
+        }
+        let Some(room_id) = self.history_modal.room_id() else {
+            return;
+        };
+        let cursor = match direction {
+            HistoryDirection::Older => self.history_modal.older_cursor(),
+            HistoryDirection::Newer => self.history_modal.newer_cursor(),
+        };
+        let request_id = Uuid::now_v7();
+        self.history_modal.begin_page(direction, request_id);
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_page_task(
+            self.user_id,
+            request_id,
+            room_id,
+            cursor,
+            direction,
+            exclude_user_ids,
+        );
+    }
+
     /// Lazily fetch the context window (3 messages either side) for a search
     /// hit if it is not cached and no other context fetch is running. Called
     /// from the modal's tick for the currently selected hit; the single
@@ -2716,6 +2795,15 @@ impl ChatState {
             let query = rest.trim().to_string();
             self.clear_composer_after_submit();
             self.requested_message_search = Some(query);
+            return None;
+        }
+
+        if body.trim() == "/history" {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.visible_room_id else {
+                return Some(Banner::error("open a room first"));
+            };
+            self.open_history_at_tail(room_id);
             return None;
         }
 
@@ -4782,8 +4870,11 @@ impl ChatState {
                         if self.message_is_loaded_in_room(room_id, message_id) {
                             self.select_message_by_id_in_room(room_id, message_id);
                         } else {
-                            banner =
-                                Some(Banner::error("Message is older than the loaded history"));
+                            // Further back than the tail reaches. The room is
+                            // already on screen underneath, so the modal opens
+                            // over it and closing lands the user in the right
+                            // room rather than nowhere.
+                            self.open_history_at_message(room_id, message_id);
                         }
                     }
                 }
@@ -5008,6 +5099,39 @@ impl ChatState {
                     message,
                 } if self.user_id == user_id && self.message_search.is_current(request_id) => {
                     self.message_search.fail(sentence_case(&message));
+                }
+                ChatEvent::HistoryPageLoaded {
+                    user_id,
+                    request_id,
+                    direction,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    self.history_modal
+                        .apply_page(request_id, direction, messages, usernames);
+                }
+                ChatEvent::HistoryPageFailed {
+                    user_id,
+                    request_id,
+                    direction,
+                } if self.user_id == user_id => {
+                    self.history_modal.apply_failed(request_id, direction);
+                }
+                ChatEvent::HistoryAnchorLoaded {
+                    user_id,
+                    request_id,
+                    anchor_id,
+                    messages,
+                    usernames,
+                } if self.user_id == user_id => {
+                    self.history_modal
+                        .apply_anchor(request_id, anchor_id, messages, usernames);
+                }
+                ChatEvent::HistoryAnchorMissing {
+                    user_id,
+                    request_id,
+                } if self.user_id == user_id => {
+                    self.history_modal.apply_anchor_missing(request_id);
                 }
                 ChatEvent::MessageContextLoaded {
                     user_id,

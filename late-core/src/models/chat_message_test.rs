@@ -1,3 +1,5 @@
+use uuid::Uuid;
+
 use crate::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams, escape_like_pattern},
@@ -310,6 +312,7 @@ async fn search_and_context_exclude_replies_to_ignored_users() {
     let (before, after) = ChatMessage::list_around(
         &client,
         room.id,
+        viewer.id,
         anchor.created,
         anchor.id,
         &[ignored.id],
@@ -320,4 +323,165 @@ async fn search_and_context_exclude_replies_to_ignored_users() {
     let window_ids: Vec<_> = before.iter().chain(after.iter()).map(|m| m.id).collect();
     assert!(window_ids.contains(&plain.id));
     assert!(!window_ids.contains(&reply_to_ignored.id));
+}
+
+/// The read boundary that used to sit in caller code and now lives in the
+/// query. A caller passing a room id it has no business reading must come
+/// back empty rather than with content.
+#[tokio::test]
+async fn history_pages_admit_public_rooms_but_not_private_ones_to_non_members() {
+    use crate::models::chat_message::HistoryDirection;
+    use crate::models::chat_room_member::ChatRoomMember;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let make_user = async |fingerprint: &str, username: &str| {
+        User::create(
+            &client,
+            UserParams {
+                fingerprint: fingerprint.to_string(),
+                username: username.to_string(),
+                settings: serde_json::json!({}),
+            },
+        )
+        .await
+        .expect("create user")
+    };
+    let member = make_user("page-member", "pagemember").await;
+    let outsider = make_user("page-outsider", "pageoutsider").await;
+
+    let public = ChatRoom::get_or_create_public_room(&client, "page-public")
+        .await
+        .expect("public room");
+    let private = ChatRoom::create_private_room(&client, "page-private", member.id)
+        .await
+        .expect("private room");
+    ChatRoomMember::join(&client, private.id, member.id)
+        .await
+        .expect("join private");
+
+    for room_id in [public.id, private.id] {
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id: member.id,
+                body: "secret plans".to_string(),
+            },
+        )
+        .await
+        .expect("create message");
+    }
+
+    let page = async |viewer: Uuid, room_id: Uuid| {
+        ChatMessage::list_page_for_viewer(
+            &client,
+            room_id,
+            viewer,
+            None,
+            HistoryDirection::Older,
+            &[],
+            50,
+        )
+        .await
+        .expect("page")
+    };
+
+    // A public non-game room reads for anyone: a mention can point a
+    // non-member at it, and refusing would strand them.
+    assert_eq!(page(outsider.id, public.id).await.len(), 1);
+    assert_eq!(page(member.id, public.id).await.len(), 1);
+    // The private room reads only for its member. The outsider holds a valid
+    // room id and still gets nothing.
+    assert_eq!(page(member.id, private.id).await.len(), 1);
+    assert!(page(outsider.id, private.id).await.is_empty());
+}
+
+/// Walking the room in pages must reconstruct it exactly: every message once,
+/// in order, no gap or repeat at the seams. The messages are written in a
+/// tight loop so several land on the same `created` value, which is the case
+/// a `created`-only cursor gets wrong.
+#[tokio::test]
+async fn history_pages_walk_the_room_without_gaps_or_repeats() {
+    use crate::models::chat_message::HistoryDirection;
+    use crate::models::chat_room_member::ChatRoomMember;
+
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let viewer = User::create(
+        &client,
+        UserParams {
+            fingerprint: "page-walker".to_string(),
+            username: "pagewalker".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .expect("create user");
+    let room = ChatRoom::get_or_create_public_room(&client, "page-walk")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, viewer.id)
+        .await
+        .expect("join");
+
+    let mut expected = Vec::new();
+    for index in 0..25 {
+        let message = ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id: room.id,
+                user_id: viewer.id,
+                body: format!("walk {index}"),
+            },
+        )
+        .await
+        .expect("create message");
+        expected.push((message.created, message.id));
+    }
+
+    // Page back from the tail in sevens, so the final page is deliberately
+    // short and the loop has to stop on an empty page rather than a short one.
+    let mut cursor = None;
+    let mut walked: Vec<Uuid> = Vec::new();
+    loop {
+        let page = ChatMessage::list_page_for_viewer(
+            &client,
+            room.id,
+            viewer.id,
+            cursor,
+            HistoryDirection::Older,
+            &[],
+            7,
+        )
+        .await
+        .expect("page");
+        let Some(first) = page.first() else {
+            break;
+        };
+        cursor = Some((first.created, first.id));
+        // Pages arrive oldest first, so each one prefixes what we have.
+        let mut merged: Vec<Uuid> = page.iter().map(|message| message.id).collect();
+        merged.extend(walked);
+        walked = merged;
+    }
+    let expected_ids: Vec<Uuid> = expected.iter().map(|(_, id)| *id).collect();
+    assert_eq!(walked, expected_ids);
+
+    // Forward from the oldest message reconstructs the same run minus itself.
+    let forward = ChatMessage::list_page_for_viewer(
+        &client,
+        room.id,
+        viewer.id,
+        Some(expected[0]),
+        HistoryDirection::Newer,
+        &[],
+        50,
+    )
+    .await
+    .expect("forward page");
+    let forward_ids: Vec<Uuid> = forward.iter().map(|message| message.id).collect();
+    assert_eq!(forward_ids, expected_ids[1..].to_vec());
 }
