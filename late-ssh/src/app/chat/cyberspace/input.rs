@@ -98,9 +98,13 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
             return;
         }
         // Back to the live bottom, however far back the user scrolled.
+        // Only with nothing typed: while the row holds text, End is an
+        // editing key (Home's mirror), and falls through to the edit below.
         ParsedInput::End => {
-            app.chat.cyberspace.room_to_bottom();
-            return;
+            if app.chat.cyberspace.room_composer_text().is_empty() {
+                app.chat.cyberspace.room_to_bottom();
+                return;
+            }
         }
         _ => {}
     }
@@ -137,12 +141,12 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// A `/cs` command typed inside one of their rooms. Only the ones that open
-/// *over* the room belong here: the two pickers and starting a conversation,
-/// none of which pull the user out of a room they are reading. The rest stay
-/// with the main chat composer, where moving the user is not a surprise, and
-/// they are answered rather than posted, because a command of ours has no
-/// business landing in their chat as a message.
+/// A `/cs` command typed inside one of their rooms, answered rather than
+/// posted, because a command of ours has no business landing in their chat
+/// as a message. The two pickers open *over* the room; `/cs mail @user`
+/// deliberately moves the user into the conversation it starts, since a
+/// conversation started by name is one they asked to write in. The rest
+/// stay with the main chat composer.
 fn handle_room_command(app: &mut App, command: CyberspaceCommand) -> Option<Banner> {
     match command {
         CyberspaceCommand::Chat => app.chat.cyberspace.open_rooms_modal(),

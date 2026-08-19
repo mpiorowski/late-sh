@@ -936,12 +936,7 @@ impl CyberspaceService {
         }
     }
 
-    async fn stream_once(
-        &self,
-        user_id: Uuid,
-        node: StreamNode,
-        room: &str,
-    ) -> Result<(), String> {
+    async fn stream_once(&self, user_id: Uuid, node: StreamNode, room: &str) -> Result<(), String> {
         let (token, rtdb_url) = self
             .token_and_rtdb(user_id)
             .await
@@ -1107,12 +1102,7 @@ impl CyberspaceService {
     /// `last_message_at` stamps are what the rail's room dots compare
     /// against, and (when conversations are pinned) the C-Mail list, whose
     /// own unread counts are the badges on those rows.
-    async fn refresh_unread(
-        &self,
-        user_id: Uuid,
-        include_circ_roster: bool,
-        include_cmail: bool,
-    ) {
+    async fn refresh_unread(&self, user_id: Uuid, include_circ_roster: bool, include_cmail: bool) {
         let token = match self.id_token(user_id).await {
             Ok(token) => token,
             Err(_) => return,

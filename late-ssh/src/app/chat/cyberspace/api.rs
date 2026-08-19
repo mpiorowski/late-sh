@@ -170,9 +170,10 @@ impl CsNotification {
     ///
     /// Their terms keep their content out of any AI pipeline, and a log line
     /// is exactly where it would otherwise leak, so a value prints only where
-    /// it cannot be prose: content keys are dropped by name, and any other
-    /// string carrying whitespace or longer than `SHAPE_VALUE_MAX_CHARS`
-    /// prints as its length instead of its text.
+    /// it cannot be prose: content keys are dropped by name (exact, or as a
+    /// fragment of a longer non-id key), and any other string carrying
+    /// whitespace or longer than `SHAPE_VALUE_MAX_CHARS` prints as its length
+    /// instead of its text.
     pub fn shape(&self) -> String {
         let mut out = format!(
             "type={} targetType={} targetId={}",
@@ -193,8 +194,9 @@ impl CsNotification {
 }
 
 /// Keys that carry their prose rather than an identifier. Matched
-/// case-insensitively, since the payload is open-ended and only the
-/// documented keys are known to be camelCase.
+/// case-insensitively: exactly for any value, and as fragments of longer
+/// keys for string values, since the payload is open-ended and only the
+/// documented keys are known.
 const CONTENT_KEYS: &[&str] = &[
     "content",
     "postcontent",
@@ -218,14 +220,28 @@ const SHAPE_VALUE_MAX_CHARS: usize = 64;
 /// walking a whole payload.
 const SHAPE_MAX_DEPTH: usize = 2;
 
+/// Whether a string under `key` (already lowercased) is their prose by
+/// name: any content word inside the key marks it, so an undocumented
+/// `messagePreview` or `lastMessage` cannot slip past the exact list. Keys
+/// naming an id are exempt: `messageId` is a pointer, not a sentence, and
+/// pointers are what the log is for.
+fn is_content_string_key(key: &str) -> bool {
+    if key.ends_with("id") {
+        return false;
+    }
+    CONTENT_KEYS.iter().any(|word| key.contains(word))
+}
+
 fn shape_value(key: &str, value: &serde_json::Value, depth: usize) -> String {
-    if CONTENT_KEYS.contains(&key.to_ascii_lowercase().as_str()) {
+    let key = key.to_ascii_lowercase();
+    if CONTENT_KEYS.contains(&key.as_str()) {
         return "<content>".to_string();
     }
     match value {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(flag) => flag.to_string(),
         serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::String(_) if is_content_string_key(&key) => "<content>".to_string(),
         serde_json::Value::String(text)
             if text.chars().count() <= SHAPE_VALUE_MAX_CHARS
                 && !text.chars().any(char::is_whitespace) =>

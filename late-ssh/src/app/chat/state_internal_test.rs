@@ -2347,6 +2347,40 @@ async fn remote_pin_changes_re_derive_the_rail_room_selection() {
     );
 }
 
+#[tokio::test]
+async fn a_room_hop_keeps_the_recorded_return_row() {
+    use late_core::models::cyberspace_account::CyberspaceAccount;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "circ_return_row").await;
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+    CyberspaceAccount::set_circ_rooms(&client, user.id, &["alpha".to_string(), "beta".to_string()])
+        .await
+        .expect("pin rooms");
+
+    let (mut state, _cyberspace) = chat_state_with_cyberspace(&test_db, user.id);
+    tick_until(&mut state, "pinned rooms load", |state| {
+        state.cyberspace.pinned_rooms().len() == 2
+    })
+    .await;
+
+    // A mention jump: standing on the notifications row, walk into a room.
+    state.select_cyberspace_notifications();
+    state.select_cyberspace_room(0);
+    // Hop to the second room through the rail. The user never stood on a
+    // pane row in between, so the recorded origin must survive the hop.
+    state.select_cyberspace_room(1);
+
+    state.select_cyberspace_return_row();
+    assert!(
+        state.cyberspace_notifications_selected,
+        "a room-to-room hop must not reset the recorded return row to the feed"
+    );
+}
+
 /// Pump the chat event stream until `ready` holds, the way the app tick loop
 /// drains events every frame. `wait_until` cannot serve here: its predicate
 /// borrows immutably, and draining needs `&mut ChatState`.

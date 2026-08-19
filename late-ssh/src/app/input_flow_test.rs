@@ -1245,6 +1245,40 @@ async fn entering_a_cyberspace_room_reads_it_before_it_types_in_it() {
 }
 
 #[tokio::test]
+async fn end_in_a_room_draft_edits_the_line_instead_of_scrolling() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-end-key").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-end-key-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+    app.chat.select_cyberspace_room(0);
+
+    app.handle_input(b"iab");
+    app.handle_input(b"\x1b[H");
+    app.handle_input(b"c");
+    assert_eq!(room_draft(&app), "cab", "Home moves the cursor to the head");
+
+    // End is Home's mirror while the row holds text: it must return the
+    // cursor to the end of the line, not scroll the conversation.
+    app.handle_input(b"\x1b[F");
+    app.handle_input(b"d");
+    assert_eq!(room_draft(&app), "cabd");
+}
+
+#[tokio::test]
 async fn our_own_command_typed_in_their_room_never_becomes_a_message() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "cs-room-command").await;

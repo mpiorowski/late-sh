@@ -531,7 +531,12 @@ impl State {
     /// on their website to fall back to.
     pub(crate) fn selected_entry_link(&self) -> Option<String> {
         let post = match self.view {
-            View::Feed | View::Notifications => self.posts.get(self.selected)?,
+            View::Feed => self.posts.get(self.selected)?,
+            // A notification's entry is fetched by id when opened, never
+            // looked up in `posts`, so there is nothing local to link;
+            // resolving through the feed's cursor would copy an entry the
+            // user never selected.
+            View::Notifications => return None,
             View::Thread => &self.thread.as_ref()?.post,
         };
         let slug = post.slug.as_ref().filter(|slug| !slug.trim().is_empty())?;
@@ -953,7 +958,10 @@ impl State {
         let Some(slug) = self.open_circ_slug().map(str::to_string) else {
             return;
         };
-        let room = self.open_room.as_ref().expect("open_circ_slug named a room");
+        let room = self
+            .open_room
+            .as_ref()
+            .expect("open_circ_slug named a room");
         let newest_message = room.messages.iter().map(|message| message.timestamp).max();
         // The roster's own stamp is the floor. Reading the messages is not
         // always possible (their history call can fail, the room can be

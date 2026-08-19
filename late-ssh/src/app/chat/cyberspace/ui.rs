@@ -710,7 +710,7 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom, viewer: &str, onlin
     if room.messages.is_empty() {
         let text = match room.loading {
             true => "Joining the room...",
-            false => "Nothing said here yet. Type to say something.",
+            false => "Nothing said here yet. Press i to write.",
         };
         frame.render_widget(
             Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM())),
@@ -768,9 +768,7 @@ pub(crate) fn room_lines(
         let is_own = message.username.eq_ignore_ascii_case(viewer);
         // Only somebody else's message can be the boundary: coming back to
         // your own last line and being told it is new reads as a bug.
-        if !divider_drawn
-            && !is_own
-            && unread_from.is_some_and(|cursor| message.timestamp > cursor)
+        if !divider_drawn && !is_own && unread_from.is_some_and(|cursor| message.timestamp > cursor)
         {
             rows.push(new_messages_rule(width));
             divider_drawn = true;
@@ -825,7 +823,9 @@ pub(crate) fn room_lines(
             (
                 Span::styled(
                     format!("{}: ", message.username),
-                    Style::default().fg(author_color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(author_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 body,
                 Style::default().fg(theme::TEXT()),

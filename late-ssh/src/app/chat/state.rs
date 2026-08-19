@@ -2751,9 +2751,9 @@ impl ChatState {
                     self.pending_chat_screen_switch = true;
                     return self.cyberspace.open_cmail_modal();
                 }
-                // Starting a conversation does not move the user: the row
-                // appears in the rail when their API answers, and they walk
-                // into it like any other room.
+                // The row appears in the rail when their API answers, and
+                // the chat tick walks the user into it: a conversation
+                // started by name is one they asked to write in.
                 CyberspaceCommand::MailTo(username) => {
                     return self.cyberspace.start_cmail(username);
                 }
@@ -4264,10 +4264,13 @@ impl ChatState {
     }
 
     /// Note which cyberspace row the user is standing on before a room takes
-    /// the selection, so `leave_cyberspace_room` can put them back on it. A
-    /// room entered from anywhere else (the rail, a click, another screen)
-    /// keeps whatever row was last recorded, which is the pane either way.
+    /// the selection, so `select_cyberspace_return_row` can put them back on
+    /// it. A hop straight from one room or conversation to another keeps the
+    /// recorded origin: the user never stood on a pane row in between.
     fn remember_cyberspace_row(&mut self) {
+        if self.cyberspace_room_selected.is_some() || self.cyberspace_mail_selected.is_some() {
+            return;
+        }
         self.cyberspace_return_row = match self.cyberspace_notifications_selected {
             true => CyberspaceRow::Notifications,
             false => CyberspaceRow::Feeds,

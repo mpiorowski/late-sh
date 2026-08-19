@@ -7,8 +7,8 @@ use late_core::models::cyberspace_account::CmailThread;
 
 use crate::app::chat::cyberspace::api::{CircMessage, CircStreamEvent, CsNotification, CsPost};
 use crate::app::chat::cyberspace::state::{
-    Modal, NotificationTarget, State, View, count_unread_entries, dedupe_notifications, reload_due,
-    parse_topics, unread_poll_due,
+    Modal, NotificationTarget, State, View, count_unread_entries, dedupe_notifications,
+    parse_topics, reload_due, unread_poll_due,
 };
 use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
@@ -249,6 +249,29 @@ async fn reopening_the_pane_lands_on_the_newest_entry() {
         state.selected, 0,
         "a selection kept across visits points into a feed that has been refetched since"
     );
+}
+
+#[tokio::test]
+async fn the_notifications_view_offers_no_entry_link() {
+    let mut state = test_state().await;
+    state.posts = vec![
+        serde_json::from_str(r#"{"postId":"p1","authorUsername":"oddity","slug":"their-entry"}"#)
+            .expect("post"),
+    ];
+    state.selected = 0;
+
+    state.view = View::Feed;
+    assert!(
+        state.selected_entry_link().is_some(),
+        "the feed's selected row is what c copies"
+    );
+
+    // On the notifications row, `selected` still points into the feed's
+    // list: copying through it hands the user a link to an entry they never
+    // selected. A notification's entry is fetched by id when opened and is
+    // not in `posts`, so there is nothing local to link.
+    state.view = View::Notifications;
+    assert_eq!(state.selected_entry_link(), None);
 }
 
 #[test]

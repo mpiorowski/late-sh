@@ -319,3 +319,42 @@ fn a_notification_shape_names_its_ids_and_never_their_text() {
     assert!(shape.contains("messageContent=<content>"), "{shape}");
     assert!(!shape.contains("hey"), "{shape}");
 }
+
+#[test]
+fn a_notification_shape_drops_prose_under_undocumented_keys() {
+    // A `dm_message`, the kind the debug log exists to observe and the one
+    // most likely to carry a preview. The metadata is open-ended, so a
+    // content key the list does not name exactly (`messagePreview`,
+    // `lastMessage`) must still never print, even as a single word that
+    // slips past the whitespace check.
+    let body = r#"{
+        "data": [
+            {
+                "id": "n2",
+                "type": "dm_message",
+                "actorUsername": "laschii",
+                "targetId": "-Oconv42",
+                "targetType": "conversation",
+                "metadata": {
+                    "conversationId": "-Oconv42",
+                    "messageId": "-Omsg7",
+                    "messagePreview": "tonight",
+                    "lastMessage": "yes"
+                }
+            }
+        ]
+    }"#;
+    let notifications: Vec<CsNotification> = parse_envelope(200, body).expect("notifications");
+    let shape = notifications[0].shape();
+
+    // Ids keep printing: they are what the log is for, and `messageId` is a
+    // pointer even though it carries a content word.
+    assert!(
+        shape.contains("metadata.conversationId=-Oconv42"),
+        "{shape}"
+    );
+    assert!(shape.contains("metadata.messageId=-Omsg7"), "{shape}");
+    // A single word is still their prose.
+    assert!(!shape.contains("tonight"), "{shape}");
+    assert!(!shape.contains("yes"), "{shape}");
+}
