@@ -278,3 +278,41 @@ fn stream_buffer_drains_every_completed_frame_and_keeps_the_tail() {
     );
     assert_eq!(buffer.pending_len(), "event: pu".len());
 }
+
+#[test]
+fn a_notification_shape_names_its_ids_and_never_their_text() {
+    // A chat mention, invented to the shape their docs allow: `targetType`
+    // is documented as `post | reply`, `metadata` is open-ended, and unknown
+    // top-level keys are possible, so the log has to survive all three.
+    let body = r#"{
+        "data": [
+            {
+                "id": "n1",
+                "type": "chat_mention",
+                "actorUsername": "laschii",
+                "targetId": "general",
+                "targetType": "chat",
+                "roomId": "general",
+                "metadata": {
+                    "messageId": "-Oabc123",
+                    "roomName": "general",
+                    "messageContent": "hey @mat did you see this",
+                    "context": { "timestamp": 1719700000000 }
+                }
+            }
+        ]
+    }"#;
+    let notifications: Vec<CsNotification> = parse_envelope(200, body).expect("notifications");
+    let shape = notifications[0].shape();
+
+    // The ids are the whole point of the log: they are what a jump needs.
+    assert!(shape.contains("type=chat_mention"), "{shape}");
+    assert!(shape.contains("targetId=general"), "{shape}");
+    assert!(shape.contains("metadata.messageId=-Oabc123"), "{shape}");
+    // Keys the struct does not name survive, wherever they sit.
+    assert!(shape.contains("roomId=general"), "{shape}");
+    assert!(shape.contains("context={timestamp=1719700000000}"), "{shape}");
+    // Their text never lands in a log an AI can read, by key and by shape.
+    assert!(shape.contains("messageContent=<content>"), "{shape}");
+    assert!(!shape.contains("hey"), "{shape}");
+}

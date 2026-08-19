@@ -570,6 +570,18 @@ impl CyberspaceService {
                 };
                 match service.api.list_notifications(&token).await {
                     Ok(notifications) => {
+                        // Diagnostic while the chat-mention jump is being
+                        // built: their docs leave `chat_mention` and
+                        // `dm_message` payloads open-ended, and this is the
+                        // one place a real one passes through. `shape` keeps
+                        // their content out of the log. Drop this line once
+                        // the jump lands.
+                        for notification in &notifications {
+                            tracing::debug!(
+                                shape = %notification.shape(),
+                                "cyberspace notification payload"
+                            );
+                        }
                         service.publish(CsEvent::NotificationsLoaded {
                             user_id,
                             notifications,

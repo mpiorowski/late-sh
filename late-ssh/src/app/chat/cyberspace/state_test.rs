@@ -7,8 +7,8 @@ use late_core::models::cyberspace_account::CmailThread;
 
 use crate::app::chat::cyberspace::api::{CircMessage, CircStreamEvent, CsNotification, CsPost};
 use crate::app::chat::cyberspace::state::{
-    Modal, State, View, count_unread_entries, dedupe_notifications, reload_due, parse_topics,
-    unread_poll_due,
+    Modal, NotificationTarget, State, View, count_unread_entries, dedupe_notifications, reload_due,
+    parse_topics, unread_poll_due,
 };
 use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
@@ -307,18 +307,40 @@ async fn enter_on_a_notification_opens_the_entry_it_is_about() {
             r#"{"id":"n2","type":"new_follower","targetId":"user-1","targetType":"user"}"#,
         )
         .expect("follow notification"),
+        // A chat mention as their API actually sends one: the room slug sits
+        // in `targetId` with no `targetType` beside it, repeated in
+        // `metadata.roomSlug`, and nothing names the message.
+        serde_json::from_str(
+            r#"{"id":"n3","type":"chat_mention","targetId":"cyberspace","metadata":{"roomSlug":"cyberspace","roomName":"cyberspace"}}"#,
+        )
+        .expect("chat mention"),
     ]);
     state.view = View::Notifications;
 
-    assert!(state.open_selected_notification().is_none());
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::Entry("post-1".to_string())
+    );
+    state.open_notification_entry("post-1".to_string());
     assert_eq!(state.view, View::Thread);
     assert_eq!(state.thread_target.as_deref(), Some("post-1"));
 
-    // A follow has no entry behind it, so it says so and stays put.
+    // A follow has no entry and no room behind it, so Enter has nothing to do.
     state.back_to_root();
     state.view = View::Notifications;
     state.notif_selected = 1;
-    assert!(state.open_selected_notification().is_some(), "banner");
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::Nothing
+    );
+
+    // A chat mention lands on the room it happened in: the finest their
+    // payload allows, since it names no message.
+    state.notif_selected = 2;
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::ChatRoom("cyberspace".to_string())
+    );
     assert_eq!(state.view, View::Notifications, "view must not move");
 }
 
@@ -332,7 +354,7 @@ async fn a_thread_that_finished_loading_after_the_user_left_is_dropped() {
         .expect("notification"),
     ]);
     state.view = View::Notifications;
-    state.open_selected_notification();
+    state.open_notification_entry("post-1".to_string());
 
     // The user moves on before the fetch lands, then a slow load arrives for
     // the entry they were looking at a moment ago.

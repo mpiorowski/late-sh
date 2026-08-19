@@ -15,9 +15,11 @@ use std::time::Duration;
 
 pub const BASE_URL: &str = "https://api.cyberspace.online";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// How much room history one page carries. Their cap is 100; a screen of
-/// scrollback is what a room opens with and `before` pages further back.
-const CIRC_HISTORY_LIMIT: u8 = 50;
+/// How much room and conversation history one page carries, their documented
+/// cap for both. A mention jumped to from a notification names no message, so
+/// the deeper the page a room opens with, the likelier the line that pulled
+/// the user in is already on it; `before` pages further back.
+const CIRC_HISTORY_LIMIT: u8 = 100;
 /// The live window their realtime database replays when a stream opens. Their
 /// hard ceiling is 100 and unbounded reads are rejected outright.
 const CIRC_STREAM_WINDOW: u8 = 50;
@@ -115,6 +117,12 @@ pub struct CsNotification {
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// Everything the fields above do not name. Their docs type `targetType`
+    /// as `post | reply` and call `metadata` open-ended, so a `chat_mention`
+    /// or a `dm_message` can carry its room or conversation anywhere in the
+    /// payload; keeping the rest is what lets `shape` report it.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl CsNotification {
@@ -135,6 +143,103 @@ impl CsNotification {
         self.metadata
             .get("replyId")
             .and_then(|value| value.as_str())
+    }
+
+    /// The chat room a `chat_mention` happened in. Their payload names it
+    /// twice, as `targetId` and as `metadata.roomSlug`, and carries no
+    /// message id or message timestamp at all, so the room is the finest a
+    /// jump can land. Other kinds never name a room.
+    pub fn room_slug(&self) -> Option<&str> {
+        if self.kind != "chat_mention" {
+            return None;
+        }
+        self.metadata
+            .get("roomSlug")
+            .and_then(|value| value.as_str())
+            .or(self.target_id.as_deref())
+    }
+
+    /// A content-free, one-line description of what this notification
+    /// carries: its type, its target, and every other key with an id-shaped
+    /// value. Diagnostic, for answering what a `chat_mention` and a
+    /// `dm_message` actually point at, which their docs leave open-ended.
+    ///
+    /// Their terms keep their content out of any AI pipeline, and a log line
+    /// is exactly where it would otherwise leak, so a value prints only where
+    /// it cannot be prose: content keys are dropped by name, and any other
+    /// string carrying whitespace or longer than `SHAPE_VALUE_MAX_CHARS`
+    /// prints as its length instead of its text.
+    pub fn shape(&self) -> String {
+        let mut out = format!(
+            "type={} targetType={} targetId={}",
+            self.kind,
+            self.target_type.as_deref().unwrap_or("-"),
+            self.target_id.as_deref().unwrap_or("-"),
+        );
+        if let Some(metadata) = self.metadata.as_object() {
+            for (key, value) in metadata {
+                out.push_str(&format!(" metadata.{key}={}", shape_value(key, value, 0)));
+            }
+        }
+        for (key, value) in &self.extra {
+            out.push_str(&format!(" {key}={}", shape_value(key, value, 0)));
+        }
+        out
+    }
+}
+
+/// Keys that carry their prose rather than an identifier. Matched
+/// case-insensitively, since the payload is open-ended and only the
+/// documented keys are known to be camelCase.
+const CONTENT_KEYS: &[&str] = &[
+    "content",
+    "postcontent",
+    "replycontent",
+    "messagecontent",
+    "text",
+    "body",
+    "message",
+    "preview",
+    "snippet",
+    "excerpt",
+    "title",
+    "reason",
+    "bio",
+];
+/// The longest string `shape` prints outright. An id, a slug, or a username
+/// fits; a sentence does not.
+const SHAPE_VALUE_MAX_CHARS: usize = 64;
+/// How far `shape` walks into nested objects before reporting their key count
+/// instead. Two levels is enough to see a `{ room: { id, slug } }` without
+/// walking a whole payload.
+const SHAPE_MAX_DEPTH: usize = 2;
+
+fn shape_value(key: &str, value: &serde_json::Value, depth: usize) -> String {
+    if CONTENT_KEYS.contains(&key.to_ascii_lowercase().as_str()) {
+        return "<content>".to_string();
+    }
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(flag) => flag.to_string(),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::String(text)
+            if text.chars().count() <= SHAPE_VALUE_MAX_CHARS
+                && !text.chars().any(char::is_whitespace) =>
+        {
+            text.clone()
+        }
+        serde_json::Value::String(text) => format!("<str:{}>", text.chars().count()),
+        serde_json::Value::Array(items) => format!("<array:{}>", items.len()),
+        serde_json::Value::Object(map) if depth >= SHAPE_MAX_DEPTH => {
+            format!("<object:{}>", map.len())
+        }
+        serde_json::Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(key, value)| format!("{key}={}", shape_value(key, value, depth + 1)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
     }
 }
 

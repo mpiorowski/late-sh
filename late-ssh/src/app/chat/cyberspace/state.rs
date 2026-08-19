@@ -65,6 +65,17 @@ pub(crate) enum LinkStatus {
     Linked { username: String },
 }
 
+/// What Enter on a notification row opens. Their payload decides: entry
+/// notifications name a post, a chat mention names the room it happened in
+/// (and never the message, which their payload does not carry), and follows,
+/// pokes and role changes open nothing at all.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NotificationTarget {
+    Entry(String),
+    ChatRoom(String),
+    Nothing,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum View {
     Feed,
@@ -509,15 +520,39 @@ impl State {
         self.service.load_thread_task(self.user_id, post);
     }
 
+    /// What Enter on the selected notification opens. A chat mention names a
+    /// room and nothing finer, and a room is entered through its rail entry,
+    /// which only `ChatState` owns, so the pane reports the target instead of
+    /// acting on it.
+    pub(crate) fn selected_notification_target(&self) -> NotificationTarget {
+        let Some(notification) = self.notifications.get(self.notif_selected) else {
+            return NotificationTarget::Nothing;
+        };
+        match (notification.post_id(), notification.room_slug()) {
+            (Some(post_id), _) => NotificationTarget::Entry(post_id.to_string()),
+            (None, Some(slug)) => NotificationTarget::ChatRoom(slug.to_string()),
+            (None, None) => NotificationTarget::Nothing,
+        }
+    }
+
+    /// Put a room on the rail if it is not there already, answering whether
+    /// it had to be added. A room is entered through its rail entry, so a jump
+    /// to one nobody pinned has to pin it first: the chat tick leaves any open
+    /// room the pinned list cannot name.
+    pub(crate) fn pin_room(&mut self, slug: String) -> bool {
+        if self.pinned.iter().any(|pinned| *pinned == slug) {
+            return false;
+        }
+        self.pinned.push(slug);
+        self.service
+            .set_circ_pinned_task(self.user_id, self.pinned.clone());
+        true
+    }
+
     /// Enter on a notification opens the entry it is about. The post is
     /// fetched by id rather than looked up locally: the entry someone replied
     /// to is usually older than the feed page in memory.
-    pub(crate) fn open_selected_notification(&mut self) -> Option<Banner> {
-        let notification = self.notifications.get(self.notif_selected)?;
-        let Some(post_id) = notification.post_id() else {
-            return Some(Banner::error("That notification has no entry to open."));
-        };
-        let post_id = post_id.to_string();
+    pub(crate) fn open_notification_entry(&mut self, post_id: String) {
         self.thread_target = Some(post_id.clone());
         // No placeholder to show: unlike the feed path, nothing here knows
         // the post yet, so the thread view renders its loading state.
@@ -526,7 +561,6 @@ impl State {
         self.view = View::Thread;
         self.loading = true;
         self.service.load_thread_by_id_task(self.user_id, post_id);
-        None
     }
 
     fn load_notifications(&mut self) {

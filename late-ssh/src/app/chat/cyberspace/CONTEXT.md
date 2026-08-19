@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh as a personal client for cyberspace.online: the Cyberspace rail entry/pane, `/cs` commands, account linking, and the typed v1 API client
 - Primary audience: LLM agents working in `late-ssh/src/app/chat/cyberspace`, the `/cs` commands, the `cyberspace_accounts` table, or the AI blocklist for cyberspace.online URLs
-- Last updated: 2026-08-09 (room unread dots: the 10-minute badge poll also fetches the chat roster while rooms are pinned, and each rail room row shows a `●` when its `last_message_at` passed our per-room read cursor, migration 139; see section 9)
+- Last updated: 2026-08-19 (a chat room opens in reading mode and `i`/Enter focuses its composer, section 9; Enter on a `chat_mention` notification pins and opens the room it names, and the observed notification payloads are written down in section 6b; room and conversation history pages are their cap of 100)
 - Status: Active (v1)
 - Parent context: `../CONTEXT.md` (chat), root `../../../../../CONTEXT.md`
 - Related context: `../news/` (`is_ai_blocklisted_url` lives in `news/svc.rs`)
@@ -91,6 +91,24 @@ Three views (`View::Feed`/`Thread`/`Notifications`) and four modals (`Modal::Lin
 - Opening notifications marks all read server-side (opening the view is reading them, same contract as the RSS inbox) and zeroes that half of the badge.
 - **The notifications view is one row per event, not one per notification** (`dedupe_notifications`, keyed on kind + actor + `target_id` + `reply_id()`, first occurrence wins so the row keeps the newest stamp). Their API notifies more than once for a single event: one reply observed as three `reply` notifications with distinct ids. `metadata.replyId` is what makes the fold safe, since it separates "the same reply notified again" from "a second real reply on the same entry"; kinds that carry no reply id fall back to the entry. Deliberately **no `×N` count** on a row: a count would have to be trusted to mean something, and duplicates are not repeats.
 - A notification's `targetId` is the **post** id for both `post` and `reply` targets (a reply notification puts the reply's own id in `metadata.replyId`); the entry is fetched via `GET /v1/posts/{id}` rather than looked up locally, since it is usually older than the feed page in memory. Ids only: that route 404s on slugs. Follows and pokes target a user, so they open nothing.
+- **`NotificationTarget` is what Enter resolves to**, one arm per thing a row can open: `Entry(post_id)` opens the thread, `ChatRoom(slug)` walks into their chat room (pinning it first, see section 9), `Nothing` says so and stays put. It is a closed enum precisely because their payload is not: a new notification type that names something new should break this match rather than silently open a thread for an id that is not a post.
+
+### 6b. Notification Payloads, As Observed
+
+Their docs type `targetType` as `post | reply` and call `metadata` open-ended, so what follows was read off a live account (2026-08-19) rather than out of the docs, using `CsNotification::shape()` and the debug line in `load_notifications_task`. `shape` prints ids and key names but never their prose (content keys by name, plus any string with whitespace or over 64 chars), because a log is exactly where their content would otherwise leak into an AI context, which section 3 forbids. Everything the struct does not name is kept in `CsNotification::extra` (`#[serde(flatten)]`), which is what makes an undocumented key visible at all.
+
+| type | `targetType` | `targetId` | metadata keys |
+|------|--------------|-----------|---------------|
+| `reply`, `thread_reply` | `reply` | the **post** id | `replyId`, `postSlug`, `authorUsername` |
+| `bookmark` | `post` | the post id | `postSlug`, `authorUsername` |
+| `chat_mention` | **absent** | the **room slug** | `roomSlug`, `roomName`, `messageContent` |
+| `dm_message` | unknown | unknown | unknown, none observed yet |
+
+Top level also carries `actorId` and `userId` (the recipient) beside the fields the struct names.
+
+**A `chat_mention` names the room and never the message.** There is no message id and no message timestamp anywhere in the payload, and their API has no endpoint that fetches one message, so the room is as far as a jump can land: `targetId` and `metadata.roomSlug` agree on the slug, and `CsNotification::room_slug` reads it (slug first, `targetId` as the fallback). The only clock available is the notification's own `createdAt`, which is close to the message but is not the message; anything finer than the room would have to page `GET /v1/circ/:roomId?before=` and match the author and text, which is a guess, not a lookup. Landing in the room with a full page of history is the honest version of the jump, and why `CIRC_HISTORY_LIMIT` is their cap of 100.
+
+Unused so far: their `?type=` filter on the notifications list (comma-separated, up to 20 values) and its `cursor` pagination. We fetch the newest 20 of everything, once, when the view opens.
 - `State::thread_target` holds the post the thread view is for, set before the post exists; a `ThreadLoaded` for anything else is stale and dropped, which is what stops a slow fetch from yanking a thread the user already left.
 ### 6a. The Feed Read Cursor
 
@@ -133,6 +151,8 @@ Three views (`View::Feed`/`Thread`/`Notifications`) and four modals (`Modal::Lin
 Their API docs are public at https://api.cyberspace.online/docs (markdown at `/docs.md`; their WAF 403s non-browser user agents, so fetch with a browser UA).
 
 **Shape.** Linking cyberspace gives the rail its own collapsible `cyberspace` section (`RoomSection::Cyberspace`, shortcut `y`) holding **`feeds`** (`RoomSlot::Cyberspace`, the feed/thread/notifications pane, moved out of Core and relabelled, because the chat rooms beside it are cyberspace too) plus one row per added chat room. The section renders only while `cyberspace_linked`, so an unlinked user's rail is untouched.
+
+**A chat mention is the other way in.** Enter on a `chat_mention` row in the notifications view pins the room it names (if it is not pinned already) and walks into it, because their payload names a room and nothing finer (section 6b). Pinning first is not optional: the rail entry is how a room is entered, and the chat tick leaves any open room the pinned list cannot name.
 
 **Rooms are added through a picker, and adding one is what creates its rail entry.** There is no join/leave over there: `GET /v1/circ` returns the rooms this account may read and that roster is what it is, so our list is a bookmark. `/cs chat` (alias `/cs rooms`) opens `Modal::Rooms`, a checklist of their roster with online counts; Enter adds the highlighted room to the section or takes it off. Command only, deliberately: a single letter would have to be pressed on the feeds pane specifically, which is the one place a user looking for rooms is least likely to be standing, and the pane's letters are otherwise all reading actions. The picker deliberately does **not** open rooms: a room is entered by selecting its rail entry, like every other room in the rail.
 

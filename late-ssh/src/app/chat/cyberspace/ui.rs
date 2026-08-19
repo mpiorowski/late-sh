@@ -66,7 +66,7 @@ pub fn footer_hint(state: &State) -> &'static str {
         }
         View::Thread => " j/k scroll · g top · r reply · b back",
         View::Notifications => {
-            " j/k navigate · g top · Enter open the entry · r reload · b feeds"
+            " j/k navigate · g top · Enter open · r reload · b feeds"
         }
     }
 }

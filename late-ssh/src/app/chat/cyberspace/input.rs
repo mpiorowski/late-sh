@@ -9,8 +9,8 @@ use crate::app::{
 };
 
 use super::state::{
-    BODY_MAX_CHARS, CIRC_MESSAGE_MAX_CHARS, ComposeField, LinkField, Modal, TITLE_MAX_CHARS,
-    TOPICS_MAX_CHARS, View,
+    BODY_MAX_CHARS, CIRC_MESSAGE_MAX_CHARS, ComposeField, LinkField, Modal, NotificationTarget,
+    TITLE_MAX_CHARS, TOPICS_MAX_CHARS, View,
 };
 
 /// How far PageUp/PageDown move a room's conversation. A fixed jump rather
@@ -150,11 +150,15 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         b'\r' | b'\n' => {
             match state.view {
                 View::Feed => state.open_selected_thread(),
-                View::Notifications => {
-                    if let Some(banner) = state.open_selected_notification() {
-                        app.banner = Some(banner);
+                View::Notifications => match state.selected_notification_target() {
+                    NotificationTarget::Entry(post_id) => state.open_notification_entry(post_id),
+                    // A chat mention names a room, so Enter walks into it
+                    // rather than opening an entry that does not exist.
+                    NotificationTarget::ChatRoom(slug) => jump_to_chat_room(app, slug),
+                    NotificationTarget::Nothing => {
+                        app.banner = Some(Banner::error("That notification has nothing to open."));
                     }
-                }
+                },
                 View::Thread => {}
             }
             true
@@ -201,6 +205,28 @@ enum ModalAction {
     None,
     Submit,
     Escape,
+}
+
+/// Enter on a chat mention: walk into the room it happened in. Their payload
+/// carries no message id and no message timestamp, so the room is as far as a
+/// jump can go, and a fresh page of history is what puts the mention on screen.
+/// A room that is not on the rail is pinned first, because the rail entry is
+/// how a room is entered and the chat tick leaves any open room the pinned
+/// list cannot name.
+fn jump_to_chat_room(app: &mut App, slug: String) {
+    if app.chat.cyberspace.pin_room(slug.clone()) {
+        app.banner = Some(Banner::success(&format!("Added #{slug} to your rail.")));
+    }
+    let Some(index) = app
+        .chat
+        .cyberspace
+        .pinned_rooms()
+        .iter()
+        .position(|pinned| *pinned == slug)
+    else {
+        return;
+    };
+    app.chat.select_cyberspace_room(index);
 }
 
 pub(crate) fn handle_modal_input(app: &mut App, event: ParsedInput) {
