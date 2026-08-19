@@ -293,6 +293,15 @@ pub(crate) enum PetCommand {
     Water,
 }
 
+/// The two cyberspace rows a room can be entered from, and the one leaving
+/// it goes back to.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum CyberspaceRow {
+    #[default]
+    Feeds,
+    Notifications,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CyberspaceCommand {
     Open,
@@ -311,7 +320,10 @@ pub(crate) enum CyberspaceCommand {
 
 /// `/cs` and `/cyberspace` with an optional subcommand. `None` means the
 /// body is not a cyberspace command at all (falls through to other handlers).
-fn parse_cyberspace_command(body: &str) -> Option<CyberspaceCommand> {
+/// Two composers parse against this: the main chat one, and the composer
+/// inside one of their rooms, where a command of ours must never be sent to
+/// their API as a message.
+pub(crate) fn parse_cyberspace_command(body: &str) -> Option<CyberspaceCommand> {
     let trimmed = body.trim();
     let rest = trimmed
         .strip_prefix("/cyberspace")
@@ -720,6 +732,11 @@ pub struct ChatState {
     pub(crate) cyberspace_selected: bool,
     /// Their notification list, the row beside `feeds`.
     pub(crate) cyberspace_notifications_selected: bool,
+    /// Which cyberspace row a room or conversation was entered from, so
+    /// leaving one goes back where the user came in rather than always
+    /// landing on `feeds`. A mention jumped to from the notifications row is
+    /// what made the difference visible.
+    pub(crate) cyberspace_return_row: CyberspaceRow,
     /// Which pinned cyberspace chat room is selected, by position in the
     /// pinned list. `None` whenever any other rail entry is.
     pub(crate) cyberspace_room_selected: Option<usize>,
@@ -969,6 +986,7 @@ impl ChatState {
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
             cyberspace_selected: false,
             cyberspace_notifications_selected: false,
+            cyberspace_return_row: CyberspaceRow::Feeds,
             cyberspace_room_selected: None,
             cyberspace_mail_selected: None,
             cyberspace: cyberspace::state::State::new(cyberspace_service, user_id),
@@ -4076,6 +4094,19 @@ impl ChatState {
                 }
             }
         }
+        // A conversation the user started by name is one they asked to write
+        // in, so it opens rather than only appearing in the rail. Pulling
+        // them to Home matches every other `/cs` command that moves them.
+        if let Some(id) = self.cyberspace.take_started_cmail()
+            && let Some(index) = self
+                .cyberspace
+                .pinned_cmail()
+                .iter()
+                .position(|pin| pin.id == id)
+        {
+            self.select_cyberspace_mail(index);
+            self.pending_chat_screen_switch = true;
+        }
         // Same reconcile for the pinned conversations.
         if self.cyberspace_mail_selected.is_some() {
             let derived = self.cyberspace.open_cmail_id().and_then(|id| {
@@ -4206,6 +4237,7 @@ impl ChatState {
         {
             return;
         }
+        self.remember_cyberspace_row();
         self.clear_synthetic_selection();
         self.cyberspace_mail_selected = Some(index);
         self.cyberspace.enter_cmail(thread);
@@ -4225,9 +4257,29 @@ impl ChatState {
         {
             return;
         }
+        self.remember_cyberspace_row();
         self.clear_synthetic_selection();
         self.cyberspace_room_selected = Some(index);
         self.cyberspace.enter_room(slug);
+    }
+
+    /// Note which cyberspace row the user is standing on before a room takes
+    /// the selection, so `leave_cyberspace_room` can put them back on it. A
+    /// room entered from anywhere else (the rail, a click, another screen)
+    /// keeps whatever row was last recorded, which is the pane either way.
+    fn remember_cyberspace_row(&mut self) {
+        self.cyberspace_return_row = match self.cyberspace_notifications_selected {
+            true => CyberspaceRow::Notifications,
+            false => CyberspaceRow::Feeds,
+        };
+    }
+
+    /// Leaving a room or conversation: back to the row it was entered from.
+    pub fn select_cyberspace_return_row(&mut self) {
+        match self.cyberspace_return_row {
+            CyberspaceRow::Feeds => self.select_cyberspace(),
+            CyberspaceRow::Notifications => self.select_cyberspace_notifications(),
+        }
     }
 
     pub fn select_news(&mut self) {

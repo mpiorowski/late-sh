@@ -263,6 +263,10 @@ pub struct State {
     /// list. Theirs, not ours: they read it back, so the rail row carries a
     /// number where a cIRC room can only carry a dot.
     cmail_unread: HashMap<String, i64>,
+    /// A conversation started by name this frame, waiting for the chat tick
+    /// to select its rail row. Only `ChatState` can move the selection, so
+    /// the pane reports it rather than acting.
+    started_cmail: Option<String>,
     pub(crate) open_room: Option<OpenRoom>,
     pub(crate) link: LinkStatus,
     pub(crate) view: View,
@@ -324,6 +328,7 @@ impl State {
             room_last_message: HashMap::new(),
             room_online: HashMap::new(),
             cmail_pins: Vec::new(),
+            started_cmail: None,
             cmail_unread: HashMap::new(),
             open_room: None,
             link: LinkStatus::Unknown,
@@ -520,6 +525,24 @@ impl State {
         self.service.load_thread_task(self.user_id, post);
     }
 
+    /// The public link to the entry the pane is on: the feed's selected row,
+    /// or the entry a thread is open on. `None` when their payload carries no
+    /// slug, since the deep link is built from one and there is no id route
+    /// on their website to fall back to.
+    pub(crate) fn selected_entry_link(&self) -> Option<String> {
+        let post = match self.view {
+            View::Feed | View::Notifications => self.posts.get(self.selected)?,
+            View::Thread => &self.thread.as_ref()?.post,
+        };
+        let slug = post.slug.as_ref().filter(|slug| !slug.trim().is_empty())?;
+        Some(format!(
+            "{}/{}/{}",
+            super::api::WEB_URL,
+            post.author_username,
+            slug
+        ))
+    }
+
     /// What Enter on the selected notification opens. A chat mention names a
     /// room and nothing finer, and a room is entered through its rail entry,
     /// which only `ChatState` owns, so the pane reports the target instead of
@@ -540,7 +563,7 @@ impl State {
     /// to one nobody pinned has to pin it first: the chat tick leaves any open
     /// room the pinned list cannot name.
     pub(crate) fn pin_room(&mut self, slug: String) -> bool {
-        if self.pinned.iter().any(|pinned| *pinned == slug) {
+        if self.pinned.contains(&slug) {
             return false;
         }
         self.pinned.push(slug);
@@ -826,6 +849,12 @@ impl State {
             .set_cmail_pinned_task(self.user_id, self.cmail_pins.clone());
     }
 
+    /// The conversation `/cs mail @user` just started, taken once by the chat
+    /// tick, which owns rail selection. `None` on every other frame.
+    pub(crate) fn take_started_cmail(&mut self) -> Option<String> {
+        self.started_cmail.take()
+    }
+
     pub(crate) fn pinned_cmail(&self) -> &[CmailThread] {
         &self.cmail_pins
     }
@@ -1019,6 +1048,24 @@ impl State {
     /// one input in the place every other room's input lives.
     pub(crate) fn room_composer(&self) -> Option<&TextArea<'static>> {
         Some(&self.open_room.as_ref()?.composer)
+    }
+
+    /// What is currently typed into the open room's composer, which is what
+    /// the room's own submit path parses for our commands before their API
+    /// ever sees it.
+    pub(crate) fn room_composer_text(&self) -> String {
+        match &self.open_room {
+            Some(room) => single_line(&room.composer),
+            None => String::new(),
+        }
+    }
+
+    /// Drop the draft without leaving the composer: a command of ours was
+    /// typed there and answered locally, and the user is still mid-chat.
+    pub(crate) fn clear_room_composer(&mut self) {
+        if let Some(room) = &mut self.open_room {
+            room.composer = new_themed_textarea("", WrapMode::None, room.composing);
+        }
     }
 
     /// Typing counts as activity, which is what keeps the user from showing
@@ -1420,6 +1467,10 @@ impl State {
             }
             CsEvent::CmailStarted { user_id, thread } if user_id == self.user_id => {
                 let banner = Banner::success(&format!("Opened c-mail with @{}.", thread.username));
+                // Naming someone is asking to write to them, so the chat tick
+                // walks the user into the conversation rather than leaving a
+                // new rail row to be found.
+                self.started_cmail = Some(thread.id.clone());
                 self.pin_cmail(thread);
                 Some(banner)
             }

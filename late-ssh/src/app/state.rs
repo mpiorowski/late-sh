@@ -948,7 +948,7 @@ impl App {
     /// what stops the room's stream and heartbeat, so every exit path (Esc,
     /// `b`, selecting anything else) goes through a `leave_room`.
     pub(crate) fn leave_cyberspace_room(&mut self) {
-        self.chat.select_cyberspace();
+        self.chat.select_cyberspace_return_row();
     }
 
     pub(crate) fn sync_visible_chat_room(&mut self) {

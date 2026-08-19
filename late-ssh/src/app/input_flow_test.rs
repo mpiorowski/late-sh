@@ -1135,7 +1135,10 @@ async fn linked_account_gets_the_rail_entry_and_the_pane() {
     // The pane header names the account and the notification key, so the
     // rail badge is not the only thing explaining the count.
     wait_for_render_contains(&mut app, "@oddity on cyberspace.online").await;
-    wait_for_render_contains(&mut app, "n notifications").await;
+    // Notifications are their own rail row with their own badge, so the row
+    // is where the count is explained now; the pane header speaks for the
+    // feed alone.
+    wait_for_render_contains(&mut app, "notifications").await;
     assert!(app.chat.cyberspace_selected, "/cs should open the pane");
     assert!(
         !app.chat.cyberspace.modal_active(),
@@ -1239,6 +1242,43 @@ async fn entering_a_cyberspace_room_reads_it_before_it_types_in_it() {
         Some("circ-lab"),
         "the first Esc leaves the composer, not the room"
     );
+}
+
+#[tokio::test]
+async fn our_own_command_typed_in_their_room_never_becomes_a_message() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-command").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-command-flow-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+    app.chat.select_cyberspace_room(0);
+
+    // `/cs chat` is ours, not theirs. It opens the picker over the room the
+    // user is standing in, and the text never reaches their API as a message.
+    app.handle_input(b"i/cs chat\r");
+    assert!(
+        app.chat.cyberspace.modal_active(),
+        "the room picker should open over the room"
+    );
+    assert_eq!(
+        app.chat.cyberspace.open_circ_slug(),
+        Some("circ-lab"),
+        "opening a picker must not walk the user out of the room"
+    );
+    assert_eq!(room_draft(&app), "", "the command must not stay in the draft");
 }
 
 /// What is currently typed into the open cyberspace room's composer.

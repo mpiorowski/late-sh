@@ -14,6 +14,10 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 pub const BASE_URL: &str = "https://api.cyberspace.online";
+/// Their website, which is where a shared link has to point: the API host
+/// serves JSON, not pages. Entries live at `/{username}/{slug}`, the deep
+/// link their notification metadata is documented against.
+pub const WEB_URL: &str = "https://cyberspace.online";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// How much room and conversation history one page carries, their documented
 /// cap for both. A mention jumped to from a notification names no message, so

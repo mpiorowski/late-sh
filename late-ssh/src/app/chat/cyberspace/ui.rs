@@ -61,10 +61,11 @@ pub fn footer_hint(state: &State) -> &'static str {
     // A room never lands here: its composer is always open and occupies this
     // slot itself.
     match state.view {
-        View::Feed => {
-            " j/k navigate · g top · Enter open · p post · n notifications · r refresh · /cs chat · /cs mail"
-        }
-        View::Thread => " j/k scroll · g top · r reply · b back",
+        // No `/cs` commands here: the pane has no composer to type them
+        // into, and the two that make sense inside a room are advertised
+        // there instead.
+        View::Feed => " j/k navigate · g top · Enter open · p post · c copy link · r refresh",
+        View::Thread => " j/k scroll · g top · r reply · c copy link · b back",
         View::Notifications => {
             " j/k navigate · g top · Enter open · r reload · b feeds"
         }
@@ -654,8 +655,10 @@ fn draw_cmail_modal(frame: &mut Frame, area: Rect, cmail: &CmailModal, state: &S
             error.clone(),
             Style::default().fg(theme::ERROR()),
         )),
+        // The picker only lists conversations that exist, so the way to write
+        // to someone new belongs here rather than only in the empty state.
         None => Line::from(Span::styled(
-            "Conversations you add become entries under cyberspace in your rail.",
+            "Write to someone new with /cs mail @user.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
     };
@@ -972,7 +975,7 @@ fn notification_line(notification: &CsNotification, selected: bool) -> Line<'sta
             .add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::styled(
-        format!(" {}", describe_notification(&notification.kind)),
+        format!(" {}", describe_notification(notification)),
         Style::default().fg(theme::TEXT()),
     ));
     if let Some(stamp) = relative_stamp(notification.created_at) {
@@ -985,9 +988,14 @@ fn notification_line(notification: &CsNotification, selected: bool) -> Line<'sta
 }
 
 /// Human phrasing for the notification types the API documents; unknown
-/// types fall back to the raw name so new server types stay readable.
-fn describe_notification(kind: &str) -> String {
-    match kind {
+/// types fall back to the raw name so new server types stay readable. A chat
+/// mention names its room, because that is where Enter is about to take the
+/// user and it is the only thing their payload says about it.
+fn describe_notification(notification: &CsNotification) -> String {
+    if let Some(slug) = notification.room_slug() {
+        return format!("mentioned you in #{slug}");
+    }
+    match notification.kind.as_str() {
         "reply" => "replied to your entry".to_string(),
         "thread_reply" => "replied in a thread you watch".to_string(),
         "new_follower" => "followed you".to_string(),

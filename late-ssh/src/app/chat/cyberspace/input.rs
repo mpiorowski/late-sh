@@ -1,4 +1,5 @@
 use crate::app::{
+    chat::state::{CyberspaceCommand, parse_cyberspace_command},
     common::{
         composer::set_themed_textarea_cursor_visible,
         primitives::Banner,
@@ -110,9 +111,22 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     // draws in and their one-message-per-send API.
     match handle_single_line_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
         EditOutcome::Submit => {
-            let keep_open = app.profile_state.profile().keep_composer_focused;
-            if let Some(banner) = app.chat.cyberspace.submit_room_composer(keep_open) {
-                app.banner = Some(banner);
+            // A command of ours never reaches their API as a message. Their
+            // own commands (`/me`, `/dice`, `/mute`, ...) expand server-side,
+            // so anything we do not recognise is sent exactly as typed.
+            match parse_cyberspace_command(&app.chat.cyberspace.room_composer_text()) {
+                Some(command) => {
+                    app.chat.cyberspace.clear_room_composer();
+                    if let Some(banner) = handle_room_command(app, command) {
+                        app.banner = Some(banner);
+                    }
+                }
+                None => {
+                    let keep_open = app.profile_state.profile().keep_composer_focused;
+                    if let Some(banner) = app.chat.cyberspace.submit_room_composer(keep_open) {
+                        app.banner = Some(banner);
+                    }
+                }
             }
         }
         // Esc: `app::input`'s escape chain owns both steps out of a room, and
@@ -120,6 +134,27 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
         EditOutcome::Cancel => {}
         EditOutcome::Handled => app.chat.cyberspace.note_composer_activity(),
         EditOutcome::Ignored => {}
+    }
+}
+
+/// A `/cs` command typed inside one of their rooms. Only the ones that open
+/// *over* the room belong here: the two pickers and starting a conversation,
+/// none of which pull the user out of a room they are reading. The rest stay
+/// with the main chat composer, where moving the user is not a surprise, and
+/// they are answered rather than posted, because a command of ours has no
+/// business landing in their chat as a message.
+fn handle_room_command(app: &mut App, command: CyberspaceCommand) -> Option<Banner> {
+    match command {
+        CyberspaceCommand::Chat => app.chat.cyberspace.open_rooms_modal(),
+        CyberspaceCommand::Mail => app.chat.cyberspace.open_cmail_modal(),
+        CyberspaceCommand::MailTo(username) => app.chat.cyberspace.start_cmail(username),
+        CyberspaceCommand::Open
+        | CyberspaceCommand::Post
+        | CyberspaceCommand::Link
+        | CyberspaceCommand::Unlink
+        | CyberspaceCommand::Invalid => Some(Banner::error(
+            "In a cyberspace room: /cs chat, /cs mail, /cs mail @user.",
+        )),
     }
 }
 
@@ -171,6 +206,20 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 }
                 View::Thread => state.open_reply_modal(),
                 View::Notifications => state.refresh_notifications(),
+            }
+            true
+        }
+        // Their entries live on the web at `/{username}/{slug}`, and sharing
+        // one is the reason to leave the pane with something in hand. Same
+        // key and same banner as every other copy in the app.
+        b'c' | b'C' => {
+            let link = state.selected_entry_link();
+            match link {
+                Some(link) => {
+                    app.pending_clipboard = Some(link);
+                    app.banner = Some(Banner::success("Link copied!"));
+                }
+                None => app.banner = Some(Banner::error("That entry has no link to copy.")),
             }
             true
         }
