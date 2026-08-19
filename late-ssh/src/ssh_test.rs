@@ -1,5 +1,5 @@
 use crate::ssh::run_with_listener;
-use crate::test_helpers::{new_test_db, test_app_state, test_config};
+use crate::test_helpers::{new_test_db, test_app_state, test_config, wait_until};
 use getrandom::SysRng;
 use russh::keys::signature::rand_core::UnwrapErr;
 use russh::{
@@ -65,8 +65,9 @@ async fn new_account_uses_generated_name_instead_of_ssh_login() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local addr");
+    let server_state = state.clone();
     let handle = tokio::spawn(async move {
-        let _ = run_with_listener(listener, state, None).await;
+        let _ = run_with_listener(listener, server_state, None).await;
     });
 
     let ssh_login = "private-local-login";
@@ -109,11 +110,23 @@ async fn new_account_uses_generated_name_instead_of_ssh_login() {
         "new account should use a curated modifier+noun name, got {}",
         user.username
     );
+    assert!(
+        state.leaderboard_service.online_user_is_active(user.id),
+        "successful SSH authentication starts online-time tracking"
+    );
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .expect("disconnect client");
+    wait_until(
+        || {
+            let active = state.leaderboard_service.online_user_is_active(user.id);
+            async move { !active }
+        },
+        "SSH disconnect stops online-time tracking",
+    )
+    .await;
     handle.abort();
 }
 

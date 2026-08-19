@@ -643,15 +643,7 @@ impl App {
             .chat
             .selected_room_id
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
-        let selected_room_active_poll = if !self.chat.feeds_selected
-            && !self.chat.news_selected
-            && !self.chat.cyberspace_selected
-            && self.chat.cyberspace_room_selected.is_none()
-            && !self.chat.discover_selected
-            && !self.chat.notifications_selected
-            && !self.chat.showcase_selected
-            && !self.chat.work_selected
-        {
+        let selected_room_active_poll = if !self.chat.synthetic_entry_selected() {
             self.chat
                 .selected_room_id
                 .and_then(|room_id| self.chat.active_poll_for_room(room_id))
@@ -668,10 +660,14 @@ impl App {
             feeds_unread_count: self.chat.feeds.unread_count(),
             feeds_view,
             cyberspace_selected: self.chat.cyberspace_selected,
-            cyberspace_unread_count: self.chat.cyberspace.unread_count(),
+            cyberspace_notifications_selected: self.chat.cyberspace_notifications_selected,
+            cyberspace_feeds_unread: self.chat.cyberspace.unread_entries(),
+            cyberspace_notifications_unread: self.chat.cyberspace.unread_notifications(),
             cyberspace_unread_saturated: self.chat.cyberspace.unread_saturated(),
             cyberspace_rooms: self.chat.cyberspace.pinned_rooms(),
             cyberspace_room_selected: self.chat.cyberspace_room_selected,
+            cyberspace_mail: self.chat.cyberspace.pinned_cmail(),
+            cyberspace_mail_selected: self.chat.cyberspace_mail_selected,
             cyberspace: Some(&self.chat.cyberspace),
             news_selected: self.chat.news_selected,
             news_unread_count: self.chat.news.unread_count(),
@@ -1806,6 +1802,12 @@ impl App {
             );
         }
 
+        // Drawn after the search modal: a jump too old to land in the room
+        // opens history over the top of whatever was showing.
+        if ctx.chat_state.history_modal.is_open() {
+            crate::app::chat::history_modal::ui::draw(frame, inner, &ctx.chat_state.history_modal);
+        }
+
         if ctx.room_info_modal_open {
             room_info_modal::ui::draw(frame, inner, ctx.room_info_modal_state);
         }
@@ -1870,6 +1872,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
         || ctx.room_search_modal_open
+        || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open
         || ctx.icon_picker_open
 }

@@ -114,6 +114,7 @@ const COMMANDS: &[Command] = &[
     global("friends", "list friends"),
     global("gift", "send chips (/gift @user 50 [note])"),
     global("golive", "stream your screen (/golive <title>; stop)"),
+    global("history", "browse this room's full history"),
     global("icons", "open icon picker"),
     global("ignore", "mute a user (/ignore @user; bare lists)"),
     global("invite", "add a user to this room (/invite @user)"),

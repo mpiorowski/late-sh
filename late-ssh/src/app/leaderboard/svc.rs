@@ -1,26 +1,31 @@
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::Result;
+use chrono::{Datelike, NaiveDate, Utc};
 use late_core::db::Db;
-use late_core::models::leaderboard::{LeaderboardData, fetch_leaderboard_data};
+use late_core::models::leaderboard::{
+    LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
+};
 use late_core::models::profile_award::snapshot_previous_month_profile_awards;
 use tokio::sync::{Notify, watch};
+use uuid::Uuid;
 
 /// How often the leaderboard is rebuilt from the DB while at least one session
 /// is watching it.
 ///
-/// `fetch_leaderboard_data` is thirteen aggregate queries (several UNION ALL
+/// `fetch_leaderboard_data` is fourteen aggregate queries (several UNION ALL
 /// over every game's win/score tables; the all-time windows read O(players)
 /// sources, the `daily_win_totals` rollup, the legacy best-score tables, and
 /// the one-row-per-player `mud_characters` blobs, so no query scans full
 /// history), and it is a timer, not a reaction to
 /// anything a user did. At the old 30 s cadence a previous shape of this pass
 /// was 13% of all database execution time in prod (2026-07-26
-/// `pg_stat_statements` ranking, SCALE.md). The data is daily and monthly
-/// standings, so minutes of staleness are invisible. The one
+/// `pg_stat_statements` ranking, SCALE.md). These standings tolerate minutes
+/// of staleness. The one
 /// latency-sensitive consumer, the per-session chip balance read in
 /// `app/tick.rs`, does not wait for this loop: chip mutations notify
 /// `chip_user_changed` and `ShopService` pushes the new balance per user.
@@ -41,6 +46,180 @@ pub struct LeaderboardService {
     /// When the last successful refresh published, or `None` before the first
     /// one. Read by `snapshot_age`; never held across an await.
     last_refresh: Arc<Mutex<Option<Instant>>>,
+    online_time: OnlineTimeTracker,
+    flush_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Clone, Debug)]
+struct OnlineTimeBatch {
+    id: Uuid,
+    increments: Vec<OnlineTimeIncrement>,
+}
+
+struct PreparedOnlineTimeBatch {
+    batch: OnlineTimeBatch,
+    was_retry: bool,
+}
+
+#[derive(Default)]
+struct OnlineTimeState {
+    /// The first authenticated connection's start time. The shared
+    /// `active_users` map owns connection ref-counting; this map only sees its
+    /// zero-to-one and one-to-zero transitions.
+    active_since: HashMap<Uuid, ActiveOnlineTime>,
+    pending_milliseconds: HashMap<(Uuid, NaiveDate), i64>,
+    /// Retained until Postgres confirms it. A retry uses the same id so the
+    /// upsert can distinguish it from a new increment.
+    in_flight: Option<OnlineTimeBatch>,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveOnlineTime {
+    since: Instant,
+    month_start: NaiveDate,
+}
+
+#[derive(Clone, Default)]
+struct OnlineTimeTracker {
+    state: Arc<Mutex<OnlineTimeState>>,
+}
+
+impl OnlineTimeTracker {
+    fn connected(&self, user_id: Uuid) {
+        self.connected_at(user_id, Instant::now(), current_month_start());
+    }
+
+    fn connected_at(&self, user_id: Uuid, now: Instant, month_start: NaiveDate) {
+        self.state
+            .lock()
+            .expect("online time tracker poisoned")
+            .active_since
+            .entry(user_id)
+            .or_insert(ActiveOnlineTime {
+                since: now,
+                month_start,
+            });
+    }
+
+    fn disconnected(&self, user_id: Uuid) {
+        self.disconnected_at(user_id, Instant::now());
+    }
+
+    fn disconnected_at(&self, user_id: Uuid, now: Instant) {
+        let mut state = self.state.lock().expect("online time tracker poisoned");
+        let Some(active) = state.active_since.remove(&user_id) else {
+            return;
+        };
+        add_elapsed(
+            &mut state.pending_milliseconds,
+            user_id,
+            active.month_start,
+            active.since,
+            now,
+        );
+    }
+
+    fn begin_batch(&self) -> Option<PreparedOnlineTimeBatch> {
+        self.begin_batch_at(Instant::now(), current_month_start())
+    }
+
+    fn begin_batch_at(
+        &self,
+        now: Instant,
+        month_start: NaiveDate,
+    ) -> Option<PreparedOnlineTimeBatch> {
+        let mut state = self.state.lock().expect("online time tracker poisoned");
+        if let Some(batch) = state.in_flight.clone() {
+            return Some(PreparedOnlineTimeBatch {
+                batch,
+                was_retry: true,
+            });
+        }
+
+        let mut checkpoints = Vec::with_capacity(state.active_since.len());
+        for (&user_id, active) in &mut state.active_since {
+            checkpoints.push((user_id, *active));
+            *active = ActiveOnlineTime {
+                since: now,
+                month_start,
+            };
+        }
+        for (user_id, active) in checkpoints {
+            add_elapsed(
+                &mut state.pending_milliseconds,
+                user_id,
+                active.month_start,
+                active.since,
+                now,
+            );
+        }
+
+        let pending = std::mem::take(&mut state.pending_milliseconds);
+        let mut increments: Vec<_> = pending
+            .into_iter()
+            .filter_map(|((user_id, month_start), milliseconds)| {
+                (milliseconds > 0).then_some(OnlineTimeIncrement {
+                    user_id,
+                    month_start,
+                    milliseconds,
+                })
+            })
+            .collect();
+        if increments.is_empty() {
+            return None;
+        }
+        increments.sort_unstable_by_key(|value| (value.user_id, value.month_start));
+
+        let batch = OnlineTimeBatch {
+            id: Uuid::now_v7(),
+            increments,
+        };
+        state.in_flight = Some(batch.clone());
+        Some(PreparedOnlineTimeBatch {
+            batch,
+            was_retry: false,
+        })
+    }
+
+    fn acknowledge(&self, flush_id: Uuid) {
+        let mut state = self.state.lock().expect("online time tracker poisoned");
+        if state
+            .in_flight
+            .as_ref()
+            .is_some_and(|batch| batch.id == flush_id)
+        {
+            state.in_flight = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn is_active(&self, user_id: Uuid) -> bool {
+        self.state
+            .lock()
+            .expect("online time tracker poisoned")
+            .active_since
+            .contains_key(&user_id)
+    }
+}
+
+fn current_month_start() -> NaiveDate {
+    let today = Utc::now().date_naive();
+    today.with_day(1).expect("every UTC month has a first day")
+}
+
+fn add_elapsed(
+    pending: &mut HashMap<(Uuid, NaiveDate), i64>,
+    user_id: Uuid,
+    month_start: NaiveDate,
+    since: Instant,
+    now: Instant,
+) {
+    let milliseconds = now.saturating_duration_since(since).as_millis();
+    let milliseconds = i64::try_from(milliseconds).unwrap_or(i64::MAX);
+    if milliseconds > 0 {
+        let total = pending.entry((user_id, month_start)).or_default();
+        *total = total.saturating_add(milliseconds);
+    }
 }
 
 /// What woke the refresh loop.
@@ -56,7 +235,7 @@ enum Wake {
 /// `age` is how long ago the last successful refresh published, `None` before
 /// the first one.
 fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> bool {
-    // A refresh nobody is watching is thirteen aggregate queries published to
+    // A refresh nobody is watching is fourteen aggregate queries published to
     // nobody, whatever woke us.
     if !has_subscribers {
         return false;
@@ -79,7 +258,26 @@ impl LeaderboardService {
             data_tx: Arc::new(tx),
             connected: Arc::new(Notify::new()),
             last_refresh: Arc::new(Mutex::new(None)),
+            online_time: OnlineTimeTracker::default(),
+            flush_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// Starts one user's connected interval. Call only when the shared human
+    /// presence map transitions from zero connections to one.
+    pub fn online_user_connected(&self, user_id: Uuid) {
+        self.online_time.connected(user_id);
+    }
+
+    /// Stops one user's connected interval. Call only when the shared human
+    /// presence map transitions from one connection to zero.
+    pub fn online_user_disconnected(&self, user_id: Uuid) {
+        self.online_time.disconnected(user_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn online_user_is_active(&self, user_id: Uuid) -> bool {
+        self.online_time.is_active(user_id)
     }
 
     /// Hands a session the current snapshot and wakes the refresh loop.
@@ -106,7 +304,7 @@ impl LeaderboardService {
 
     /// Whether any session is currently watching the leaderboard. Every SSH
     /// session subscribes at bootstrap, so this is "is anyone connected". A
-    /// refresh with no subscribers is thirteen aggregate queries published to
+    /// refresh with no subscribers is fourteen aggregate queries published to
     /// nobody, so the loop skips it.
     fn has_subscribers(&self) -> bool {
         self.data_tx.receiver_count() > 0
@@ -117,6 +315,44 @@ impl LeaderboardService {
         let data = fetch_leaderboard_data(&client).await?;
         self.publish(data);
         *self.last_refresh.lock().expect("last_refresh poisoned") = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Checkpoints every active user and persists all completed intervals in
+    /// one statement. The steady-state path writes at most once per five-minute
+    /// tick; after an earlier uncertain failure it may first retry that retained
+    /// batch and then write the time accumulated since it was prepared.
+    pub async fn flush_online_time(&self) -> Result<()> {
+        let _flush_guard = self.flush_lock.lock().await;
+        let Some(prepared) = self.online_time.begin_batch() else {
+            return Ok(());
+        };
+        let retrying = prepared.was_retry;
+        let client = self.db.get().await?;
+        self.apply_online_time_batch(&client, prepared.batch)
+            .await?;
+
+        if retrying && let Some(follow_up) = self.online_time.begin_batch() {
+            self.apply_online_time_batch(&client, follow_up.batch)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn apply_online_time_batch(
+        &self,
+        client: &tokio_postgres::Client,
+        batch: OnlineTimeBatch,
+    ) -> Result<()> {
+        let rows = batch.increments.len();
+        let milliseconds: i64 = batch
+            .increments
+            .iter()
+            .map(|value| value.milliseconds)
+            .sum();
+        apply_online_time_batch(client, batch.id, &batch.increments).await?;
+        self.online_time.acknowledge(batch.id);
+        tracing::debug!(rows, milliseconds, "flushed online time");
         Ok(())
     }
 
@@ -143,6 +379,21 @@ impl LeaderboardService {
                     _ = interval.tick() => Wake::Timer,
                     _ = self.connected.notified() => Wake::Connect,
                 };
+                if wake == Wake::Timer {
+                    match self.flush_online_time().await {
+                        Ok(()) => {
+                            crate::metrics::record_online_time_flush(
+                                crate::metrics::OnlineTimeFlushResult::Flushed,
+                            );
+                        }
+                        Err(e) => {
+                            crate::metrics::record_online_time_flush(
+                                crate::metrics::OnlineTimeFlushResult::Failed,
+                            );
+                            tracing::warn!(error = ?e, "online time flush failed");
+                        }
+                    }
+                }
                 if !should_refresh(wake, self.has_subscribers(), self.snapshot_age()) {
                     tracing::debug!(?wake, "skipping leaderboard refresh");
                     continue;

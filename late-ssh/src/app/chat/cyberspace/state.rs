@@ -16,10 +16,13 @@ use uuid::Uuid;
 use crate::app::common::composer::{new_themed_textarea, set_themed_textarea_cursor_visible};
 use crate::app::common::primitives::Banner;
 
+use late_core::models::cyberspace_account::CmailThread;
+
 use super::api::{
-    CircMessage, CircRoom, CircStreamEvent, CsNotification, CsPost, NewPost, UNREAD_PROBE_LIMIT,
+    CircMessage, CircRoom, CircStreamEvent, CmailConversation, CsNotification, CsPost, NewPost,
+    UNREAD_PROBE_LIMIT,
 };
-use super::svc::{CircRoomSession, CsEvent, CsThread, CyberspaceService};
+use super::svc::{CircRoomSession, CmailSession, CsEvent, CsThread, CyberspaceService};
 
 pub(crate) const TITLE_MAX_CHARS: usize = 100;
 pub(crate) const TOPICS_MAX_CHARS: usize = 80;
@@ -31,12 +34,17 @@ const MAX_TOPICS: usize = 3;
 /// minutes from one global task; this one rides the session tick instead,
 /// because the count is per user and needs that user's own token.
 const UNREAD_POLL_INTERVAL: Duration = Duration::from_secs(10 * 60);
-/// How stale the feed has to be before *entering* the pane refetches it.
+/// How stale a list has to be before *entering* its rail row refetches it.
 /// Entering happens more often than it looks: cycling the room rail lands on
 /// the slot, and every landing would otherwise be an authenticated call to a
 /// third party under the user's own token, which is the traffic shape their
 /// anti-bot terms are about. `r` is the explicit refresh and ignores this.
-const FEED_RELOAD_INTERVAL: Duration = Duration::from_secs(30);
+///
+/// It guards the notifications row as well as the feed, and there it guards
+/// more than traffic: loading notifications marks them read on their side, so
+/// an ungated landing would wipe the unread count every time the rail cursor
+/// passed over the row.
+const RELOAD_INTERVAL: Duration = Duration::from_secs(30);
 /// Their cap on one chat message.
 pub(crate) const CIRC_MESSAGE_MAX_CHARS: usize = 2_048;
 /// How much of a room's conversation one session keeps. Their live window is
@@ -55,6 +63,17 @@ pub(crate) enum LinkStatus {
     Unknown,
     Unlinked,
     Linked { username: String },
+}
+
+/// What Enter on a notification row opens. Their payload decides: entry
+/// notifications name a post, a chat mention names the room it happened in
+/// (and never the message, which their payload does not carry), and follows,
+/// pokes and role changes open nothing at all.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum NotificationTarget {
+    Entry(String),
+    ChatRoom(String),
+    Nothing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +123,16 @@ pub(crate) struct RoomsModal {
     pub error: Option<String>,
 }
 
+/// The C-Mail picker: their conversation list, with the ones already on the
+/// rail marked. Same shape and same contract as [`RoomsModal`]: adding one is
+/// what creates its rail entry, and nothing here opens a conversation.
+pub(crate) struct CmailModal {
+    pub conversations: Vec<CmailConversation>,
+    pub selected: usize,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 pub(crate) struct ReplyModal {
     pub post: CsPost,
     pub body: TextArea<'static>,
@@ -119,17 +148,60 @@ pub(crate) enum Modal {
     Compose(Box<ComposeModal>),
     Reply(Box<ReplyModal>),
     Rooms(Box<RoomsModal>),
+    Cmail(Box<CmailModal>),
 }
 
-/// A room the user is currently inside. Its `session` is what makes it fetch:
-/// history, the live stream, and the presence heartbeat all hang off it and
-/// all stop when it drops, which is why leaving a room is simply dropping this.
+/// Which of their two chat surfaces an open room is. Their docs describe the
+/// two as the same mechanism, and they render, scroll and type identically
+/// here, so one surface carries both and this decides the few places they
+/// differ: the endpoints, the header prefix, and whether a read cursor of ours
+/// is involved at all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RoomKind {
+    /// A cIRC room, addressed by slug. Unread state is ours (their roster
+    /// reports `last_message_at` but never reads read state back).
+    Circ,
+    /// A C-Mail conversation, addressed by their opaque conversation id.
+    /// Unread state is theirs: their list reports a count per conversation.
+    Cmail,
+}
+
+/// The handle whose lifetime is a room's fetching. Dropping it aborts the
+/// history load and the live stream (and, for a room, announces the user out
+/// of it), which is why leaving is simply dropping this.
+pub(crate) enum RoomSession {
+    Circ(Box<CircRoomSession>),
+    // Never read: a conversation has no presence to announce, so the handle
+    // is held purely for its `Drop`, which is what stops it fetching.
+    Cmail(#[allow(dead_code)] CmailSession),
+}
+
+/// A room or conversation the user is currently inside. Its `session` is what
+/// makes it fetch: history, the live stream, and the presence heartbeat all
+/// hang off it and all stop when it drops.
 pub(crate) struct OpenRoom {
-    pub slug: String,
+    /// Their address for it: a room slug, or a conversation id.
+    pub id: String,
+    /// What it is called on screen, without the sigil: `general`, or `alice`.
+    pub label: String,
+    pub kind: RoomKind,
     pub messages: Vec<CircMessage>,
     pub loading: bool,
-    /// `None` while reading; `Some` once the user starts writing.
-    pub composer: Option<TextArea<'static>>,
+    /// Drawn in the chat composer slot for as long as the room is open, like
+    /// every other room in the rail. Single row: that slot is one line and
+    /// their API takes one message per send.
+    pub composer: TextArea<'static>,
+    /// Whether keystrokes land in the composer. Entering a room lands in
+    /// reading mode, again like every other room: `i`/Enter focuses the
+    /// composer, Esc drops back out of it. Focusing on entry turned j/k, the
+    /// rail shortcuts, and every other global letter into text.
+    pub composing: bool,
+    /// The read cursor as it stood when the user walked in, which is what the
+    /// "new messages" rule reads from. Entering stamps the cursor forward
+    /// immediately (that is what clears the rail dot), so the separator has to
+    /// hold on to the old value or it would never have anything to mark.
+    /// `None` for a room never visited: nothing to be behind on.
+    pub unread_from: Option<i64>,
     /// Rendered rows scrolled back from the newest. 0 is the live bottom.
     pub scroll: usize,
     /// How far back the conversation can scroll, written by the renderer once
@@ -139,7 +211,28 @@ pub(crate) struct OpenRoom {
     /// Their stream gave up. Reading still works, the room is just no longer
     /// live, and the user is told rather than left staring at a frozen room.
     pub stream_down: bool,
-    session: CircRoomSession,
+    session: RoomSession,
+}
+
+impl OpenRoom {
+    /// The header/rail name with its sigil: `#general` for a room, `@alice`
+    /// for a conversation.
+    pub(crate) fn display_name(&self) -> String {
+        match self.kind {
+            RoomKind::Circ => format!("#{}", self.label),
+            RoomKind::Cmail => format!("@{}", self.label),
+        }
+    }
+
+    /// The user did something here, which is what keeps them from showing as
+    /// idle in a room's user list. A conversation has no user list, so there
+    /// is nothing to announce.
+    fn note_activity(&self) {
+        match &self.session {
+            RoomSession::Circ(session) => session.note_activity(),
+            RoomSession::Cmail(_) => {}
+        }
+    }
 }
 
 pub struct State {
@@ -158,9 +251,30 @@ pub struct State {
     /// badge poll. Compared against `room_reads` for the rail's unread dots;
     /// same clock on both sides, so skew never enters into it.
     room_last_message: HashMap<String, i64>,
+    /// The roster's head count per room, from the same fetch. Rendered in an
+    /// open room's header; no call of its own, so a room with no roster yet
+    /// simply shows nothing.
+    room_online: HashMap<String, i64>,
+    /// C-Mail conversations pinned into the rail, in the user's order. Ours,
+    /// like the room pins: their API has no notion of a bookmarked
+    /// conversation.
+    pub(crate) cmail_pins: Vec<CmailThread>,
+    /// Unread count per conversation id, straight from their conversation
+    /// list. Theirs, not ours: they read it back, so the rail row carries a
+    /// number where a cIRC room can only carry a dot.
+    cmail_unread: HashMap<String, i64>,
+    /// A conversation started by name this frame, waiting for the chat tick
+    /// to select its rail row. Only `ChatState` can move the selection, so
+    /// the pane reports it rather than acting.
+    started_cmail: Option<String>,
     pub(crate) open_room: Option<OpenRoom>,
     pub(crate) link: LinkStatus,
     pub(crate) view: View,
+    /// The view the selected rail row stands for: `Feed` for `feeds`,
+    /// `Notifications` for `notifications`. A thread opens over either one and
+    /// backs out to whichever row the user came in through, so the rail
+    /// highlight and the pane can never disagree about where you are.
+    root_view: View,
     pub(crate) posts: Vec<CsPost>,
     pub(crate) selected: usize,
     pub(crate) thread: Option<CsThread>,
@@ -195,6 +309,8 @@ pub struct State {
     last_unread_poll: Instant,
     /// `None` until the first feed load of this session.
     last_feed_load: Option<Instant>,
+    /// `None` until the first notifications load of this session.
+    last_notifications_load: Option<Instant>,
     pub(crate) loading: bool,
     pub(crate) modal: Option<Modal>,
 }
@@ -210,9 +326,14 @@ impl State {
             pinned: Vec::new(),
             room_reads: HashMap::new(),
             room_last_message: HashMap::new(),
+            room_online: HashMap::new(),
+            cmail_pins: Vec::new(),
+            started_cmail: None,
+            cmail_unread: HashMap::new(),
             open_room: None,
             link: LinkStatus::Unknown,
             view: View::Feed,
+            root_view: View::Feed,
             posts: Vec::new(),
             selected: 0,
             thread: None,
@@ -230,23 +351,23 @@ impl State {
             // so the interval starts running from session start.
             last_unread_poll: Instant::now(),
             last_feed_load: None,
+            last_notifications_load: None,
             loading: false,
             modal: None,
         }
     }
 
-    /// The rail badge: notifications plus new entries, one number for
-    /// "cyberspace has this much waiting for you". The pane header splits it
-    /// back apart, since the two open with different keys.
-    pub fn unread_count(&self) -> i64 {
-        self.unread_notifications + self.unread_entries
-    }
-
-    pub(crate) fn unread_notifications(&self) -> i64 {
+    /// The `notifications` row's badge: their own counter endpoint, so an
+    /// exact number rather than a floor.
+    pub fn unread_notifications(&self) -> i64 {
         self.unread_notifications
     }
 
-    pub(crate) fn unread_entries(&self) -> i64 {
+    /// The `feeds` row's badge: entries published since this user last read
+    /// the feed, counted locally out of the probe page. The two badges are
+    /// deliberately never summed: they sit on different rows and are opened by
+    /// moving to that row, so one number would only say "somewhere in here".
+    pub fn unread_entries(&self) -> i64 {
         self.unread_entries
     }
 
@@ -287,12 +408,12 @@ impl State {
     /// last visit points into a feed that has since been refetched, so it
     /// lands on whatever entry happens to sit at that row now.
     pub fn opened(&mut self) {
-        self.back_to_feed();
+        self.root_view = View::Feed;
+        self.back_to_root();
         self.selected = 0;
-        self.notif_selected = 0;
         // Freeze the marks for this visit before the cursor moves past them.
         self.feed_marker_at = self.feed_read_at;
-        if feed_reload_due(
+        if reload_due(
             self.is_linked(),
             self.loading,
             self.last_feed_load.map(|at| at.elapsed()),
@@ -302,11 +423,35 @@ impl State {
         }
     }
 
+    /// Entering the `notifications` rail row. Their list is loaded under the
+    /// same interval the feed uses, and for a stronger reason: a load marks
+    /// every notification read on their side, so an ungated landing would
+    /// clear the badge every time the rail cursor passed over the row.
+    pub fn opened_notifications(&mut self) {
+        self.root_view = View::Notifications;
+        self.back_to_root();
+        self.notif_selected = 0;
+        if reload_due(
+            self.is_linked(),
+            self.loading,
+            self.last_notifications_load.map(|at| at.elapsed()),
+        ) {
+            self.load_notifications();
+        }
+    }
+
     /// `r`: the user asking for the feed, so no interval applies.
     pub(crate) fn refresh(&mut self) {
         if self.is_linked() {
             self.mark_read_on_load = true;
             self.load_feed();
+        }
+    }
+
+    /// `r` on the notifications row: the user asking, so no interval applies.
+    pub(crate) fn refresh_notifications(&mut self) {
+        if self.is_linked() {
+            self.load_notifications();
         }
     }
 
@@ -380,15 +525,62 @@ impl State {
         self.service.load_thread_task(self.user_id, post);
     }
 
+    /// The public link to the entry the pane is on: the feed's selected row,
+    /// or the entry a thread is open on. `None` when their payload carries no
+    /// slug, since the deep link is built from one and there is no id route
+    /// on their website to fall back to.
+    pub(crate) fn selected_entry_link(&self) -> Option<String> {
+        let post = match self.view {
+            View::Feed => self.posts.get(self.selected)?,
+            // A notification's entry is fetched by id when opened, never
+            // looked up in `posts`, so there is nothing local to link;
+            // resolving through the feed's cursor would copy an entry the
+            // user never selected.
+            View::Notifications => return None,
+            View::Thread => &self.thread.as_ref()?.post,
+        };
+        let slug = post.slug.as_ref().filter(|slug| !slug.trim().is_empty())?;
+        Some(format!(
+            "{}/{}/{}",
+            super::api::WEB_URL,
+            post.author_username,
+            slug
+        ))
+    }
+
+    /// What Enter on the selected notification opens. A chat mention names a
+    /// room and nothing finer, and a room is entered through its rail entry,
+    /// which only `ChatState` owns, so the pane reports the target instead of
+    /// acting on it.
+    pub(crate) fn selected_notification_target(&self) -> NotificationTarget {
+        let Some(notification) = self.notifications.get(self.notif_selected) else {
+            return NotificationTarget::Nothing;
+        };
+        match (notification.post_id(), notification.room_slug()) {
+            (Some(post_id), _) => NotificationTarget::Entry(post_id.to_string()),
+            (None, Some(slug)) => NotificationTarget::ChatRoom(slug.to_string()),
+            (None, None) => NotificationTarget::Nothing,
+        }
+    }
+
+    /// Put a room on the rail if it is not there already, answering whether
+    /// it had to be added. A room is entered through its rail entry, so a jump
+    /// to one nobody pinned has to pin it first: the chat tick leaves any open
+    /// room the pinned list cannot name.
+    pub(crate) fn pin_room(&mut self, slug: String) -> bool {
+        if self.pinned.contains(&slug) {
+            return false;
+        }
+        self.pinned.push(slug);
+        self.service
+            .set_circ_pinned_task(self.user_id, self.pinned.clone());
+        true
+    }
+
     /// Enter on a notification opens the entry it is about. The post is
     /// fetched by id rather than looked up locally: the entry someone replied
     /// to is usually older than the feed page in memory.
-    pub(crate) fn open_selected_notification(&mut self) -> Option<Banner> {
-        let notification = self.notifications.get(self.notif_selected)?;
-        let Some(post_id) = notification.post_id() else {
-            return Some(Banner::error("That notification has no entry to open."));
-        };
-        let post_id = post_id.to_string();
+    pub(crate) fn open_notification_entry(&mut self, post_id: String) {
         self.thread_target = Some(post_id.clone());
         // No placeholder to show: unlike the feed path, nothing here knows
         // the post yet, so the thread view renders its loading state.
@@ -397,32 +589,30 @@ impl State {
         self.view = View::Thread;
         self.loading = true;
         self.service.load_thread_by_id_task(self.user_id, post_id);
-        None
     }
 
-    pub(crate) fn open_notifications(&mut self) {
-        if !self.is_linked() {
-            return;
-        }
-        self.view = View::Notifications;
-        self.notif_selected = 0;
+    fn load_notifications(&mut self) {
+        self.last_notifications_load = Some(Instant::now());
         self.loading = true;
         self.service.load_notifications_task(self.user_id);
     }
 
-    /// Esc from a sub-view goes back to the feed, matching the `b back` the
-    /// footer advertises. Reports whether it acted, so the shell's escape
-    /// chain keeps looking when the pane has nothing to close.
-    pub(crate) fn escape_to_feed(&mut self) -> bool {
-        if self.view == View::Feed {
+    /// Esc from a thread goes back to the row the user came in through,
+    /// matching the `b back` the footer advertises. Reports whether it acted,
+    /// so the shell's escape chain keeps looking when the pane has nothing to
+    /// close.
+    pub(crate) fn escape_to_root(&mut self) -> bool {
+        if self.view == self.root_view {
             return false;
         }
-        self.back_to_feed();
+        self.back_to_root();
         true
     }
 
-    pub(crate) fn back_to_feed(&mut self) {
-        self.view = View::Feed;
+    /// Back to the view the selected rail row stands for, dropping the thread
+    /// that was open over it.
+    pub(crate) fn back_to_root(&mut self) {
+        self.view = self.root_view;
         self.thread = None;
         self.thread_target = None;
         self.reset_thread_scroll();
@@ -497,8 +687,45 @@ impl State {
         &self.pinned
     }
 
-    pub(crate) fn open_room_slug(&self) -> Option<&str> {
-        self.open_room.as_ref().map(|room| room.slug.as_str())
+    /// The open surface's name for titles and for "is a room open at all"
+    /// checks: `#general` or `@alice`.
+    pub(crate) fn open_room_name(&self) -> Option<String> {
+        self.open_room.as_ref().map(OpenRoom::display_name)
+    }
+
+    /// The open cIRC room's slug, and only that: the rail reconcile matches it
+    /// against the pinned room list, and an open conversation must not answer
+    /// a question about rooms.
+    pub(crate) fn open_circ_slug(&self) -> Option<&str> {
+        let room = self.open_room.as_ref()?;
+        match room.kind {
+            RoomKind::Circ => Some(room.id.as_str()),
+            RoomKind::Cmail => None,
+        }
+    }
+
+    /// The open C-Mail conversation's id, mirroring `open_circ_slug`.
+    pub(crate) fn open_cmail_id(&self) -> Option<&str> {
+        let room = self.open_room.as_ref()?;
+        match room.kind {
+            RoomKind::Cmail => Some(room.id.as_str()),
+            RoomKind::Circ => None,
+        }
+    }
+
+    /// The head count their roster last reported for a room, if it has been
+    /// fetched at all this session.
+    pub(crate) fn room_online_count(&self, slug: &str) -> Option<i64> {
+        self.room_online.get(slug).copied()
+    }
+
+    /// The linked account's username, for the surfaces that have to tell your
+    /// own messages and mentions apart from everyone else's.
+    pub(crate) fn username(&self) -> &str {
+        match &self.link {
+            LinkStatus::Linked { username } => username,
+            LinkStatus::Unknown | LinkStatus::Unlinked => "",
+        }
     }
 
     /// `/cs chat`: the room picker. Their roster is fetched here and nowhere
@@ -549,22 +776,129 @@ impl State {
         Some(banner)
     }
 
+    /// `/cs mail`: the C-Mail picker, the same shape as the room picker.
+    /// Their conversation list is fetched here and nowhere else on demand,
+    /// because a human asked for it.
+    pub(crate) fn open_cmail_modal(&mut self) -> Option<Banner> {
+        if !self.is_linked() {
+            return Some(Banner::error(
+                "Link your cyberspace account first: /cs link",
+            ));
+        }
+        self.modal = Some(Modal::Cmail(Box::new(CmailModal {
+            conversations: Vec::new(),
+            selected: 0,
+            loading: true,
+            error: None,
+        })));
+        self.service.load_cmail_task(self.user_id);
+        None
+    }
+
+    pub(crate) fn move_cmail_modal_selection(&mut self, delta: isize) {
+        if let Some(Modal::Cmail(modal)) = &mut self.modal {
+            modal.selected = step_index(modal.selected, delta, modal.conversations.len());
+        }
+    }
+
+    /// Add the highlighted conversation to the rail, or take it off again.
+    pub(crate) fn toggle_selected_cmail(&mut self) -> Option<Banner> {
+        let Some(Modal::Cmail(modal)) = &self.modal else {
+            return None;
+        };
+        let conversation = modal.conversations.get(modal.selected)?;
+        let thread = CmailThread {
+            id: conversation.conversation_id.clone(),
+            username: conversation.other_user.username.clone(),
+        };
+        match self.cmail_pins.iter().position(|pin| pin.id == thread.id) {
+            Some(index) => {
+                let removed = self.cmail_pins.remove(index);
+                self.persist_cmail_pins();
+                Some(Banner::success(&format!(
+                    "Removed @{} from your rail.",
+                    removed.username
+                )))
+            }
+            None => {
+                let username = thread.username.clone();
+                self.pin_cmail(thread);
+                Some(Banner::success(&format!("Added @{username} to your rail.")))
+            }
+        }
+    }
+
+    /// `/cs mail @user`: ask their API for the conversation with that person.
+    /// The answer arrives as `CmailStarted`, which pins it.
+    pub(crate) fn start_cmail(&mut self, username: String) -> Option<Banner> {
+        if !self.is_linked() {
+            return Some(Banner::error(
+                "Link your cyberspace account first: /cs link",
+            ));
+        }
+        self.service.start_cmail_task(self.user_id, username);
+        None
+    }
+
+    /// Pin a conversation, keeping the list free of duplicates: their start
+    /// endpoint is idempotent, so asking twice must not grow the rail.
+    fn pin_cmail(&mut self, thread: CmailThread) {
+        if !self.cmail_pins.iter().any(|pin| pin.id == thread.id) {
+            self.cmail_pins.push(thread);
+        }
+        self.persist_cmail_pins();
+    }
+
+    fn persist_cmail_pins(&self) {
+        self.service
+            .set_cmail_pinned_task(self.user_id, self.cmail_pins.clone());
+    }
+
+    /// The conversation `/cs mail @user` just started, taken once by the chat
+    /// tick, which owns rail selection. `None` on every other frame.
+    pub(crate) fn take_started_cmail(&mut self) -> Option<String> {
+        self.started_cmail.take()
+    }
+
+    pub(crate) fn pinned_cmail(&self) -> &[CmailThread] {
+        &self.cmail_pins
+    }
+
+    /// One unread count per pinned conversation, aligned with `pinned_cmail`.
+    /// Theirs, so the rail row can name a number instead of a dot.
+    pub(crate) fn cmail_unread_counts(&self) -> Vec<i64> {
+        self.cmail_pins
+            .iter()
+            .map(|pin| self.cmail_unread.get(&pin.id).copied().unwrap_or(0))
+            .collect()
+    }
+
     /// Enter a room: everything it fetches hangs off the session held here, so
     /// a room nobody is looking at fetches nothing. Re-entering the room
     /// already open is a no-op rather than a reconnect.
     pub fn enter_room(&mut self, slug: String) {
-        if self.open_room_slug() == Some(slug.as_str()) {
+        if self.open_circ_slug() == Some(slug.as_str()) {
             return;
         }
         // Leaving the previous room closes its stream, announces the user out
         // of it, and stamps its read cursor before the new one opens.
         self.leave_room();
-        let session = self.service.open_circ_room(self.user_id, slug.clone());
+        let session = RoomSession::Circ(Box::new(
+            self.service.open_circ_room(self.user_id, slug.clone()),
+        ));
+        let unread_from = self.room_reads.get(&slug).copied();
         self.open_room = Some(OpenRoom {
-            slug,
+            label: slug.clone(),
+            id: slug,
+            kind: RoomKind::Circ,
             messages: Vec::new(),
             loading: true,
-            composer: None,
+            // No placeholder here: `chat::ui` draws the empty state itself so
+            // the cursor sits on the hint's first character instead of before
+            // it. The cursor stays hidden until the composer is focused.
+            composer: new_themed_textarea("", WrapMode::None, false),
+            composing: false,
+            unread_from,
             scroll: 0,
             max_scroll: Cell::new(0),
             stream_down: false,
@@ -574,6 +908,38 @@ impl State {
         // loaded. Waiting for history would leave the mark up on exactly the
         // rooms whose history did not arrive.
         self.stamp_open_room_read();
+    }
+
+    /// Enter a C-Mail conversation. Same contract as a room, with two
+    /// differences that follow from their API: the unread count is theirs (so
+    /// nothing is stamped here, the history load marks it read on their side)
+    /// and there is no presence to announce.
+    pub fn enter_cmail(&mut self, thread: CmailThread) {
+        if self.open_cmail_id() == Some(thread.id.as_str()) {
+            return;
+        }
+        self.leave_room();
+        let session = RoomSession::Cmail(self.service.open_cmail(self.user_id, thread.id.clone()));
+        // Their count is what the badge shows and opening is reading, so the
+        // row clears the moment the user walks in rather than when the mark
+        // lands back through the next poll.
+        self.cmail_unread.remove(&thread.id);
+        self.open_room = Some(OpenRoom {
+            id: thread.id,
+            label: thread.username,
+            kind: RoomKind::Cmail,
+            messages: Vec::new(),
+            loading: true,
+            composer: new_themed_textarea("", WrapMode::None, false),
+            composing: false,
+            // Their unread count says how many, never which, so a conversation
+            // has no boundary to rule off.
+            unread_from: None,
+            scroll: 0,
+            max_scroll: Cell::new(0),
+            stream_down: false,
+            session,
+        });
     }
 
     /// Leaving the room surface for anything else. Dropping the session is
@@ -589,10 +955,15 @@ impl State {
     /// which is the whole contract of the mark. Only a cursor that actually
     /// advances is persisted, so re-visiting a quiet room writes nothing.
     fn stamp_open_room_read(&mut self) {
-        let Some(room) = &self.open_room else {
+        // Conversations keep their read state on their side, so there is
+        // nothing of ours to move.
+        let Some(slug) = self.open_circ_slug().map(str::to_string) else {
             return;
         };
-        let slug = room.slug.clone();
+        let room = self
+            .open_room
+            .as_ref()
+            .expect("open_circ_slug named a room");
         let newest_message = room.messages.iter().map(|message| message.timestamp).max();
         // The roster's own stamp is the floor. Reading the messages is not
         // always possible (their history call can fail, the room can be
@@ -625,7 +996,7 @@ impl State {
         self.pinned
             .iter()
             .map(|slug| {
-                if self.open_room_slug() == Some(slug.as_str()) {
+                if self.open_circ_slug() == Some(slug.as_str()) {
                     return false;
                 }
                 match (self.room_last_message.get(slug), self.room_reads.get(slug)) {
@@ -640,7 +1011,7 @@ impl State {
     /// showing as idle in the room's user list on their side.
     fn note_room_activity(&self) {
         if let Some(room) = &self.open_room {
-            room.session.note_activity();
+            room.note_activity();
         }
     }
 
@@ -655,36 +1026,56 @@ impl State {
         room.scroll = room.scroll.saturating_add_signed(-delta).min(ceiling);
     }
 
-    /// `g` in a room jumps back to the live bottom.
+    /// End in a room jumps back to the live bottom.
     pub(crate) fn room_to_bottom(&mut self) {
         if let Some(room) = &mut self.open_room {
             room.scroll = 0;
         }
     }
 
+    /// Whether keystrokes go into the open room's composer. `app::input`
+    /// routes every event there while it answers true, so nothing else in the
+    /// app sees them.
+    pub(crate) fn room_composing(&self) -> bool {
+        self.open_room.as_ref().is_some_and(|room| room.composing)
+    }
+
+    /// `i` or Enter in a room: focus the composer.
     pub(crate) fn start_room_composer(&mut self) {
         let Some(room) = &mut self.open_room else {
             return;
         };
-        if room.composer.is_none() {
-            // One line: it draws in the chat composer slot, which is a single
-            // row, and their cap is one message rather than a document. No
-            // placeholder here: `chat::ui` draws the empty state itself so the
-            // cursor sits on the hint's first character instead of before it.
-            room.composer = Some(new_themed_textarea("", WrapMode::None, true));
-        }
-        self.note_room_activity();
+        room.composing = true;
+        set_themed_textarea_cursor_visible(&mut room.composer, true);
     }
 
     pub(crate) fn room_composer_mut(&mut self) -> Option<&mut TextArea<'static>> {
-        self.open_room.as_mut()?.composer.as_mut()
+        Some(&mut self.open_room.as_mut()?.composer)
     }
 
     /// The open room's composer for rendering. It draws in the chat composer
     /// slot at the bottom of the screen, not inside the pane, so a room has
     /// one input in the place every other room's input lives.
     pub(crate) fn room_composer(&self) -> Option<&TextArea<'static>> {
-        self.open_room.as_ref()?.composer.as_ref()
+        Some(&self.open_room.as_ref()?.composer)
+    }
+
+    /// What is currently typed into the open room's composer, which is what
+    /// the room's own submit path parses for our commands before their API
+    /// ever sees it.
+    pub(crate) fn room_composer_text(&self) -> String {
+        match &self.open_room {
+            Some(room) => single_line(&room.composer),
+            None => String::new(),
+        }
+    }
+
+    /// Drop the draft without leaving the composer: a command of ours was
+    /// typed there and answered locally, and the user is still mid-chat.
+    pub(crate) fn clear_room_composer(&mut self) {
+        if let Some(room) = &mut self.open_room {
+            room.composer = new_themed_textarea("", WrapMode::None, room.composing);
+        }
     }
 
     /// Typing counts as activity, which is what keeps the user from showing
@@ -693,10 +1084,15 @@ impl State {
         self.note_room_activity();
     }
 
+    /// Esc in a focused composer drops the draft and goes back to reading the
+    /// room; Esc while reading reports nothing to close, so the escape chain
+    /// moves on to leaving the room. Two presses to walk out of a room you
+    /// were mid-sentence in, one when you were only reading.
     pub(crate) fn cancel_room_composer(&mut self) -> bool {
         match &mut self.open_room {
-            Some(room) if room.composer.is_some() => {
-                room.composer = None;
+            Some(room) if room.composing => {
+                room.composer = new_themed_textarea("", WrapMode::None, false);
+                room.composing = false;
                 true
             }
             _ => false,
@@ -706,14 +1102,15 @@ impl State {
     /// Send what is in the room composer. Nothing is echoed locally: the
     /// message arrives through the room's own stream like everyone else's, so
     /// there is no provisional row to reconcile or leave behind on failure.
-    pub(crate) fn submit_room_composer(&mut self) -> Option<Banner> {
+    /// `keep_open` is the profile's `keep_composer_focused` tweak, threaded
+    /// from the call site exactly as the main chat composer threads it: with
+    /// it off, sending hands the room back to reading mode.
+    pub(crate) fn submit_room_composer(&mut self, keep_open: bool) -> Option<Banner> {
         let Some(room) = &mut self.open_room else {
             return None;
         };
-        let composer = room.composer.as_ref()?;
-        let content = single_line(composer);
+        let content = single_line(&room.composer);
         if content.is_empty() {
-            room.composer = None;
             return None;
         }
         if content.chars().count() > CIRC_MESSAGE_MAX_CHARS {
@@ -721,17 +1118,27 @@ impl State {
                 "Cyberspace messages are capped at {CIRC_MESSAGE_MAX_CHARS} characters."
             )));
         }
-        let slug = room.slug.clone();
-        room.composer = None;
+        let id = room.id.clone();
+        let kind = room.kind;
+        room.composer = new_themed_textarea("", WrapMode::None, keep_open);
+        room.composing = keep_open;
         room.scroll = 0;
         self.note_room_activity();
-        self.service
-            .send_circ_message_task(self.user_id, slug, content);
+        match kind {
+            RoomKind::Circ => self
+                .service
+                .send_circ_message_task(self.user_id, id, content),
+            RoomKind::Cmail => self.service.send_cmail_task(self.user_id, id, content),
+        }
         None
     }
 
     pub(crate) fn is_pinned(&self, slug: &str) -> bool {
         self.pinned.iter().any(|pinned| pinned == slug)
+    }
+
+    pub(crate) fn is_cmail_pinned(&self, conversation_id: &str) -> bool {
+        self.cmail_pins.iter().any(|pin| pin.id == conversation_id)
     }
 
     /// Submit whichever modal is open. Validation happens here (the boundary);
@@ -786,9 +1193,9 @@ impl State {
                 self.service
                     .reply_task(self.user_id, reply.post.clone(), body);
             }
-            // The picker has nothing to submit: toggling a room is the whole
+            // The pickers have nothing to submit: toggling a row is the whole
             // interaction, and it takes effect as it is pressed.
-            Some(Modal::Rooms(_)) | None => {}
+            Some(Modal::Rooms(_)) | Some(Modal::Cmail(_)) | None => {}
         }
     }
 
@@ -811,8 +1218,11 @@ impl State {
             return;
         }
         self.last_unread_poll = Instant::now();
-        self.service
-            .refresh_unread_task(self.user_id, !self.pinned.is_empty());
+        self.service.refresh_unread_task(
+            self.user_id,
+            !self.pinned.is_empty(),
+            !self.cmail_pins.is_empty(),
+        );
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -841,6 +1251,7 @@ impl State {
                 username,
                 feed_read_at,
                 circ_rooms,
+                cmail_threads,
                 circ_room_reads,
             } if user_id == self.user_id => {
                 self.link = match username {
@@ -850,6 +1261,7 @@ impl State {
                 self.feed_read_at = feed_read_at;
                 self.feed_marker_at = feed_read_at;
                 self.pinned = circ_rooms;
+                self.cmail_pins = cmail_threads;
                 self.room_reads = circ_room_reads;
                 None
             }
@@ -886,12 +1298,16 @@ impl State {
                 self.pinned.clear();
                 self.room_reads.clear();
                 self.room_last_message.clear();
+                self.room_online.clear();
+                self.cmail_pins.clear();
+                self.cmail_unread.clear();
                 self.unread_notifications = 0;
                 self.unread_entries = 0;
                 self.feed_read_at = None;
                 self.mark_read_on_load = false;
                 self.feed_marker_at = None;
                 self.view = View::Feed;
+                self.root_view = View::Feed;
                 Some(Banner::success("Cyberspace account unlinked."))
             }
             CsEvent::FeedLoaded { user_id, posts } if user_id == self.user_id => {
@@ -954,6 +1370,10 @@ impl State {
                     .iter()
                     .filter_map(|room| Some((room.key().to_string(), room.last_message_at?)))
                     .collect();
+                self.room_online = rooms
+                    .iter()
+                    .map(|room| (room.key().to_string(), room.online_count))
+                    .collect();
                 // A roster landing while the user sits in a room is theirs to
                 // acknowledge: they are looking at it. Without this, a roster
                 // that first arrives mid-visit would dot the room the moment
@@ -978,7 +1398,8 @@ impl State {
                 messages,
             } if user_id == self.user_id => {
                 let loaded = if let Some(open) = &mut self.open_room
-                    && open.slug == room
+                    && open.kind == RoomKind::Circ
+                    && open.id == room
                 {
                     open.loading = false;
                     for message in messages {
@@ -1005,7 +1426,8 @@ impl State {
                 // A frame for a room this session is not in belongs to another
                 // session of the same user; theirs to apply, not ours.
                 if let Some(open) = &mut self.open_room
-                    && open.slug == room
+                    && open.kind == RoomKind::Circ
+                    && open.id == room
                 {
                     apply_stream_event(open, event);
                 }
@@ -1013,7 +1435,92 @@ impl State {
             }
             CsEvent::CircStreamEnded { user_id, room } if user_id == self.user_id => {
                 if let Some(open) = &mut self.open_room
-                    && open.slug == room
+                    && open.kind == RoomKind::Circ
+                    && open.id == room
+                {
+                    open.stream_down = true;
+                }
+                None
+            }
+            CsEvent::CmailList {
+                user_id,
+                conversations,
+            } if user_id == self.user_id => {
+                // Their counts, wholesale: a conversation missing from the
+                // list has nothing waiting in it.
+                self.cmail_unread = conversations
+                    .iter()
+                    .map(|conversation| {
+                        (
+                            conversation.conversation_id.clone(),
+                            conversation.unread_count,
+                        )
+                    })
+                    .collect();
+                // Being inside a conversation is reading it, whatever the list
+                // says: their count was taken before the user walked in.
+                if let Some(id) = self.open_cmail_id().map(str::to_string) {
+                    self.cmail_unread.remove(&id);
+                }
+                if let Some(Modal::Cmail(modal)) = &mut self.modal {
+                    modal.conversations = conversations;
+                    modal.selected = clamp_index(modal.selected, modal.conversations.len());
+                    modal.loading = false;
+                }
+                None
+            }
+            CsEvent::CmailPinned { user_id, threads } if user_id == self.user_id => {
+                // Another session of the same user pinned something; adopt
+                // their list rather than keeping a divergent rail.
+                self.cmail_pins = threads;
+                None
+            }
+            CsEvent::CmailStarted { user_id, thread } if user_id == self.user_id => {
+                let banner = Banner::success(&format!("Opened c-mail with @{}.", thread.username));
+                // Naming someone is asking to write to them, so the chat tick
+                // walks the user into the conversation rather than leaving a
+                // new rail row to be found.
+                self.started_cmail = Some(thread.id.clone());
+                self.pin_cmail(thread);
+                Some(banner)
+            }
+            CsEvent::CmailHistoryLoaded {
+                user_id,
+                conversation_id,
+                messages,
+            } if user_id == self.user_id => {
+                if let Some(open) = &mut self.open_room
+                    && open.kind == RoomKind::Cmail
+                    && open.id == conversation_id
+                {
+                    open.loading = false;
+                    for message in messages {
+                        merge_message(&mut open.messages, message);
+                    }
+                    trim_messages(&mut open.messages);
+                }
+                None
+            }
+            CsEvent::CmailStreamed {
+                user_id,
+                conversation_id,
+                event,
+            } if user_id == self.user_id => {
+                if let Some(open) = &mut self.open_room
+                    && open.kind == RoomKind::Cmail
+                    && open.id == conversation_id
+                {
+                    apply_stream_event(open, event);
+                }
+                None
+            }
+            CsEvent::CmailStreamEnded {
+                user_id,
+                conversation_id,
+            } if user_id == self.user_id => {
+                if let Some(open) = &mut self.open_room
+                    && open.kind == RoomKind::Cmail
+                    && open.id == conversation_id
                 {
                     open.stream_down = true;
                 }
@@ -1150,18 +1657,16 @@ pub(crate) fn unread_poll_due(linked: bool, since_last_poll: Duration) -> bool {
 }
 
 /// Never fetch for an unlinked user or on top of a fetch already in flight.
-/// `None` means this session has not loaded the feed yet, which always fetches.
-pub(crate) fn feed_reload_due(
-    linked: bool,
-    loading: bool,
-    since_last_load: Option<Duration>,
-) -> bool {
+/// `None` means this session has not loaded that list yet, which always
+/// fetches. Shared by the feed and the notifications list: both hang off a
+/// rail row the cursor can land on by accident.
+pub(crate) fn reload_due(linked: bool, loading: bool, since_last_load: Option<Duration>) -> bool {
     if !linked || loading {
         return false;
     }
     match since_last_load {
         None => true,
-        Some(elapsed) => elapsed >= FEED_RELOAD_INTERVAL,
+        Some(elapsed) => elapsed >= RELOAD_INTERVAL,
     }
 }
 

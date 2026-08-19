@@ -183,7 +183,9 @@ pub(crate) fn search_items(chat: &ChatState, current_user_id: Uuid) -> Vec<RoomS
             RoomSlot::Feeds
             | RoomSlot::News
             | RoomSlot::Cyberspace
+            | RoomSlot::CyberspaceNotifications
             | RoomSlot::CyberspaceRoom(_)
+            | RoomSlot::CyberspaceMail(_)
             | RoomSlot::Notifications
             | RoomSlot::Discover
             | RoomSlot::Showcase
@@ -240,8 +242,9 @@ fn item_matches_query(item: &RoomSearchItem, query: &SearchQuery) -> bool {
 }
 
 fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
-    // A pinned cyberspace room is the one synthetic entry with a name of its
-    // own rather than a fixed label, so it is resolved before the roster.
+    // The pinned cyberspace rooms and conversations are the synthetic entries
+    // with names of their own rather than fixed labels, so they are resolved
+    // before the roster below.
     if let RoomSlot::CyberspaceRoom(index) = slot {
         let label = match chat.cyberspace.pinned_rooms().get(index) {
             Some(slug) => format!("#{slug}"),
@@ -256,10 +259,38 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
             favorite: false,
         };
     }
+    if let RoomSlot::CyberspaceMail(index) = slot {
+        let label = match chat.cyberspace.pinned_cmail().get(index) {
+            Some(thread) => format!("@{}", thread.username),
+            None => "@?".to_string(),
+        };
+        return RoomSearchItem {
+            slot,
+            label,
+            meta: "cyberspace c-mail".to_string(),
+            unread_count: chat
+                .cyberspace
+                .cmail_unread_counts()
+                .get(index)
+                .copied()
+                .unwrap_or(0),
+            last_message_at: None,
+            favorite: false,
+        };
+    }
     let (label, meta, unread_count) = match slot {
         RoomSlot::Feeds => ("rss", "rss inbox", chat.feeds.unread_count()),
         RoomSlot::News => ("news", "shared links", chat.news.unread_count()),
-        RoomSlot::Cyberspace => ("feeds", "cyberspace.online", chat.cyberspace.unread_count()),
+        RoomSlot::Cyberspace => (
+            "feeds",
+            "cyberspace.online",
+            chat.cyberspace.unread_entries(),
+        ),
+        RoomSlot::CyberspaceNotifications => (
+            "notifications",
+            "cyberspace.online",
+            chat.cyberspace.unread_notifications(),
+        ),
         RoomSlot::Notifications => (
             "mentions",
             "notifications",
@@ -268,8 +299,8 @@ fn synthetic_item(slot: RoomSlot, chat: &ChatState) -> RoomSearchItem {
         RoomSlot::Discover => ("browse rooms", "custom rooms", 0),
         RoomSlot::Showcase => ("showcases", "projects", chat.showcase.unread_count()),
         RoomSlot::Work => ("work", "profiles", chat.work.unread_count()),
-        RoomSlot::Room(_) | RoomSlot::CyberspaceRoom(_) => {
-            unreachable!("real rooms are built from ChatRoom, pinned rooms just above")
+        RoomSlot::Room(_) | RoomSlot::CyberspaceRoom(_) | RoomSlot::CyberspaceMail(_) => {
+            unreachable!("real rooms are built from ChatRoom, pinned entries just above")
         }
     };
 

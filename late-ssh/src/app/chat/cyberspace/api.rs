@@ -14,10 +14,16 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 pub const BASE_URL: &str = "https://api.cyberspace.online";
+/// Their website, which is where a shared link has to point: the API host
+/// serves JSON, not pages. Entries live at `/{username}/{slug}`, the deep
+/// link their notification metadata is documented against.
+pub const WEB_URL: &str = "https://cyberspace.online";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// How much room history one page carries. Their cap is 100; a screen of
-/// scrollback is what a room opens with and `before` pages further back.
-const CIRC_HISTORY_LIMIT: u8 = 50;
+/// How much room and conversation history one page carries, their documented
+/// cap for both. A mention jumped to from a notification names no message, so
+/// the deeper the page a room opens with, the likelier the line that pulled
+/// the user in is already on it; `before` pages further back.
+const CIRC_HISTORY_LIMIT: u8 = 100;
 /// The live window their realtime database replays when a stream opens. Their
 /// hard ceiling is 100 and unbounded reads are rejected outright.
 const CIRC_STREAM_WINDOW: u8 = 50;
@@ -115,6 +121,12 @@ pub struct CsNotification {
     pub created_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// Everything the fields above do not name. Their docs type `targetType`
+    /// as `post | reply` and call `metadata` open-ended, so a `chat_mention`
+    /// or a `dm_message` can carry its room or conversation anywhere in the
+    /// payload; keeping the rest is what lets `shape` report it.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl CsNotification {
@@ -135,6 +147,119 @@ impl CsNotification {
         self.metadata
             .get("replyId")
             .and_then(|value| value.as_str())
+    }
+
+    /// The chat room a `chat_mention` happened in. Their payload names it
+    /// twice, as `targetId` and as `metadata.roomSlug`, and carries no
+    /// message id or message timestamp at all, so the room is the finest a
+    /// jump can land. Other kinds never name a room.
+    pub fn room_slug(&self) -> Option<&str> {
+        if self.kind != "chat_mention" {
+            return None;
+        }
+        self.metadata
+            .get("roomSlug")
+            .and_then(|value| value.as_str())
+            .or(self.target_id.as_deref())
+    }
+
+    /// A content-free, one-line description of what this notification
+    /// carries: its type, its target, and every other key with an id-shaped
+    /// value. Diagnostic, for answering what a `chat_mention` and a
+    /// `dm_message` actually point at, which their docs leave open-ended.
+    ///
+    /// Their terms keep their content out of any AI pipeline, and a log line
+    /// is exactly where it would otherwise leak, so a value prints only where
+    /// it cannot be prose: content keys are dropped by name (exact, or as a
+    /// fragment of a longer non-id key), and any other string carrying
+    /// whitespace or longer than `SHAPE_VALUE_MAX_CHARS` prints as its length
+    /// instead of its text.
+    pub fn shape(&self) -> String {
+        let mut out = format!(
+            "type={} targetType={} targetId={}",
+            self.kind,
+            self.target_type.as_deref().unwrap_or("-"),
+            self.target_id.as_deref().unwrap_or("-"),
+        );
+        if let Some(metadata) = self.metadata.as_object() {
+            for (key, value) in metadata {
+                out.push_str(&format!(" metadata.{key}={}", shape_value(key, value, 0)));
+            }
+        }
+        for (key, value) in &self.extra {
+            out.push_str(&format!(" {key}={}", shape_value(key, value, 0)));
+        }
+        out
+    }
+}
+
+/// Keys that carry their prose rather than an identifier. Matched
+/// case-insensitively: exactly for any value, and as fragments of longer
+/// keys for string values, since the payload is open-ended and only the
+/// documented keys are known.
+const CONTENT_KEYS: &[&str] = &[
+    "content",
+    "postcontent",
+    "replycontent",
+    "messagecontent",
+    "text",
+    "body",
+    "message",
+    "preview",
+    "snippet",
+    "excerpt",
+    "title",
+    "reason",
+    "bio",
+];
+/// The longest string `shape` prints outright. An id, a slug, or a username
+/// fits; a sentence does not.
+const SHAPE_VALUE_MAX_CHARS: usize = 64;
+/// How far `shape` walks into nested objects before reporting their key count
+/// instead. Two levels is enough to see a `{ room: { id, slug } }` without
+/// walking a whole payload.
+const SHAPE_MAX_DEPTH: usize = 2;
+
+/// Whether a string under `key` (already lowercased) is their prose by
+/// name: any content word inside the key marks it, so an undocumented
+/// `messagePreview` or `lastMessage` cannot slip past the exact list. Keys
+/// naming an id are exempt: `messageId` is a pointer, not a sentence, and
+/// pointers are what the log is for.
+fn is_content_string_key(key: &str) -> bool {
+    if key.ends_with("id") {
+        return false;
+    }
+    CONTENT_KEYS.iter().any(|word| key.contains(word))
+}
+
+fn shape_value(key: &str, value: &serde_json::Value, depth: usize) -> String {
+    let key = key.to_ascii_lowercase();
+    if CONTENT_KEYS.contains(&key.as_str()) {
+        return "<content>".to_string();
+    }
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(flag) => flag.to_string(),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::String(_) if is_content_string_key(&key) => "<content>".to_string(),
+        serde_json::Value::String(text)
+            if text.chars().count() <= SHAPE_VALUE_MAX_CHARS
+                && !text.chars().any(char::is_whitespace) =>
+        {
+            text.clone()
+        }
+        serde_json::Value::String(text) => format!("<str:{}>", text.chars().count()),
+        serde_json::Value::Array(items) => format!("<array:{}>", items.len()),
+        serde_json::Value::Object(map) if depth >= SHAPE_MAX_DEPTH => {
+            format!("<object:{}>", map.len())
+        }
+        serde_json::Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(key, value)| format!("{key}={}", shape_value(key, value, depth + 1)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
     }
 }
 
@@ -177,6 +302,10 @@ impl CircRoom {
     }
 }
 
+/// One message in a cIRC room or a C-Mail conversation. Their two chat
+/// surfaces carry the same fields under two names for the author (`userId` /
+/// `username` in a room, `senderId` / `senderUsername` in a conversation), so
+/// the aliases collapse them here and everything downstream sees one message.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CircMessage {
@@ -184,9 +313,9 @@ pub struct CircMessage {
     /// its object hangs off rather than a field inside it.
     #[serde(default)]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, alias = "senderId")]
     pub user_id: String,
-    #[serde(default)]
+    #[serde(default, alias = "senderUsername")]
     pub username: String,
     #[serde(default)]
     pub is_chat_admin: bool,
@@ -278,6 +407,88 @@ impl CircMessage {
 pub struct CircHistory {
     pub messages: Vec<CircMessage>,
     pub cursor: Option<i64>,
+}
+
+/// Their history endpoints are documented by their fields rather than their
+/// envelope shape, so accept both the bare list and the paged object. Shared
+/// by rooms and C-Mail, which return the same two shapes.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HistoryBody {
+    Paged {
+        messages: Vec<CircMessage>,
+        #[serde(default)]
+        cursor: Option<i64>,
+    },
+    List(Vec<CircMessage>),
+}
+
+impl HistoryBody {
+    fn into_history(self) -> CircHistory {
+        match self {
+            HistoryBody::Paged { messages, cursor } => CircHistory { messages, cursor },
+            HistoryBody::List(messages) => CircHistory {
+                cursor: messages.first().map(|message| message.timestamp),
+                messages,
+            },
+        }
+    }
+}
+
+/// Which realtime-database collection a live stream reads from. Their two
+/// chat surfaces are the same mechanism over two nodes, so the opener takes
+/// this instead of growing a second copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamNode {
+    /// cIRC rooms, keyed by room id.
+    ChatMessages,
+    /// C-Mail conversations, keyed by conversation id.
+    DmMessages,
+}
+
+impl StreamNode {
+    fn path(self) -> &'static str {
+        match self {
+            StreamNode::ChatMessages => "chat_messages",
+            StreamNode::DmMessages => "dm_messages",
+        }
+    }
+}
+
+/// One C-Mail conversation as their list reports it. `unread_count` is theirs,
+/// not ours: they read it back, so the rail badge is a real number instead of
+/// the dot a cIRC room has to settle for.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailConversation {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub other_user: CmailUser,
+    #[serde(default)]
+    pub last_message: Option<String>,
+    /// Milliseconds since the epoch, on their clock.
+    #[serde(default)]
+    pub last_message_at: Option<i64>,
+    #[serde(default)]
+    pub unread_count: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailUser {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub username: String,
+}
+
+/// The answer to starting a conversation: their id for it, and who it is with.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CmailStarted {
+    pub conversation_id: String,
+    #[serde(default)]
+    pub other_user: CmailUser,
 }
 
 /// The floor under the presence cadence. Their response names the interval
@@ -481,34 +692,14 @@ impl CsApi {
         room_id: &str,
         before: Option<i64>,
     ) -> Result<CircHistory, CsApiError> {
-        /// Their history endpoint is documented by its fields rather than its
-        /// envelope shape, so accept both the bare list and the paged object.
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Body {
-            Paged {
-                messages: Vec<CircMessage>,
-                #[serde(default)]
-                cursor: Option<i64>,
-            },
-            List(Vec<CircMessage>),
-        }
-
         let path = match before {
             Some(before) => {
                 format!("/v1/circ/{room_id}?limit={CIRC_HISTORY_LIMIT}&before={before}")
             }
             None => format!("/v1/circ/{room_id}?limit={CIRC_HISTORY_LIMIT}"),
         };
-        let body: Body = self.get_json(&path, id_token).await?;
-        let history = match body {
-            Body::Paged { messages, cursor } => CircHistory { messages, cursor },
-            Body::List(messages) => CircHistory {
-                cursor: messages.first().map(|message| message.timestamp),
-                messages,
-            },
-        };
-        Ok(history)
+        let body: HistoryBody = self.get_json(&path, id_token).await?;
+        Ok(body.into_history())
     }
 
     pub async fn send_circ_message(
@@ -569,6 +760,76 @@ impl CsApi {
         parse_void(status, &body)
     }
 
+    /// Their conversation list, newest activity first, with the unread count
+    /// per conversation. This is the C-Mail badge: unlike the cIRC roster it
+    /// reports read state back, so no cursor of ours is involved.
+    pub async fn list_cmail(&self, id_token: &str) -> Result<Vec<CmailConversation>, CsApiError> {
+        self.get_json("/v1/cmail", id_token).await
+    }
+
+    /// Start (or find) the conversation with a username. Idempotent on their
+    /// side: an existing conversation comes back rather than a second one.
+    pub async fn start_cmail(
+        &self,
+        id_token: &str,
+        recipient_username: &str,
+    ) -> Result<CmailStarted, CsApiError> {
+        self.post_json(
+            "/v1/cmail",
+            Some(id_token),
+            &serde_json::json!({ "recipientUsername": recipient_username }),
+        )
+        .await
+    }
+
+    /// A page of conversation history, oldest-first. Same two shapes as the
+    /// room history endpoint.
+    pub async fn read_cmail(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+        before: Option<i64>,
+    ) -> Result<CircHistory, CsApiError> {
+        let path = match before {
+            Some(before) => {
+                format!("/v1/cmail/{conversation_id}?limit={CIRC_HISTORY_LIMIT}&before={before}")
+            }
+            None => format!("/v1/cmail/{conversation_id}?limit={CIRC_HISTORY_LIMIT}"),
+        };
+        let body: HistoryBody = self.get_json(&path, id_token).await?;
+        Ok(body.into_history())
+    }
+
+    pub async fn send_cmail(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+        content: &str,
+    ) -> Result<(), CsApiError> {
+        self.post_void(
+            &format!("/v1/cmail/{conversation_id}"),
+            Some(id_token),
+            &serde_json::json!({ "content": content }),
+        )
+        .await
+    }
+
+    /// Zero the unread count on their side. Unlike the cIRC equivalent this
+    /// one is readable back (their conversation list carries `unreadCount`),
+    /// which is why C-Mail needs no read cursor of ours.
+    pub async fn mark_cmail_read(
+        &self,
+        id_token: &str,
+        conversation_id: &str,
+    ) -> Result<(), CsApiError> {
+        self.post_void(
+            &format!("/v1/cmail/{conversation_id}/read"),
+            Some(id_token),
+            &serde_json::json!({}),
+        )
+        .await
+    }
+
     /// Open the live message stream for a room: their realtime database over
     /// Server-Sent Events, under the user's own id token. The bounds are not
     /// optional politeness, unbounded reads are rejected: always ordered by
@@ -576,14 +837,21 @@ impl CsApi {
     ///
     /// The stream ends when the id token expires (~60 minutes), which the
     /// caller answers by minting a fresh one and opening a new stream.
-    pub async fn open_circ_stream(
+    ///
+    /// `node` is the realtime-database collection: `chat_messages` for a cIRC
+    /// room, `dm_messages` for a C-Mail conversation. Their docs describe the
+    /// two as the same mechanism, and the frames are identical, so one opener
+    /// and one parser serve both.
+    pub async fn open_message_stream(
         &self,
         rtdb_url: &str,
-        room_id: &str,
+        node: StreamNode,
+        id: &str,
         id_token: &str,
     ) -> Result<reqwest::Response, CsApiError> {
+        let node = node.path();
         let url = format!(
-            "{}/chat_messages/{room_id}.json?auth={id_token}&orderBy=%22timestamp%22&limitToLast={CIRC_STREAM_WINDOW}",
+            "{}/{node}/{id}.json?auth={id_token}&orderBy=%22timestamp%22&limitToLast={CIRC_STREAM_WINDOW}",
             rtdb_url.trim_end_matches('/')
         );
         let response = self

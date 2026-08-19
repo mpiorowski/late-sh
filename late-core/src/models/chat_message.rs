@@ -19,6 +19,15 @@ crate::model! {
     }
 }
 
+/// Which way a history page walks from its cursor: `Older` back toward the
+/// start of the room, `Newer` forward toward the tail. Both directions hand
+/// their page back oldest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryDirection {
+    Older,
+    Newer,
+}
+
 impl ChatMessage {
     pub async fn list_recent_for_rooms(
         client: &Client,
@@ -194,57 +203,151 @@ impl ChatMessage {
             .collect())
     }
 
+    /// One keyset-paginated page of a room's history, always returned oldest
+    /// first, as the viewer is allowed to see it.
+    ///
+    /// The read boundary is in the query, not the caller: members read any
+    /// room they belong to, and anyone reads a public non-game room (mention
+    /// previews can reference rooms the user never joined, the same rule as
+    /// `get_for_viewer`). A caller holding a `room_id` it has no business
+    /// reading gets an empty page rather than content, so a new entry point
+    /// cannot leak a private room by forgetting a check.
+    ///
+    /// `cursor` is the `(created, id)` of the message to walk away from,
+    /// exclusive. `None` starts at the room's newest message for `Older` and
+    /// its oldest for `Newer`. Paging on the `(created, id)` pair rather than
+    /// on `created` alone is what keeps messages sharing a timestamp from
+    /// being skipped or repeated across page boundaries, and it matches
+    /// `idx_chat_messages_room_created` exactly, so a page costs the same
+    /// whether the room holds a hundred messages or a hundred thousand, and
+    /// whether the cursor sits at the tail or a year back.
+    ///
+    /// System-feed authors and `exclude_user_ids` (the caller's ignored
+    /// users, as authors and as bot-reply targets) are skipped, so a page
+    /// reads as conversation rather than feed noise. Note this means a page
+    /// can return fewer than `limit` rows without the room being exhausted;
+    /// callers detect the end by an empty page, never by a short one.
+    pub async fn list_page_for_viewer(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+        cursor: Option<(DateTime<Utc>, Uuid)>,
+        direction: HistoryDirection,
+        exclude_user_ids: &[Uuid],
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let (cursor_created, cursor_id) = match cursor {
+            Some((created, id)) => (Some(created), Some(id)),
+            None => (None, None),
+        };
+
+        // The two arms differ only in comparison and sort order, but both are
+        // spelled out: a paging query is worth reading whole rather than
+        // reassembling from string fragments.
+        let sql = match direction {
+            HistoryDirection::Older => {
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND (
+                     (room.visibility = 'public' AND room.kind <> 'game')
+                     OR EXISTS (
+                        SELECT 1 FROM chat_room_members mem
+                        WHERE mem.room_id = $1 AND mem.user_id = $2
+                     )
+                   )
+                   AND ($3::timestamptz IS NULL
+                        OR (msg.created, msg.id) < ($3, $4::uuid))
+                   AND msg.user_id <> ALL($5::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($5::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $6"
+            }
+            HistoryDirection::Newer => {
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND (
+                     (room.visibility = 'public' AND room.kind <> 'game')
+                     OR EXISTS (
+                        SELECT 1 FROM chat_room_members mem
+                        WHERE mem.room_id = $1 AND mem.user_id = $2
+                     )
+                   )
+                   AND ($3::timestamptz IS NULL
+                        OR (msg.created, msg.id) > ($3, $4::uuid))
+                   AND msg.user_id <> ALL($5::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($5::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created ASC, msg.id ASC
+                 LIMIT $6"
+            }
+        };
+
+        let rows = client
+            .query(
+                sql,
+                &[
+                    &room_id,
+                    &user_id,
+                    &cursor_created,
+                    &cursor_id,
+                    &exclude_user_ids,
+                    &limit,
+                ],
+            )
+            .await?;
+        let mut page: Vec<Self> = rows.into_iter().map(Self::from).collect();
+        // `Older` walked backwards to find the page; hand it back in reading
+        // order so every caller sees pages the same way round.
+        match direction {
+            HistoryDirection::Older => page.reverse(),
+            HistoryDirection::Newer => {}
+        }
+        Ok(page)
+    }
+
     /// Up to `limit_each` messages immediately before and after a message in
-    /// its room, both in chronological order. System-feed authors and
-    /// `exclude_user_ids` (the caller's ignored users, as authors or as
-    /// bot-reply targets) are skipped so the window shows conversation, not
-    /// feed noise. Callers must verify room membership first; used for the
-    /// search-hit context window.
+    /// its room, both in chronological order. Read scoping, ignored users and
+    /// system-feed exclusion all come from `list_page_for_viewer`; this is the
+    /// centered-window shape of it, used for the search-hit context pane.
     pub async fn list_around(
         client: &Client,
         room_id: Uuid,
+        user_id: Uuid,
         created: DateTime<Utc>,
         id: Uuid,
         exclude_user_ids: &[Uuid],
         limit_each: i64,
     ) -> Result<(Vec<Self>, Vec<Self>)> {
-        let before_rows = client
-            .query(
-                "SELECT msg.*
-                 FROM chat_messages msg
-                 JOIN users author ON author.id = msg.user_id
-                 WHERE msg.room_id = $1
-                   AND (msg.created, msg.id) < ($2, $3)
-                   AND msg.user_id <> ALL($4::uuid[])
-                   AND (msg.reply_to_user_id IS NULL
-                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
-                   AND COALESCE((author.settings->>'system')::boolean, false) = false
-                 ORDER BY msg.created DESC, msg.id DESC
-                 LIMIT $5",
-                &[&room_id, &created, &id, &exclude_user_ids, &limit_each],
-            )
-            .await?;
-        let mut before: Vec<Self> = before_rows.into_iter().map(Self::from).collect();
-        before.reverse();
-
-        let after_rows = client
-            .query(
-                "SELECT msg.*
-                 FROM chat_messages msg
-                 JOIN users author ON author.id = msg.user_id
-                 WHERE msg.room_id = $1
-                   AND (msg.created, msg.id) > ($2, $3)
-                   AND msg.user_id <> ALL($4::uuid[])
-                   AND (msg.reply_to_user_id IS NULL
-                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
-                   AND COALESCE((author.settings->>'system')::boolean, false) = false
-                 ORDER BY msg.created ASC, msg.id ASC
-                 LIMIT $5",
-                &[&room_id, &created, &id, &exclude_user_ids, &limit_each],
-            )
-            .await?;
-        let after: Vec<Self> = after_rows.into_iter().map(Self::from).collect();
-
+        let cursor = Some((created, id));
+        let before = Self::list_page_for_viewer(
+            client,
+            room_id,
+            user_id,
+            cursor,
+            HistoryDirection::Older,
+            exclude_user_ids,
+            limit_each,
+        )
+        .await?;
+        let after = Self::list_page_for_viewer(
+            client,
+            room_id,
+            user_id,
+            cursor,
+            HistoryDirection::Newer,
+            exclude_user_ids,
+            limit_each,
+        )
+        .await?;
         Ok((before, after))
     }
 

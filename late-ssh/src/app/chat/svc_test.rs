@@ -3807,10 +3807,17 @@ async fn message_context_window_surrounds_hit_chronologically() {
     }
 
     let hit = &created_messages[5];
-    let (before, after) =
-        ChatMessage::list_around(&client, room.id, hit.created, hit.id, &[ignored.id], 3)
-            .await
-            .expect("list around");
+    let (before, after) = ChatMessage::list_around(
+        &client,
+        room.id,
+        author.id,
+        hit.created,
+        hit.id,
+        &[ignored.id],
+        3,
+    )
+    .await
+    .expect("list around");
 
     let before_bodies: Vec<&str> = before.iter().map(|m| m.body.as_str()).collect();
     let after_bodies: Vec<&str> = after.iter().map(|m| m.body.as_str()).collect();

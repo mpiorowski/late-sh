@@ -15,7 +15,7 @@ use late_core::{
     db::Db,
     models::{
         character_sheet::{CharacterSheet, CharacterSheetParams},
-        chat_message::{ChatMessage, ChatMessageParams},
+        chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
         chat_message_reaction::{
             ChatMessageReaction, ChatMessageReactionAction, ChatMessageReactionOwners,
             ChatMessageReactionSummary,
@@ -60,6 +60,10 @@ use super::commands::RoomScopedCommand;
 /// authors, as loaded by `load_message_context_task`.
 type MessageContext = (Vec<ChatMessage>, Vec<ChatMessage>, HashMap<Uuid, String>);
 
+/// One page of history plus the usernames its authors need, as loaded by
+/// `load_history_page_task` and `load_history_anchor_task`.
+type HistoryPage = (Vec<ChatMessage>, HashMap<Uuid, String>);
+
 /// The staff room a new public room is reported to. A missing room means the
 /// report is skipped, not that opening the room fails.
 const MODERATORS_SLUG: &str = "moderators";
@@ -79,6 +83,13 @@ pub(crate) const SEARCH_MIN_CHARS: usize = 3;
 /// Messages fetched on each side of a selected search hit for the modal's
 /// context window.
 const SEARCH_CONTEXT_EACH_SIDE: i64 = 4;
+
+/// Messages per history-modal page. Large enough that scrolling rarely
+/// stalls on a fetch, small enough that the first page renders promptly and
+/// a fast scroller cannot queue many large pages. Pages are index-only walks
+/// (see `ChatMessage::list_page_for_viewer`), so this trades render work, not
+/// query cost.
+pub(crate) const HISTORY_PAGE_SIZE: i64 = 50;
 
 /// The two report-only rooms. `#bugs` and `#suggestions` accept only
 /// `/bug` / `/suggest` report cards from regular users; free-text posting is
@@ -666,6 +677,38 @@ pub enum ChatEvent {
         user_id: Uuid,
         request_id: Uuid,
         message_id: Uuid,
+    },
+    /// One page of the history modal, oldest first. `direction` says which
+    /// edge asked for it, so the modal knows which end to splice onto and
+    /// which "no more" flag an empty page retires.
+    HistoryPageLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        direction: HistoryDirection,
+        messages: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    HistoryPageFailed {
+        user_id: Uuid,
+        request_id: Uuid,
+        direction: HistoryDirection,
+    },
+    /// The opening window for a history modal centered on one message:
+    /// `messages` already has the anchor spliced between its two pages, so
+    /// the modal never has to stitch them itself.
+    HistoryAnchorLoaded {
+        user_id: Uuid,
+        request_id: Uuid,
+        anchor_id: Uuid,
+        messages: Vec<ChatMessage>,
+        usernames: HashMap<Uuid, String>,
+    },
+    /// The anchor is gone (hard-deleted) or sits in a room this viewer may
+    /// not read. Distinct from `HistoryPageFailed` because it is a settled
+    /// answer, not a transient failure worth retrying.
+    HistoryAnchorMissing {
+        user_id: Uuid,
+        request_id: Uuid,
     },
     MessageReactionsUpdated {
         room_id: Uuid,
@@ -1745,8 +1788,9 @@ impl ChatService {
 
     /// Load up to `SEARCH_CONTEXT_EACH_SIDE` messages either side of a search
     /// hit (`MessageContextLoaded`, user-targeted, keyed by request id) for
-    /// the modal's detail-pane context window. Membership-gated; system-feed
-    /// lines and the caller's ignored users are excluded.
+    /// the modal's detail-pane context window. Read scoping, system-feed lines
+    /// and the caller's ignored users are all handled inside
+    /// `list_page_for_viewer`; an unreadable room yields an empty window.
     #[allow(clippy::too_many_arguments)]
     pub fn load_message_context_task(
         &self,
@@ -1763,20 +1807,10 @@ impl ChatService {
                 let result: Result<MessageContext> = async {
                     let _permit = service.read_permits.acquire().await?;
                     let client = service.db.get().await?;
-                    // Same read boundary as `get_for_viewer`: members
-                    // always, public non-game rooms for everyone (mention
-                    // previews can reference rooms the user never joined).
-                    if !ChatRoomMember::is_member(&client, room_id, user_id).await? {
-                        let public_readable = ChatRoom::get(&client, room_id)
-                            .await?
-                            .is_some_and(|room| room.visibility == "public" && room.kind != "game");
-                        if !public_readable {
-                            anyhow::bail!("user cannot read this room");
-                        }
-                    }
                     let (before, after) = ChatMessage::list_around(
                         &client,
                         room_id,
+                        user_id,
                         created,
                         message_id,
                         &exclude_user_ids,
@@ -1825,6 +1859,177 @@ impl ChatService {
             }
             .instrument(info_span!(
                 "chat.load_message_context_task",
+                user_id = %user_id,
+                message_id = %message_id
+            )),
+        );
+    }
+
+    /// Load one page of room history for the history modal
+    /// (`HistoryPageLoaded`, user-targeted, keyed by request id). `cursor` is
+    /// the edge message the page walks away from, `None` for the first page
+    /// at the room tail. Read scoping lives in `list_page_for_viewer`, so an
+    /// unreadable room comes back as an empty page rather than an error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_history_page_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Uuid,
+        cursor: Option<(DateTime<Utc>, Uuid)>,
+        direction: HistoryDirection,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<HistoryPage> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    let messages = ChatMessage::list_page_for_viewer(
+                        &client,
+                        room_id,
+                        user_id,
+                        cursor,
+                        direction,
+                        &exclude_user_ids,
+                        HISTORY_PAGE_SIZE,
+                    )
+                    .await?;
+                    let author_ids: Vec<Uuid> =
+                        messages.iter().map(|message| message.user_id).collect();
+                    let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                    Ok((messages, usernames))
+                }
+                .await;
+                match result {
+                    Ok((messages, usernames)) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryPageLoaded {
+                                user_id,
+                                request_id,
+                                direction,
+                                messages,
+                                usernames,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryPageFailed {
+                                user_id,
+                                request_id,
+                                direction,
+                            },
+                        );
+                        late_core::error_span!(
+                            "chat_history_page_failed",
+                            error = ?e,
+                            "failed to load chat history page"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_history_page_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
+    /// Load the opening window for a history modal centered on `message_id`:
+    /// the anchor itself plus a page either side, spliced into one
+    /// chronological run (`HistoryAnchorLoaded`). Resolving the anchor here
+    /// rather than passing it in from the caller keeps the one case that has
+    /// no answer - a hard-deleted message, or a room this viewer cannot read
+    /// - in a single place (`HistoryAnchorMissing`). The room is the
+    /// anchor's own; taking a separate room id would only make a mismatched
+    /// pair representable.
+    pub fn load_history_anchor_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        message_id: Uuid,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<Option<HistoryPage>> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    let Some(anchor) =
+                        ChatMessage::get_for_viewer(&client, message_id, user_id).await?
+                    else {
+                        return Ok(None);
+                    };
+                    let (before, after) = ChatMessage::list_around(
+                        &client,
+                        anchor.room_id,
+                        user_id,
+                        anchor.created,
+                        anchor.id,
+                        &exclude_user_ids,
+                        HISTORY_PAGE_SIZE,
+                    )
+                    .await?;
+                    // The anchor is spliced in unconditionally: the viewer
+                    // asked for this message by name, so it shows even when
+                    // the page filters would have dropped it (an ignored
+                    // author, a system line).
+                    let mut messages = before;
+                    messages.push(anchor);
+                    messages.extend(after);
+                    let author_ids: Vec<Uuid> =
+                        messages.iter().map(|message| message.user_id).collect();
+                    let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                    Ok(Some((messages, usernames)))
+                }
+                .await;
+                match result {
+                    Ok(Some((messages, usernames))) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryAnchorLoaded {
+                                user_id,
+                                request_id,
+                                anchor_id: message_id,
+                                messages,
+                                usernames,
+                            },
+                        );
+                    }
+                    Ok(None) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryAnchorMissing {
+                                user_id,
+                                request_id,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryPageFailed {
+                                user_id,
+                                request_id,
+                                direction: HistoryDirection::Older,
+                            },
+                        );
+                        late_core::error_span!(
+                            "chat_history_anchor_failed",
+                            error = ?e,
+                            "failed to load chat history anchor"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_history_anchor_task",
                 user_id = %user_id,
                 message_id = %message_id
             )),

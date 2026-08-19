@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use chrono::NaiveDate;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -238,6 +239,15 @@ pub struct BoardWindows {
     pub all_time: Vec<RankedEntry>,
 }
 
+/// One UTC-month slice of a connected-time checkpoint. A batch can carry more
+/// than one month when it checkpoints sessions spanning a month boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OnlineTimeIncrement {
+    pub user_id: Uuid,
+    pub month_start: NaiveDate,
+    pub milliseconds: i64,
+}
+
 /// The uniform board triple of one roguelike door, over `door_runs` (and,
 /// for the dive board, the mid-run depth marks in `door_milestones`).
 #[derive(Clone, Default)]
@@ -262,6 +272,7 @@ pub struct LeaderboardData {
     pub user_chips: HashMap<Uuid, i64>,
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
+    pub online_time: BoardWindows,
     pub daily_boards: HashMap<DailyPuzzle, BoardWindows>,
     pub score_boards: HashMap<ScoreGame, BoardWindows>,
     pub door_boards: HashMap<DoorGame, DoorBoards>,
@@ -296,6 +307,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         user_chips,
         monthly_chip_earners,
         arcade_champions,
+        online_time,
         daily_monthly,
         daily_all_time,
         score_monthly,
@@ -310,6 +322,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         UserChips::all_balances(client),
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
+        fetch_online_time(client, BOARD_DEPTH),
         fetch_daily_win_boards(client, DailyWindow::Monthly),
         fetch_daily_win_boards(client, DailyWindow::AllTime),
         fetch_score_boards(client, ScoreWindow::Monthly),
@@ -373,12 +386,77 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         user_chips,
         monthly_chip_earners,
         arcade_champions,
+        online_time,
         daily_boards,
         score_boards,
         door_boards,
         lateania_adventurers,
         lateania_frontier,
     })
+}
+
+/// Adds one process checkpoint of connected time for every user in a single
+/// statement. `flush_id` makes retrying the same uncertain statement
+/// idempotent: the service never advances to another batch until this one is
+/// confirmed.
+pub async fn apply_online_time_batch(
+    client: &Client,
+    flush_id: Uuid,
+    increments: &[OnlineTimeIncrement],
+) -> Result<u64> {
+    if increments.is_empty() {
+        return Ok(0);
+    }
+
+    let user_ids: Vec<Uuid> = increments.iter().map(|value| value.user_id).collect();
+    let month_starts: Vec<NaiveDate> = increments.iter().map(|value| value.month_start).collect();
+    let milliseconds: Vec<i64> = increments.iter().map(|value| value.milliseconds).collect();
+    Ok(client
+        .execute(
+            "WITH raw_increments AS (
+                SELECT user_id, month_start, milliseconds
+                FROM unnest($1::uuid[], $2::date[], $3::bigint[])
+                    AS value(user_id, month_start, milliseconds)
+                WHERE milliseconds > 0
+            ),
+            increments AS (
+                SELECT raw.user_id,
+                       raw.month_start,
+                       SUM(raw.milliseconds)::bigint AS milliseconds
+                FROM raw_increments raw
+                JOIN users u ON u.id = raw.user_id
+                GROUP BY raw.user_id, raw.month_start
+            ),
+            all_time_increments AS (
+                SELECT user_id, SUM(milliseconds)::bigint AS milliseconds
+                FROM increments
+                GROUP BY user_id
+            ),
+            all_time_upsert AS (
+                INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
+                SELECT user_id, milliseconds, $4 FROM all_time_increments
+                ON CONFLICT (user_id) DO UPDATE SET
+                    total_milliseconds = user_online_time.total_milliseconds
+                        + CASE
+                            WHEN user_online_time.last_flush_id = EXCLUDED.last_flush_id THEN 0
+                            ELSE EXCLUDED.total_milliseconds
+                          END,
+                    last_flush_id = EXCLUDED.last_flush_id
+                RETURNING user_id
+            )
+            INSERT INTO user_online_time_monthly
+                (month_start, user_id, total_milliseconds, last_flush_id)
+            SELECT month_start, user_id, milliseconds, $4 FROM increments
+            ON CONFLICT (month_start, user_id) DO UPDATE SET
+                total_milliseconds = user_online_time_monthly.total_milliseconds
+                    + CASE
+                        WHEN user_online_time_monthly.last_flush_id = EXCLUDED.last_flush_id THEN 0
+                        ELSE EXCLUDED.total_milliseconds
+                      END,
+                last_flush_id = EXCLUDED.last_flush_id",
+            &[&user_ids, &month_starts, &milliseconds, &flush_id],
+        )
+        .await?)
 }
 
 #[derive(Clone, Copy)]
@@ -630,6 +708,62 @@ async fn fetch_monthly_chip_earners(client: &Client, limit: i64) -> Result<Vec<R
         )
         .await?;
     Ok(ranked_entries(rows))
+}
+
+async fn fetch_online_time(client: &Client, limit: i64) -> Result<BoardWindows> {
+    let rows = client
+        .query(
+            &format!(
+                "WITH totals AS (
+                    SELECT 'monthly'::text AS period,
+                           user_id,
+                           total_milliseconds AS value
+                    FROM user_online_time_monthly
+                    WHERE month_start = {MONTH_DATE_FILTER}
+                      AND total_milliseconds > 0
+                    UNION ALL
+                    SELECT 'all_time'::text AS period,
+                           user_id,
+                           total_milliseconds AS value
+                    FROM user_online_time
+                    WHERE total_milliseconds > 0
+                ),
+                ranked AS (
+                    SELECT totals.period,
+                           u.username,
+                           totals.user_id,
+                           totals.value,
+                           RANK() OVER (
+                               PARTITION BY totals.period ORDER BY totals.value DESC
+                           ) AS rank
+                    FROM totals
+                    JOIN users u ON u.id = totals.user_id
+                )
+                SELECT period, username, user_id, value, rank
+                FROM ranked
+                WHERE rank <= $1
+                ORDER BY period ASC, rank ASC, username ASC"
+            ),
+            &[&limit],
+        )
+        .await?;
+
+    let mut windows = BoardWindows::default();
+    for row in rows {
+        let entry = RankedEntry {
+            username: row.get("username"),
+            user_id: row.get("user_id"),
+            rank: row.get("rank"),
+            value: row.get("value"),
+            note: None,
+        };
+        match row.get::<_, &str>("period") {
+            "monthly" => windows.monthly.push(entry),
+            "all_time" => windows.all_time.push(entry),
+            other => unreachable!("online time window {other} not produced by this query"),
+        }
+    }
+    Ok(windows)
 }
 
 /// Monthly Arcade Wins points. The per-win `SELECT` arms are generated from

@@ -105,11 +105,14 @@ fn submit_message_jump(app: &mut App) {
     let room_id = hit.message.room_id;
     let message_id = hit.message.id;
 
-    // A mention preview can reference a public room the user never joined;
-    // there is no room to land in, so keep the modal open instead of
-    // selecting a room the rail does not have.
+    // A mention preview can reference a public room the user never joined.
+    // There is no room in the rail to land in, but the message is still
+    // readable (`list_page_for_viewer` admits public non-game rooms), so read
+    // it in the history modal instead of refusing the jump outright.
     if !app.chat.rooms.iter().any(|(room, _)| room.id == room_id) {
-        app.banner = Some(Banner::error("Join that room from Discover to jump there"));
+        app.room_search_modal_state.close();
+        app.chat.message_search.clear();
+        app.chat.open_history_at_message(room_id, message_id);
         return;
     }
 
@@ -122,7 +125,8 @@ fn submit_message_jump(app: &mut App) {
         // `sync_visible_chat_room` only requests a tail when the visible room
         // changed; if the hit's room was already on screen no load would fire
         // and the pending jump would never resolve. Request one explicitly so
-        // the jump either selects the message or reports it as too old.
+        // the jump either selects the message or falls through to the history
+        // modal as too old.
         app.chat.request_room_tail(room_id);
     }
 }

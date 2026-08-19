@@ -447,13 +447,14 @@ fn track_active_irc_user(
         afk: None,
     };
 
-    if let Some(active) = active_users.get_mut(&registered.user_id) {
+    let became_online = if let Some(active) = active_users.get_mut(&registered.user_id) {
         active.connection_count += 1;
         active.username = registered.username.clone();
         active.fingerprint = Some(registered.fingerprint.clone());
         active.audio_source = registered.audio_source;
         active.last_login_at = std::time::Instant::now();
         active.sessions.push(session);
+        false
     } else {
         active_users.insert(
             registered.user_id,
@@ -466,7 +467,14 @@ fn track_active_irc_user(
                 last_login_at: std::time::Instant::now(),
             },
         );
+        true
+    };
+    if became_online {
+        state
+            .leaderboard_service
+            .online_user_connected(registered.user_id);
     }
+    drop(active_users);
 }
 
 fn untrack_active_irc_user(state: &State, user_id: Uuid, conn_id: u64) {
@@ -476,11 +484,17 @@ fn untrack_active_irc_user(state: &State, user_id: Uuid, conn_id: u64) {
     };
     let token = irc_session_token(conn_id);
     active.sessions.retain(|session| session.token != token);
-    if active.connection_count <= 1 {
+    let became_offline = if active.connection_count <= 1 {
         active_users.remove(&user_id);
+        true
     } else {
         active.connection_count -= 1;
+        false
+    };
+    if became_offline {
+        state.leaderboard_service.online_user_disconnected(user_id);
     }
+    drop(active_users);
 }
 
 fn motd_burst(nick: &str, web_url: &str) -> Vec<Message> {
