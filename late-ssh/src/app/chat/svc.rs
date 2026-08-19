@@ -1944,10 +1944,10 @@ impl ChatService {
     /// the anchor itself plus a page either side, spliced into one
     /// chronological run (`HistoryAnchorLoaded`). Resolving the anchor here
     /// rather than passing it in from the caller keeps the one case that has
-    /// no answer - a hard-deleted message, or a room this viewer cannot read
-    /// - in a single place (`HistoryAnchorMissing`). The room is the
-    /// anchor's own; taking a separate room id would only make a mismatched
-    /// pair representable.
+    /// no answer (a hard-deleted message, or a room this viewer cannot read)
+    /// in a single place (`HistoryAnchorMissing`). The room is the anchor's
+    /// own; taking a separate room id would only make a mismatched pair
+    /// representable.
     pub fn load_history_anchor_task(
         &self,
         user_id: Uuid,
