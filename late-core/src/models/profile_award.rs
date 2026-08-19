@@ -350,6 +350,7 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         | DCSS_WIN_AWARD_CATEGORY
         | BROGUE_ESCAPE_AWARD_CATEGORY
         | BROGUE_MASTERY_AWARD_CATEGORY
+        | GREENDRAGON_DRAGON_AWARD_CATEGORY
         | DARKROOM_ESCAPE_AWARD_CATEGORY => {
             format!("{value} chips")
         }
