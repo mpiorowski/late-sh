@@ -10,7 +10,8 @@ const EMPTY: &[RankedEntry] = &[];
 /// One selectable board on the Leaderboards page. The two bespoke boards
 /// lead, then every game board; the per-game boards come straight off the
 /// late-core rosters, so a game added there appears here without a page
-/// change.
+/// change. `BadgeGuide` trails every ranked board: it carries no standings,
+/// `draw_detail` special-cases it before touching `standings`/`format_value`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Board {
     LateaniaAdventurers,
@@ -22,6 +23,7 @@ pub(crate) enum Board {
     ArcadeWins,
     Daily(DailyPuzzle),
     Score(ScoreGame),
+    BadgeGuide,
 }
 
 /// What the detail pane shows for one board. Every board answers with
@@ -61,6 +63,7 @@ impl Board {
         }
         boards.extend(DailyPuzzle::ALL.iter().copied().map(Self::Daily));
         boards.extend(ScoreGame::ALL.iter().copied().map(Self::Score));
+        boards.push(Self::BadgeGuide);
         boards
     }
 
@@ -81,6 +84,7 @@ impl Board {
             Self::ArcadeWins => "Arcade Wins",
             Self::Daily(puzzle) => puzzle.title(),
             Self::Score(game) => game.title(),
+            Self::BadgeGuide => "Badge Guide",
         }
     }
 
@@ -111,6 +115,7 @@ impl Board {
             ),
             Self::Daily(_) => "daily wins".to_string(),
             Self::Score(_) => "best score".to_string(),
+            Self::BadgeGuide => "what each three-letter award code means".to_string(),
         }
     }
 
@@ -127,6 +132,10 @@ impl Board {
             Self::ArcadeWins => format!("{} pts", thousands(value)),
             Self::Daily(_) => format!("{} wins", thousands(value)),
             Self::Score(_) => thousands(value),
+            // Unreachable: BadgeGuide has no ranked entries, so nothing ever
+            // calls format_value with it. draw_detail renders the guide
+            // directly and returns before reaching entry formatting.
+            Self::BadgeGuide => String::new(),
         }
     }
 
@@ -167,6 +176,9 @@ impl Board {
                     all_time: windows.map_or(EMPTY, |board| &board.all_time),
                 }
             }
+            // Unreachable: draw_detail special-cases BadgeGuide before
+            // calling standings.
+            Self::BadgeGuide => Standings::Snapshot(EMPTY),
         }
     }
 }

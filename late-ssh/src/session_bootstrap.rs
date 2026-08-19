@@ -489,6 +489,13 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         dopewars_host: state.config.dopewars_host.clone(),
         dopewars_port: state.config.dopewars_port,
         dopewars_secret: state.config.dopewars_secret.clone(),
+        bashquest_enabled: state.config.bashquest_enabled,
+        bashquest_host: state.config.bashquest_host.clone(),
+        bashquest_port: state.config.bashquest_port,
+        bashquest_secret: state.config.bashquest_secret.clone(),
+        bashquest_awards: Some(crate::app::door::bashquest::graduate::BashquestAwards::new(
+            state.db.clone(),
+        )),
         codekeep_enabled: state.config.codekeep_enabled,
         codekeep_host: state.config.codekeep_host.clone(),
         codekeep_port: state.config.codekeep_port,

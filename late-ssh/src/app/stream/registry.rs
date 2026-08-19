@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use late_core::MutexRecover;
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -801,8 +802,15 @@ impl StreamRegistry {
 /// the house-standard v7, on purpose: these are secrets, not row ids, and a
 /// v7 would leak the stream's start time while carrying only ~74 random
 /// bits against v4's 122.
+///
+/// Base64url over the raw 16 bytes rather than the 32-char hex form: same
+/// 122 bits, 22 characters instead of 32. A watch URL is meant to be read and
+/// clicked out of a chat row, and those 10 columns are the difference between
+/// the room header showing the link and dropping it. The alphabet is
+/// `[A-Za-z0-9_-]`, which needs no escaping in a URL path, a query value, or
+/// a cookie — `late-web`'s `valid_capability_id` gate accepts exactly that set.
 fn capability_id() -> String {
-    Uuid::new_v4().simple().to_string()
+    URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes())
 }
 
 #[cfg(test)]

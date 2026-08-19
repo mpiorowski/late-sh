@@ -34,7 +34,7 @@ resource "kubernetes_deployment_v1" "service_web" {
 
       spec {
         container {
-          image = var.WEB_IMAGE_TAG
+          image = local.image_tags["web"]
           name  = "service-web"
 
           port {
@@ -136,6 +136,15 @@ resource "kubernetes_deployment_v1" "service_web" {
         }
       }
     }
+  }
+
+  # Images are deployed with `kubectl set image` (deploy_service.yml), never
+  # by terraform applies, so a full apply must not roll the service back to
+  # whatever tag it was created with.
+  lifecycle {
+    ignore_changes = [
+      spec[0].template[0].spec[0].container[0].image,
+    ]
   }
 }
 

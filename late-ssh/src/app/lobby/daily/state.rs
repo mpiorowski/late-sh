@@ -123,6 +123,9 @@ pub struct DailyMatchDetail {
 
 pub enum DailyGameDetail {
     Chess(ChessDetail),
+    /// Same detail as `Chess`: chess960 differs only in the opening position,
+    /// which lives in the FEN, so rules, board, and renderer are shared.
+    Chess960(ChessDetail),
     Battleship(BattleshipDetail),
     Connect4(Connect4Detail),
     Reversi(ReversiDetail),
@@ -136,6 +139,7 @@ impl DailyGameDetail {
     pub fn kind(&self) -> DailyGame {
         match self {
             Self::Chess(_) => DailyGame::Chess,
+            Self::Chess960(_) => DailyGame::Chess960,
             Self::Battleship(_) => DailyGame::Battleship,
             Self::Connect4(_) => DailyGame::ConnectFour,
             Self::Reversi(_) => DailyGame::Reversi,
@@ -236,6 +240,7 @@ impl DailyMatchDetail {
     fn from_row(row: DailyMatch) -> Result<Self, String> {
         let game = match DailyGame::from_kind(&row.game_kind) {
             Some(DailyGame::Chess) => DailyGameDetail::Chess(ChessDetail::from_row(&row)?),
+            Some(DailyGame::Chess960) => DailyGameDetail::Chess960(ChessDetail::from_row(&row)?),
             Some(DailyGame::Battleship) => DailyGameDetail::Battleship(BattleshipDetail {
                 state: DailyBattleshipState::parse(&row.state).map_err(|e| e.to_string())?,
                 shot_in_flight: false,
@@ -270,14 +275,14 @@ impl DailyMatchDetail {
 
     pub fn chess(&self) -> Option<&ChessDetail> {
         match &self.game {
-            DailyGameDetail::Chess(chess) => Some(chess),
+            DailyGameDetail::Chess(chess) | DailyGameDetail::Chess960(chess) => Some(chess),
             _ => None,
         }
     }
 
     fn chess_mut(&mut self) -> Option<&mut ChessDetail> {
         match &mut self.game {
-            DailyGameDetail::Chess(chess) => Some(chess),
+            DailyGameDetail::Chess(chess) | DailyGameDetail::Chess960(chess) => Some(chess),
             _ => None,
         }
     }
@@ -709,7 +714,7 @@ impl DailyState {
             return_screen,
             // Start the cursor mid-board for each game's grid.
             cursor: match game {
-                DailyGame::Chess => 12,
+                DailyGame::Chess | DailyGame::Chess960 => 12,
                 DailyGame::Battleship => 44,
                 // The connect4 cursor is a column, not a cell.
                 DailyGame::ConnectFour => 3,
@@ -962,7 +967,9 @@ impl DailyState {
         // Copy the game kind out first: the per-game handlers need `board`
         // whole, and matching the roster enum keeps this exhaustive.
         match detail.game.kind() {
-            DailyGame::Chess => Self::chess_select_or_move(board, user_id, &svc),
+            DailyGame::Chess | DailyGame::Chess960 => {
+                Self::chess_select_or_move(board, user_id, &svc)
+            }
             DailyGame::Battleship => Self::battleship_fire(board, user_id, &svc),
             DailyGame::ConnectFour => Self::connect4_drop(board, user_id, &svc),
             DailyGame::Reversi => Self::reversi_place(board, user_id, &svc),
@@ -1315,7 +1322,7 @@ impl DailyState {
         let label = rules::san_label(&board, mv);
         let mut board = board;
         board.play(mv);
-        chess.state.fen = format!("{board}");
+        chess.state.fen = rules::fen(&board);
         // The resolved move's own squares, not the clicked pair: a castle
         // played as a two-square king push records as the king-captures-rook
         // encoding every other castle in the history uses.

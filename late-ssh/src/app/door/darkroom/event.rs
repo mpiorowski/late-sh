@@ -314,7 +314,7 @@ impl Look<'_> {
     }
 
     /// Free space in the pack. At home there is no pack, so nothing binds.
-    fn free_space(&self) -> f64 {
+    pub fn free_space(&self) -> f64 {
         match self.trip {
             Some(trip) => self.game.capacity() - trip.load(),
             None => f64::MAX,
@@ -347,6 +347,10 @@ pub enum Phase {
     Spoils {
         leave_cooldown: f64,
     },
+    /// Selecting an item in the pack to drop in order to fit a target loot item.
+    DropFor {
+        loot_index: usize,
+    },
 }
 
 /// One row of the modal.
@@ -360,6 +364,13 @@ pub enum Row {
     Take(usize),
     /// Take everything that fits.
     TakeAll,
+    /// Drop `count` of `item` from pack to fit target loot.
+    Drop {
+        item: Resource,
+        count: i64,
+    },
+    /// Cancel drop selection and return to spoils/story.
+    DropCancel,
     Leave,
 }
 
@@ -436,7 +447,7 @@ impl Active {
     pub fn fight(&self) -> Option<&Fight> {
         match &self.phase {
             Phase::Fighting(fight) => Some(fight),
-            Phase::Story | Phase::Spoils { .. } => None,
+            Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => None,
         }
     }
 
@@ -493,6 +504,29 @@ impl Active {
                     rows.push(Row::Meds);
                 }
             }
+            Phase::DropFor { loot_index } => {
+                if let Some(target) = self.loot.get(*loot_index) {
+                    let needed = world_data::weight(target.item) - look.free_space();
+                    if let Some(trip) = look.trip {
+                        for item in world_data::CARRYABLE {
+                            let count = trip.carrying(item);
+                            if count > 0 && item != target.item {
+                                let item_weight = world_data::weight(item);
+                                if item_weight > 0.0 {
+                                    let num_to_drop = (needed / item_weight).ceil() as i64;
+                                    if num_to_drop <= count {
+                                        rows.push(Row::Drop {
+                                            item,
+                                            count: num_to_drop.max(1),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                rows.push(Row::DropCancel);
+            }
             Phase::Story | Phase::Spoils { .. } => {
                 for (index, _) in self.loot.iter().enumerate() {
                     rows.push(Row::Take(index));
@@ -534,31 +568,56 @@ impl Active {
                     fight.weapon_cooldown.get(&weapon).copied().unwrap_or(0.0) <= 0.0
                         && weapon_loaded(weapon, look)
                 }
-                Phase::Story | Phase::Spoils { .. } => false,
+                Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => false,
             },
             Row::Eat => match &self.phase {
                 Phase::Fighting(fight) => {
                     fight.eat_cooldown <= 0.0 && look.quantity(Resource::CuredMeat) > 0
                 }
-                Phase::Story | Phase::Spoils { .. } => look.quantity(Resource::CuredMeat) > 0,
+                Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => {
+                    look.quantity(Resource::CuredMeat) > 0
+                }
             },
             Row::Meds => match &self.phase {
                 Phase::Fighting(fight) => {
                     fight.meds_cooldown <= 0.0 && look.quantity(Resource::Medicine) > 0
                 }
-                Phase::Story | Phase::Spoils { .. } => look.quantity(Resource::Medicine) > 0,
+                Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => {
+                    look.quantity(Resource::Medicine) > 0
+                }
             },
             Row::Take(index) => match self.loot.get(index) {
-                Some(row) => row.left > 0 && world_data::weight(row.item) <= look.free_space(),
+                Some(row) => {
+                    if row.left <= 0 {
+                        false
+                    } else if world_data::weight(row.item) <= look.free_space() {
+                        true
+                    } else if let Some(trip) = look.trip {
+                        let target_weight = world_data::weight(row.item);
+                        world_data::CARRYABLE.iter().any(|item| {
+                            let count = trip.carrying(*item);
+                            if count > 0 && *item != row.item {
+                                let total_item_weight = count as f64 * world_data::weight(*item);
+                                total_item_weight + look.free_space() >= target_weight
+                            } else {
+                                false
+                            }
+                        })
+                    } else {
+                        false
+                    }
+                }
                 None => false,
             },
             Row::TakeAll => self
                 .loot
                 .iter()
                 .any(|row| row.left > 0 && world_data::weight(row.item) <= look.free_space()),
+            Row::Drop { item, count } => look.quantity(item) >= count,
+            Row::DropCancel => true,
             Row::Leave => match &self.phase {
                 Phase::Spoils { leave_cooldown } => *leave_cooldown <= 0.0,
-                Phase::Story | Phase::Fighting(_) => true,
+                Phase::Story | Phase::Fighting(_) | Phase::DropFor { .. } => true,
             },
         }
     }
@@ -605,14 +664,58 @@ impl Active {
                 Outcome::Continue
             }
             Row::Take(index) => {
-                self.take_one(index, ctx);
+                let Some(target) = self.loot.get(index) else {
+                    return Outcome::Continue;
+                };
+                if world_data::weight(target.item) <= ctx.look().free_space() {
+                    self.take_one(index, ctx);
+                } else {
+                    self.phase = Phase::DropFor { loot_index: index };
+                }
                 Outcome::Continue
             }
             Row::TakeAll => {
                 for index in 0..self.loot.len() {
-                    while self.row_ready(Row::Take(index), &ctx.look()) {
-                        self.take_one(index, ctx);
+                    while let Some(target) = self.loot.get(index) {
+                        if target.left > 0
+                            && world_data::weight(target.item) <= ctx.look().free_space()
+                        {
+                            self.take_one(index, ctx);
+                        } else {
+                            break;
+                        }
                     }
+                }
+                Outcome::Continue
+            }
+            Row::Drop { item, count } => {
+                if let Phase::DropFor { loot_index } = self.phase {
+                    if let Some(trip) = &mut ctx.trip {
+                        trip.add(item, -count);
+                    }
+                    if let Some(existing) = self.loot.iter_mut().find(|r| r.item == item) {
+                        existing.left += count;
+                    } else {
+                        self.loot.push(LootRow { item, left: count });
+                    }
+                    self.take_one(loot_index, ctx);
+                    self.phase = match self.scene.combat {
+                        Some(_) => Phase::Spoils {
+                            leave_cooldown: 0.0,
+                        },
+                        None => Phase::Story,
+                    };
+                }
+                Outcome::Continue
+            }
+            Row::DropCancel => {
+                if matches!(self.phase, Phase::DropFor { .. }) {
+                    self.phase = match self.scene.combat {
+                        Some(_) => Phase::Spoils {
+                            leave_cooldown: 0.0,
+                        },
+                        None => Phase::Story,
+                    };
                 }
                 Outcome::Continue
             }
@@ -625,7 +728,7 @@ impl Active {
                         .unwrap_or(Next::End);
                     self.follow(next, ctx, rng, out)
                 }
-                Phase::Story | Phase::Fighting(_) => Outcome::Done,
+                Phase::Story | Phase::Fighting(_) | Phase::DropFor { .. } => Outcome::Done,
             },
         }
     }
@@ -752,7 +855,7 @@ impl Active {
         out: &mut Vec<String>,
     ) -> Outcome {
         match &mut self.phase {
-            Phase::Story => Outcome::Continue,
+            Phase::Story | Phase::DropFor { .. } => Outcome::Continue,
             Phase::Spoils { leave_cooldown } => {
                 *leave_cooldown = (*leave_cooldown - seconds).max(0.0);
                 Outcome::Continue
@@ -932,7 +1035,7 @@ fn roll_loot(table: &'static [Loot], rng: &mut impl Rng) -> Vec<LootRow> {
 }
 
 /// The weapons the pack can actually swing, fists last if there is nothing
-/// else (upstream falls back to punching).
+/// else or if no damaging weapons have ammunition (upstream falls back to punching).
 pub fn available_weapons(look: &Look<'_>) -> Vec<Weapon> {
     let mut weapons: Vec<Weapon> = Weapon::ALL
         .into_iter()
@@ -942,7 +1045,12 @@ pub fn available_weapons(look: &Look<'_>) -> Vec<Weapon> {
             None => false,
         })
         .collect();
-    if weapons.is_empty() {
+    // Upstream adds fists if numWeapons (usable damaging weapons) is 0.
+    let usable_damaging = weapons.iter().any(|&w| match w.damage() {
+        Damage::Hits(h) if h > 0 => weapon_loaded(w, look),
+        _ => false,
+    });
+    if !usable_damaging && !weapons.contains(&Weapon::Fists) {
         weapons.push(Weapon::Fists);
     }
     weapons

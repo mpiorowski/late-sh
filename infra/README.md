@@ -157,8 +157,7 @@ secrets/variables for CI/CD).
 |----------|-------------|
 | `LOG_LEVEL` | Rust log level (`RUST_LOG`) |
 | `SSH_HOST_KEY` | Ed25519 private key for SSH server |
-| `SSH_IMAGE_TAG` | Docker image for late-ssh |
-| `WEB_IMAGE_TAG` | Docker image for late-web |
+| `IMAGE_TAGS` | Component name -> image ref map (ssh, web, and each door). Only read when a deployment is created; deploys go through `kubectl set image` and every deployment ignores image changes |
 
 ### IRC
 

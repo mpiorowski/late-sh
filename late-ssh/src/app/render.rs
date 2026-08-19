@@ -161,6 +161,7 @@ struct DrawContext<'a> {
     brogue_enabled: bool,
     usurper_enabled: bool,
     dopewars_enabled: bool,
+    bashquest_enabled: bool,
     codekeep_enabled: bool,
     lateania_state: Option<&'a crate::app::door::lateania::state::State>,
     /// Players currently in the Lateania world (for the landing/hub card).
@@ -179,6 +180,7 @@ struct DrawContext<'a> {
     brogue_state: Option<&'a mut crate::app::door::brogue::state::State>,
     usurper_state: Option<&'a mut crate::app::door::usurper::state::State>,
     dopewars_state: Option<&'a mut crate::app::door::dopewars::state::State>,
+    bashquest_state: Option<&'a mut crate::app::door::bashquest::state::State>,
     codekeep_state: Option<&'a mut crate::app::door::codekeep::state::State>,
     /// Detected terminal-image protocol for the current session.
     /// `None` -> no native images supported; capable terminals get
@@ -969,6 +971,7 @@ impl App {
         let mut brogue_state_taken = self.brogue_state.take();
         let mut usurper_state_taken = self.usurper_state.take();
         let mut dopewars_state_taken = self.dopewars_state.take();
+        let mut bashquest_state_taken = self.bashquest_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
 
         let draw_result = terminal
@@ -997,6 +1000,7 @@ impl App {
                         brogue_enabled: self.brogue_enabled,
                         usurper_enabled: self.usurper_enabled,
                         dopewars_enabled: self.dopewars_enabled,
+                        bashquest_enabled: self.bashquest_enabled,
                         codekeep_enabled: self.codekeep_enabled,
                         lateania_state: self.lateania_state.as_ref(),
                         lateania_online: self.lateania_service.player_count(),
@@ -1011,6 +1015,7 @@ impl App {
                         brogue_state: brogue_state_taken.as_mut(),
                         usurper_state: usurper_state_taken.as_mut(),
                         dopewars_state: dopewars_state_taken.as_mut(),
+                        bashquest_state: bashquest_state_taken.as_mut(),
                         codekeep_state: codekeep_state_taken.as_mut(),
                         terminal_image_protocol: self.terminal_image_protocol,
                         twenty_forty_eight_state: &self.twenty_forty_eight_state,
@@ -1137,6 +1142,7 @@ impl App {
         self.brogue_state = brogue_state_taken;
         self.usurper_state = usurper_state_taken;
         self.dopewars_state = dopewars_state_taken;
+        self.bashquest_state = bashquest_state_taken;
         self.codekeep_state = codekeep_state_taken;
         draw_result?;
 
@@ -1363,6 +1369,7 @@ impl App {
                         brogue_enabled: ctx.brogue_enabled,
                         usurper_enabled: ctx.usurper_enabled,
                         dopewars_enabled: ctx.dopewars_enabled,
+                        bashquest_enabled: ctx.bashquest_enabled,
                         codekeep_enabled: ctx.codekeep_enabled,
                         lateania_online: ctx.lateania_online,
                         lateania_slots: ctx.lateania_slots.clone(),
@@ -1464,6 +1471,13 @@ impl App {
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(content_area);
                     crate::app::door::dopewars::render::draw_page(frame, content_area, state);
+                }
+            }
+            Screen::Bashquest => {
+                if let Some(state) = ctx.bashquest_state.as_deref_mut() {
+                    // Size the child PTY to the exact widget area before blitting.
+                    state.set_viewport(content_area);
+                    crate::app::door::bashquest::render::draw_page(frame, content_area, state);
                 }
             }
             Screen::Codekeep => {
@@ -1741,6 +1755,17 @@ impl App {
                 state.entry_input(),
             );
         }
+        if screen == Screen::Bashquest
+            && let Some(state) = ctx.bashquest_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
 
         if let Some(modal) = ctx.login_announcements {
             announcements::draw(frame, inner, modal);
@@ -1881,6 +1906,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
                         | Screen::Brogue
                         | Screen::Usurper
                         | Screen::Dopewars
+                        | Screen::Bashquest
                         | Screen::Codekeep
                         | Screen::GreenDragon
                 ))
@@ -1907,6 +1933,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::Brogue => "Brogue",
         Screen::Usurper => "Usurper",
         Screen::Dopewars => "dopewars",
+        Screen::Bashquest => "BashQuest",
         Screen::Codekeep => "CodeKeep",
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::GreenDragon => "Green Dragon",
@@ -2037,6 +2064,26 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.push(Span::styled(
                 "· Ctrl-C quit ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ));
+        }
+    }
+
+    if screen == Screen::Bashquest {
+        spans.push(Span::styled(
+            "by github.com/hardlygospel/bashquest ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        // While a game is live, surface the leave key in the chrome (it sits
+        // outside the game grid, so it never covers glyphs). Players who
+        // skipped the launcher otherwise mash Esc trying to get out.
+        let in_game = ctx
+            .bashquest_state
+            .as_deref()
+            .is_some_and(|state| state.is_running());
+        if in_game {
+            spans.push(Span::styled(
+                "\u{b7} Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }
@@ -2263,12 +2310,15 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
             " thanks for hanging out ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
-        spans.push(Span::styled("☕ ", Style::default().fg(theme::AMBER())));
+        spans.push(Span::styled("☕", Style::default().fg(theme::AMBER())));
     }
+    // The link carries its own blank cell on each side: this line is drawn
+    // over the bottom border, so without them the `─` glyphs on either side
+    // get swallowed into the URL by terminals that linkify what they see.
     let url = if include_protocol {
-        "https://ko-fi.com/mateuszpiorowski "
+        " https://ko-fi.com/mateuszpiorowski "
     } else {
-        "ko-fi.com/mateuszpiorowski "
+        " ko-fi.com/mateuszpiorowski "
     };
     spans.push(Span::styled(url, Style::default().fg(theme::AMBER_DIM())));
     Line::from(spans).right_aligned()

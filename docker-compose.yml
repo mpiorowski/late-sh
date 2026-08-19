@@ -26,6 +26,8 @@ services:
         condition: service_started
       service-dopewars:
         condition: service_started
+      service-bashquest:
+        condition: service_started
       service-codekeep:
         condition: service_started
       service-dcss:
@@ -87,6 +89,21 @@ services:
       context: .
       target: dev-dopewars
     container_name: ${INSTANCE}-dopewars
+    env_file:
+      - .env
+      - path: .env.local
+        required: false
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - cargo-target:/app/target
+
+  service-bashquest:
+    build:
+      context: .
+      target: dev-bashquest
+    container_name: ${INSTANCE}-bashquest
     env_file:
       - .env
       - path: .env.local
