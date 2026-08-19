@@ -128,6 +128,28 @@ DELETE FROM daily_win_totals t USING seed_players p WHERE t.user_id = p.user_id;
 DELETE FROM mud_characters c USING seed_players p WHERE c.user_id = p.user_id;
 DELETE FROM door_runs r USING seed_players p WHERE r.user_id = p.user_id;
 DELETE FROM door_milestones m USING seed_players p WHERE m.user_id = p.user_id;
+DELETE FROM user_online_time_monthly t USING seed_players p WHERE t.user_id = p.user_id;
+DELETE FROM user_online_time t USING seed_players p WHERE t.user_id = p.user_id;
+
+-- All-time connected durations, spread from roughly 49 days down to two days.
+-- The non-round minute/second offsets exercise the compact duration formatter.
+INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
+SELECT
+    user_id,
+    ((50 - idx)::bigint * 86400000) + (idx::bigint * 1234567),
+    uuidv7()
+FROM seed_players;
+
+-- Current-month connected durations deliberately use a different ordering from
+-- all-time, so the paired Late Time windows do not mirror each other.
+INSERT INTO user_online_time_monthly
+    (month_start, user_id, total_milliseconds, last_flush_id)
+SELECT
+    date_trunc('month', current_timestamp AT TIME ZONE 'UTC')::date,
+    user_id,
+    ((49 - ((idx * 17) % 48))::bigint * 3600000) + (idx::bigint * 12345),
+    uuidv7()
+FROM seed_players;
 
 -- Balances and a multi-event monthly chip ledger. Shop spending is present but
 -- intentionally excluded by the production monthly-earners query.
@@ -404,7 +426,7 @@ SELECT
         END
     )
 FROM seed_players p
-ON CONFLICT (user_id) DO UPDATE SET
+ON CONFLICT (user_id, slot) DO UPDATE SET
     data = EXCLUDED.data,
     updated = current_timestamp;
 
@@ -521,6 +543,29 @@ ON CONFLICT (user_id) DO UPDATE SET
     balance = GREATEST(user_chips.balance, EXCLUDED.balance),
     updated = current_timestamp;
 
+INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
+SELECT user_id, 9 * 86400000 + 7 * 3600000 + 23 * 60000, uuidv7()
+FROM seed_current_player
+ON CONFLICT (user_id) DO UPDATE SET
+    total_milliseconds = GREATEST(
+        user_online_time.total_milliseconds,
+        EXCLUDED.total_milliseconds
+    );
+
+INSERT INTO user_online_time_monthly
+    (month_start, user_id, total_milliseconds, last_flush_id)
+SELECT
+    date_trunc('month', current_timestamp AT TIME ZONE 'UTC')::date,
+    user_id,
+    27 * 3600000 + 23 * 60000,
+    uuidv7()
+FROM seed_current_player
+ON CONFLICT (month_start, user_id) DO UPDATE SET
+    total_milliseconds = GREATEST(
+        user_online_time_monthly.total_milliseconds,
+        EXCLUDED.total_milliseconds
+    );
+
 INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref, created_at)
 SELECT user_id, 5075, 'leaderboard_seed', 'leaderboard_seed', 'leaderboard-v2-current-player', current_timestamp
 FROM seed_current_player c
@@ -623,7 +668,7 @@ SELECT
         'visited', jsonb_build_array(1, 5, 12, 2000, 2400)
     )
 FROM seed_current_player
-ON CONFLICT (user_id) DO NOTHING;
+ON CONFLICT (user_id, slot) DO NOTHING;
 
 -- A representative mid-field DCSS death; real ingested runs are untouched
 -- (distinct seed: source_file).
@@ -685,6 +730,10 @@ UNION ALL
 SELECT 'seed chip ledger rows', COUNT(*) FROM chip_ledger WHERE source_kind = 'leaderboard_seed'
 UNION ALL
 SELECT 'seed score events', COUNT(*) FROM game_score_events e JOIN users u ON u.id = e.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%'
+UNION ALL
+SELECT 'seed online times', COUNT(*) FROM user_online_time t JOIN users u ON u.id = t.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%'
+UNION ALL
+SELECT 'seed monthly times', COUNT(*) FROM user_online_time_monthly t JOIN users u ON u.id = t.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%'
 UNION ALL
 SELECT 'seed Le Word wins', COUNT(*) FROM le_word_daily_wins w JOIN users u ON u.id = w.user_id WHERE u.fingerprint LIKE 'seed:leaderboard:v2:%'
 UNION ALL

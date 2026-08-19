@@ -1,5 +1,6 @@
 use crate::app::chat::cyberspace::api::{CircMessage, CsPost, CsReply};
 use crate::app::chat::cyberspace::svc::CsThread;
+use crate::app::common::theme;
 
 use super::{room_lines, thread_lines};
 
@@ -86,7 +87,7 @@ fn a_long_chat_message_wraps_inside_the_pane_instead_of_running_off_it() {
     .expect("message");
     let width = 60;
 
-    let rows = room_lines(std::slice::from_ref(&message), width);
+    let rows = room_lines(std::slice::from_ref(&message), width, "mat", None);
 
     // One message, several rows: unwrapped it was one row that ran off the
     // right edge, and the scroll window counts rows, so it also lied about
@@ -125,7 +126,7 @@ fn wide_glyphs_in_a_chat_message_wrap_by_display_width() {
     .expect("message");
     let width = 50;
 
-    for row in room_lines(std::slice::from_ref(&message), width) {
+    for row in room_lines(std::slice::from_ref(&message), width, "someone_else", None) {
         assert!(
             row.width() <= width,
             "row wider than the pane: {}",
@@ -143,4 +144,64 @@ fn a_narrower_pane_makes_the_same_entry_taller() {
         narrow > wide,
         "the scroll ceiling has to follow the pane width: {narrow} vs {wide}"
     );
+}
+
+#[test]
+fn a_room_marks_your_own_lines_the_ones_that_at_you_and_where_the_unread_start() {
+    let messages: Vec<CircMessage> = [
+        r#"{"id":"m1","username":"mat","content":"morning","timestamp":1000}"#,
+        r#"{"id":"m2","username":"alice","content":"morning @mat","timestamp":2000}"#,
+        r#"{"id":"m3","username":"alice","content":"just chatter","timestamp":3000}"#,
+    ]
+    .iter()
+    .map(|raw| serde_json::from_str(raw).expect("message"))
+    .collect();
+
+    // Read up to the first message, so the two after it are new.
+    let rows = room_lines(&messages, 60, "mat", Some(1000));
+
+    let text = |row: &ratatui::text::Line<'_>| {
+        row.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    };
+    let rule = rows
+        .iter()
+        .position(|row| text(row).contains("new messages"))
+        .expect("a rule above the first unread message");
+    let mine = rows
+        .iter()
+        .position(|row| text(row).contains("morning") && text(row).contains("mat:"))
+        .expect("your own message");
+    assert!(
+        mine < rule,
+        "the rule belongs above the messages the user has not read, not above their own"
+    );
+
+    // Your own name reads in full amber, everyone else's dim, the same tell a
+    // late.sh room gives.
+    let author_color = |needle: &str| {
+        rows.iter()
+            .find_map(|row| {
+                row.spans
+                    .iter()
+                    .find(|span| span.content.starts_with(needle))
+                    .and_then(|span| span.style.fg)
+            })
+            .expect("an author span")
+    };
+    assert_eq!(author_color("mat:"), theme::AMBER());
+    assert_eq!(author_color("alice:"), theme::AMBER_DIM());
+
+    // The message that `@`s you takes the mention wash; the one beside it,
+    // from the same author, does not.
+    let washed = |needle: &str| {
+        rows.iter()
+            .find(|row| text(row).contains(needle))
+            .map(|row| row.style.bg == Some(theme::CHAT_MENTION_BG()))
+            .expect("the message")
+    };
+    assert!(washed("morning @mat"));
+    assert!(!washed("just chatter"));
 }

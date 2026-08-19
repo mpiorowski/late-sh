@@ -1,5 +1,5 @@
 use crate::{
-    models::cyberspace_account::CyberspaceAccount,
+    models::cyberspace_account::{CmailThread, CyberspaceAccount},
     test_utils::{create_test_user, test_db},
 };
 
@@ -197,4 +197,54 @@ async fn circ_room_read_cursors_round_trip_and_prune_with_the_pins() {
         .room_read_cursors();
     assert_eq!(cursors.get("general"), None);
     assert_eq!(cursors.get("tech"), Some(&1_700_000_100_000));
+}
+
+#[tokio::test]
+async fn pinned_cmail_threads_round_trip_and_survive_a_relink() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "cs-cmail").await;
+
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-1")
+        .await
+        .expect("link");
+
+    // A fresh link pins nothing.
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert!(found.cmail_threads().is_empty());
+
+    // Their id addresses the conversation and the username labels the rail
+    // row: an opaque id is not something a reader recognizes, and the row has
+    // to draw before anything is fetched.
+    let threads = vec![
+        CmailThread {
+            id: "conv-1".to_string(),
+            username: "alice".to_string(),
+        },
+        CmailThread {
+            id: "conv-2".to_string(),
+            username: "bob".to_string(),
+        },
+    ];
+    CyberspaceAccount::set_cmail_threads(&client, user.id, &threads)
+        .await
+        .expect("pin conversations");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.cmail_threads(), threads);
+
+    // Signing in again is the same person's rail, so the pins stay.
+    CyberspaceAccount::upsert_for_user(&client, user.id, "uid-1", "odd", "refresh-2")
+        .await
+        .expect("re-link");
+    let found = CyberspaceAccount::find_by_user_id(&client, user.id)
+        .await
+        .expect("find")
+        .expect("linked");
+    assert_eq!(found.cmail_threads(), threads);
 }

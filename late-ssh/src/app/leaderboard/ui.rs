@@ -408,6 +408,7 @@ fn empty_copy(board: Board) -> &'static str {
         Board::DoorScore(_) => "no scored runs yet",
         Board::TopChips => "no chip earnings yet this month",
         Board::ArcadeWins => "no daily puzzle wins yet this month",
+        Board::TimeOnline => "no connected time recorded yet",
         Board::Daily(_) => "no wins yet, be the first",
         Board::Score(_) => "no scores yet, be the first",
         // Unreachable: draw_detail special-cases BadgeGuide before calling

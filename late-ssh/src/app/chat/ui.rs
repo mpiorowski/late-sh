@@ -2529,11 +2529,17 @@ pub struct ChatRenderInput<'a> {
     pub feeds_unread_count: i64,
     pub feeds_view: super::feeds::ui::FeedListView<'a>,
     pub cyberspace_selected: bool,
-    pub cyberspace_unread_count: i64,
-    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_notifications_selected: bool,
+    /// Unread entries, the `feeds` row's badge.
+    pub cyberspace_feeds_unread: i64,
+    /// Their notification counter, the `notifications` row's badge.
+    pub cyberspace_notifications_unread: i64,
+    /// The entry count is a floor, not a total: their probe page was full.
     pub cyberspace_unread_saturated: bool,
     pub cyberspace_rooms: &'a [String],
     pub cyberspace_room_selected: Option<usize>,
+    pub cyberspace_mail: &'a [late_core::models::cyberspace_account::CmailThread],
+    pub cyberspace_mail_selected: Option<usize>,
     /// `None` only in pure render tests; the app always passes the state.
     pub cyberspace: Option<&'a super::cyberspace::state::State>,
     pub news_selected: bool,
@@ -2678,8 +2684,12 @@ pub(crate) struct ChatRoomListView<'a> {
     /// Gates the whole section: unlinked users reach the pane through `/cs` only.
     pub cyberspace_linked: bool,
     pub cyberspace_selected: bool,
-    pub cyberspace_unread_count: i64,
-    /// The count is a floor, not a total: their probe page was full.
+    pub cyberspace_notifications_selected: bool,
+    /// Unread entries, the `feeds` row's badge.
+    pub cyberspace_feeds_unread: i64,
+    /// Their notification counter, the `notifications` row's badge.
+    pub cyberspace_notifications_unread: i64,
+    /// The entry count is a floor, not a total: their probe page was full.
     pub cyberspace_unread_saturated: bool,
     /// Pinned cyberspace chat rooms, in rail order. Slots carry the index.
     pub cyberspace_rooms: &'a [String],
@@ -2687,6 +2697,12 @@ pub(crate) struct ChatRoomListView<'a> {
     /// One flag per pinned room, aligned with `cyberspace_rooms`: the rail
     /// dot for "messages since this user last sat in the room".
     pub cyberspace_room_unread: Vec<bool>,
+    /// Pinned C-Mail conversations, in rail order, after the rooms.
+    pub cyberspace_mail: &'a [late_core::models::cyberspace_account::CmailThread],
+    pub cyberspace_mail_selected: Option<usize>,
+    /// One unread count per pinned conversation, aligned with
+    /// `cyberspace_mail`. Theirs, so these are real numbers.
+    pub cyberspace_mail_unread: Vec<i64>,
     pub news_selected: bool,
     pub news_unread_count: i64,
     pub notifications_selected: bool,
@@ -2948,13 +2964,22 @@ fn strip_room_section_header_prefix(mut text: &str) -> &str {
     }
 }
 
+/// Whether the cyberspace pane owns the center: its feeds row, its
+/// notifications row, or an open chat room. All three draw through
+/// `cyberspace::ui::draw_pane`, so they answer as one.
+fn cyberspace_pane_selected(view: &ChatRenderInput<'_>) -> bool {
+    view.cyberspace_selected
+        || view.cyberspace_notifications_selected
+        || view.cyberspace_room_selected.is_some()
+        || view.cyberspace_mail_selected.is_some()
+}
+
 fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionMode {
     let composer_text_width = area.width.saturating_sub(2).max(1) as usize;
     if view.notifications_selected
         || view.discover_selected
         || view.feeds_selected
-        || view.cyberspace_selected
-        || view.cyberspace_room_selected.is_some()
+        || cyberspace_pane_selected(view)
     {
         ChatSelectionMode::Compact
     } else if view.news_selected {
@@ -3041,13 +3066,21 @@ fn room_list_view_from_render_input<'a>(view: &'a ChatRenderInput<'a>) -> ChatRo
             .cyberspace
             .is_some_and(super::cyberspace::state::State::is_linked),
         cyberspace_selected: view.cyberspace_selected,
-        cyberspace_unread_count: view.cyberspace_unread_count,
+        cyberspace_notifications_selected: view.cyberspace_notifications_selected,
+        cyberspace_feeds_unread: view.cyberspace_feeds_unread,
+        cyberspace_notifications_unread: view.cyberspace_notifications_unread,
         cyberspace_unread_saturated: view.cyberspace_unread_saturated,
         cyberspace_rooms: view.cyberspace_rooms,
         cyberspace_room_selected: view.cyberspace_room_selected,
         cyberspace_room_unread: view
             .cyberspace
             .map(super::cyberspace::state::State::room_unread_flags)
+            .unwrap_or_default(),
+        cyberspace_mail: view.cyberspace_mail,
+        cyberspace_mail_selected: view.cyberspace_mail_selected,
+        cyberspace_mail_unread: view
+            .cyberspace
+            .map(super::cyberspace::state::State::cmail_unread_counts)
             .unwrap_or_default(),
         news_selected: view.news_selected,
         news_unread_count: view.news_unread_count,
@@ -3067,6 +3100,9 @@ pub(crate) fn home_title_room_label(view: &ChatRenderInput<'_>) -> Option<String
     }
     if view.cyberspace_selected {
         return Some("cyberspace feeds".to_string());
+    }
+    if view.cyberspace_notifications_selected {
+        return Some("cyberspace notifications".to_string());
     }
     if let Some(index) = view.cyberspace_room_selected {
         return view
@@ -3154,7 +3190,9 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         !view.feeds_selected
             && !view.news_selected
             && !view.cyberspace_selected
+            && !view.cyberspace_notifications_selected
             && view.cyberspace_room_selected.is_none()
+            && view.cyberspace_mail_selected.is_none()
             && !view.notifications_selected
             && !view.discover_selected
             && !view.showcase_selected
@@ -3283,34 +3321,42 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     }
 
     if view.cyberspace_linked {
-        let cyberspace_line = {
+        // Two rows, two badges: entries on `feeds`, their notification
+        // counter on `notifications`. Summing them would name a total that
+        // points at neither row.
+        for (slot, name, unread, selected) in [
+            (
+                RoomSlot::Cyberspace,
+                "feeds",
+                view.cyberspace_feeds_unread,
+                view.cyberspace_selected,
+            ),
+            (
+                RoomSlot::CyberspaceNotifications,
+                "notifications",
+                view.cyberspace_notifications_unread,
+                view.cyberspace_notifications_selected,
+            ),
+        ] {
             let prefix = room_jump_prefix(
                 view.room_jump_active.then(|| jump_keys.next()).flatten(),
                 view.room_jump_active,
-                view.cyberspace_selected,
+                selected,
             );
-            let style = if view.cyberspace_selected {
+            let style = if selected {
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme::TEXT())
             };
-            let label = if view.cyberspace_unread_count > 0 {
-                format!(
-                    "{prefix}feeds ({})",
-                    room_slot_badge(view, RoomSlot::Cyberspace, view.cyberspace_unread_count)
-                )
+            let label = if unread > 0 {
+                format!("{prefix}{name} ({})", room_slot_badge(view, slot, unread))
             } else {
-                format!("{prefix}feeds")
+                format!("{prefix}{name}")
             };
-            Line::from(Span::styled(label, style))
-        };
-        push_row(
-            cyberspace_line,
-            Some(RoomSlot::Cyberspace),
-            view.cyberspace_selected,
-        );
+            push_row(Line::from(Span::styled(label, style)), Some(slot), selected);
+        }
         for (index, slug) in view.cyberspace_rooms.iter().enumerate() {
             let selected = view.cyberspace_room_selected == Some(index);
             let prefix = room_jump_prefix(
@@ -3336,6 +3382,32 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
             push_row(
                 Line::from(spans),
                 Some(RoomSlot::CyberspaceRoom(index)),
+                selected,
+            );
+        }
+        // C-Mail rows sit after the rooms: same section, and a conversation is
+        // still cyberspace. `@name` rather than `#slug`, and a real count.
+        for (index, thread) in view.cyberspace_mail.iter().enumerate() {
+            let selected = view.cyberspace_mail_selected == Some(index);
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                selected,
+            );
+            let style = match selected {
+                true => Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+                false => Style::default().fg(theme::TEXT()),
+            };
+            let unread = view.cyberspace_mail_unread.get(index).copied().unwrap_or(0);
+            let label = match unread > 0 {
+                true => format!("{prefix}@{} ({unread})", thread.username),
+                false => format!("{prefix}@{}", thread.username),
+            };
+            push_row(
+                Line::from(Span::styled(label, style)),
+                Some(RoomSlot::CyberspaceMail(index)),
                 selected,
             );
         }
@@ -3709,6 +3781,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         feeds_available: view.feeds_available,
         cyberspace_linked: view.cyberspace_linked,
         cyberspace_rooms: view.cyberspace_rooms,
+        cyberspace_mail: view.cyberspace_mail,
         favorite_room_ids: view.favorite_room_ids,
         collapsed_sections: view.collapsed_sections,
         ignored_user_ids: view.ignored_user_ids,
@@ -3964,8 +4037,12 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_row(section_header(RoomSection::Cyberspace), None, false);
         if !collapsed_set.contains(&RoomSection::Cyberspace) {
             push_slot(RoomSlot::Cyberspace, &mut push_row);
+            push_slot(RoomSlot::CyberspaceNotifications, &mut push_row);
             for index in 0..view.cyberspace_rooms.len() {
                 push_slot(RoomSlot::CyberspaceRoom(index), &mut push_row);
+            }
+            for index in 0..view.cyberspace_mail.len() {
+                push_slot(RoomSlot::CyberspaceMail(index), &mut push_row);
             }
         }
     }
@@ -4065,6 +4142,8 @@ fn format_unread_badge(unread: i64) -> String {
 /// behind.
 fn room_slot_badge(view: &ChatRoomListView<'_>, slot: RoomSlot, unread: i64) -> String {
     match slot {
+        // Only the feeds row saturates: the notifications count comes from
+        // their own counter endpoint and is exact.
         RoomSlot::Cyberspace if view.cyberspace_unread_saturated => "9+".to_string(),
         // A dot, never a number: their roster names a room's last_message_at
         // but counting would take a per-room history fetch every poll.
@@ -4099,7 +4178,11 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
         RoomSlot::News => ("news".to_string(), view.news_unread_count),
         // Under the `cyberspace` header this row is their feed, not the whole
         // site: the chat rooms beside it are cyberspace too.
-        RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_unread_count),
+        RoomSlot::Cyberspace => ("feeds".to_string(), view.cyberspace_feeds_unread),
+        RoomSlot::CyberspaceNotifications => (
+            "notifications".to_string(),
+            view.cyberspace_notifications_unread,
+        ),
         // Bare slugs, like every other room row in this rail. The "unread" is
         // a flag, not a count: the roster's last_message_at against this
         // user's read cursor, rendered as a dot by `room_slot_badge`.
@@ -4114,6 +4197,15 @@ fn room_slot_label_and_unread(view: &ChatRoomListView<'_>, slot: RoomSlot) -> (S
                     .copied()
                     .unwrap_or(false),
             ),
+        ),
+        // `@name`, like a DM row: a conversation is a person, not a place.
+        // The count is real, straight off their conversation list.
+        RoomSlot::CyberspaceMail(index) => (
+            match view.cyberspace_mail.get(index) {
+                Some(thread) => format!("@{}", thread.username),
+                None => "@?".to_string(),
+            },
+            view.cyberspace_mail_unread.get(index).copied().unwrap_or(0),
         ),
         RoomSlot::Notifications => ("mentions".to_string(), view.notifications_unread_count),
         RoomSlot::Discover => ("+ browse rooms".to_string(), 0),
@@ -4252,7 +4344,9 @@ fn cozy_slot_selected(view: &ChatRoomListView<'_>, slot: RoomSlot) -> bool {
             feeds_selected: view.feeds_selected,
             news_selected: view.news_selected,
             cyberspace_selected: view.cyberspace_selected,
+            cyberspace_notifications_selected: view.cyberspace_notifications_selected,
             cyberspace_room_selected: view.cyberspace_room_selected,
+            cyberspace_mail_selected: view.cyberspace_mail_selected,
             notifications_selected: view.notifications_selected,
             discover_selected: view.discover_selected,
             showcase_selected: view.showcase_selected,
@@ -4504,7 +4598,7 @@ fn draw_selected_content(
 
     if feeds_selected {
         super::feeds::ui::draw_feed_list(frame, messages_area, &view.feeds_view);
-    } else if view.cyberspace_selected || view.cyberspace_room_selected.is_some() {
+    } else if cyberspace_pane_selected(&view) {
         if let Some(cyberspace) = view.cyberspace {
             super::cyberspace::ui::draw_pane(frame, messages_area, cyberspace);
         }
@@ -4690,15 +4784,24 @@ fn draw_selected_content(
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         }
-    } else if view.cyberspace_selected || view.cyberspace_room_selected.is_some() {
-        let title = match view.cyberspace.and_then(|state| state.open_room_slug()) {
-            Some(slug) => format!(" {slug} "),
+    } else if cyberspace_pane_selected(&view) {
+        let title = match view.cyberspace.and_then(|state| state.open_room_name()) {
+            Some(name) => format!(" {name} "),
             None => " Cyberspace ".to_string(),
+        };
+        // A room being read borders like any unfocused composer; focusing it
+        // lights the border, the same signal the main chat composer gives.
+        let room_composing = view
+            .cyberspace
+            .is_some_and(super::cyberspace::state::State::room_composing);
+        let border = match room_composing {
+            true => theme::BORDER_ACTIVE(),
+            false => theme::BORDER(),
         };
         let hint_block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER()));
+            .border_style(Style::default().fg(border));
         // Writing in a chat room uses this box rather than opening a second
         // one inside the pane: it is the composer slot every other room types
         // into, so the room reads like a room.
@@ -4709,17 +4812,26 @@ fn draw_selected_content(
                 // chat composer's text area.
                 let inner = horizontal_inset(hint_block.inner(composer_area), 1);
                 frame.render_widget(hint_block, composer_area);
-                // An empty composer draws its own hint so the cursor lands on
-                // the first character, the same reason the main chat composer
-                // does (a `TextArea` placeholder renders after the cursor cell).
-                match composer.is_empty() {
-                    true => frame.render_widget(
+                // Reading a room draws its keys where the input goes, the way
+                // the main chat composer does until `i` focuses it. A focused
+                // empty composer draws its own hint so the cursor lands on the
+                // first character (a `TextArea` placeholder renders after the
+                // cursor cell).
+                match (room_composing, composer.is_empty()) {
+                    (false, _) => frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(
+                            " i write · j/k scroll · g newest · Esc leave",
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ))),
+                        inner,
+                    ),
+                    (true, true) => frame.render_widget(
                         Paragraph::new(crate::app::common::composer::placeholder_with_cursor(
-                            "Enter send · Esc cancel",
+                            "Type a message · Enter send · ↑↓ scroll · Esc back",
                         )),
                         inner,
                     ),
-                    false => frame.render_widget(composer, inner),
+                    (true, false) => frame.render_widget(composer, inner),
                 }
             }
             None => {

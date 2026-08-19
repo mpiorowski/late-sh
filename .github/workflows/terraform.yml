@@ -88,11 +88,19 @@ jobs:
 
       # CRD-installing operators must be applied first because kubernetes_manifest
       # resources validate against the API schema at plan time. A targeted apply
-      # never plans kubernetes_manifest resources, so it skips this step.
+      # never plans kubernetes_manifest resources, so it skips this step. Only a
+      # cluster actually missing the CRDs (fresh bootstrap) runs it: terraform
+      # refuses any targeted apply while pending moved blocks touch untargeted
+      # resources, so a live cluster must not run a targeted apply it does not
+      # need.
       - name: terraform_apply_operators
         if: ${{ inputs.targets == '' }}
         working-directory: ./infra
         run: |
+          if kubectl get crd certificates.cert-manager.io clusters.postgresql.cnpg.io objectstores.barmancloud.cnpg.io >/dev/null 2>&1; then
+            echo "operator CRDs already present, skipping bootstrap apply"
+            exit 0
+          fi
           terraform apply -auto-approve -compact-warnings \
             -target=helm_release.cert_manager \
             -target=helm_release.cloudnativepg \

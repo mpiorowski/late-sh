@@ -26,7 +26,20 @@ crate::user_scoped_model! {
         // the user was in the room (their clock, epoch ms). Read through
         // `room_read_cursors`, written through `mark_circ_room_read`.
         pub circ_room_reads: Value,
+        // C-Mail conversations pinned into the rail, in order: a JSON array of
+        // `{id, username}`. Read through `cmail_threads()`, written through
+        // `set_cmail_threads`. No read cursor beside it: unlike the cIRC
+        // roster, their conversation list reports an unread count back.
+        pub cmail_threads: Value,
     }
+}
+
+/// One pinned C-Mail conversation: their opaque id plus the other
+/// participant's username, which is what the rail row is labelled with.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CmailThread {
+    pub id: String,
+    pub username: String,
 }
 
 impl CyberspaceAccount {
@@ -123,6 +136,40 @@ impl CyberspaceAccount {
                      updated = current_timestamp
                  WHERE user_id = $1",
                 &[&user_id, &slug, &last_message_ts],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The pinned C-Mail conversations, in rail order. A malformed entry is
+    /// dropped rather than failing the read: the rail is a bookmark list, and
+    /// one bad row must not cost the user the rest of them.
+    pub fn cmail_threads(&self) -> Vec<CmailThread> {
+        match self.cmail_threads.as_array() {
+            Some(entries) => entries
+                .iter()
+                .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Replace the pinned C-Mail list wholesale, same contract as
+    /// `set_circ_rooms`: the list is short and every change rewrites the whole
+    /// order, so there is nothing to diff. No cursor prune to go with it,
+    /// because their conversation list carries the unread count itself.
+    pub async fn set_cmail_threads(
+        client: &Client,
+        user_id: Uuid,
+        threads: &[CmailThread],
+    ) -> Result<()> {
+        let value = serde_json::to_value(threads)?;
+        client
+            .execute(
+                "UPDATE cyberspace_accounts
+                 SET cmail_threads = $2, updated = current_timestamp
+                 WHERE user_id = $1",
+                &[&user_id, &value],
             )
             .await?;
         Ok(())

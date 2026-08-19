@@ -94,6 +94,18 @@ async fn flush_lateania_characters(state: &State, fatal_error: &mut Option<anyho
     }
 }
 
+async fn flush_online_time(state: &State, fatal_error: &mut Option<anyhow::Error>) {
+    match state.leaderboard_service.flush_online_time().await {
+        Ok(()) => tracing::info!("flushed online time during shutdown"),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to flush online time during shutdown");
+            if fatal_error.is_none() {
+                *fatal_error = Some(err.context("failed to flush online time during shutdown"));
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = late_core::telemetry::init_telemetry("late-ssh")
@@ -629,6 +641,7 @@ async fn main() -> anyhow::Result<()> {
     }
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
     flush_lateania_characters(&state, &mut fatal_error).await;
+    flush_online_time(&state, &mut fatal_error).await;
     session_shutdown.cancel();
 
     if tokio::time::timeout(Duration::from_secs(6), async {

@@ -402,6 +402,7 @@ impl Drop for ClientHandler {
             metrics::add_ssh_session(-1);
             let user_id = user.id;
             let mut user_still_afk = false;
+            let mut became_offline = false;
             let mut active_users = self.state.active_users.lock_recover();
 
             if let Some(active) = active_users.get_mut(&user_id) {
@@ -410,6 +411,7 @@ impl Drop for ClientHandler {
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
+                    became_offline = true;
                     // Last connection gone: retire any running countdown so a
                     // peer doesn't keep painting a badge for someone who left.
                     // The timer is session-local, so there is nothing to
@@ -423,6 +425,11 @@ impl Drop for ClientHandler {
                     active.connection_count -= 1;
                     user_still_afk = active.sessions.iter().any(|session| session.afk.is_some());
                 }
+            }
+            if became_offline {
+                self.state
+                    .leaderboard_service
+                    .online_user_disconnected(user_id);
             }
             drop(active_users);
             crate::state::set_afk_user(&self.state.afk_users, user_id, user_still_afk);
@@ -578,12 +585,13 @@ impl russh::server::Handler for ClientHandler {
         if !self.active_user_incremented {
             let mut active_users = self.state.active_users.lock_recover();
 
-            if let Some(active) = active_users.get_mut(&user.id) {
+            let became_online = if let Some(active) = active_users.get_mut(&user.id) {
                 active.connection_count += 1;
                 active.username = user.username.clone();
                 active.fingerprint = Some(fingerprint.clone());
                 active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
                 active.last_login_at = std::time::Instant::now();
+                false
             } else {
                 active_users.insert(
                     user.id,
@@ -596,7 +604,14 @@ impl russh::server::Handler for ClientHandler {
                         last_login_at: std::time::Instant::now(),
                     },
                 );
+                true
+            };
+            if became_online {
+                self.state
+                    .leaderboard_service
+                    .online_user_connected(user.id);
             }
+            drop(active_users);
             self.active_user_incremented = true;
             metrics::add_ssh_session(1);
         }

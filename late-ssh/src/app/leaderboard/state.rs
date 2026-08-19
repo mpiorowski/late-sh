@@ -7,7 +7,7 @@ use crate::app::common::primitives::thousands;
 
 const EMPTY: &[RankedEntry] = &[];
 
-/// One selectable board on the Leaderboards page. The two bespoke boards
+/// One selectable board on the Leaderboards page. The three bespoke boards
 /// lead, then every game board; the per-game boards come straight off the
 /// late-core rosters, so a game added there appears here without a page
 /// change. `BadgeGuide` trails every ranked board: it carries no standings,
@@ -21,13 +21,14 @@ pub(crate) enum Board {
     DoorScore(DoorGame),
     TopChips,
     ArcadeWins,
+    TimeOnline,
     Daily(DailyPuzzle),
     Score(ScoreGame),
     BadgeGuide,
 }
 
 /// What the detail pane shows for one board. Every board answers with
-/// exactly one of these; the renderer matches all three, so a new shape
+/// exactly one of these; the renderer matches all four, so a new shape
 /// cannot fall through to a wrong heading.
 pub(crate) enum Standings<'a> {
     /// One window of month-scoped standings, headed "this month".
@@ -53,6 +54,7 @@ impl Board {
         let mut boards = vec![
             Self::TopChips,
             Self::ArcadeWins,
+            Self::TimeOnline,
             Self::LateaniaAdventurers,
             Self::LateaniaFrontier,
         ];
@@ -82,6 +84,7 @@ impl Board {
             Self::DoorScore(DoorGame::Brogue) => "Brogue Top Score",
             Self::TopChips => "Top Chips",
             Self::ArcadeWins => "Arcade Wins",
+            Self::TimeOnline => "Late Time",
             Self::Daily(puzzle) => puzzle.title(),
             Self::Score(game) => game.title(),
             Self::BadgeGuide => "Badge Guide",
@@ -113,6 +116,7 @@ impl Board {
                 Difficulty::Medium.points(),
                 Difficulty::Hard.points(),
             ),
+            Self::TimeOnline => "total connected time".to_string(),
             Self::Daily(_) => "daily wins".to_string(),
             Self::Score(_) => "best score".to_string(),
             Self::BadgeGuide => "what each three-letter award code means".to_string(),
@@ -130,6 +134,7 @@ impl Board {
             Self::DoorScore(_) => thousands(value),
             Self::TopChips => format!("{} chips", thousands(value)),
             Self::ArcadeWins => format!("{} pts", thousands(value)),
+            Self::TimeOnline => format_online_time(value),
             Self::Daily(_) => format!("{} wins", thousands(value)),
             Self::Score(_) => thousands(value),
             // Unreachable: BadgeGuide has no ranked entries, so nothing ever
@@ -162,6 +167,10 @@ impl Board {
             }
             Self::TopChips => Standings::MonthlyOnly(&data.monthly_chip_earners),
             Self::ArcadeWins => Standings::MonthlyOnly(&data.arcade_champions),
+            Self::TimeOnline => Standings::Paired {
+                monthly: &data.online_time.monthly,
+                all_time: &data.online_time.all_time,
+            },
             Self::Daily(puzzle) => {
                 let windows = data.daily_board(puzzle);
                 Standings::Paired {
@@ -181,6 +190,29 @@ impl Board {
             Self::BadgeGuide => Standings::Snapshot(EMPTY),
         }
     }
+}
+
+fn format_online_time(milliseconds: i64) -> String {
+    let seconds = milliseconds.max(0) / 1_000;
+    if seconds == 0 {
+        return "<1s".to_string();
+    }
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+
+    let minutes = seconds / 60;
+    if minutes < 60 {
+        return format!("{}m {}s", minutes, seconds % 60);
+    }
+
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{}h {}m", hours, minutes % 60);
+    }
+
+    let days = hours / 24;
+    format!("{}d {}h", days, hours % 24)
 }
 
 pub(crate) struct LeaderboardPageState {

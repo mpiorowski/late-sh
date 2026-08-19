@@ -671,8 +671,10 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
 /// pinned room's rail slot, or a room opened from the roster without one.
 fn cyberspace_surface_active(app: &App) -> bool {
     app.chat.cyberspace_selected
+        || app.chat.cyberspace_notifications_selected
         || app.chat.cyberspace_room_selected.is_some()
-        || app.chat.cyberspace.open_room_slug().is_some()
+        || app.chat.cyberspace_mail_selected.is_some()
+        || app.chat.cyberspace.open_room_name().is_some()
 }
 
 pub fn handle_byte(app: &mut App, byte: u8) -> bool {
@@ -743,8 +745,10 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
     }
 
     // An open room owns the pane whichever cyberspace entry is selected, so
-    // it is checked before the pane's own keys.
-    if app.chat.cyberspace.open_room_slug().is_some() {
+    // it is checked before the pane's own keys. A byte only reaches here
+    // while the room is being read: with the composer focused, `app::input`
+    // routes every one of them into it before chat routing runs.
+    if app.chat.cyberspace.open_room_name().is_some() {
         if is_next_room_key(byte) {
             switch_room(app, 1);
             return true;
@@ -760,7 +764,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         return super::cyberspace::input::handle_room_byte(app, byte);
     }
 
-    if app.chat.cyberspace_selected {
+    if app.chat.cyberspace_selected || app.chat.cyberspace_notifications_selected {
         if is_next_room_key(byte) {
             switch_room(app, 1);
             return true;

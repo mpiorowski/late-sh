@@ -657,6 +657,11 @@ Done 2026-07-26 (`app/hub/svc.rs`; the service has since moved to `app/leaderboa
 
 **Verified 2026-08-18:** the leaderboard passes run at 0.01 calls/sec in the live differential, consistent with the 300 s interval, and account for 7.0% of live DB time in aggregate. Working as designed.
 
+Follow-up 2026-08-18: Late Time adds one query over indexed all-time and
+current-month O(users) rollups to the subscriber-gated pass (fourteen queries
+total), plus one array-upsert statement updating both rollups per five minutes
+when connected time is pending. Connection and disconnection do no DB work.
+
 ### 3. Add a second node; give `service-ssh` a full node to itself
 
 `late-ssh` render/tick CPU is the scaling unit; everything else on `server-1` is overhead stealing cores from sessions. Move the overhead to a new node so the full 8 cores serve sessions.

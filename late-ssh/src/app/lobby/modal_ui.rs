@@ -264,7 +264,7 @@ fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line
         .map(|at| format_deadline(at, Utc::now()))
         .unwrap_or_else(|| "--".to_string());
     let progress = match item.game {
-        DailyGame::Chess => {
+        DailyGame::Chess | DailyGame::Chess960 => {
             let color = if item.white_id == Some(daily.user_id()) {
                 ChessColor::White
             } else {
@@ -435,7 +435,7 @@ fn spectate_line(item: &DailyMatchItem, selected: bool) -> Line<'static> {
         .clone()
         .unwrap_or_else(|| "player".to_string());
     let progress = match item.game {
-        DailyGame::Chess => format!("{} moves", item.move_count),
+        DailyGame::Chess | DailyGame::Chess960 => format!("{} moves", item.move_count),
         DailyGame::Battleship => format!("{} shots", item.move_count),
         DailyGame::ConnectFour => format!("{} drops", item.move_count),
         DailyGame::Reversi | DailyGame::Checkers => format!("{} moves", item.move_count),

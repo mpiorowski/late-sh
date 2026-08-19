@@ -5,7 +5,10 @@ use uuid::Uuid;
 use crate::{
     models::{
         le_word,
-        leaderboard::{DailyPuzzle, RankedEntry, fetch_leaderboard_data},
+        leaderboard::{
+            DailyPuzzle, OnlineTimeIncrement, RankedEntry, apply_online_time_batch,
+            fetch_leaderboard_data,
+        },
         mud_character::MudCharacter,
         rubiks_cube, sudoku,
     },
@@ -17,6 +20,114 @@ fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
         .iter()
         .find(|entry| entry.user_id == user_id)
         .expect("user on board")
+}
+
+#[tokio::test]
+async fn online_time_batches_are_idempotent_and_rank_both_windows() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let alice = create_test_user(&test_db.db, "lb_online_alice").await;
+    let bob = create_test_user(&test_db.db, "lb_online_bob").await;
+    let deleted = create_test_user(&test_db.db, "lb_online_deleted").await;
+    client
+        .execute("DELETE FROM users WHERE id = $1", &[&deleted.id])
+        .await
+        .expect("delete user before batch");
+
+    let first_flush = Uuid::now_v7();
+    let today = Utc::now().date_naive();
+    let current_month =
+        NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("current month");
+    let previous_day = current_month - Duration::days(1);
+    let previous_month = NaiveDate::from_ymd_opt(previous_day.year(), previous_day.month(), 1)
+        .expect("previous month");
+    let increment = |user_id, month_start, milliseconds| OnlineTimeIncrement {
+        user_id,
+        month_start,
+        milliseconds,
+    };
+    let increments = [
+        increment(alice.id, current_month, 60_000),
+        increment(alice.id, current_month, 40_000),
+        increment(bob.id, current_month, 90_000),
+        increment(deleted.id, current_month, 500_000),
+    ];
+    assert_eq!(
+        apply_online_time_batch(&client, first_flush, &increments)
+            .await
+            .expect("apply first batch"),
+        2,
+        "duplicate input users are folded and deleted users are skipped"
+    );
+    apply_online_time_batch(&client, first_flush, &increments)
+        .await
+        .expect("retry first batch");
+    apply_online_time_batch(
+        &client,
+        Uuid::now_v7(),
+        &[increment(alice.id, current_month, 10_000)],
+    )
+    .await
+    .expect("apply later batch");
+    apply_online_time_batch(
+        &client,
+        Uuid::now_v7(),
+        &[
+            increment(alice.id, previous_month, 50_000),
+            increment(bob.id, previous_month, 200_000),
+        ],
+    )
+    .await
+    .expect("apply previous-month batch");
+
+    let alice_total: i64 = client
+        .query_one(
+            "SELECT total_milliseconds FROM user_online_time WHERE user_id = $1",
+            &[&alice.id],
+        )
+        .await
+        .expect("alice online time")
+        .get(0);
+    assert_eq!(alice_total, 160_000, "retry must not add the batch twice");
+
+    let alice_monthly: i64 = client
+        .query_one(
+            "SELECT total_milliseconds
+             FROM user_online_time_monthly
+             WHERE month_start = $1 AND user_id = $2",
+            &[&current_month, &alice.id],
+        )
+        .await
+        .expect("alice monthly online time")
+        .get(0);
+    assert_eq!(alice_monthly, 110_000);
+
+    let data = fetch_leaderboard_data(&client)
+        .await
+        .expect("fetch leaderboard");
+    assert_eq!(entry_for(&data.online_time.monthly, alice.id).rank, 1);
+    assert_eq!(
+        entry_for(&data.online_time.monthly, alice.id).value,
+        110_000
+    );
+    assert_eq!(entry_for(&data.online_time.monthly, bob.id).rank, 2);
+    assert_eq!(entry_for(&data.online_time.all_time, bob.id).rank, 1);
+    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 290_000);
+    assert_eq!(entry_for(&data.online_time.all_time, alice.id).rank, 2);
+    assert!(
+        !data
+            .online_time
+            .monthly
+            .iter()
+            .any(|entry| entry.user_id == deleted.id)
+    );
+    assert!(
+        !data
+            .online_time
+            .all_time
+            .iter()
+            .any(|entry| entry.user_id == deleted.id)
+    );
 }
 
 /// One fixture exercises the whole roster-generated pipeline: the per-puzzle

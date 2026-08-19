@@ -598,25 +598,31 @@ async fn projects_dotted_usernames_to_irc_nicks() {
 }
 
 #[tokio::test]
-async fn irc_only_connection_counts_as_active_until_disconnect() {
+async fn concurrent_irc_connections_share_online_presence_until_last_disconnect() {
     let server = IrcTestServer::start().await;
     let user = server.seed_user("irc-active-user").await;
     let mut client = server.connect(&user.token).await;
+    let mut second_client = server.connect(&user.token).await;
 
     client.read_until(" 376 ").await;
+    second_client.read_until(" 376 ").await;
     wait_until(
         || async {
             let active_users = server.state.active_users.lock().expect("active users");
             active_users.get(&user.id).is_some_and(|active| {
                 active.username == user.username
-                    && active.connection_count == 1
+                    && active.connection_count == 2
+                    && server
+                        .state
+                        .leaderboard_service
+                        .online_user_is_active(user.id)
                     && active
                         .sessions
                         .iter()
                         .any(|session| session.token.starts_with("irc:"))
             })
         },
-        "IRC-only user tracked as active",
+        "concurrent IRC user tracked once as active",
     )
     .await;
 
@@ -625,6 +631,30 @@ async fn irc_only_connection_counts_as_active_until_disconnect() {
     assert!(
         client.read_line().await.is_none(),
         "QUIT should close IRC connection"
+    );
+    wait_until(
+        || async {
+            let active_users = server.state.active_users.lock().expect("active users");
+            active_users.get(&user.id).is_some_and(|active| {
+                active.connection_count == 1
+                    && server
+                        .state
+                        .leaderboard_service
+                        .online_user_is_active(user.id)
+            })
+        },
+        "one remaining IRC connection keeps online-time tracking active",
+    )
+    .await;
+
+    second_client
+        .write_line("QUIT :bye")
+        .await
+        .expect("send second QUIT");
+    second_client.read_until("ERROR :Closing Link").await;
+    assert!(
+        second_client.read_line().await.is_none(),
+        "second QUIT should close IRC connection"
     );
     wait_until(
         || async {
@@ -638,6 +668,13 @@ async fn irc_only_connection_counts_as_active_until_disconnect() {
         "IRC-only user removed from active users",
     )
     .await;
+    assert!(
+        !server
+            .state
+            .leaderboard_service
+            .online_user_is_active(user.id),
+        "last IRC disconnect stops online-time tracking"
+    );
 }
 
 #[tokio::test]

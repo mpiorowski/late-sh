@@ -44,6 +44,7 @@ impl DailyMatch {
     pub const RESULT_MOST_POINTS: &'static str = "most_points";
 
     pub const GAME_KIND_CHESS: &'static str = "chess";
+    pub const GAME_KIND_CHESS960: &'static str = "chess960";
     pub const GAME_KIND_BATTLESHIP: &'static str = "battleship";
     pub const GAME_KIND_CONNECTFOUR: &'static str = "connect4";
     pub const GAME_KIND_REVERSI: &'static str = "reversi";
