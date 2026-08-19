@@ -73,7 +73,11 @@ fn chess960_shuffles_the_back_rank_within_the_rules() {
         let ranks: Vec<&str> = fields.next().expect("placement").split('/').collect();
         let white: String = ranks[7].to_string();
         assert_eq!(white.len(), 8, "{text}");
-        assert_eq!(ranks[0], white.to_ascii_lowercase(), "black mirrors: {text}");
+        assert_eq!(
+            ranks[0],
+            white.to_ascii_lowercase(),
+            "black mirrors: {text}"
+        );
         assert_eq!((ranks[1], ranks[6]), ("pppppppp", "PPPPPPPP"), "{text}");
 
         let files = |piece: char| -> Vec<usize> {
@@ -85,7 +89,13 @@ fn chess960_shuffles_the_back_rank_within_the_rules() {
         };
         let (bishops, rooks, king) = (files('B'), files('R'), files('K'));
         assert_eq!(
-            (bishops.len(), rooks.len(), king.len(), files('Q').len(), files('N').len()),
+            (
+                bishops.len(),
+                rooks.len(),
+                king.len(),
+                files('Q').len(),
+                files('N').len()
+            ),
             (2, 2, 1, 1, 2),
             "one of each piece: {text}"
         );

@@ -716,9 +716,20 @@ fn draw_info_rail(frame: &mut Frame, area: Rect, game: DailyGame, chess: &ChessD
         )),
     ];
 
-    let budget = (inner.height as usize).saturating_sub(lines.len());
+    // The paragraph wraps, so a header line wider than the rail (the chess960
+    // tagline) costs more rows than it costs lines. Budget the move list
+    // against the rows the header actually renders into, or the overflow
+    // clips the newest pair off the bottom.
+    let header_rows: usize = lines.iter().map(|line| rendered_rows(line, inner)).sum();
+    let budget = (inner.height as usize).saturating_sub(header_rows);
     append_moves(&mut lines, chess, budget);
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// Rows `line` occupies once the rail's paragraph wraps it to `inner`.
+fn rendered_rows(line: &Line<'static>, inner: Rect) -> usize {
+    let width = (inner.width as usize).max(1);
+    line.width().max(1).div_ceil(width)
 }
 
 fn append_moves(lines: &mut Vec<Line<'static>>, chess: &ChessDetail, budget: usize) {
@@ -784,3 +795,7 @@ fn centered_x(rect: Rect, width: u16) -> Rect {
         height: rect.height,
     }
 }
+
+#[cfg(test)]
+#[path = "board_ui_test.rs"]
+mod board_ui_test;
