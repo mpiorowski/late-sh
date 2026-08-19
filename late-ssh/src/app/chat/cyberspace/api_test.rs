@@ -311,7 +311,10 @@ fn a_notification_shape_names_its_ids_and_never_their_text() {
     assert!(shape.contains("metadata.messageId=-Oabc123"), "{shape}");
     // Keys the struct does not name survive, wherever they sit.
     assert!(shape.contains("roomId=general"), "{shape}");
-    assert!(shape.contains("context={timestamp=1719700000000}"), "{shape}");
+    assert!(
+        shape.contains("context={timestamp=1719700000000}"),
+        "{shape}"
+    );
     // Their text never lands in a log an AI can read, by key and by shape.
     assert!(shape.contains("messageContent=<content>"), "{shape}");
     assert!(!shape.contains("hey"), "{shape}");

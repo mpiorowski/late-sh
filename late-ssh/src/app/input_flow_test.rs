@@ -1278,7 +1278,11 @@ async fn our_own_command_typed_in_their_room_never_becomes_a_message() {
         Some("circ-lab"),
         "opening a picker must not walk the user out of the room"
     );
-    assert_eq!(room_draft(&app), "", "the command must not stay in the draft");
+    assert_eq!(
+        room_draft(&app),
+        "",
+        "the command must not stay in the draft"
+    );
 }
 
 /// What is currently typed into the open cyberspace room's composer.

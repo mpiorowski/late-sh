@@ -570,12 +570,13 @@ impl CyberspaceService {
                 };
                 match service.api.list_notifications(&token).await {
                     Ok(notifications) => {
-                        // Diagnostic while the chat-mention jump is being
-                        // built: their docs leave `chat_mention` and
-                        // `dm_message` payloads open-ended, and this is the
-                        // one place a real one passes through. `shape` keeps
-                        // their content out of the log. Drop this line once
-                        // the jump lands.
+                        // Kept deliberately: their docs type `targetType` as
+                        // `post | reply` and call `metadata` open-ended, so
+                        // this line is the only place a real payload is
+                        // visible, and it is what told us a `chat_mention`
+                        // names a room and no message. Debug level, human
+                        // triggered (opening the row), and `shape` keeps their
+                        // content out of it, so it costs nothing to leave in.
                         for notification in &notifications {
                             tracing::debug!(
                                 shape = %notification.shape(),
@@ -608,7 +609,21 @@ impl CyberspaceService {
                     Err(e) => return service.fail(user_id, e.user_message()),
                 };
                 match service.api.list_circ_rooms(&token).await {
-                    Ok(rooms) => service.publish(CsEvent::CircRooms { user_id, rooms }),
+                    Ok(rooms) => {
+                        // Kept for the same reason as the notification line:
+                        // the picker renders this list verbatim, so a room
+                        // missing from it was never sent, and that question
+                        // comes up whenever their roster is filtered for an
+                        // account. Slugs only, and only on a picker open; the
+                        // badge poll's roster refresh takes another path and
+                        // logs nothing.
+                        tracing::debug!(
+                            count = rooms.len(),
+                            slugs = %rooms.iter().map(super::api::CircRoom::key).collect::<Vec<_>>().join(","),
+                            "cyberspace chat roster"
+                        );
+                        service.publish(CsEvent::CircRooms { user_id, rooms });
+                    }
                     Err(e) => service.fail(user_id, format!("loading chat rooms failed: {e}")),
                 }
             }
