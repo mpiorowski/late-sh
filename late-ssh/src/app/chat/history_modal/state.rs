@@ -43,10 +43,10 @@ pub(crate) struct ChatHistoryModalState {
     /// opened at the tail, where there is nothing to point at.
     anchor_id: Option<Uuid>,
     status: HistoryStatus,
-    /// Index into `messages` of the first row drawn. Scrolling is tracked in
-    /// messages rather than rendered lines so that splicing a page onto the
-    /// top can hold the viewport still with an exact `+= len`; a line offset
-    /// would drift every time a body wrapped to a different height.
+    /// Index into `messages` of the first message drawn. Scrolling is tracked
+    /// in messages rather than rendered lines so that splicing a page onto
+    /// the top can hold the viewport still with an exact `+= len`; a line
+    /// offset would drift every time a body wrapped to a different height.
     scroll_index: usize,
     /// Request id of the in-flight page for each edge, at most one apiece, so
     /// holding a scroll key queues one fetch instead of one per key repeat.
@@ -59,9 +59,12 @@ pub(crate) struct ChatHistoryModalState {
     /// system lines) can shorten a page that still has more behind it.
     exhausted_older: bool,
     exhausted_newer: bool,
-    /// Rows the last frame could fit, recorded by the renderer so paging keys
-    /// move by a real screenful and the bottom-edge test matches what the
-    /// user actually sees. Interior-mutable because rendering takes `&self`.
+    /// Messages the last frame fully fit, recorded by the renderer: bodies
+    /// wrap to a variable number of terminal rows, so only a rendered frame
+    /// knows how many messages make a screenful. Paging keys, the bottom-edge
+    /// test, and the scroll clamp all count in messages through this.
+    /// Interior-mutable because rendering takes `&self`; the conservative
+    /// default of 1 is deliberate (see the renderer's `draw_messages`).
     visible_rows: Cell<usize>,
 }
 
@@ -199,11 +202,12 @@ impl ChatHistoryModalState {
         }
     }
 
-    /// Move the viewport by whole messages, clamped to the loaded run.
+    /// Move the viewport by whole messages, clamped so the pane cannot
+    /// scroll past its last screenful of the loaded run.
     pub(crate) fn scroll(&mut self, delta: i32) {
-        let last = self.messages.len().saturating_sub(1);
+        let max = self.messages.len().saturating_sub(self.visible_rows.get());
         let next = self.scroll_index as i32 + delta;
-        self.scroll_index = next.clamp(0, last as i32) as usize;
+        self.scroll_index = next.clamp(0, max as i32) as usize;
     }
 
     pub(crate) fn scroll_page(&mut self, pages: i32) {

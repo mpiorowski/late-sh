@@ -2150,6 +2150,13 @@ fn dispatch_escape(app: &mut App) {
         room_info_modal::input::handle_escape(app);
         return;
     }
+    // A lone Esc dispatches here rather than through the history modal's own
+    // input handler; ordered between room info (drawn over it) and room
+    // search (drawn under it) to match the render stack.
+    if app.chat.history_modal.is_open() {
+        app.chat.history_modal.close();
+        return;
+    }
     if app.room_search_modal_state.is_open() {
         app.room_search_modal_state.close();
         app.chat.message_search.clear();

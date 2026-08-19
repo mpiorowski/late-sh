@@ -508,6 +508,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /ignore [@user]    ignore a user, or list ignored users",
         "  /unignore [@user]  unignore a user, or list ignored users",
         "  /search [query]    search messages (opens the Ctrl+/ modal in ? mode)",
+        "  /history           browse this room's full history in a scrollable modal",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",

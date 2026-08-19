@@ -1907,3 +1907,49 @@ async fn only_esc_closes_the_stream_modal() {
     )
     .await;
 }
+
+/// A lone Esc dispatches through `dispatch_escape`, never through the history
+/// modal's own input handler, so the modal needs its arm there: without it
+/// Esc leaves the modal stuck open over the room.
+#[tokio::test]
+async fn history_modal_opens_from_command_and_closes_on_esc() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "history-esc-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: viewer.id,
+            body: "hello from the archive".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "history-esc-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"i/history\r");
+    wait_for_render_contains(&mut app, "History ·").await;
+    wait_for_render_contains(&mut app, "hello from the archive").await;
+
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.chat.history_modal.is_open(),
+        "esc closes the history modal",
+    )
+    .await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("History ·"),
+        "expected the history modal gone after Esc; frame={frame:?}"
+    );
+}

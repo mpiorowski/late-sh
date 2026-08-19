@@ -5,14 +5,18 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
+
+use late_core::models::chat_message::ChatMessage;
 
 use crate::app::chat::history_modal::state::{ChatHistoryModalState, HistoryStatus};
+use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::theme;
 
 const MODAL_WIDTH: u16 = 96;
 const MODAL_HEIGHT: u16 = 30;
-/// Width of the `HH:MM ` gutter each row opens with.
+/// Width of the `HH:MM ` gutter each message opens with; continuation lines
+/// of a wrapped body indent by the same amount so bodies stay column-aligned.
 const TIME_WIDTH: usize = 6;
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
@@ -38,10 +42,6 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState)
 
     let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
 
-    // The renderer is the only place that knows how many rows fit, so it
-    // tells the state; scrolling and the bottom-edge test both read it back.
-    state.set_visible_rows(body.height as usize);
-
     match state.status() {
         HistoryStatus::Loading => draw_notice(frame, body, "Loading history…"),
         HistoryStatus::AnchorMissing => {
@@ -61,6 +61,14 @@ fn draw_notice(frame: &mut Frame, area: Rect, text: &str) {
     frame.render_widget(Paragraph::new(vec![line]), area);
 }
 
+/// Bodies soft-wrap to the pane rather than truncating, so a message covers a
+/// variable number of terminal rows and only the renderer knows how many
+/// messages make a screenful. It reports that count back through
+/// `set_visible_rows`; paging keys, the bottom-edge test, and the scroll
+/// clamp all read it in message units. Non-Ready frames leave the count at
+/// its conservative default on purpose: an underestimate parks a tail open on
+/// its newest message (back-filled below) and an anchored open on its anchor,
+/// both visible, where an overestimate could push them off-screen.
 fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
     let messages = state.messages();
     if messages.is_empty() {
@@ -69,12 +77,15 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
     }
 
     let width = area.width as usize;
-    let height = area.height as usize;
-    let anchor_id = state.anchor_id();
+    let height = (area.height as usize).max(1);
+    let body_width = width.saturating_sub(TIME_WIDTH).max(1);
+
+    let start = fill_start(state, height, body_width);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(height);
     let mut last_date: Option<chrono::NaiveDate> = None;
+    let mut fully_shown = 0usize;
 
-    for message in messages.iter().skip(state.scroll_index()) {
+    for message in messages.iter().skip(start) {
         if lines.len() >= height {
             break;
         }
@@ -92,36 +103,97 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
             }
         }
 
-        let author = state
-            .usernames()
-            .get(&message.user_id)
-            .cloned()
-            .unwrap_or_else(|| "?".to_string());
-        let body = message.body.replace(['\n', '\r'], " ");
-        let text = format!("{author}: {body}");
-        let is_anchor = anchor_id == Some(message.id);
-        let body_style = if is_anchor {
+        let body_style = if state.anchor_id() == Some(message.id) {
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT())
         };
-
         let time = message.created.format("%H:%M").to_string();
-        lines.push(Line::from(vec![
-            Span::styled(
-                pad_right(&time, TIME_WIDTH),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled(
-                truncate_to_width(&text, width.saturating_sub(TIME_WIDTH)),
-                body_style,
-            ),
-        ]));
+        let mut clipped = false;
+        for (row, text) in wrapped_body(state, message, body_width)
+            .into_iter()
+            .enumerate()
+        {
+            if lines.len() >= height {
+                clipped = true;
+                break;
+            }
+            let gutter = if row == 0 {
+                pad_right(&time, TIME_WIDTH)
+            } else {
+                " ".repeat(TIME_WIDTH)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(gutter, Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(text, body_style),
+            ]));
+        }
+        if !clipped {
+            fully_shown += 1;
+        }
     }
 
+    state.set_visible_rows(fully_shown);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// First message the pane draws. Normally the scroll index itself; when the
+/// window from there runs out of messages before the pane is full (the
+/// viewport is parked at the tail), it walks back so the pane fills from the
+/// bottom up instead of showing the newest message alone above blank space.
+fn fill_start(state: &ChatHistoryModalState, height: usize, body_width: usize) -> usize {
+    let messages = state.messages();
+    let mut start = state.scroll_index().min(messages.len() - 1);
+    while start > 0 && window_lines(state, start - 1, height, body_width) <= height {
+        start -= 1;
+    }
+    start
+}
+
+/// Lines the window starting at `start` would fill, stopping as soon as it
+/// passes `height`: `fill_start` only needs to know "fits" or "overflows".
+fn window_lines(
+    state: &ChatHistoryModalState,
+    start: usize,
+    height: usize,
+    body_width: usize,
+) -> usize {
+    let mut total = 0usize;
+    let mut last_date: Option<chrono::NaiveDate> = None;
+    for message in state.messages().iter().skip(start) {
+        let date = message.created.date_naive();
+        if last_date != Some(date) {
+            last_date = Some(date);
+            total += 1;
+        }
+        total += wrapped_body(state, message, body_width).len();
+        if total > height {
+            break;
+        }
+    }
+    total
+}
+
+/// A message's rendered lines: `author: body`, soft-wrapped to the pane.
+fn wrapped_body(state: &ChatHistoryModalState, message: &ChatMessage, width: usize) -> Vec<String> {
+    let author = state
+        .usernames()
+        .get(&message.user_id)
+        .map(String::as_str)
+        .unwrap_or("?");
+    let text = format!("{author}: {}", message.body.replace('\r', ""));
+    let mut out: Vec<String> = text
+        .lines()
+        .flat_map(|line| wrap_plain_line(line, width))
+        .collect();
+    // `wrap_plain_line` drops blank text; a whitespace-only body still needs
+    // one row so the message doesn't vanish from the run.
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
@@ -146,24 +218,6 @@ fn pad_right(text: &str, width: usize) -> String {
     if text_width < width {
         out.push_str(&" ".repeat(width - text_width));
     }
-    out
-}
-
-fn truncate_to_width(text: &str, width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > width.saturating_sub(1) {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push('…');
     out
 }
 
