@@ -909,9 +909,11 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // The open room's composer takes every keystroke while it is up, so arrows
-    // move the cursor rather than scrolling the conversation behind it.
-    if app.chat.cyberspace.room_composer_mut().is_some() {
+    // The open room's composer takes every keystroke while it has focus, so
+    // arrows move the cursor rather than scrolling the conversation behind
+    // it. A room being read routes through chat instead, which is what keeps
+    // the rail and the global keys reachable from inside a room.
+    if app.chat.cyberspace.room_composing() {
         chat::cyberspace::input::handle_room_composer_input(app, event);
         return;
     }
@@ -2107,8 +2109,8 @@ fn dispatch_escape(app: &mut App) {
         return;
     }
     // Inside a cyberspace chat room, Esc backs out one step at a time: the
-    // composer first (so a draft is never lost to a stray Esc), then the room
-    // itself, which is what closes its stream.
+    // composer first (so a room is never left out from under a half-typed
+    // message), then the room itself, which is what closes its stream.
     if app.chat.cyberspace.cancel_room_composer() {
         return;
     }
@@ -2487,6 +2489,13 @@ pub fn sanitize_paste_markers(s: &str) -> String {
 }
 
 fn handle_scroll_for_screen(app: &mut App, screen: Screen, delta: isize) {
+    // A cyberspace room draws over the pane, so the page keys scroll its
+    // conversation rather than the chat room sitting behind it. Its scroll
+    // counts rows back from the newest, so the sign flips.
+    if app.chat.cyberspace.open_room_name().is_some() {
+        app.chat.cyberspace.room_scroll(-delta);
+        return;
+    }
     // Chat-pane screens scroll the room they're showing; the clubhouse has
     // no scrollable chat panel (bubbles carry the conversation and the full
     // history lives on Home), so it resolves to None like everything else.

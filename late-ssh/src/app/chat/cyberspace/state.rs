@@ -176,10 +176,15 @@ pub(crate) struct OpenRoom {
     pub kind: RoomKind,
     pub messages: Vec<CircMessage>,
     pub loading: bool,
-    /// Always open, like every other room in the rail: you type into a room
-    /// rather than asking it for an input first. Arrows scroll the
-    /// conversation instead, since the composer is a single row.
+    /// Drawn in the chat composer slot for as long as the room is open, like
+    /// every other room in the rail. Single row: that slot is one line and
+    /// their API takes one message per send.
     pub composer: TextArea<'static>,
+    /// Whether keystrokes land in the composer. Entering a room lands in
+    /// reading mode, again like every other room: `i`/Enter focuses the
+    /// composer, Esc drops back out of it. Focusing on entry turned j/k, the
+    /// rail shortcuts, and every other global letter into text.
+    pub composing: bool,
     /// The read cursor as it stood when the user walked in, which is what the
     /// "new messages" rule reads from. Entering stamps the cursor forward
     /// immediately (that is what clears the rail dot), so the separator has to
@@ -820,8 +825,9 @@ impl State {
             loading: true,
             // No placeholder here: `chat::ui` draws the empty state itself so
             // the cursor sits on the hint's first character instead of before
-            // it.
-            composer: new_themed_textarea("", WrapMode::None, true),
+            // it. The cursor stays hidden until the composer is focused.
+            composer: new_themed_textarea("", WrapMode::None, false),
+            composing: false,
             unread_from,
             scroll: 0,
             max_scroll: Cell::new(0),
@@ -854,7 +860,8 @@ impl State {
             kind: RoomKind::Cmail,
             messages: Vec::new(),
             loading: true,
-            composer: new_themed_textarea("", WrapMode::None, true),
+            composer: new_themed_textarea("", WrapMode::None, false),
+            composing: false,
             // Their unread count says how many, never which, so a conversation
             // has no boundary to rule off.
             unread_from: None,
@@ -953,6 +960,22 @@ impl State {
         }
     }
 
+    /// Whether keystrokes go into the open room's composer. `app::input`
+    /// routes every event there while it answers true, so nothing else in the
+    /// app sees them.
+    pub(crate) fn room_composing(&self) -> bool {
+        self.open_room.as_ref().is_some_and(|room| room.composing)
+    }
+
+    /// `i` or Enter in a room: focus the composer.
+    pub(crate) fn start_room_composer(&mut self) {
+        let Some(room) = &mut self.open_room else {
+            return;
+        };
+        room.composing = true;
+        set_themed_textarea_cursor_visible(&mut room.composer, true);
+    }
+
     pub(crate) fn room_composer_mut(&mut self) -> Option<&mut TextArea<'static>> {
         Some(&mut self.open_room.as_mut()?.composer)
     }
@@ -970,14 +993,15 @@ impl State {
         self.note_room_activity();
     }
 
-    /// Esc with a draft in the composer clears the draft and stops there;
-    /// Esc on an empty composer reports nothing to close, so the escape chain
+    /// Esc in a focused composer drops the draft and goes back to reading the
+    /// room; Esc while reading reports nothing to close, so the escape chain
     /// moves on to leaving the room. Two presses to walk out of a room you
     /// were mid-sentence in, one when you were only reading.
     pub(crate) fn cancel_room_composer(&mut self) -> bool {
         match &mut self.open_room {
-            Some(room) if !room.composer.is_empty() => {
-                room.composer = new_themed_textarea("", WrapMode::None, true);
+            Some(room) if room.composing => {
+                room.composer = new_themed_textarea("", WrapMode::None, false);
+                room.composing = false;
                 true
             }
             _ => false,
@@ -987,7 +1011,10 @@ impl State {
     /// Send what is in the room composer. Nothing is echoed locally: the
     /// message arrives through the room's own stream like everyone else's, so
     /// there is no provisional row to reconcile or leave behind on failure.
-    pub(crate) fn submit_room_composer(&mut self) -> Option<Banner> {
+    /// `keep_open` is the profile's `keep_composer_focused` tweak, threaded
+    /// from the call site exactly as the main chat composer threads it: with
+    /// it off, sending hands the room back to reading mode.
+    pub(crate) fn submit_room_composer(&mut self, keep_open: bool) -> Option<Banner> {
         let Some(room) = &mut self.open_room else {
             return None;
         };
@@ -1002,7 +1029,8 @@ impl State {
         }
         let id = room.id.clone();
         let kind = room.kind;
-        room.composer = new_themed_textarea("", WrapMode::None, true);
+        room.composer = new_themed_textarea("", WrapMode::None, keep_open);
+        room.composing = keep_open;
         room.scroll = 0;
         self.note_room_activity();
         match kind {

@@ -18,15 +18,26 @@ use super::state::{
 /// worth threading back for a scroll step.
 const ROOM_PAGE_ROWS: isize = 10;
 
-/// Arrows in the pane. A room's arrows never reach here: its composer is
-/// always open, so `app::input` routes every event there first.
+/// Arrows in the pane, or in a room being read: a room scrolls its
+/// conversation where the pane moves its selection. Arrows inside a focused
+/// composer never reach here, since `app::input` routes every event there
+/// first.
 pub fn handle_arrow(app: &mut App, key: u8) -> bool {
-    match key {
-        b'A' => {
+    let in_room = app.chat.cyberspace.open_room_name().is_some();
+    match (key, in_room) {
+        (b'A', true) => {
+            app.chat.cyberspace.room_scroll(-1);
+            true
+        }
+        (b'B', true) => {
+            app.chat.cyberspace.room_scroll(1);
+            true
+        }
+        (b'A', false) => {
             app.chat.cyberspace.move_selection(-1);
             true
         }
-        b'B' => {
+        (b'B', false) => {
             app.chat.cyberspace.move_selection(1);
             true
         }
@@ -34,11 +45,39 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
 }
 
-/// Keystrokes inside an open chat room. The composer is always open, the way
-/// it is in every other room in the rail, so it owns every one of them and a
-/// message can contain a space or an `h` without the rail stealing it.
-/// Reached from `app::input`'s modal chain, which runs before any chat
-/// routing. Scrolling moves to the arrows, since the letters are text now.
+/// Keys inside an open chat room while its composer is not focused. The room
+/// is its own surface (its own rail slot), so it does not share the pane's
+/// view keys, and unhandled bytes fall through so the global keys keep
+/// working. Returning to reading rather than typing on entry is what keeps
+/// them reachable at all.
+pub fn handle_room_byte(app: &mut App, byte: u8) -> bool {
+    let state = &mut app.chat.cyberspace;
+    match byte {
+        b'j' | b'J' => {
+            state.room_scroll(1);
+            true
+        }
+        b'k' | b'K' => {
+            state.room_scroll(-1);
+            true
+        }
+        b'g' | b'G' => {
+            state.room_to_bottom();
+            true
+        }
+        b'i' | b'I' | b'\r' | b'\n' => {
+            state.start_room_composer();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Keystrokes while the room composer is focused. It owns every one of them,
+/// the same way an open modal does, so a message can contain a space or an
+/// `h` without the rail stealing it. Reached from `app::input`'s modal chain,
+/// which runs before any chat routing. Scrolling rides the arrows and the
+/// page keys here, since the letters are text while the composer has focus.
 pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Arrow(b'A') => {
@@ -71,12 +110,13 @@ pub fn handle_room_composer_input(app: &mut App, event: ParsedInput) {
     // draws in and their one-message-per-send API.
     match handle_single_line_edit(composer, &event, CIRC_MESSAGE_MAX_CHARS) {
         EditOutcome::Submit => {
-            if let Some(banner) = app.chat.cyberspace.submit_room_composer() {
+            let keep_open = app.profile_state.profile().keep_composer_focused;
+            if let Some(banner) = app.chat.cyberspace.submit_room_composer(keep_open) {
                 app.banner = Some(banner);
             }
         }
-        // Esc: `app::input`'s escape chain owns leaving the room, and it asks
-        // the composer first, so this arm never has to.
+        // Esc: `app::input`'s escape chain owns both steps out of a room, and
+        // it asks the composer first, so this arm never has to.
         EditOutcome::Cancel => {}
         EditOutcome::Handled => app.chat.cyberspace.note_composer_activity(),
         EditOutcome::Ignored => {}

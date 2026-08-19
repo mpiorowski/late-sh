@@ -1192,6 +1192,66 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
 }
 
 #[tokio::test]
+async fn entering_a_cyberspace_room_reads_it_before_it_types_in_it() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-reader").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-read-flow-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+
+    app.chat.select_cyberspace_room(0);
+    assert_eq!(app.chat.cyberspace.open_circ_slug(), Some("circ-lab"));
+
+    // Walking into a room is reading it, like every other room in the rail:
+    // `k` scrolls the conversation, it does not start a message.
+    app.handle_input(b"k");
+    assert_eq!(
+        room_draft(&app),
+        "",
+        "a room must not open with its composer focused"
+    );
+
+    // `i` is what focuses it, and from there the same letter is text.
+    app.handle_input(b"ik");
+    assert_eq!(room_draft(&app), "k");
+
+    // Esc drops the draft and hands the room back to reading; only the next
+    // one leaves the room.
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| room_draft(app).is_empty(), "room composer").await;
+    app.handle_input(b"k");
+    assert_eq!(room_draft(&app), "");
+    assert_eq!(
+        app.chat.cyberspace.open_circ_slug(),
+        Some("circ-lab"),
+        "the first Esc leaves the composer, not the room"
+    );
+}
+
+/// What is currently typed into the open cyberspace room's composer.
+fn room_draft(app: &crate::app::state::App) -> String {
+    app.chat
+        .cyberspace
+        .room_composer()
+        .expect("a room is open")
+        .lines()
+        .join("")
+}
+
+#[tokio::test]
 async fn client_side_chat_commands_render_without_persisting_messages() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "command-flow-viewer").await;

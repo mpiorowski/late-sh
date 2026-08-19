@@ -4789,10 +4789,19 @@ fn draw_selected_content(
             Some(name) => format!(" {name} "),
             None => " Cyberspace ".to_string(),
         };
+        // A room being read borders like any unfocused composer; focusing it
+        // lights the border, the same signal the main chat composer gives.
+        let room_composing = view
+            .cyberspace
+            .is_some_and(super::cyberspace::state::State::room_composing);
+        let border = match room_composing {
+            true => theme::BORDER_ACTIVE(),
+            false => theme::BORDER(),
+        };
         let hint_block = Block::default()
             .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::BORDER()));
+            .border_style(Style::default().fg(border));
         // Writing in a chat room uses this box rather than opening a second
         // one inside the pane: it is the composer slot every other room types
         // into, so the room reads like a room.
@@ -4803,17 +4812,26 @@ fn draw_selected_content(
                 // chat composer's text area.
                 let inner = horizontal_inset(hint_block.inner(composer_area), 1);
                 frame.render_widget(hint_block, composer_area);
-                // An empty composer draws its own hint so the cursor lands on
-                // the first character, the same reason the main chat composer
-                // does (a `TextArea` placeholder renders after the cursor cell).
-                match composer.is_empty() {
-                    true => frame.render_widget(
+                // Reading a room draws its keys where the input goes, the way
+                // the main chat composer does until `i` focuses it. A focused
+                // empty composer draws its own hint so the cursor lands on the
+                // first character (a `TextArea` placeholder renders after the
+                // cursor cell).
+                match (room_composing, composer.is_empty()) {
+                    (false, _) => frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(
+                            " i write · j/k scroll · g newest · Esc leave",
+                            Style::default().fg(theme::TEXT_DIM()),
+                        ))),
+                        inner,
+                    ),
+                    (true, true) => frame.render_widget(
                         Paragraph::new(crate::app::common::composer::placeholder_with_cursor(
-                            "Type to talk · Enter send · ↑↓ scroll · Esc leave",
+                            "Type a message · Enter send · ↑↓ scroll · Esc back",
                         )),
                         inner,
                     ),
-                    false => frame.render_widget(composer, inner),
+                    (true, false) => frame.render_widget(composer, inner),
                 }
             }
             None => {

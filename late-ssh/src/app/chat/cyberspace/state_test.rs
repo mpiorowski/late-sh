@@ -614,6 +614,32 @@ async fn walking_into_a_room_clears_its_dot_even_when_history_never_lands() {
 }
 
 #[tokio::test]
+async fn entering_a_room_lands_in_reading_mode_and_esc_backs_out_one_step() {
+    let mut state = test_state().await;
+    state.enter_room("general".to_string());
+
+    // Walking into a room is reading it, the way every other room in the rail
+    // opens. Landing in the composer turns j/k, the rail shortcuts, and every
+    // other global letter into text nobody asked to type.
+    assert!(
+        !state.room_composing(),
+        "entering a room must not focus its composer"
+    );
+
+    state.start_room_composer();
+    assert!(state.room_composing());
+
+    // Esc leaves the composer and stops there; the next one is what leaves the
+    // room, so one stray Esc never walks the user out of a room.
+    assert!(state.cancel_room_composer());
+    assert!(!state.room_composing());
+    assert!(
+        !state.cancel_room_composer(),
+        "a room being read has no composer to close"
+    );
+}
+
+#[tokio::test]
 async fn unlinking_closes_the_open_room_and_clears_the_rail() {
     let mut state = test_state().await;
     let user_id = state.user_id;
