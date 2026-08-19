@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use late_core::models::chat_message::ChatMessage;
 
-use crate::app::chat::history_modal::state::{ChatHistoryModalState, HistoryStatus};
+use crate::app::chat::history_modal::state::{ChatHistoryModalState, HistoryStatus, Park};
 use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::theme;
 
@@ -62,13 +62,12 @@ fn draw_notice(frame: &mut Frame, area: Rect, text: &str) {
 }
 
 /// Bodies soft-wrap to the pane rather than truncating, so a message covers a
-/// variable number of terminal rows and only the renderer knows how many
-/// messages make a screenful. It reports that count back through
-/// `set_visible_rows`; paging keys, the bottom-edge test, and the scroll
-/// clamp all read it in message units. Non-Ready frames leave the count at
-/// its conservative default on purpose: an underestimate parks a tail open on
-/// its newest message (back-filled below) and an anchored open on its anchor,
-/// both visible, where an overestimate could push them off-screen.
+/// variable number of terminal rows and only a rendered frame knows how many
+/// messages make a screenful. The frame writes two things back through the
+/// state's `Cell`s: `resolve_viewport` settles any pending park and aligns
+/// the scroll index with the first row it actually draws, and
+/// `set_visible_rows` reports how many whole messages fit, which drives the
+/// paging keys, the bottom-edge test, and the scroll clamp.
 fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
     let messages = state.messages();
     if messages.is_empty() {
@@ -80,7 +79,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
     let height = (area.height as usize).max(1);
     let body_width = width.saturating_sub(TIME_WIDTH).max(1);
 
-    let start = fill_start(state, height, body_width);
+    let start = resolve_viewport(state, height, body_width);
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(height);
     let mut last_date: Option<chrono::NaiveDate> = None;
     let mut fully_shown = 0usize;
@@ -137,6 +136,54 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
 
     state.set_visible_rows(fully_shown);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Settle the viewport for this frame and return the first message drawn.
+/// A pending park (a fresh open, or End) is resolved now that the pane's
+/// line budget is known: `Bottom` lands on the newest message, `Anchor`
+/// centers the opened-on message. The scroll index is then aligned with the
+/// row actually drawn first, so after a back-fill the next keypress moves
+/// from what the user sees instead of dying in the clamp.
+fn resolve_viewport(state: &ChatHistoryModalState, height: usize, body_width: usize) -> usize {
+    let messages = state.messages();
+    match state.take_park() {
+        Some(Park::Bottom) => state.sync_scroll_index(messages.len() - 1),
+        Some(Park::Anchor) => {
+            let anchor_at = state
+                .anchor_id()
+                .and_then(|id| messages.iter().position(|m| m.id == id))
+                .unwrap_or(0);
+            state.sync_scroll_index(centered_start(state, anchor_at, height, body_width));
+        }
+        None => {}
+    }
+    let start = fill_start(state, height, body_width);
+    state.sync_scroll_index(start);
+    start
+}
+
+/// First message of a window that shows `anchor_at` roughly mid-pane:
+/// messages above the anchor are admitted until they cost more than half the
+/// pane's lines. Day separators are ignored in the budget; a row off-center
+/// is invisible and it keeps the walk one accumulation.
+fn centered_start(
+    state: &ChatHistoryModalState,
+    anchor_at: usize,
+    height: usize,
+    body_width: usize,
+) -> usize {
+    let budget = height / 2;
+    let mut used = 0usize;
+    let mut start = anchor_at;
+    while start > 0 {
+        let above = wrapped_body(state, &state.messages()[start - 1], body_width).len();
+        if used + above > budget {
+            break;
+        }
+        used += above;
+        start -= 1;
+    }
+    start
 }
 
 /// First message the pane draws. Normally the scroll index itself; when the
@@ -230,3 +277,7 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         .areas(row);
     cell
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

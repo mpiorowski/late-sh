@@ -1872,6 +1872,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_ultimate_modal
         || ctx.news_modal.is_some()
         || ctx.room_search_modal_open
+        || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open
         || ctx.icon_picker_open
 }

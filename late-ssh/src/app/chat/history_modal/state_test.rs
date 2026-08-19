@@ -119,7 +119,7 @@ fn a_stale_page_is_dropped() {
 }
 
 #[test]
-fn an_anchored_open_centers_and_marks_the_anchor() {
+fn an_anchored_open_becomes_ready_and_marks_the_anchor() {
     let mut state = ChatHistoryModalState::default();
     let request_id = Uuid::now_v7();
     let anchor_id = message(20).id;
@@ -129,16 +129,12 @@ fn an_anchored_open_centers_and_marks_the_anchor() {
         anchor_id,
         request_id,
     );
-    state.set_visible_rows(10);
     state.apply_anchor(request_id, anchor_id, run(0..41), HashMap::new());
 
     assert_eq!(state.status(), HistoryStatus::Ready);
     assert_eq!(state.anchor_id(), Some(anchor_id));
-    // Anchor sits at index 20 with a 10-row pane, so the viewport starts half
-    // a screen above it and the anchor lands mid-pane, not against the top.
-    assert_eq!(state.scroll_index(), 15);
-    // Both edges are live: an anchored open has history in both directions.
-    assert!(state.wants_page(HistoryDirection::Newer) || state.scroll_index() > 0);
+    // Where the viewport lands is the renderer's job (the anchor centers by
+    // wrapped lines); the ui tests pin that.
 }
 
 #[test]

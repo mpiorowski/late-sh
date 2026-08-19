@@ -20,6 +20,16 @@ pub(crate) enum HistoryStatus {
     Failed,
 }
 
+/// Where the next rendered frame should park the viewport. An open (or an
+/// End press) knows where it wants to land, the tail or the anchor, but not
+/// how many wrapped lines the pane fits, so the parking is deferred to the
+/// renderer's `resolve_viewport`, the first place both are known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Park {
+    Bottom,
+    Anchor,
+}
+
 /// Scroll-driven room history: a window over
 /// `ChatMessage::list_page_for_viewer`, opened either at a room's tail
 /// (`/history`) or centered on one message that is older than the live room
@@ -47,7 +57,12 @@ pub(crate) struct ChatHistoryModalState {
     /// in messages rather than rendered lines so that splicing a page onto
     /// the top can hold the viewport still with an exact `+= len`; a line
     /// offset would drift every time a body wrapped to a different height.
-    scroll_index: usize,
+    /// Interior-mutable because the renderer settles pending parks and
+    /// aligns the index with the back-filled row it actually drew first,
+    /// both from `&self`.
+    scroll_index: Cell<usize>,
+    /// A parking request for the next rendered frame; see [`Park`].
+    park: Cell<Option<Park>>,
     /// Request id of the in-flight page for each edge, at most one apiece, so
     /// holding a scroll key queues one fetch instead of one per key repeat.
     pending_older: Option<Uuid>,
@@ -78,7 +93,8 @@ impl Default for ChatHistoryModalState {
             usernames: HashMap::new(),
             anchor_id: None,
             status: HistoryStatus::Loading,
-            scroll_index: 0,
+            scroll_index: Cell::new(0),
+            park: Cell::new(None),
             pending_older: None,
             pending_newer: None,
             pending_open: None,
@@ -119,7 +135,20 @@ impl ChatHistoryModalState {
     }
 
     pub(crate) fn scroll_index(&self) -> usize {
-        self.scroll_index
+        self.scroll_index.get()
+    }
+
+    /// Consume the pending parking request. Renderer only; a taken park is
+    /// settled by writing the landing spot back through `sync_scroll_index`.
+    pub(crate) fn take_park(&self) -> Option<Park> {
+        self.park.take()
+    }
+
+    /// Align the scroll index with the first row the frame actually drew.
+    /// Renderer only: this is how a park lands and how a back-filled tail
+    /// keeps the next keypress moving from what the user sees.
+    pub(crate) fn sync_scroll_index(&self, index: usize) {
+        self.scroll_index.set(index);
     }
 
     pub(crate) fn set_visible_rows(&self, rows: usize) {
@@ -183,7 +212,9 @@ impl ChatHistoryModalState {
         }
         match direction {
             HistoryDirection::Older => {
-                self.scroll_index == 0 && !self.exhausted_older && self.pending_older.is_none()
+                self.scroll_index.get() == 0
+                    && !self.exhausted_older
+                    && self.pending_older.is_none()
             }
             HistoryDirection::Newer => {
                 self.at_bottom() && !self.exhausted_newer && self.pending_newer.is_none()
@@ -192,7 +223,7 @@ impl ChatHistoryModalState {
     }
 
     fn at_bottom(&self) -> bool {
-        self.scroll_index + self.visible_rows.get() >= self.messages.len()
+        self.scroll_index.get() + self.visible_rows.get() >= self.messages.len()
     }
 
     pub(crate) fn begin_page(&mut self, direction: HistoryDirection, request_id: Uuid) {
@@ -203,11 +234,13 @@ impl ChatHistoryModalState {
     }
 
     /// Move the viewport by whole messages, clamped so the pane cannot
-    /// scroll past its last screenful of the loaded run.
+    /// scroll past its last screenful of the loaded run. A manual scroll
+    /// overrides any parking still waiting on a frame.
     pub(crate) fn scroll(&mut self, delta: i32) {
+        self.park.set(None);
         let max = self.messages.len().saturating_sub(self.visible_rows.get());
-        let next = self.scroll_index as i32 + delta;
-        self.scroll_index = next.clamp(0, max as i32) as usize;
+        let next = self.scroll_index.get() as i32 + delta;
+        self.scroll_index.set(next.clamp(0, max as i32) as usize);
     }
 
     pub(crate) fn scroll_page(&mut self, pages: i32) {
@@ -249,7 +282,7 @@ impl ChatHistoryModalState {
                 let mut merged = messages;
                 merged.append(&mut self.messages);
                 self.messages = merged;
-                self.scroll_index += added;
+                self.scroll_index.set(self.scroll_index.get() + added);
             }
             HistoryDirection::Newer => {
                 if self.pending_newer != Some(request_id) {
@@ -266,8 +299,9 @@ impl ChatHistoryModalState {
         self.usernames.extend(usernames);
     }
 
-    /// Install the opening window and park the viewport so the anchor sits
-    /// roughly mid-pane rather than at the very top.
+    /// Install the opening window and ask the next frame to park the
+    /// viewport with the anchor mid-pane: centering needs wrapped line
+    /// heights, which only the renderer knows.
     pub(crate) fn apply_anchor(
         &mut self,
         request_id: Uuid,
@@ -282,10 +316,8 @@ impl ChatHistoryModalState {
         self.status = HistoryStatus::Ready;
         self.anchor_id = Some(anchor_id);
         self.usernames = usernames;
-        let anchor_at = messages.iter().position(|m| m.id == anchor_id).unwrap_or(0);
         self.messages = messages;
-        let half = self.visible_rows.get() / 2;
-        self.scroll_index = anchor_at.saturating_sub(half);
+        self.park.set(Some(Park::Anchor));
     }
 
     /// Install the opening page for a tail open, parked at the newest
@@ -309,9 +341,11 @@ impl ChatHistoryModalState {
         self.scroll_to_bottom();
     }
 
+    /// Park at the newest loaded message. Deferred to the next frame like an
+    /// open: how many messages a bottom-anchored pane holds depends on their
+    /// wrapped heights.
     pub(crate) fn scroll_to_bottom(&mut self) {
-        let rows = self.visible_rows.get();
-        self.scroll_index = self.messages.len().saturating_sub(rows);
+        self.park.set(Some(Park::Bottom));
     }
 
     pub(crate) fn apply_anchor_missing(&mut self, request_id: Uuid) {

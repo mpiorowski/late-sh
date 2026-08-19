@@ -1945,12 +1945,13 @@ impl ChatService {
     /// chronological run (`HistoryAnchorLoaded`). Resolving the anchor here
     /// rather than passing it in from the caller keeps the one case that has
     /// no answer - a hard-deleted message, or a room this viewer cannot read
-    /// - in a single place (`HistoryAnchorMissing`).
+    /// - in a single place (`HistoryAnchorMissing`). The room is the
+    /// anchor's own; taking a separate room id would only make a mismatched
+    /// pair representable.
     pub fn load_history_anchor_task(
         &self,
         user_id: Uuid,
         request_id: Uuid,
-        room_id: Uuid,
         message_id: Uuid,
         exclude_user_ids: Vec<Uuid>,
     ) {
@@ -1967,7 +1968,7 @@ impl ChatService {
                     };
                     let (before, after) = ChatMessage::list_around(
                         &client,
-                        room_id,
+                        anchor.room_id,
                         user_id,
                         anchor.created,
                         anchor.id,
@@ -2030,7 +2031,6 @@ impl ChatService {
             .instrument(info_span!(
                 "chat.load_history_anchor_task",
                 user_id = %user_id,
-                room_id = %room_id,
                 message_id = %message_id
             )),
         );
