@@ -10,13 +10,14 @@ use late_core::models::{
     reward::{
         DAILY_BACKGAMMON_WIN_REWARD_KEY, DAILY_BATTLESHIP_WIN_REWARD_KEY,
         DAILY_BRISCOLA_WIN_REWARD_KEY, DAILY_CHECKERS_WIN_REWARD_KEY, DAILY_CHESS_WIN_REWARD_KEY,
-        DAILY_CONNECT4_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY,
+        DAILY_CHESS960_WIN_REWARD_KEY, DAILY_CONNECT4_WIN_REWARD_KEY, DAILY_REVERSI_WIN_REWARD_KEY,
     },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DailyGame {
     Chess,
+    Chess960,
     Battleship,
     ConnectFour,
     Reversi,
@@ -27,8 +28,9 @@ pub enum DailyGame {
 
 impl DailyGame {
     /// Roster order: pickers, help copy, and usage strings follow it.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Chess,
+        Self::Chess960,
         Self::Battleship,
         Self::ConnectFour,
         Self::Reversi,
@@ -41,6 +43,7 @@ impl DailyGame {
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Chess => DailyMatch::GAME_KIND_CHESS,
+            Self::Chess960 => DailyMatch::GAME_KIND_CHESS960,
             Self::Battleship => DailyMatch::GAME_KIND_BATTLESHIP,
             Self::ConnectFour => DailyMatch::GAME_KIND_CONNECTFOUR,
             Self::Reversi => DailyMatch::GAME_KIND_REVERSI,
@@ -54,6 +57,7 @@ impl DailyGame {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chess => "chess",
+            Self::Chess960 => "chess960",
             Self::Battleship => "battleship",
             Self::ConnectFour => "connect4",
             Self::Reversi => "reversi",
@@ -69,6 +73,7 @@ impl DailyGame {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Chess => "Chess",
+            Self::Chess960 => "Chess960",
             Self::Battleship => "Battleship",
             Self::ConnectFour => "Connect Four",
             Self::Reversi => "Reversi",
@@ -83,6 +88,7 @@ impl DailyGame {
     pub const fn win_payout(self) -> i64 {
         match self {
             Self::Chess => 500,
+            Self::Chess960 => 500,
             Self::Battleship => 300,
             Self::ConnectFour => 400,
             Self::Reversi => 400,
@@ -95,6 +101,7 @@ impl DailyGame {
     pub const fn reward_key(self) -> &'static str {
         match self {
             Self::Chess => DAILY_CHESS_WIN_REWARD_KEY,
+            Self::Chess960 => DAILY_CHESS960_WIN_REWARD_KEY,
             Self::Battleship => DAILY_BATTLESHIP_WIN_REWARD_KEY,
             Self::ConnectFour => DAILY_CONNECT4_WIN_REWARD_KEY,
             Self::Reversi => DAILY_REVERSI_WIN_REWARD_KEY,
@@ -107,6 +114,7 @@ impl DailyGame {
     pub const fn chip_move(self) -> ChipMove {
         match self {
             Self::Chess => ChipMove::DailyChessWin,
+            Self::Chess960 => ChipMove::DailyChess960Win,
             Self::Battleship => ChipMove::DailyBattleshipWin,
             Self::ConnectFour => ChipMove::DailyConnectFourWin,
             Self::Reversi => ChipMove::DailyReversiWin,
@@ -120,6 +128,7 @@ impl DailyGame {
     pub const fn tagline(self) -> &'static str {
         match self {
             Self::Chess => "one move per day",
+            Self::Chess960 => "shuffled back rank · castle onto your rook",
             Self::Battleship => "one salvo per day · a hit fires again",
             Self::ConnectFour => "one drop per day · four in a row wins",
             Self::Reversi => "one move per day · most discs wins",

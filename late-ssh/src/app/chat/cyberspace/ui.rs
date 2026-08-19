@@ -14,8 +14,8 @@ use crate::app::common::theme;
 
 use super::api::{CircMessage, CsNotification, CsPost};
 use super::state::{
-    ComposeField, ComposeModal, LinkField, LinkModal, LinkStatus, Modal, OpenRoom, ReplyModal,
-    RoomsModal, State, TITLE_MAX_CHARS, View,
+    CmailModal, ComposeField, ComposeModal, LinkField, LinkModal, LinkStatus, Modal, OpenRoom,
+    ReplyModal, RoomsModal, State, TITLE_MAX_CHARS, View,
 };
 use super::svc::CsThread;
 
@@ -26,7 +26,13 @@ pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
     // renders: selecting the row is what opened the room, so the room wins
     // over the feed views below.
     if let Some(room) = &state.open_room {
-        draw_room(frame, area, room);
+        draw_room(
+            frame,
+            area,
+            room,
+            state.username(),
+            state.room_online_count(&room.id),
+        );
         return;
     }
     match &state.link {
@@ -41,7 +47,7 @@ pub fn draw_pane(frame: &mut Frame, area: Rect, state: &State) {
         LinkStatus::Linked { username } => match state.view {
             View::Feed => draw_feed(frame, area, state, username),
             View::Thread => draw_thread(frame, area, state),
-            View::Notifications => draw_notifications(frame, area, state),
+            View::Notifications => draw_notifications(frame, area, state, username),
         },
     }
 }
@@ -52,17 +58,15 @@ pub fn footer_hint(state: &State) -> &'static str {
     if !state.is_linked() {
         return " Enter link your cyberspace account";
     }
-    // Only the reading hint: while the composer is open it occupies this slot
-    // itself, so there is no hint row to write into.
-    if state.open_room.is_some() {
-        return " j/k scroll · g newest · i write · b leave";
-    }
+    // A room never lands here: its composer is always open and occupies this
+    // slot itself.
     match state.view {
-        View::Feed => {
-            " j/k navigate · g top · Enter open · p post · n notifications · r refresh · /cs chat rooms"
-        }
-        View::Thread => " j/k scroll · g top · r reply · b back",
-        View::Notifications => " j/k navigate · g top · Enter open the entry · b back",
+        // No `/cs` commands here: the pane has no composer to type them
+        // into, and the two that make sense inside a room are advertised
+        // there instead.
+        View::Feed => " j/k navigate · g top · Enter open · p post · c copy link · r refresh",
+        View::Thread => " j/k scroll · g top · r reply · c copy link · b back",
+        View::Notifications => " j/k navigate · g top · Enter open · r reload · b feeds",
     }
 }
 
@@ -166,40 +170,14 @@ fn draw_feed(frame: &mut Frame, area: Rect, state: &State, username: &str) {
     }
 }
 
-/// Identity and new entries on the left, notifications on the right. The rail
-/// badge is the sum of the two, so this row is where the number gets split
-/// back into the things it counts and each half points at the key for it.
+/// Identity and new entries. Notifications are their own rail row with their
+/// own badge now, so this header speaks only for the feed.
 fn draw_feed_header(frame: &mut Frame, area: Rect, state: &State, username: &str) {
     let block = Block::default()
         .borders(Borders::BOTTOM)
         .border_style(Style::default().fg(theme::BORDER_DIM()));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    let (right_text, right_style) = if state.unread_notifications() > 0 {
-        (
-            format!(
-                "● {} unread notification{} · n to open",
-                state.unread_notifications(),
-                if state.unread_notifications() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        (
-            "n notifications".to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        )
-    };
-    let right_width = right_text.chars().count() as u16;
-    let [left_area, right_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(inner);
 
     let mut left = vec![
         Span::styled(
@@ -221,11 +199,7 @@ fn draw_feed_header(frame: &mut Frame, area: Rect, state: &State, username: &str
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(left)), left_area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(right_text, right_style))),
-        right_area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(left)), inner);
 }
 
 fn feed_entry_lines(post: &CsPost, unread: bool) -> Vec<Line<'static>> {
@@ -574,9 +548,127 @@ fn draw_rooms_modal(frame: &mut Frame, area: Rect, rooms: &RoomsModal, state: &S
     );
 }
 
-/// One of their chat rooms, live. Everything on screen arrived through this
-/// session's own stream and renders for this user alone.
-fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
+/// The C-Mail picker. Same shape as the room picker: their list, what is on
+/// the rail already, and Enter to toggle.
+fn draw_cmail_modal(frame: &mut Frame, area: Rect, cmail: &CmailModal, state: &State) {
+    let popup = centered_rect(area, 56, 20);
+    frame.render_widget(Clear, popup);
+    let block = modal_block(" Add cyberspace c-mail ");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let areas = Layout::vertical([
+        Constraint::Length(1), // hint
+        Constraint::Length(1), // blank
+        Constraint::Min(3),    // conversations
+        Constraint::Length(1), // status
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(theme::SUCCESS())),
+            Span::styled(
+                " add or remove  ".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("j/k", Style::default().fg(theme::AMBER())),
+            Span::styled(
+                " move  ".to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("Esc", Style::default().fg(theme::ERROR())),
+            Span::styled(" close".to_string(), Style::default().fg(theme::TEXT_DIM())),
+        ]))
+        .style(Style::default().bg(theme::BG_CANVAS())),
+        areas[0],
+    );
+
+    if cmail.conversations.is_empty() {
+        let text = match cmail.loading {
+            true => "Loading your c-mail...",
+            false => "No conversations yet. Start one with /cs mail @user.",
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM())),
+            areas[2],
+        );
+    } else {
+        let height = areas[2].height.max(1) as usize;
+        let selected = cmail
+            .selected
+            .min(cmail.conversations.len().saturating_sub(1));
+        let start = selected.saturating_sub(height.saturating_sub(1));
+        let lines: Vec<Line<'static>> = cmail
+            .conversations
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(height)
+            .map(|(index, conversation)| {
+                let is_selected = index == selected;
+                let on_rail = state.is_cmail_pinned(&conversation.conversation_id);
+                let mut spans = vec![
+                    Span::styled(
+                        match is_selected {
+                            true => "> ",
+                            false => "  ",
+                        },
+                        Style::default().fg(theme::AMBER()),
+                    ),
+                    Span::styled(
+                        match on_rail {
+                            true => "[x] ",
+                            false => "[ ] ",
+                        },
+                        Style::default().fg(match on_rail {
+                            true => theme::SUCCESS(),
+                            false => theme::TEXT_FAINT(),
+                        }),
+                    ),
+                    Span::styled(
+                        format!("@{}", conversation.other_user.username),
+                        match is_selected {
+                            true => Style::default()
+                                .fg(theme::TEXT_BRIGHT())
+                                .add_modifier(Modifier::BOLD),
+                            false => Style::default().fg(theme::TEXT()),
+                        },
+                    ),
+                ];
+                if conversation.unread_count > 0 {
+                    spans.push(Span::styled(
+                        format!("  {} unread", conversation.unread_count),
+                        Style::default().fg(theme::AMBER()),
+                    ));
+                }
+                Line::from(spans)
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines), areas[2]);
+    }
+
+    let status = match &cmail.error {
+        Some(error) => Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme::ERROR()),
+        )),
+        // The picker only lists conversations that exist, so the way to write
+        // to someone new belongs here rather than only in the empty state.
+        None => Line::from(Span::styled(
+            "Write to someone new with /cs mail @user.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+    };
+    frame.render_widget(
+        Paragraph::new(status).style(Style::default().bg(theme::BG_CANVAS())),
+        areas[3],
+    );
+}
+
+/// One of their chat rooms or C-Mail conversations, live. Everything on screen
+/// arrived through this session's own stream and renders for this user alone.
+fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom, viewer: &str, online: Option<i64>) {
     // No composer here: writing happens in the chat composer slot below the
     // pane, the same box every other room types into (`chat::ui`).
     let [header_area, body_area] =
@@ -589,7 +681,7 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
     frame.render_widget(block, header_area);
     let mut header = vec![
         Span::styled(
-            format!("#{}", room.slug),
+            room.display_name(),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -599,6 +691,14 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ];
+    // Their roster carries the head count, so it costs nothing beyond the
+    // badge refresh that already fetches it.
+    if let Some(online) = online {
+        header.push(Span::styled(
+            format!(" · {online} online"),
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
     if room.stream_down {
         header.push(Span::styled(
             "  · not live, press b and come back",
@@ -617,7 +717,12 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
             body_area,
         );
     } else {
-        let lines = room_lines(&room.messages, body_area.width as usize);
+        let lines = room_lines(
+            &room.messages,
+            body_area.width as usize,
+            viewer,
+            room.unread_from,
+        );
         // Scroll counts rendered rows back from the newest, so a room opens
         // live at the bottom the way a chat room should. Only the renderer
         // knows how many rows the conversation wrapped to, so it writes the
@@ -640,13 +745,34 @@ fn draw_room(frame: &mut Frame, area: Rect, room: &OpenRoom) {
 ///
 /// Continuations hang under the author rather than restarting at the margin,
 /// so a long message still reads as one message.
-fn room_lines(messages: &[CircMessage], width: usize) -> Vec<Line<'static>> {
+///
+/// Three reading aids ride along, all decided from what is already on screen:
+/// your own messages carry your name in full amber against everyone else's
+/// dim, a message that `@`s you takes the same background wash a mention gets
+/// in a late.sh room, and the first message you have not seen gets a "new
+/// messages" rule above it.
+pub(crate) fn room_lines(
+    messages: &[CircMessage],
+    width: usize,
+    viewer: &str,
+    unread_from: Option<i64>,
+) -> Vec<Line<'static>> {
     const STAMP: &str = "%H:%M";
     // "HH:MM " plus the indent continuations hang at.
     let indent_cols = 6usize;
     let mut rows: Vec<Line<'static>> = Vec::new();
+    let viewer_lower = viewer.to_lowercase();
+    let mut divider_drawn = false;
 
     for message in messages {
+        let is_own = message.username.eq_ignore_ascii_case(viewer);
+        // Only somebody else's message can be the boundary: coming back to
+        // your own last line and being told it is new reads as a bug.
+        if !divider_drawn && !is_own && unread_from.is_some_and(|cursor| message.timestamp > cursor)
+        {
+            rows.push(new_messages_rule(width));
+            divider_drawn = true;
+        }
         let stamp = message
             .at()
             .map(|at| at.format(STAMP).to_string())
@@ -687,16 +813,31 @@ fn room_lines(messages: &[CircMessage], width: usize) -> Vec<Line<'static>> {
                     false => body = format!("{body} {label}"),
                 }
             }
+            // Your own name reads in full amber, everyone else's dim: the
+            // same tell a late.sh room gives, so a room you are talking in
+            // scans the same way here.
+            let author_color = match is_own {
+                true => theme::AMBER(),
+                false => theme::AMBER_DIM(),
+            };
             (
                 Span::styled(
                     format!("{}: ", message.username),
                     Style::default()
-                        .fg(theme::AMBER_DIM())
+                        .fg(author_color)
                         .add_modifier(Modifier::BOLD),
                 ),
                 body,
                 Style::default().fg(theme::TEXT()),
             )
+        };
+
+        // A message that `@`s you takes the wash a mention takes in a late.sh
+        // room. Their mention syntax is ours (`@name`, case-insensitive), so
+        // the same parser decides it.
+        let row_style = match !is_own && mentions_viewer(&body, &viewer_lower) {
+            true => Style::default().bg(theme::CHAT_MENTION_BG()),
+            false => Style::default(),
         };
 
         let prefix_cols: usize = prefix
@@ -709,18 +850,24 @@ fn room_lines(messages: &[CircMessage], width: usize) -> Vec<Line<'static>> {
         let wrapped = wrap_paragraph_hanging(&body, first_width, rest_width);
 
         match wrapped.split_first() {
-            None => rows.push(Line::from(vec![stamp_span, prefix])),
+            None => rows.push(Line::from(vec![stamp_span, prefix]).style(row_style)),
             Some((first, rest)) => {
-                rows.push(Line::from(vec![
-                    stamp_span,
-                    prefix,
-                    Span::styled(first.clone(), body_style),
-                ]));
+                rows.push(
+                    Line::from(vec![
+                        stamp_span,
+                        prefix,
+                        Span::styled(first.clone(), body_style),
+                    ])
+                    .style(row_style),
+                );
                 for row in rest {
-                    rows.push(Line::from(vec![
-                        Span::raw(" ".repeat(indent_cols)),
-                        Span::styled(row.clone(), body_style),
-                    ]));
+                    rows.push(
+                        Line::from(vec![
+                            Span::raw(" ".repeat(indent_cols)),
+                            Span::styled(row.clone(), body_style),
+                        ])
+                        .style(row_style),
+                    );
                 }
             }
         }
@@ -728,7 +875,56 @@ fn room_lines(messages: &[CircMessage], width: usize) -> Vec<Line<'static>> {
     rows
 }
 
-fn draw_notifications(frame: &mut Frame, area: Rect, state: &State) {
+/// The rule marking where the messages you have not read start.
+fn new_messages_rule(width: usize) -> Line<'static> {
+    let label = " new messages ";
+    let rule_width = width.saturating_sub(label.len()).max(2);
+    let left = rule_width / 2;
+    let style = Style::default().fg(theme::TEXT_DIM());
+    Line::from(vec![
+        Span::styled("─".repeat(left), style),
+        Span::styled(label, style.add_modifier(Modifier::BOLD)),
+        Span::styled("─".repeat(rule_width.saturating_sub(left)), style),
+    ])
+}
+
+/// Whether a room message `@`s the viewer, using the same mention parser the
+/// late.sh chat and notification paths use.
+fn mentions_viewer(body: &str, viewer_lower: &str) -> bool {
+    crate::app::common::mentions::extract_mentions(body)
+        .iter()
+        .any(|mentioned| mentioned == viewer_lower)
+}
+
+fn draw_notifications(frame: &mut Frame, area: Rect, state: &State, username: &str) {
+    // Its own row in the rail, so it gets the same header the feed has: the
+    // surface has to say whose notifications these are.
+    let [header_area, area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(theme::BORDER_DIM()));
+    let header_inner = block.inner(header_area);
+    frame.render_widget(block, header_area);
+    let mut header = vec![
+        Span::styled(
+            format!("@{username}"),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" notifications", Style::default().fg(theme::TEXT_DIM())),
+    ];
+    if state.unread_notifications() > 0 {
+        header.push(Span::styled(
+            format!(" · {} unread", state.unread_notifications()),
+            Style::default()
+                .fg(theme::SUCCESS())
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(header)), header_inner);
+
     if state.notifications.is_empty() {
         let text = if state.loading {
             "Loading notifications..."
@@ -777,7 +973,7 @@ fn notification_line(notification: &CsNotification, selected: bool) -> Line<'sta
             .add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::styled(
-        format!(" {}", describe_notification(&notification.kind)),
+        format!(" {}", describe_notification(notification)),
         Style::default().fg(theme::TEXT()),
     ));
     if let Some(stamp) = relative_stamp(notification.created_at) {
@@ -790,9 +986,14 @@ fn notification_line(notification: &CsNotification, selected: bool) -> Line<'sta
 }
 
 /// Human phrasing for the notification types the API documents; unknown
-/// types fall back to the raw name so new server types stay readable.
-fn describe_notification(kind: &str) -> String {
-    match kind {
+/// types fall back to the raw name so new server types stay readable. A chat
+/// mention names its room, because that is where Enter is about to take the
+/// user and it is the only thing their payload says about it.
+fn describe_notification(notification: &CsNotification) -> String {
+    if let Some(slug) = notification.room_slug() {
+        return format!("mentioned you in #{slug}");
+    }
+    match notification.kind.as_str() {
         "reply" => "replied to your entry".to_string(),
         "thread_reply" => "replied in a thread you watch".to_string(),
         "new_follower" => "followed you".to_string(),
@@ -822,6 +1023,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &State) {
         // the pane rather than in the modal: the rail is the truth about what
         // was added, and the modal is a view onto it.
         Modal::Rooms(rooms) => draw_rooms_modal(frame, area, rooms, state),
+        Modal::Cmail(cmail) => draw_cmail_modal(frame, area, cmail, state),
     }
 }
 

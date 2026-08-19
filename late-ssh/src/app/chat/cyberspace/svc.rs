@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
-use late_core::{db::Db, models::cyberspace_account::CyberspaceAccount};
+use late_core::{
+    db::Db,
+    models::cyberspace_account::{CmailThread, CyberspaceAccount},
+};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{Instrument, info_span};
@@ -21,8 +24,8 @@ use uuid::Uuid;
 use crate::app::activity::publisher::ActivityPublisher;
 
 use super::api::{
-    CircMessage, CircRoom, CircStreamBuffer, CircStreamEvent, CsApi, CsApiError, CsNotification,
-    CsPost, CsReply, NewPost, parse_circ_stream_frame,
+    CircMessage, CircRoom, CircStreamBuffer, CircStreamEvent, CmailConversation, CsApi, CsApiError,
+    CsNotification, CsPost, CsReply, NewPost, StreamNode, parse_circ_stream_frame,
 };
 
 /// Firebase id tokens live ~60 minutes; refresh with slack so a token handed
@@ -58,6 +61,9 @@ pub enum CsEvent {
         username: Option<String>,
         feed_read_at: Option<DateTime<Utc>>,
         circ_rooms: Vec<String>,
+        /// Pinned C-Mail conversations, landing with the rooms so the whole
+        /// section is drawable from the first frame.
+        cmail_threads: Vec<CmailThread>,
         /// Per-room read cursors (slug -> newest message ts seen, their
         /// clock), landing with the pins so the rail's unread dots have
         /// something to compare against from the first roster fetch.
@@ -135,6 +141,36 @@ pub enum CsEvent {
         user_id: Uuid,
         room: String,
     },
+    /// Their C-Mail conversation list, for the picker and the rail badges.
+    /// Carries their own unread counts, so nothing here is ours to track.
+    CmailList {
+        user_id: Uuid,
+        conversations: Vec<CmailConversation>,
+    },
+    /// The pinned C-Mail rail rows, after a load or an add/remove.
+    CmailPinned {
+        user_id: Uuid,
+        threads: Vec<CmailThread>,
+    },
+    /// A conversation started (or found) by username, ready to pin.
+    CmailStarted {
+        user_id: Uuid,
+        thread: CmailThread,
+    },
+    CmailHistoryLoaded {
+        user_id: Uuid,
+        conversation_id: String,
+        messages: Vec<CircMessage>,
+    },
+    CmailStreamed {
+        user_id: Uuid,
+        conversation_id: String,
+        event: CircStreamEvent,
+    },
+    CmailStreamEnded {
+        user_id: Uuid,
+        conversation_id: String,
+    },
     /// Any task failure the user should see, rendered as a banner.
     ActionFailed {
         user_id: Uuid,
@@ -182,6 +218,22 @@ impl Drop for CircRoomSession {
         }
         self.service
             .leave_circ_room_task(self.user_id, self.room.clone());
+    }
+}
+
+/// A C-Mail conversation the user currently has open. Same contract as
+/// [`CircRoomSession`]: holding one is what makes the conversation fetch, and
+/// dropping it stops the history load and the live stream. No presence half,
+/// because a conversation has no user list to be in.
+pub struct CmailSession {
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl Drop for CmailSession {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
     }
 }
 
@@ -278,6 +330,11 @@ impl CyberspaceService {
                 let has_rooms = account
                     .as_ref()
                     .is_some_and(|account| !account.circ_rooms.is_empty());
+                let cmail_threads = account
+                    .as_ref()
+                    .map(CyberspaceAccount::cmail_threads)
+                    .unwrap_or_default();
+                let has_cmail = !cmail_threads.is_empty();
                 // The cursor lands before any entries do, so the session has
                 // something to count them against, and the pinned rooms land
                 // before the rail is drawn.
@@ -290,9 +347,10 @@ impl CyberspaceService {
                         .map(|a| a.room_read_cursors())
                         .unwrap_or_default(),
                     circ_rooms: account.map(|a| a.circ_rooms).unwrap_or_default(),
+                    cmail_threads,
                 });
                 if linked {
-                    service.refresh_unread(user_id, has_rooms).await;
+                    service.refresh_unread(user_id, has_rooms, has_cmail).await;
                 }
             }
             .instrument(info_span!("cyberspace.session_init", user_id = %user_id)),
@@ -336,7 +394,11 @@ impl CyberspaceService {
                         });
                         service.load_feed(user_id).await;
                         service
-                            .refresh_unread(user_id, !account.circ_rooms.is_empty())
+                            .refresh_unread(
+                                user_id,
+                                !account.circ_rooms.is_empty(),
+                                !account.cmail_threads().is_empty(),
+                            )
                             .await;
                     }
                     Err(error) => service.publish(CsEvent::LinkFailed { user_id, error }),
@@ -508,6 +570,19 @@ impl CyberspaceService {
                 };
                 match service.api.list_notifications(&token).await {
                     Ok(notifications) => {
+                        // Kept deliberately: their docs type `targetType` as
+                        // `post | reply` and call `metadata` open-ended, so
+                        // this line is the only place a real payload is
+                        // visible, and it is what told us a `chat_mention`
+                        // names a room and no message. Debug level, human
+                        // triggered (opening the row), and `shape` keeps their
+                        // content out of it, so it costs nothing to leave in.
+                        for notification in &notifications {
+                            tracing::debug!(
+                                shape = %notification.shape(),
+                                "cyberspace notification payload"
+                            );
+                        }
                         service.publish(CsEvent::NotificationsLoaded {
                             user_id,
                             notifications,
@@ -534,7 +609,21 @@ impl CyberspaceService {
                     Err(e) => return service.fail(user_id, e.user_message()),
                 };
                 match service.api.list_circ_rooms(&token).await {
-                    Ok(rooms) => service.publish(CsEvent::CircRooms { user_id, rooms }),
+                    Ok(rooms) => {
+                        // Kept for the same reason as the notification line:
+                        // the picker renders this list verbatim, so a room
+                        // missing from it was never sent, and that question
+                        // comes up whenever their roster is filtered for an
+                        // account. Slugs only, and only on a picker open; the
+                        // badge poll's roster refresh takes another path and
+                        // logs nothing.
+                        tracing::debug!(
+                            count = rooms.len(),
+                            slugs = %rooms.iter().map(super::api::CircRoom::key).collect::<Vec<_>>().join(","),
+                            "cyberspace chat roster"
+                        );
+                        service.publish(CsEvent::CircRooms { user_id, rooms });
+                    }
                     Err(e) => service.fail(user_id, format!("loading chat rooms failed: {e}")),
                 }
             }
@@ -606,8 +695,12 @@ impl CyberspaceService {
             let service = self.clone();
             let room = room.clone();
             tokio::spawn(
-                async move { service.run_circ_stream(user_id, room).await }
-                    .instrument(info_span!("cyberspace.circ_stream", user_id = %user_id)),
+                async move {
+                    service
+                        .run_message_stream(user_id, StreamNode::ChatMessages, room)
+                        .await
+                }
+                .instrument(info_span!("cyberspace.circ_stream", user_id = %user_id)),
             )
         };
         let presence = {
@@ -625,6 +718,162 @@ impl CyberspaceService {
             room,
             activity,
             tasks: vec![history, stream, presence],
+        }
+    }
+
+    /// Their conversation list, for the picker and for the rail badges. Only
+    /// ever on a human action or beside the badge refresh, same as the roster.
+    pub fn load_cmail_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let token = match service.id_token(user_id).await {
+                    Ok(token) => token,
+                    Err(e) => return service.fail(user_id, e.user_message()),
+                };
+                match service.api.list_cmail(&token).await {
+                    Ok(conversations) => service.publish(CsEvent::CmailList {
+                        user_id,
+                        conversations,
+                    }),
+                    Err(e) => service.fail(user_id, format!("loading c-mail failed: {e}")),
+                }
+            }
+            .instrument(info_span!("cyberspace.cmail_list", user_id = %user_id)),
+        );
+    }
+
+    /// `/cs mail @user`: start (or find) the conversation with that username.
+    /// Their endpoint is idempotent, so this never creates a second one.
+    pub fn start_cmail_task(&self, user_id: Uuid, username: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let token = match service.id_token(user_id).await {
+                    Ok(token) => token,
+                    Err(e) => return service.fail(user_id, e.user_message()),
+                };
+                match service.api.start_cmail(&token, &username).await {
+                    Ok(started) => {
+                        let peer = match started.other_user.username.is_empty() {
+                            true => username,
+                            false => started.other_user.username,
+                        };
+                        service.publish(CsEvent::CmailStarted {
+                            user_id,
+                            thread: CmailThread {
+                                id: started.conversation_id,
+                                username: peer,
+                            },
+                        });
+                    }
+                    Err(e) => service.fail(user_id, format!("starting c-mail failed: {e}")),
+                }
+            }
+            .instrument(info_span!("cyberspace.cmail_start", user_id = %user_id)),
+        );
+    }
+
+    /// Write the pinned C-Mail rail rows. The session already moved its own
+    /// copy; this only has to make it survive a reconnect.
+    pub fn set_cmail_pinned_task(&self, user_id: Uuid, threads: Vec<CmailThread>) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    CyberspaceAccount::set_cmail_threads(&client, user_id, &threads).await
+                }
+                .await;
+                match result {
+                    Ok(()) => service.publish(CsEvent::CmailPinned { user_id, threads }),
+                    Err(e) => {
+                        late_core::error_span!(
+                            "cyberspace_pin_cmail_failed",
+                            error = ?e,
+                            user_id = %user_id,
+                            "failed to store pinned cyberspace c-mail conversations"
+                        );
+                        service.fail(
+                            user_id,
+                            "pinning the conversation failed, try again".to_string(),
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!("cyberspace.cmail_pin", user_id = %user_id)),
+        );
+    }
+
+    pub fn send_cmail_task(&self, user_id: Uuid, conversation_id: String, content: String) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let token = match service.id_token(user_id).await {
+                    Ok(token) => token,
+                    Err(e) => return service.fail(user_id, e.user_message()),
+                };
+                // Nothing published on success: the message comes back through
+                // the conversation's own stream, like the other side's does.
+                if let Err(e) = service
+                    .api
+                    .send_cmail(&token, &conversation_id, &content)
+                    .await
+                {
+                    service.fail(user_id, format!("sending failed: {e}"));
+                }
+            }
+            .instrument(info_span!("cyberspace.cmail_send", user_id = %user_id)),
+        );
+    }
+
+    /// Open a conversation: its history and its live stream. Everything dies
+    /// with the returned handle, so a conversation nobody is reading fetches
+    /// nothing.
+    pub fn open_cmail(&self, user_id: Uuid, conversation_id: String) -> CmailSession {
+        let history = {
+            let service = self.clone();
+            let conversation_id = conversation_id.clone();
+            tokio::spawn(
+                async move { service.load_cmail_history(user_id, conversation_id).await }
+                    .instrument(info_span!("cyberspace.cmail_history", user_id = %user_id)),
+            )
+        };
+        let stream = {
+            let service = self.clone();
+            tokio::spawn(
+                async move {
+                    service
+                        .run_message_stream(user_id, StreamNode::DmMessages, conversation_id)
+                        .await
+                }
+                .instrument(info_span!("cyberspace.cmail_stream", user_id = %user_id)),
+            )
+        };
+        CmailSession {
+            tasks: vec![history, stream],
+        }
+    }
+
+    async fn load_cmail_history(&self, user_id: Uuid, conversation_id: String) {
+        let token = match self.id_token(user_id).await {
+            Ok(token) => token,
+            Err(e) => return self.fail(user_id, e.user_message()),
+        };
+        match self.api.read_cmail(&token, &conversation_id, None).await {
+            Ok(history) => {
+                self.publish(CsEvent::CmailHistoryLoaded {
+                    user_id,
+                    conversation_id: conversation_id.clone(),
+                    messages: history.messages,
+                });
+                // Opening a conversation is reading it. Their count is what
+                // the rail badge shows, so this is also what clears it.
+                if let Err(e) = self.api.mark_cmail_read(&token, &conversation_id).await {
+                    tracing::debug!(%e, "marking cyberspace c-mail read failed");
+                }
+            }
+            Err(e) => self.fail(user_id, format!("loading the conversation failed: {e}")),
         }
     }
 
@@ -655,11 +904,14 @@ impl CyberspaceService {
     /// and after a dropped connection. Bounded on purpose: their docs ask for
     /// one stream per room and no reconnect loops, so a room that cannot hold
     /// a stream gives up and tells the session rather than hammering them.
-    async fn run_circ_stream(&self, user_id: Uuid, room: String) {
+    ///
+    /// Serves both chat surfaces: a cIRC room and a C-Mail conversation are
+    /// the same mechanism over two realtime-database nodes.
+    async fn run_message_stream(&self, user_id: Uuid, node: StreamNode, room: String) {
         let mut failures = 0;
         while failures < CIRC_STREAM_MAX_FAILURES {
             let started = Instant::now();
-            let outcome = self.stream_once(user_id, &room).await;
+            let outcome = self.stream_once(user_id, node, &room).await;
             // A stream that carried the room for a while and then ended is the
             // expected token expiry, and earns a clean slate. One that ends
             // immediately counts against the budget however it ended: without
@@ -675,17 +927,23 @@ impl CyberspaceService {
             }
             tokio::time::sleep(CIRC_STREAM_RETRY_DELAY).await;
         }
-        self.publish(CsEvent::CircStreamEnded { user_id, room });
+        match node {
+            StreamNode::ChatMessages => self.publish(CsEvent::CircStreamEnded { user_id, room }),
+            StreamNode::DmMessages => self.publish(CsEvent::CmailStreamEnded {
+                user_id,
+                conversation_id: room,
+            }),
+        }
     }
 
-    async fn stream_once(&self, user_id: Uuid, room: &str) -> Result<(), String> {
+    async fn stream_once(&self, user_id: Uuid, node: StreamNode, room: &str) -> Result<(), String> {
         let (token, rtdb_url) = self
             .token_and_rtdb(user_id)
             .await
             .map_err(|e| e.user_message())?;
         let response = self
             .api
-            .open_circ_stream(&rtdb_url, room, &token)
+            .open_message_stream(&rtdb_url, node, room, &token)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -696,12 +954,20 @@ impl CyberspaceService {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| e.without_url().to_string())?;
             for frame in buffer.push(&chunk) {
-                if let Some(event) = parse_circ_stream_frame(&frame) {
-                    self.publish(CsEvent::CircStreamed {
+                let Some(event) = parse_circ_stream_frame(&frame) else {
+                    continue;
+                };
+                match node {
+                    StreamNode::ChatMessages => self.publish(CsEvent::CircStreamed {
                         user_id,
                         room: room.to_string(),
                         event,
-                    });
+                    }),
+                    StreamNode::DmMessages => self.publish(CsEvent::CmailStreamed {
+                        user_id,
+                        conversation_id: room.to_string(),
+                        event,
+                    }),
                 }
             }
             if buffer.pending_len() > CIRC_STREAM_BUFFER_CAP {
@@ -813,11 +1079,20 @@ impl CyberspaceService {
     /// and a stale badge is not worth a banner. `include_circ_roster` comes
     /// from the caller, who knows whether any rooms are pinned: a roster
     /// fetch that decorates nothing is a call their terms have no answer for.
-    pub fn refresh_unread_task(&self, user_id: Uuid, include_circ_roster: bool) {
+    pub fn refresh_unread_task(
+        &self,
+        user_id: Uuid,
+        include_circ_roster: bool,
+        include_cmail: bool,
+    ) {
         let service = self.clone();
         tokio::spawn(
-            async move { service.refresh_unread(user_id, include_circ_roster).await }
-                .instrument(info_span!("cyberspace.unread", user_id = %user_id)),
+            async move {
+                service
+                    .refresh_unread(user_id, include_circ_roster, include_cmail)
+                    .await
+            }
+            .instrument(info_span!("cyberspace.unread", user_id = %user_id)),
         );
     }
 
@@ -825,8 +1100,9 @@ impl CyberspaceService {
     /// endpoint, the newest entries for the session to count unread ones out
     /// of, and (when rooms are pinned) the chat roster, whose
     /// `last_message_at` stamps are what the rail's room dots compare
-    /// against.
-    async fn refresh_unread(&self, user_id: Uuid, include_circ_roster: bool) {
+    /// against, and (when conversations are pinned) the C-Mail list, whose
+    /// own unread counts are the badges on those rows.
+    async fn refresh_unread(&self, user_id: Uuid, include_circ_roster: bool, include_cmail: bool) {
         let token = match self.id_token(user_id).await {
             Ok(token) => token,
             Err(_) => return,
@@ -843,6 +1119,17 @@ impl CyberspaceService {
             match self.api.list_circ_rooms(&token).await {
                 Ok(rooms) => self.publish(CsEvent::CircRooms { user_id, rooms }),
                 Err(e) => tracing::debug!(%e, "cyberspace chat roster refresh failed"),
+            }
+        }
+        // Only while conversations are pinned: an account with no C-Mail rail
+        // rows has nothing to badge, so it spends no call on it.
+        if include_cmail {
+            match self.api.list_cmail(&token).await {
+                Ok(conversations) => self.publish(CsEvent::CmailList {
+                    user_id,
+                    conversations,
+                }),
+                Err(e) => tracing::debug!(%e, "cyberspace c-mail refresh failed"),
             }
         }
     }

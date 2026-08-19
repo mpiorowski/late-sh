@@ -4,7 +4,7 @@
 - Scope: the BashQuest door as a whole — the **client** in `late-ssh/src/app/door/bashquest` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-bashquest/`**. There is no separate `late-bashquest/CONTEXT.md`; this file is the single source for both halves.
 - Domain: BashQuest, a native late.sh original (not a foreign upstream binary): an interactive terminal game teaching Linux/Bash, 90 levels across 18 tiers, written by Tony "Hardlygospel" Hosaroygard (GPL-3.0, `github.com/hardlygospel/bashquest`), run on a PTY inside a **dedicated `late-bashquest` SSH host** and reached by late-ssh as a network-proxied door (same transport model as dopewars/DCSS).
 - Primary audience: LLM agents changing the BashQuest launcher UI, the SSH client transport, the host crate (PTY bridge / auth), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-08-15 (initial door integration).
+- Last updated: 2026-08-18 (TERM fallback for `clear`; see §9).
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI or build/deploy wiring.
@@ -57,7 +57,7 @@ The door is gated by the `bashquest_enabled` profile flag in `late-ssh/src/confi
 |---|---|
 | `main.rs` | Tracing init, `Config::from_env`, load/generate the SSH host key, `create_dir_all` the data dir, run the russh server (`run_on_address`). Exits promptly on SIGTERM (no save to drain). |
 | `config.rs` | `Config`: `bin`, `data_dir` (shared, persistent `HOME` for every session — DCSS's shape, not dopewars' per-session scratch dir), `secret`, listen addr/port, idle timeout. |
-| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key, captures + sanitizes the playname from the SSH username — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. No TERM fallback needed: bashquest.sh emits plain ANSI, not curses, so there's no `Unknown terminal type` failure mode to guard against. |
+| `server.rs` | russh `Server`/`ClientHandler`: `auth_publickey` (compares the derived key, captures + sanitizes the playname from the SSH username — see §7), `pty_request`, `shell_request`, `data`, `window_change_request`, `channel_eof/close`. Also `effective_term`/`term_supported`: bashquest.sh clears the screen with `clear`, a terminfo consumer, so an unresolvable client TERM falls back to `xterm-256color` (§9). |
 | `host.rs` | `PtyHost`: the per-session PTY bridge. `openpty` + `env_clear` + `setsid`/`TIOCSCTTY` + `IXON/IXOFF/IXANY` clear + `TIOCSWINSZ` + the **detached** reader. Spawns `bashquest.sh` directly (its own shebang, no CLI args) with `HOME` set to the *shared* `data_dir` and `BASHQUEST_AUTOLOGIN` set to the playname. Output flows to the SSH channel handle; client bytes flow to the PTY master. Teardown is a plain kill — bashquest.sh has no hangup-save need (see §1). Also `report_certificate_if_new`: after the child exits, checks for a fresh graduation certificate file and, if present, sends the marker directly over the channel (§10) — never derived from anything the child wrote. |
 | `identity.rs` | `derive_client_key(secret)` — identical to the client copy (KAT-pinned). |
 | `playname.rs` | `sanitize(username)`: keep `[A-Za-z0-9_]`, cap at 20 (matching the arcade handle's own `HANDLE_MAX_LEN`), fall back to `"player"`. Defense in depth on top of the already-validated arcade handle and bashquest.sh's own re-sanitizing `autologin()`. |
@@ -100,7 +100,7 @@ Input capture contract (client side):
 
 - `ClientHandler` (one per SSH connection): `auth_publickey` checks the derived key and captures + sanitizes the playname from the SSH username; `pty_request` records term/cols/rows; `shell_request` spawns a `PtyHost`.
 - `PtyHost::spawn` → `run_bridge` (unix only): `openpty`, clear `IXON/IXOFF/IXANY` on the slave termios before exec, build the `bashquest.sh` `Command` with `env_clear()` + allowlist (`TERM`, `HOME=<shared data_dir>`, `BASHQUEST_AUTOLOGIN=<playname>`, `LANG`/`LC_ALL=C.UTF-8` for the box-drawing/emoji output, `LINES`/`COLUMNS`), wire slave→stdio, `pre_exec` `setsid` + `TIOCSCTTY`. A blocking reader thread pumps PTY output to an unbounded channel; the select loop forwards those chunks to `handle.data(channel, …)`, writes client `Input` to the PTY master, applies `Resize` via `TIOCSWINSZ`, and breaks on `child.wait()`.
-- **No TERM fallback.** bashquest.sh writes ANSI escapes directly (`printf '\033[...'`), it never calls `initscr()`/`newterm()`, so there is no "Unknown terminal type" abort mode the way ncurses-based doors (nethack/DCSS/dopewars/brogue) have. Any TERM value the client sends is passed through unmodified.
+- **TERM fallback (`effective_term`), same as every other door host.** bashquest.sh writes ANSI escapes directly (`printf '\033[...'`) and never calls `initscr()`/`newterm()`, so it has no ncurses abort mode, but its `clear_screen()` shells out to `clear`, which *is* a terminfo consumer: on a TERM the host cannot resolve it prints `'<term>': unknown terminal type.` and clears nothing, so every redraw stacks under the previous screen instead of replacing it. `shell_request` therefore substitutes `xterm-256color` when `/usr/share/terminfo`, `/etc/terminfo`, and `/lib/terminfo` all lack an entry for the requested name (which also blocks a path-traversal TERM), and logs the substitution.
 - On child exit or client disconnect: close the SSH channel first (so the client returns to its launcher now), then kill the child. No SIGHUP dance — see §1.
 
 ### Sizing
@@ -131,7 +131,7 @@ Input capture contract (client side):
 - `BASHQUEST_AUTOLOGIN` is not a late.sh patch: it's an upstream feature bashquest.sh itself added specifically to support this integration (opt-in, backward-compatible — unset, the script behaves exactly as it always has for standalone `curl | bash` users). No source is forked or modified.
 
 ### Images (Dockerfile)
-- `base` copies the verified script to `/usr/local/bin/bashquest.sh` (from the `bashquest-build` stage) so `dev-bashquest` (which derives from `base`) can run it; prod ships the same copy in `runtime-bashquest`. `late-bashquest` (the host binary) builds in its own `builder-bashquest` cargo-chef stage, same shape as every other door host.
+- `base` copies the verified script to `/usr/local/bin/bashquest.sh` (from the `bashquest-build` stage) so `dev-bashquest` (which derives from `base`) can run it; prod ships the same copy in `runtime-bashquest`, which also installs `ncurses-term` for `clear`'s terminfo lookup (§9). `late-bashquest` (the host binary) builds in its own `builder-bashquest` cargo-chef stage, same shape as every other door host.
 - The committed `.env.dev` / `.env.dev2` templates carry the host-side settings compose passes to `service-bashquest` (`LATE_BASHQUEST_PORT` / `_SECRET` / `_DATA_DIR`), mirroring the dopewars/DCSS block; the client's host and port are profile literals, not env.
 
 ### Prod (Kubernetes / terraform)
@@ -167,6 +167,7 @@ Root policy applies: agents should not run `cargo test`/`nextest`/`clippy` as bl
 Inline pure tests cover:
 - Client `identity.rs` / host `identity.rs`: derivation determinism + a cross-crate known-answer fingerprint test (`SHA256:9NHbIJzzfj+WQ4YoYYlgWtjvH7N+FE2m1KYAp3X/73c` for secret `late-bashquest-kat-v1`), pinning the cross-crate contract from day one (unlike dopewars, which shipped this as a TODO).
 - Host `playname.rs`: sanitization (alnum+underscore only, cap at 20, empty falls back to `"player"`).
+- Host `server.rs`: auth records/sanitizes the playname, a rejected auth records none, and `effective_term` falls back to `xterm-256color` for an unresolvable or hostile TERM while passing a resolvable one through.
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down; a disabled door's `HandleFlow` settles to `Missing` instead of hanging in `Loading`.
 - Client `proxy.rs`'s `marker_test`: `extract_marker` parses a well-formed marker, finds one surrounded by other bytes and reports the correct strip span, rejects a marker whose certificate doesn't match its embedded digest (tamper/corruption), ignores plain output with no marker, and ignores a truncated one.
 - `late-core/src/models/bashquest_graduate_test.rs` (DB-integration, needs `TEST_DATABASE_URL`): `record` is idempotent per account (a second report doesn't overwrite the first certificate), `list_all` returns every graduate.
@@ -192,7 +193,7 @@ cargo test -p late-bashquest && cargo test -p late-ssh bashquest
 
 ### Host-side (`late-bashquest`)
 - **Ctrl-S freeze (XON/XOFF).** Cleared on the PTY before exec, same as every other door host.
-- **No terminfo/TERM fallback needed.** bashquest.sh is plain ANSI, not curses — don't add `effective_term`/`ncurses-term` machinery here by copy-pasting from another door's host; it would be dead code.
+- **`clear` needs terminfo even though bashquest.sh is "plain ANSI".** This shipped broken: the door was built on the assumption that a non-curses script has no terminfo dependency, but `clear_screen() { clear; }` does, and `runtime-bashquest` only carried the ncurses-base entry set. A ghostty client (`xterm-ghostty`, terminfo installed on the player's machine, absent on the host) got `'xterm-ghostty': unknown terminal type.` twice per redraw and a screen that never cleared, so banners/menus stacked. Fixed on both sides: `effective_term` in `server.rs` (§4) and `ncurses-term` in the runtime image. Don't reintroduce the "no terminfo concerns" assumption.
 - **Shared HOME is a feature, not a bug.** Every session getting the *same* `LATE_BASHQUEST_DATA_DIR` is deliberate (see §7), unlike almost every other door host in this codebase.
 
 ### Operational

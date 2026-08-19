@@ -1135,7 +1135,10 @@ async fn linked_account_gets_the_rail_entry_and_the_pane() {
     // The pane header names the account and the notification key, so the
     // rail badge is not the only thing explaining the count.
     wait_for_render_contains(&mut app, "@oddity on cyberspace.online").await;
-    wait_for_render_contains(&mut app, "n notifications").await;
+    // Notifications are their own rail row with their own badge, so the row
+    // is where the count is explained now; the pane header speaks for the
+    // feed alone.
+    wait_for_render_contains(&mut app, "notifications").await;
     assert!(app.chat.cyberspace_selected, "/cs should open the pane");
     assert!(
         !app.chat.cyberspace.modal_active(),
@@ -1168,7 +1171,7 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
 
     app.chat.select_cyberspace_room(0);
     assert_eq!(
-        app.chat.cyberspace.open_room_slug(),
+        app.chat.cyberspace.open_circ_slug(),
         Some("circ-lab"),
         "selecting the rail entry should open the room"
     );
@@ -1177,7 +1180,7 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
     // rail; the room's stream and presence heartbeat must not survive it.
     app.set_screen(Screen::Arcade);
     assert_eq!(
-        app.chat.cyberspace.open_room_slug(),
+        app.chat.cyberspace.open_circ_slug(),
         None,
         "leaving Home must drop the room session"
     );
@@ -1189,6 +1192,141 @@ async fn switching_screens_drops_the_open_cyberspace_room() {
         app.chat.cyberspace_selected,
         "coming back to Home should land on the cyberspace pane, same as Esc"
     );
+}
+
+#[tokio::test]
+async fn entering_a_cyberspace_room_reads_it_before_it_types_in_it() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-reader").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-read-flow-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+
+    app.chat.select_cyberspace_room(0);
+    assert_eq!(app.chat.cyberspace.open_circ_slug(), Some("circ-lab"));
+
+    // Walking into a room is reading it, like every other room in the rail:
+    // `k` scrolls the conversation, it does not start a message.
+    app.handle_input(b"k");
+    assert_eq!(
+        room_draft(&app),
+        "",
+        "a room must not open with its composer focused"
+    );
+
+    // `i` is what focuses it, and from there the same letter is text.
+    app.handle_input(b"ik");
+    assert_eq!(room_draft(&app), "k");
+
+    // Esc drops the draft and hands the room back to reading; only the next
+    // one leaves the room.
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| room_draft(app).is_empty(), "room composer").await;
+    app.handle_input(b"k");
+    assert_eq!(room_draft(&app), "");
+    assert_eq!(
+        app.chat.cyberspace.open_circ_slug(),
+        Some("circ-lab"),
+        "the first Esc leaves the composer, not the room"
+    );
+}
+
+#[tokio::test]
+async fn end_in_a_room_draft_edits_the_line_instead_of_scrolling() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-end-key").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-end-key-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+    app.chat.select_cyberspace_room(0);
+
+    app.handle_input(b"iab");
+    app.handle_input(b"\x1b[H");
+    app.handle_input(b"c");
+    assert_eq!(room_draft(&app), "cab", "Home moves the cursor to the head");
+
+    // End is Home's mirror while the row holds text: it must return the
+    // cursor to the end of the line, not scroll the conversation.
+    app.handle_input(b"\x1b[F");
+    app.handle_input(b"d");
+    assert_eq!(room_draft(&app), "cabd");
+}
+
+#[tokio::test]
+async fn our_own_command_typed_in_their_room_never_becomes_a_message() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "cs-room-command").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer to lounge");
+    CyberspaceAccount::upsert_for_user(&client, viewer.id, "cs-uid", "oddity", "refresh-token")
+        .await
+        .expect("link cyberspace account");
+    CyberspaceAccount::set_circ_rooms(&client, viewer.id, &["circ-lab".to_string()])
+        .await
+        .expect("pin a chat room");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "cs-room-command-flow-it");
+    wait_for_render_contains(&mut app, "circ-lab").await;
+    app.chat.select_cyberspace_room(0);
+
+    // `/cs chat` is ours, not theirs. It opens the picker over the room the
+    // user is standing in, and the text never reaches their API as a message.
+    app.handle_input(b"i/cs chat\r");
+    assert!(
+        app.chat.cyberspace.modal_active(),
+        "the room picker should open over the room"
+    );
+    assert_eq!(
+        app.chat.cyberspace.open_circ_slug(),
+        Some("circ-lab"),
+        "opening a picker must not walk the user out of the room"
+    );
+    assert_eq!(
+        room_draft(&app),
+        "",
+        "the command must not stay in the draft"
+    );
+}
+
+/// What is currently typed into the open cyberspace room's composer.
+fn room_draft(app: &crate::app::state::App) -> String {
+    app.chat
+        .cyberspace
+        .room_composer()
+        .expect("a room is open")
+        .lines()
+        .join("")
 }
 
 #[tokio::test]

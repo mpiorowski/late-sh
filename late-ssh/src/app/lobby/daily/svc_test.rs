@@ -1,5 +1,8 @@
+use cozy_chess::Board;
+
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::app::activity::publisher::ActivityPublisher;
+use crate::app::games::chess_core::rules;
 use crate::app::games::chips::svc::ChipService;
 use crate::app::lobby::daily::battleship::DailyBattleshipState;
 use crate::app::lobby::daily::connect4::DailyConnect4State;
@@ -236,6 +239,84 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert_eq!(credited, Some(500), "winner never received the win payout");
+}
+
+#[tokio::test]
+async fn chess960_claim_shuffles_the_start_and_a_win_pays_the_chess960_reward() {
+    let test_db = new_test_db().await;
+    let challenger = create_test_user(&test_db.db, "daily-960-challenger").await;
+    let opponent = create_test_user(&test_db.db, "daily-960-opponent").await;
+    let svc = daily_service(&test_db);
+
+    // Three claims, because the shuffle is random: one drawn position can be
+    // the standard start by chance (1 in 960), three in a row cannot, so all
+    // three standard means the claim arm handed chess960 `Board::default()`.
+    let mut claimed = Vec::new();
+    for _ in 0..3 {
+        let challenge = svc
+            .post_challenge(challenger.id, DailyGame::Chess960, None)
+            .await
+            .expect("post chess960 challenge");
+        claimed.push(
+            svc.claim_challenge(opponent.id, challenge.id)
+                .await
+                .expect("claim challenge"),
+        );
+    }
+
+    let standard = rules::fen(&Board::default());
+    let mut shuffled = false;
+    for row in &claimed {
+        let state = chess_state(row);
+        // The board screen re-parses this FEN on every draw, so a shuffled
+        // position that cannot be read back is a dead match.
+        let board: Board = state.fen.parse().expect("stored chess960 fen is a board");
+        assert_eq!(rules::fen(&board), state.fen);
+        shuffled |= state.fen != standard;
+    }
+    assert!(
+        shuffled,
+        "every chess960 claim started from the standard back rank"
+    );
+
+    // A resignation is the decisive finish that needs no scripted mate from a
+    // position nobody knows in advance.
+    let finished_id = claimed[0].id;
+    svc.resign(challenger.id, finished_id)
+        .await
+        .expect("challenger resigns");
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DailyMatch::get(&client, finished_id)
+        .await
+        .expect("load match")
+        .expect("match exists");
+    assert_eq!(row.status, DailyMatch::STATUS_FINISHED);
+    assert_eq!(row.result, DailyMatch::RESULT_RESIGN);
+    assert_eq!(row.winner_user_id, Some(opponent.id));
+
+    // The payout rides the chess960 reward key and chip move, not chess's:
+    // key, ledger reason and the seeded template have to agree three ways.
+    let mut credited = None;
+    for _ in 0..100 {
+        let rows = client
+            .query(
+                "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = 'daily_chess960_win'",
+                &[&opponent.id],
+            )
+            .await
+            .expect("ledger rows");
+        if let Some(row) = rows.first() {
+            credited = Some(row.get::<_, i64>("delta"));
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        credited,
+        Some(500),
+        "chess960 winner never received the win payout"
+    );
 }
 
 #[tokio::test]

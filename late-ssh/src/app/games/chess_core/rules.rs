@@ -1,6 +1,59 @@
 use cozy_chess::{Board, Color, File, Move, Piece, Rank, Square, util::display_san_move};
+use rand::Rng;
 
 use super::types::{ChessColor, ChessMoveSpec, ChessPiece, ChessPieceKind};
+
+/// The FEN we persist, for every variant: Shredder notation, where the
+/// castling rights name the rooks' own files (`HAha` for the standard
+/// opening) instead of `KQkq`.
+///
+/// `KQkq` cannot describe a rook that does not stand on a1/h1, so a Chess960
+/// position written that way does not read back. One notation for both
+/// variants means no code path has to know which one it is holding, and
+/// `str::parse` accepts either, so positions stored before this still load.
+pub fn fen(board: &Board) -> String {
+    format!("{board:#}")
+}
+
+/// A random Chess960 starting position: the back rank shuffled under the two
+/// rules that keep the game recognisable — the bishops stand on opposite
+/// colours, and the king stands between its two rooks, so both castles exist.
+/// Black mirrors White, as Chess960 requires.
+pub fn random_chess960_board() -> Board {
+    let mut rng = rand::thread_rng();
+    let mut back = [' '; 8];
+    // Bishops first, one on an even file and one on an odd file: that is the
+    // opposite-colours rule, and doing it first means it cannot be violated.
+    back[rng.gen_range(0..4) * 2] = 'B';
+    back[rng.gen_range(0..4) * 2 + 1] = 'B';
+    // Queen and knights drop into whatever is still free.
+    for piece in ['Q', 'N', 'N'] {
+        let free: Vec<usize> = (0..8).filter(|&file| back[file] == ' ').collect();
+        back[free[rng.gen_range(0..free.len())]] = piece;
+    }
+    // The three squares left over take rook, king, rook from left to right,
+    // which is what puts the king between its rooks.
+    let free: Vec<usize> = (0..8).filter(|&file| back[file] == ' ').collect();
+    let (long_rook, short_rook) = (free[0], free[2]);
+    back[free[0]] = 'R';
+    back[free[1]] = 'K';
+    back[free[2]] = 'R';
+
+    let white: String = back.iter().collect();
+    let black = white.to_ascii_lowercase();
+    let long = (b'a' + long_rook as u8) as char;
+    let short = (b'a' + short_rook as u8) as char;
+    let rights = format!(
+        "{}{}{}{}",
+        short.to_ascii_uppercase(),
+        long.to_ascii_uppercase(),
+        short,
+        long
+    );
+    let fen = format!("{black}/pppppppp/8/8/8/8/PPPPPPPP/{white} w {rights} - 0 1");
+    fen.parse()
+        .expect("generated chess960 position is a legal board")
+}
 
 pub fn chess_color(color: Color) -> ChessColor {
     match color {
@@ -36,7 +89,8 @@ pub fn board_pieces(board: &Board) -> [Option<ChessPiece>; 64] {
 /// up twice: once the way cozy-chess encodes it (the king capturing its own
 /// rook, so selecting the king and then the rook castles) and once as the king
 /// pushed two squares toward the rook, the gesture lichess and chess.com use.
-/// Both pairs resolve to the same move through `legal_move_for`.
+/// Both pairs resolve to the same move through `legal_move_for`. The second
+/// pair is only offered from e1/e8; see `castle_king_landing`.
 pub fn legal_moves(board: &Board) -> Vec<ChessMoveSpec> {
     let mut moves = Vec::new();
     board.generate_moves(|piece_moves| {
@@ -65,12 +119,18 @@ pub fn legal_moves(board: &Board) -> Vec<ChessMoveSpec> {
 /// its own rook, so `mv.to` is the rook's square rather than the king's
 /// destination. A king move onto a square held by its own side can only be
 /// that encoding.
+///
+/// Offered from e1/e8 only, the same guard `castle_rook_target` uses, so no
+/// square is advertised that cannot be resolved back. A Chess960 king that
+/// starts elsewhere castles by taking its rook and nothing else: from b1 the
+/// two-square push is `b1c1`, which is also an ordinary king step, and
+/// resolving that pair to a castle would play a move nobody asked for.
 fn castle_king_landing(board: &Board, mv: Move) -> Option<Square> {
     let side = board.side_to_move();
-    if board.king(side) != mv.from {
+    let rank = Rank::First.relative_to(side);
+    if board.king(side) != mv.from || mv.from != Square::new(File::E, rank) {
         return None;
     }
-    let rank = Rank::First.relative_to(side);
     let rights = board.castle_rights(side);
     let short = rights.short.map(|file| Square::new(file, rank));
     let long = rights.long.map(|file| Square::new(file, rank));
@@ -85,10 +145,11 @@ fn castle_king_landing(board: &Board, mv: Move) -> Option<Square> {
 /// castling gesture resolves to the move cozy-chess generated. `None` when the
 /// pair is not that gesture, in which case it is taken literally.
 ///
-/// Standard chess only: the gesture is recognized from e1/e8, where a king
-/// holding castling rights always stands outside Chess960. Matching on the
-/// stored rights (not on a fixed h/a file) keeps the mapping honest even when
-/// only one side of the board still has a right.
+/// Recognized from e1/e8 only — always the case in standard chess, sometimes
+/// in Chess960 — because a king standing anywhere else has ordinary one-step
+/// moves onto c1/g1 that this must not swallow. Matching on the stored rights
+/// (not on a fixed h/a file) keeps the mapping honest even when only one side
+/// of the board still has a right, which is the common Chess960 case.
 fn castle_rook_target(board: &Board, from: Square, to: Square) -> Option<Square> {
     let side = board.side_to_move();
     let rank = Rank::First.relative_to(side);

@@ -3,10 +3,12 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use late_core::test_utils::{create_test_user, test_db};
 
+use late_core::models::cyberspace_account::CmailThread;
+
 use crate::app::chat::cyberspace::api::{CircMessage, CircStreamEvent, CsNotification, CsPost};
 use crate::app::chat::cyberspace::state::{
-    Modal, State, View, count_unread_entries, dedupe_notifications, feed_reload_due, parse_topics,
-    unread_poll_due,
+    Modal, NotificationTarget, State, View, count_unread_entries, dedupe_notifications,
+    parse_topics, reload_due, unread_poll_due,
 };
 use crate::app::chat::cyberspace::svc::{CsEvent, CsThread, CyberspaceService};
 
@@ -47,12 +49,12 @@ fn unread_badge_polls_only_when_linked_and_never_faster_than_the_interval() {
 fn entering_the_pane_refetches_the_feed_but_not_on_every_landing() {
     // Cycling the room rail lands on the slot repeatedly, and each landing
     // would otherwise be an authenticated call to a third party.
-    assert!(feed_reload_due(true, false, None), "first open must fetch");
-    assert!(!feed_reload_due(true, false, Some(Duration::from_secs(5))));
-    assert!(feed_reload_due(true, false, Some(Duration::from_secs(30))));
+    assert!(reload_due(true, false, None), "first open must fetch");
+    assert!(!reload_due(true, false, Some(Duration::from_secs(5))));
+    assert!(reload_due(true, false, Some(Duration::from_secs(30))));
     // Never on top of a fetch in flight, and never without a token.
-    assert!(!feed_reload_due(true, true, None));
-    assert!(!feed_reload_due(false, false, None));
+    assert!(!reload_due(true, true, None));
+    assert!(!reload_due(false, false, None));
 }
 
 #[tokio::test]
@@ -109,7 +111,7 @@ fn unread_entries_are_the_ones_published_since_the_cursor() {
 }
 
 #[tokio::test]
-async fn the_rail_badge_sums_notifications_and_new_entries() {
+async fn the_two_rail_badges_count_their_own_row_and_never_each_other() {
     let mut state = test_state().await;
     let user_id = state.user_id;
     let read_at: DateTime<Utc> = "2026-08-07T12:00:00Z".parse().expect("cursor");
@@ -118,6 +120,7 @@ async fn the_rail_badge_sums_notifications_and_new_entries() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::new(),
     });
     let _ = state.apply_event(CsEvent::UnreadCount { user_id, count: 4 });
@@ -131,7 +134,9 @@ async fn the_rail_badge_sums_notifications_and_new_entries() {
         ],
     });
 
-    assert_eq!(state.unread_count(), 5, "4 notifications + 1 new entry");
+    // Two rows, two badges: the notifications row carries their counter and
+    // the feeds row carries the entries. Neither number includes the other,
+    // because moving to a row is how each is opened.
     assert_eq!(state.unread_notifications(), 4);
     assert_eq!(state.unread_entries(), 1);
 }
@@ -146,6 +151,7 @@ async fn opening_the_pane_clears_the_count_but_keeps_the_marks_being_read() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::new(),
     });
     let fresh: CsPost =
@@ -192,6 +198,7 @@ async fn reentering_inside_the_reload_interval_keeps_unseen_entries_unread() {
         username: Some("mat".to_string()),
         feed_read_at: Some(read_at),
         circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::new(),
     });
     // First visit: the feed arrives with its newest entry at 13:00, which is
@@ -242,6 +249,29 @@ async fn reopening_the_pane_lands_on_the_newest_entry() {
         state.selected, 0,
         "a selection kept across visits points into a feed that has been refetched since"
     );
+}
+
+#[tokio::test]
+async fn the_notifications_view_offers_no_entry_link() {
+    let mut state = test_state().await;
+    state.posts = vec![
+        serde_json::from_str(r#"{"postId":"p1","authorUsername":"oddity","slug":"their-entry"}"#)
+            .expect("post"),
+    ];
+    state.selected = 0;
+
+    state.view = View::Feed;
+    assert!(
+        state.selected_entry_link().is_some(),
+        "the feed's selected row is what c copies"
+    );
+
+    // On the notifications row, `selected` still points into the feed's
+    // list: copying through it hands the user a link to an entry they never
+    // selected. A notification's entry is fetched by id when opened and is
+    // not in `posts`, so there is nothing local to link.
+    state.view = View::Notifications;
+    assert_eq!(state.selected_entry_link(), None);
 }
 
 #[test]
@@ -300,18 +330,40 @@ async fn enter_on_a_notification_opens_the_entry_it_is_about() {
             r#"{"id":"n2","type":"new_follower","targetId":"user-1","targetType":"user"}"#,
         )
         .expect("follow notification"),
+        // A chat mention as their API actually sends one: the room slug sits
+        // in `targetId` with no `targetType` beside it, repeated in
+        // `metadata.roomSlug`, and nothing names the message.
+        serde_json::from_str(
+            r#"{"id":"n3","type":"chat_mention","targetId":"cyberspace","metadata":{"roomSlug":"cyberspace","roomName":"cyberspace"}}"#,
+        )
+        .expect("chat mention"),
     ]);
     state.view = View::Notifications;
 
-    assert!(state.open_selected_notification().is_none());
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::Entry("post-1".to_string())
+    );
+    state.open_notification_entry("post-1".to_string());
     assert_eq!(state.view, View::Thread);
     assert_eq!(state.thread_target.as_deref(), Some("post-1"));
 
-    // A follow has no entry behind it, so it says so and stays put.
-    state.back_to_feed();
+    // A follow has no entry and no room behind it, so Enter has nothing to do.
+    state.back_to_root();
     state.view = View::Notifications;
     state.notif_selected = 1;
-    assert!(state.open_selected_notification().is_some(), "banner");
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::Nothing
+    );
+
+    // A chat mention lands on the room it happened in: the finest their
+    // payload allows, since it names no message.
+    state.notif_selected = 2;
+    assert_eq!(
+        state.selected_notification_target(),
+        NotificationTarget::ChatRoom("cyberspace".to_string())
+    );
     assert_eq!(state.view, View::Notifications, "view must not move");
 }
 
@@ -325,11 +377,11 @@ async fn a_thread_that_finished_loading_after_the_user_left_is_dropped() {
         .expect("notification"),
     ]);
     state.view = View::Notifications;
-    state.open_selected_notification();
+    state.open_notification_entry("post-1".to_string());
 
     // The user moves on before the fetch lands, then a slow load arrives for
     // the entry they were looking at a moment ago.
-    state.back_to_feed();
+    state.back_to_root();
     let user_id = state.user_id;
     let _ = state.apply_event(CsEvent::ThreadLoaded {
         user_id,
@@ -482,6 +534,7 @@ async fn the_picker_adds_a_room_to_the_rail_and_takes_it_back_off() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::new(),
     });
     assert!(
@@ -503,7 +556,7 @@ async fn the_picker_adds_a_room_to_the_rail_and_takes_it_back_off() {
     assert_eq!(state.pinned_rooms(), ["ideas".to_string()]);
     assert!(state.is_pinned("ideas"));
     assert_eq!(
-        state.open_room_slug(),
+        state.open_circ_slug(),
         None,
         "adding a room does not enter it"
     );
@@ -522,6 +575,7 @@ async fn room_dots_follow_the_roster_against_the_read_cursor() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: vec!["general".to_string(), "quiet".to_string()],
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::from([("general".to_string(), 1_000)]),
     });
 
@@ -579,6 +633,7 @@ async fn walking_into_a_room_clears_its_dot_even_when_history_never_lands() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: vec!["general".to_string()],
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::from([("general".to_string(), 1_000)]),
     });
     let _ = state.apply_event(CsEvent::CircRooms {
@@ -604,6 +659,32 @@ async fn walking_into_a_room_clears_its_dot_even_when_history_never_lands() {
 }
 
 #[tokio::test]
+async fn entering_a_room_lands_in_reading_mode_and_esc_backs_out_one_step() {
+    let mut state = test_state().await;
+    state.enter_room("general".to_string());
+
+    // Walking into a room is reading it, the way every other room in the rail
+    // opens. Landing in the composer turns j/k, the rail shortcuts, and every
+    // other global letter into text nobody asked to type.
+    assert!(
+        !state.room_composing(),
+        "entering a room must not focus its composer"
+    );
+
+    state.start_room_composer();
+    assert!(state.room_composing());
+
+    // Esc leaves the composer and stops there; the next one is what leaves the
+    // room, so one stray Esc never walks the user out of a room.
+    assert!(state.cancel_room_composer());
+    assert!(!state.room_composing());
+    assert!(
+        !state.cancel_room_composer(),
+        "a room being read has no composer to close"
+    );
+}
+
+#[tokio::test]
 async fn unlinking_closes_the_open_room_and_clears_the_rail() {
     let mut state = test_state().await;
     let user_id = state.user_id;
@@ -612,14 +693,169 @@ async fn unlinking_closes_the_open_room_and_clears_the_rail() {
         username: Some("mat".to_string()),
         feed_read_at: None,
         circ_rooms: vec!["general".to_string()],
+        cmail_threads: Vec::new(),
         circ_room_reads: std::collections::HashMap::new(),
     });
     state.enter_room("general".to_string());
-    assert_eq!(state.open_room_slug(), Some("general"));
+    assert_eq!(state.open_circ_slug(), Some("general"));
 
     let _ = state.apply_event(CsEvent::Unlinked { user_id });
 
     // An unlinked account must not still be streaming or present in a room.
-    assert_eq!(state.open_room_slug(), None);
+    assert_eq!(state.open_circ_slug(), None);
     assert!(state.pinned_rooms().is_empty());
+}
+
+#[tokio::test]
+async fn a_thread_opened_from_notifications_backs_out_to_notifications() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: None,
+        circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
+    });
+
+    // Feeds and notifications are two rail rows, and a thread opens over
+    // whichever one you came in through. Backing out has to land on that row:
+    // dropping to the feed would leave the rail highlighting notifications
+    // while the pane showed the feed.
+    state.opened_notifications();
+    assert_eq!(state.view, View::Notifications);
+    state.view = View::Thread;
+    assert!(state.escape_to_root());
+    assert_eq!(state.view, View::Notifications);
+
+    state.opened();
+    state.view = View::Thread;
+    assert!(state.escape_to_root());
+    assert_eq!(state.view, View::Feed);
+    // Already home: the pane reports it did nothing, so the shell's escape
+    // chain keeps looking for something to close.
+    assert!(!state.escape_to_root());
+}
+
+#[tokio::test]
+async fn pinning_a_conversation_gives_it_a_rail_row_and_their_unread_count() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    let _ = state.apply_event(CsEvent::LinkStatus {
+        user_id,
+        username: Some("mat".to_string()),
+        feed_read_at: None,
+        circ_rooms: Vec::new(),
+        cmail_threads: Vec::new(),
+        circ_room_reads: std::collections::HashMap::new(),
+    });
+    let _ = state.open_cmail_modal();
+    let _ = state.apply_event(CsEvent::CmailList {
+        user_id,
+        conversations: vec![
+            serde_json::from_str(
+                r#"{"conversationId":"c1","otherUser":{"username":"alice"},"unreadCount":3}"#,
+            )
+            .expect("conversation"),
+            serde_json::from_str(
+                r#"{"conversationId":"c2","otherUser":{"username":"bob"},"unreadCount":0}"#,
+            )
+            .expect("conversation"),
+        ],
+    });
+
+    // Adding one from the picker is what creates its rail entry, same as a
+    // chat room. The count on that row is theirs, not ours: their list reads
+    // read state back, which a cIRC room's roster never does.
+    let _ = state.toggle_selected_cmail();
+    assert_eq!(state.pinned_cmail().len(), 1);
+    assert_eq!(state.pinned_cmail()[0].username, "alice");
+    assert_eq!(state.cmail_unread_counts(), vec![3]);
+
+    // Walking in is reading it: the badge clears before their next list
+    // lands, and a list taken before the visit must not put it back.
+    let thread = state.pinned_cmail()[0].clone();
+    state.enter_cmail(thread);
+    assert_eq!(state.cmail_unread_counts(), vec![0]);
+    let _ = state.apply_event(CsEvent::CmailList {
+        user_id,
+        conversations: vec![
+            serde_json::from_str(
+                r#"{"conversationId":"c1","otherUser":{"username":"alice"},"unreadCount":3}"#,
+            )
+            .expect("conversation"),
+        ],
+    });
+    assert_eq!(
+        state.cmail_unread_counts(),
+        vec![0],
+        "the conversation on screen is being read, whatever their count says"
+    );
+
+    // Toggling it off takes the row with it.
+    let _ = state.open_cmail_modal();
+    let _ = state.apply_event(CsEvent::CmailList {
+        user_id,
+        conversations: vec![
+            serde_json::from_str(
+                r#"{"conversationId":"c1","otherUser":{"username":"alice"},"unreadCount":0}"#,
+            )
+            .expect("conversation"),
+        ],
+    });
+    let _ = state.toggle_selected_cmail();
+    assert!(state.pinned_cmail().is_empty());
+}
+
+#[tokio::test]
+async fn a_conversation_takes_its_own_frames_and_ignores_a_rooms() {
+    let mut state = test_state().await;
+    let user_id = state.user_id;
+    state.enter_cmail(CmailThread {
+        id: "c1".to_string(),
+        username: "alice".to_string(),
+    });
+
+    let _ = state.apply_event(CsEvent::CmailHistoryLoaded {
+        user_id,
+        conversation_id: "c1".to_string(),
+        messages: vec![
+            serde_json::from_str(
+                r#"{"id":"m1","senderUsername":"alice","content":"hi","timestamp":1000}"#,
+            )
+            .expect("message"),
+        ],
+    });
+    // A conversation names its author under a different key than a room does
+    // (`senderUsername` against `username`), and one message type reads both.
+    let room = state.open_room.as_ref().expect("conversation open");
+    assert_eq!(room.messages.len(), 1);
+    assert_eq!(room.messages[0].username, "alice");
+
+    // A frame for a conversation this session is not in belongs to another
+    // session of the same account, and a room's frame is not ours at all,
+    // however much its id looks like ours.
+    let _ = state.apply_event(CsEvent::CmailStreamed {
+        user_id,
+        conversation_id: "c2".to_string(),
+        event: CircStreamEvent::Upsert(
+            serde_json::from_str(
+                r#"{"id":"m2","senderUsername":"mallory","content":"nope","timestamp":2000}"#,
+            )
+            .expect("message"),
+        ),
+    });
+    let _ = state.apply_event(CsEvent::CircStreamed {
+        user_id,
+        room: "c1".to_string(),
+        event: CircStreamEvent::Upsert(
+            serde_json::from_str(
+                r#"{"id":"m3","username":"mallory","content":"nope","timestamp":3000}"#,
+            )
+            .expect("message"),
+        ),
+    });
+    let room = state.open_room.as_ref().expect("conversation open");
+    assert_eq!(room.messages.len(), 1);
 }

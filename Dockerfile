@@ -591,15 +591,25 @@ CMD ["/app/late-brogue"]
 # Stage 4i: Runtime BashQuest - the late-bashquest host (game served over SSH)
 # ==============================================================================
 # Owns everything the game needs: the pinned, checksum-verified bashquest.sh
-# (no extra runtime deps beyond bash, already in runtime-base's Debian slim
-# image), and the writable playground HOME (/var/lib/late-bashquest; backed by
-# a PVC in prod so the shared users.db and every player's save under
-# $HOME/.bashquest survive restarts). No ncurses/terminfo concerns: bashquest.sh
-# emits plain ANSI directly, not curses. LATE_BASHQUEST_BIN defaults to
-# /usr/local/bin/bashquest.sh, LATE_BASHQUEST_DATA_DIR to that playground path.
+# (no runtime deps beyond bash and coreutils/ncurses-bin, already in
+# runtime-base's Debian slim image), and the writable playground HOME
+# (/var/lib/late-bashquest; backed by a PVC in prod so the shared users.db and
+# every player's save under $HOME/.bashquest survive restarts).
+# LATE_BASHQUEST_BIN defaults to /usr/local/bin/bashquest.sh,
+# LATE_BASHQUEST_DATA_DIR to that playground path.
 FROM runtime-base AS runtime-bashquest
 USER root
-RUN mkdir -p /var/lib/late-bashquest && chown late:late /var/lib/late-bashquest
+# ncurses-term: the EXTENDED terminfo DB (alacritty, rxvt, st, etc.). bashquest.sh
+# writes its own ANSI escapes, but it clears the screen with `clear`, which reads
+# terminfo and clears NOTHING on a TERM it cannot resolve (printing
+# "'<term>': unknown terminal type." and stacking every redraw under the last
+# screen). Terminals that ship their own terminfo (ghostty/kitty/wezterm) are not
+# in ncurses-term and are covered by the host's TERM fallback in late-bashquest
+# (effective_term). `clear` itself comes from ncurses-bin, already in the base image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ncurses-term \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/late-bashquest && chown late:late /var/lib/late-bashquest
 COPY --from=bashquest-build /bashquest.sh /usr/local/bin/bashquest.sh
 COPY --from=builder-bashquest /app/late-bashquest-bin /app/late-bashquest
 USER late

@@ -103,6 +103,7 @@ chip_moves!(
     DailyPuzzleWin,
     AsterionEscape,
     DailyChessWin,
+    DailyChess960Win,
     DailyBattleshipWin,
     DailyConnectFourWin,
     DailyReversiWin,
@@ -155,6 +156,7 @@ impl ChipMove {
             Self::DailyPuzzleWin => "daily_puzzle_win",
             Self::AsterionEscape => "asterion_escape",
             Self::DailyChessWin => "daily_chess_win",
+            Self::DailyChess960Win => "daily_chess960_win",
             Self::DailyBattleshipWin => "daily_battleship_win",
             Self::DailyConnectFourWin => "daily_connect4_win",
             Self::DailyReversiWin => "daily_reversi_win",
@@ -193,6 +195,7 @@ impl ChipMove {
             Self::DailyPuzzleWin
             | Self::AsterionEscape
             | Self::DailyChessWin
+            | Self::DailyChess960Win
             | Self::DailyBattleshipWin
             | Self::DailyConnectFourWin
             | Self::DailyReversiWin
@@ -221,6 +224,7 @@ impl ChipMove {
             | Self::DailyPuzzleWin
             | Self::AsterionEscape
             | Self::DailyChessWin
+            | Self::DailyChess960Win
             | Self::DailyBattleshipWin
             | Self::DailyConnectFourWin
             | Self::DailyReversiWin
@@ -261,6 +265,7 @@ impl ChipMove {
             | Self::DailyPuzzleWin
             | Self::AsterionEscape
             | Self::DailyChessWin
+            | Self::DailyChess960Win
             | Self::DailyBattleshipWin
             | Self::DailyConnectFourWin
             | Self::DailyReversiWin
