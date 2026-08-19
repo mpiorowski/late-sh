@@ -72,3 +72,33 @@ async fn hostile_username_is_sanitized_before_it_is_stored() {
 
     assert_eq!(handler.playname.as_deref(), Some("etcpasswd"));
 }
+
+/// A TERM the host has no terminfo for must fall back. bashquest.sh's
+/// `clear_screen()` shells out to `clear`, which prints
+/// "'<term>': unknown terminal type." and clears nothing on an unknown TERM,
+/// leaving every redraw stacked under the previous screen. That is the prod
+/// regression: a ghostty client sends `xterm-ghostty`, which resolves on the
+/// player's own machine but not in the runtime image's ncurses-base set.
+/// The name below stands in for it, since a real terminal name may or may not
+/// be installed wherever this test runs.
+#[test]
+fn unknown_term_falls_back_to_xterm_256color() {
+    assert_eq!(
+        effective_term("definitely-not-a-real-term-xyz"),
+        "xterm-256color"
+    );
+}
+
+/// Path-traversal / junk TERM never reaches the child's environment verbatim.
+#[test]
+fn hostile_term_is_rejected_and_falls_back() {
+    assert_eq!(effective_term("../../etc/passwd"), "xterm-256color");
+    assert_eq!(effective_term(""), "xterm-256color");
+}
+
+/// xterm-256color ships in ncurses-base, so it resolves anywhere this runs and
+/// must pass through unchanged.
+#[test]
+fn supported_term_passes_through() {
+    assert_eq!(effective_term("xterm-256color"), "xterm-256color");
+}

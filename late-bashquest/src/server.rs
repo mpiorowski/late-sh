@@ -83,6 +83,46 @@ fn reject() -> Auth {
     }
 }
 
+/// Whether the host has a terminfo entry for `term` (Debian layout:
+/// `<dir>/<first-char>/<name>`, plus the hex-dir variant some installs use).
+fn term_supported(term: &str) -> bool {
+    // Reject anything that isn't a plausible terminfo name; this also blocks path
+    // traversal via a hostile TERM before we build a path from it.
+    if term.is_empty()
+        || !term
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'+'))
+    {
+        return false;
+    }
+    let first = &term[..1];
+    let hex = format!("{:02x}", term.as_bytes()[0]);
+    ["/usr/share/terminfo", "/etc/terminfo", "/lib/terminfo"]
+        .iter()
+        .any(|dir| {
+            let base = std::path::Path::new(dir);
+            base.join(first).join(term).exists() || base.join(&hex).join(term).exists()
+        })
+}
+
+/// The TERM to hand the bashquest.sh child: the client's own if the host can
+/// resolve its terminfo, otherwise a universal fallback. bashquest.sh writes
+/// its own ANSI escapes, but it clears the screen with `clear` (see its
+/// `clear_screen()`), and `clear` is a terminfo consumer: on an unknown TERM it
+/// prints "'<term>': unknown terminal type." and clears nothing, so every
+/// redraw stacks a fresh banner under the last one instead of replacing it.
+/// Clients on terminals that ship their own terminfo (ghostty/kitty/wezterm)
+/// hit exactly that, since the host image only carries the ncurses-base set.
+/// Every modern terminal renders `xterm-256color`, so falling back keeps them
+/// playable.
+fn effective_term(requested: &str) -> String {
+    if term_supported(requested) {
+        requested.to_string()
+    } else {
+        "xterm-256color".to_string()
+    }
+}
+
 impl Handler for ClientHandler {
     type Error = anyhow::Error;
 
@@ -183,6 +223,19 @@ impl Handler for ClientHandler {
             return Ok(());
         };
 
+        // bashquest.sh clears the screen with `clear`, which reads terminfo: on
+        // a TERM the host cannot resolve it prints an error and clears nothing,
+        // so every redraw stacks under the previous screen. Fall back to a
+        // universal terminfo name so clients on exotic terminals still play.
+        let term = effective_term(&self.term);
+        if term != self.term {
+            tracing::info!(
+                requested = %self.term,
+                effective = %term,
+                "client TERM has no terminfo on host; using fallback"
+            );
+        }
+
         self.host = Some(PtyHost::spawn(
             HostConfig {
                 bin: self.shared.bin.clone(),
@@ -190,7 +243,7 @@ impl Handler for ClientHandler {
                 playname,
                 cols: self.cols,
                 rows: self.rows,
-                term: self.term.clone(),
+                term,
             },
             session.handle(),
             channel,
