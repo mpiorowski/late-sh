@@ -9,13 +9,17 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use late_core::models::profile_award::{
+    DARKROOM_ESCAPE_AWARD_CATEGORY, award_badge, award_category_label,
+};
+
 use crate::app::common::theme;
 use crate::app::door::landing;
 
 use super::data::{self, Building, Resource, ResourceKind};
 use super::model::{Game, View};
 use super::pace;
-use super::state::{Row, State};
+use super::state::{Ending, EndingBeat, Row, State};
 
 /// Label column width for the stores/pack sidebar rows: the longest label
 /// ("trading post", "sulphur mine") plus a two-space gutter, so a count never
@@ -38,6 +42,13 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
         frame.render_widget(loading, area);
         return;
     };
+
+    // The ending takes the whole panel, and there is nothing underneath it any
+    // more: the save is gone by the time it is up.
+    if let Some(ending) = state.ending.as_ref() {
+        draw_ending(frame, area, ending);
+        return;
+    }
 
     // The ascent takes the whole panel: no stores, no log, just the sky.
     if let Some(flight) = state.flight.as_ref() {
@@ -444,6 +455,94 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
     Line::from(spans)
 }
 
+/// What the ending says the account keeps. The amount is the reward
+/// template's (migration 143); it is written out here because the door has no
+/// reason to read the table just to print one line, and "once per account" is
+/// what keeps a second escape from reading as a broken payout.
+const ENDING_REWARD: &str = "10,000 chips and the badge, once per account";
+
+/// The two lines that say the run is over for good.
+const ENDING_WIPED: &str = "the save is gone. the room is dark and cold again.";
+const ENDING_PROMPT: &str = "press any key to step outside";
+
+/// The ending: upstream's closing prose, the run's last figures, the badge it
+/// earned, and the one key left to press. Border-less and centered, like the
+/// ascent it follows.
+fn draw_ending(frame: &mut Frame, area: Rect, ending: &Ending) {
+    let lines = ending_lines(ending);
+    // Anchor on every beat, revealed or not, so the text does not crawl up the
+    // screen as the epitaph arrives.
+    let top = (area.height as usize).saturating_sub(lines.len()) / 2;
+    let mut padded: Vec<Line<'static>> = vec![Line::from(""); top];
+    padded.extend(lines);
+    frame.render_widget(Paragraph::new(padded).centered(), area);
+}
+
+/// One line per beat, in order, with the unrevealed ones left blank.
+fn ending_lines(ending: &Ending) -> Vec<Line<'static>> {
+    let revealed = ending.revealed_count();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut previous: Option<&EndingBeat> = None;
+    for (index, beat) in ending.beats().iter().enumerate() {
+        // A blank line wherever the epitaph changes register: prose, then the
+        // figures, then the badge, then the way out.
+        if previous.is_some_and(|last| std::mem::discriminant(last) != std::mem::discriminant(beat))
+        {
+            lines.push(Line::from(""));
+        }
+        previous = Some(beat);
+        let shown = index < revealed;
+        for line in beat_lines(beat) {
+            lines.push(if shown { line } else { Line::from("") });
+        }
+    }
+    lines
+}
+
+/// How one beat reads. The unrevealed ones still take their rows, so this is
+/// also what reserves the space for them.
+fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
+    match beat {
+        EndingBeat::Prose(text) => vec![Line::from(Span::styled(
+            (*text).to_string(),
+            Style::default().fg(theme::TEXT()),
+        ))],
+        // Padded to a fixed width so the centered column lines up.
+        EndingBeat::Stat { label, value } => vec![Line::from(Span::styled(
+            format!("{label:>16}   {value:<22}"),
+            Style::default().fg(theme::TEXT_DIM()),
+        ))],
+        EndingBeat::Award => vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("[{}]  ", award_badge(DARKROOM_ESCAPE_AWARD_CATEGORY, 1)),
+                    Style::default()
+                        .fg(theme::AMBER())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    award_category_label(DARKROOM_ESCAPE_AWARD_CATEGORY).to_string(),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+            ]),
+            Line::from(Span::styled(
+                ENDING_REWARD.to_string(),
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+        ],
+        EndingBeat::Prompt => vec![
+            Line::from(Span::styled(
+                ENDING_WIPED.to_string(),
+                Style::default().fg(theme::TEXT()),
+            )),
+            Line::from(Span::styled(
+                ENDING_PROMPT.to_string(),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )),
+        ],
+    }
+}
+
 /// The two-column landing card for the Games hub.
 pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     let inner = Layout::default()
@@ -498,6 +597,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
                 "even a short visit banks {}m once the village stands",
                 pace::DAILY_CREDIT_FLOOR_SECS / 60
             ),
+            10,
+        ),
+        landing::hint("reward", ENDING_REWARD, 10),
+        landing::hint(
+            "ending",
+            "flying out wipes the save: the room starts dark again",
             10,
         ),
         Line::from(""),

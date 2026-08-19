@@ -219,7 +219,11 @@ async fn main() -> anyhow::Result<()> {
         chip_service.clone(),
         db.clone(),
     );
-    let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(db.clone());
+    let darkroom_service = late_ssh::app::door::darkroom::svc::DarkroomService::new(
+        activity_publisher.clone(),
+        chip_service.clone(),
+        db.clone(),
+    );
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(

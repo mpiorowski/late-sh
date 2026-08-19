@@ -1,7 +1,8 @@
-//! A Dark Room service: thin persistence for a single-player door. There is no
-//! shared world, no tick loop, and no published snapshot — each session owns
-//! the authoritative game in its own `state::State`, and time is settled
-//! forward on demand (see `sim`) rather than driven from here.
+//! A Dark Room service: thin persistence and the ending's reward plumbing for
+//! a single-player door. There is no shared world, no tick loop, and no
+//! published snapshot — each session owns the authoritative game in its own
+//! `state::State`, and time is settled forward on demand (see `sim`) rather
+//! than driven from here.
 //!
 //! Cheap to `Clone`: everything lives behind an `Arc`.
 
@@ -10,10 +11,25 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use late_core::{db::Db, models::darkroom_save::DarkroomSave};
+use late_core::{
+    db::Db,
+    models::{
+        chips::ChipMove,
+        darkroom_save::DarkroomSave,
+        profile_award::{
+            DARKROOM_ESCAPE_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
+        },
+        reward::DARKROOM_ESCAPE_REWARD_KEY,
+    },
+};
 use serde_json::Value;
 use tokio::sync::{Mutex as TokioMutex, watch};
 use uuid::Uuid;
+
+use crate::app::{
+    activity::event::ActivityGame, activity::publisher::ActivityPublisher,
+    games::chips::svc::ChipService,
+};
 
 use super::model::Game;
 use super::persist;
@@ -31,6 +47,8 @@ struct Inner {
     db: Db,
     seq: AtomicU64,
     gates: StdMutex<HashMap<Uuid, Arc<TokioMutex<u64>>>>,
+    activity: ActivityPublisher,
+    chips: ChipService,
 }
 
 impl Inner {
@@ -55,12 +73,14 @@ pub struct DarkroomService {
 }
 
 impl DarkroomService {
-    pub fn new(db: Db) -> Self {
+    pub fn new(activity: ActivityPublisher, chips: ChipService, db: Db) -> Self {
         Self {
             inner: Arc::new(Inner {
                 db,
                 seq: AtomicU64::new(0),
                 gates: StdMutex::new(HashMap::new()),
+                activity,
+                chips,
             }),
         }
     }
@@ -105,8 +125,78 @@ impl DarkroomService {
         tokio::spawn(commit_save(db, gate, seq, user_id, blob));
     }
 
-    /// Delete a user's save, fire-and-forget (the "start over" action), ordered
-    /// against any pending save through the same gate.
+    /// The ending's reward, fire-and-forget (the Green Dragon dragon-kill
+    /// shape): a feed line for every escape, and — first escape only, deduped
+    /// by the lifetime reward template and the `NOT EXISTS` award insert — a
+    /// once-per-account chip payout plus the rankless ADE profile badge.
+    ///
+    /// The save is wiped on the way out, so every later run reaches the same
+    /// ending; the account only ever gets paid for the first one.
+    pub fn reward_escape(&self, user_id: Uuid) {
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            inner
+                .activity
+                .game_won_task(user_id, ActivityGame::Darkroom, None, None);
+
+            let grant = match inner
+                .chips
+                .credit_lifetime_reward_template(
+                    user_id,
+                    DARKROOM_ESCAPE_REWARD_KEY,
+                    ChipMove::DarkroomEscape,
+                )
+                .await
+            {
+                Ok(grant) => grant,
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        "failed to credit darkroom escape chips"
+                    );
+                    return;
+                }
+            };
+            // Already claimed on an earlier run — nothing more to do.
+            if !grant.credited {
+                return;
+            }
+
+            let badge = award_badge(DARKROOM_ESCAPE_AWARD_CATEGORY, 1);
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(error) = grant_unique_milestone_award(
+                        &client,
+                        user_id,
+                        DARKROOM_ESCAPE_AWARD_CATEGORY,
+                        grant.amount,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            ?error,
+                            user_id = %user_id,
+                            badge = %badge,
+                            "failed to grant darkroom profile award badge"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        badge = %badge,
+                        "no db client for darkroom profile award badge"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Delete a user's save, fire-and-forget (the "start over" action, and the
+    /// wipe the ending performs), ordered against any pending save through the
+    /// same gate.
     pub fn delete_game(&self, user_id: Uuid) {
         let seq = self.inner.next_seq();
         let gate = self.inner.gate(user_id);

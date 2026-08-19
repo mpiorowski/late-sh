@@ -44,6 +44,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Dcss
             | ActivityGame::Brogue
             | ActivityGame::GreenDragon => true,
+            // A Dark Room never posts in-game moments: the room's story is
+            // its own log, and the only thing worth telling the lounge is the
+            // ending, which arrives as a win.
+            ActivityGame::Darkroom => false,
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess
@@ -73,11 +77,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Tron => true,
             // Door-game wins are milestone-gated at the source (dragon
             // kills, NetHack amulet/ascension, a DCSS Orb escape, a Brogue
-            // escape/mastery) — stories.
+            // escape/mastery, A Dark Room's one ending) — stories.
             ActivityGame::GreenDragon
             | ActivityGame::Nethack
             | ActivityGame::Dcss
-            | ActivityGame::Brogue => true,
+            | ActivityGame::Brogue
+            | ActivityGame::Darkroom => true,
             // Lateania fires a win per mob kill; boss kills arrive as
             // `BossSlain` instead.
             ActivityGame::Mud => false,

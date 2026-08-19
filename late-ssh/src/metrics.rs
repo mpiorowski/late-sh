@@ -56,6 +56,7 @@ mod inner {
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
+            ActivityGame::Darkroom => "darkroom",
             ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",
             ActivityGame::LeWord => "le_word",

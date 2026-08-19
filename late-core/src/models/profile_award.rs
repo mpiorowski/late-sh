@@ -17,6 +17,7 @@ pub const DCSS_WIN_AWARD_CATEGORY: &str = "dcss_win";
 pub const BROGUE_ESCAPE_AWARD_CATEGORY: &str = "brogue_escape";
 pub const BROGUE_MASTERY_AWARD_CATEGORY: &str = "brogue_mastery";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
+pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
 
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
@@ -245,6 +246,7 @@ pub fn award_badge(category: &str, rank: i32) -> String {
             | BROGUE_ESCAPE_AWARD_CATEGORY
             | BROGUE_MASTERY_AWARD_CATEGORY
             | GREENDRAGON_DRAGON_AWARD_CATEGORY
+            | DARKROOM_ESCAPE_AWARD_CATEGORY
     ) {
         return award_category_code(category).to_string();
     }
@@ -272,6 +274,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         BROGUE_ESCAPE_AWARD_CATEGORY => "BRE",
         BROGUE_MASTERY_AWARD_CATEGORY => "BRM",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
+        DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
         _ => "LB",
     }
 }
@@ -294,6 +297,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         BROGUE_ESCAPE_AWARD_CATEGORY => "Brogue Escape",
         BROGUE_MASTERY_AWARD_CATEGORY => "Brogue Mastery",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
+        DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
         _ => "Leaderboard",
     }
 }
@@ -316,6 +320,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         DCSS_WIN_AWARD_CATEGORY => 18,
         BROGUE_ESCAPE_AWARD_CATEGORY => 19,
         BROGUE_MASTERY_AWARD_CATEGORY => 20,
+        DARKROOM_ESCAPE_AWARD_CATEGORY => 21,
         _ => 99,
     }
 }
@@ -335,17 +340,17 @@ pub fn format_score_value(category: &str, value: i64) -> String {
     match category {
         "top_chips" => format!("{value} chips"),
         "arcade_wins" => format!("{value} pts"),
-        // Yssgar and Kaethyr pay no chips; the badge itself is the prize.
-        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY => "Yssgar slain".to_string(),
-        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY => "Kaethyr Ascendant slain".to_string(),
         LATEANIA_ARCHDEMON_AWARD_CATEGORY
         | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
+        | LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
+        | LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
         | NETHACK_AMULET_AWARD_CATEGORY
         | NETHACK_ASCENSION_AWARD_CATEGORY
         | DCSS_ORB_AWARD_CATEGORY
         | DCSS_WIN_AWARD_CATEGORY
         | BROGUE_ESCAPE_AWARD_CATEGORY
-        | BROGUE_MASTERY_AWARD_CATEGORY => {
+        | BROGUE_MASTERY_AWARD_CATEGORY
+        | DARKROOM_ESCAPE_AWARD_CATEGORY => {
             format!("{value} chips")
         }
         _ => format!("{value} score"),

@@ -598,6 +598,7 @@ impl User {
                           WHEN 'brogue_escape' THEN 'BRE'
                           WHEN 'brogue_mastery' THEN 'BRM'
                           WHEN 'greendragon_dragon' THEN 'GDS'
+                          WHEN 'darkroom_escape' THEN 'ADE'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -628,6 +629,7 @@ impl User {
                                    WHEN 'dcss_win' THEN 18
                                    WHEN 'brogue_escape' THEN 19
                                    WHEN 'brogue_mastery' THEN 20
+                                   WHEN 'darkroom_escape' THEN 21
                                    ELSE 99
                                  END
                     ) AS badges
@@ -636,7 +638,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon')
+                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon', 'darkroom_escape')
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",

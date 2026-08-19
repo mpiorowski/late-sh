@@ -84,6 +84,103 @@ pub enum Acted {
     Leave,
 }
 
+/// Seconds between the ending's beats. Any key skips the wait.
+const ENDING_BEAT_SECS: f64 = 0.9;
+
+/// One chunk of the ending, in the order it arrives. The renderer decides how
+/// each one looks; the run decides what they say.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EndingBeat {
+    /// One of upstream's three closing lines.
+    Prose(&'static str),
+    /// A figure the run finished on: what it counts, and how much.
+    Stat { label: &'static str, value: String },
+    /// The badge and chips the account keeps, once per account.
+    Award,
+    /// The save is gone, and the only key left is the one out.
+    Prompt,
+}
+
+/// The run is over: the ship is through the debris cloud and the save has been
+/// deleted. This is the last thing the door has to say, revealed a beat at a
+/// time. Never persisted, and there is no way back into the game from here:
+/// the room the player would return to no longer exists.
+#[derive(Clone, Debug)]
+pub struct Ending {
+    beats: Vec<EndingBeat>,
+    /// Seconds since the ending took the screen.
+    elapsed: f64,
+}
+
+impl Ending {
+    /// The epitaph for a finished run, read off the game one last time.
+    pub fn for_run(game: &Game) -> Self {
+        let mut beats: Vec<EndingBeat> = space::ENDING
+            .iter()
+            .map(|line| EndingBeat::Prose(line))
+            .collect();
+        beats.push(EndingBeat::Stat {
+            label: "villagers",
+            value: game.population.to_string(),
+        });
+        beats.push(EndingBeat::Stat {
+            label: "huts",
+            value: game.building_count(Building::Hut).to_string(),
+        });
+        beats.push(EndingBeat::Stat {
+            label: "things learned",
+            value: game.perks.len().to_string(),
+        });
+        beats.push(EndingBeat::Stat {
+            label: "the ship",
+            value: match game.ship.as_ref() {
+                Some(ship) => format!("hull {}, engine {}", ship.hull, ship.thrusters),
+                None => "gone".to_string(),
+            },
+        });
+        beats.push(EndingBeat::Award);
+        beats.push(EndingBeat::Prompt);
+        Self {
+            beats,
+            elapsed: 0.0,
+        }
+    }
+
+    /// Every beat of the epitaph, revealed or not. The renderer lays all of
+    /// them out and leaves the unrevealed ones blank, so the text does not
+    /// walk up the screen as it arrives.
+    pub fn beats(&self) -> &[EndingBeat] {
+        &self.beats
+    }
+
+    /// How many of them are on screen right now.
+    pub fn revealed_count(&self) -> usize {
+        let shown = 1 + (self.elapsed / ENDING_BEAT_SECS) as usize;
+        shown.min(self.beats.len())
+    }
+
+    /// Whether the whole epitaph is up, which is when a key means "leave".
+    pub fn done(&self) -> bool {
+        self.revealed_count() == self.beats.len()
+    }
+
+    /// Skip the wait and show everything at once.
+    pub fn reveal_all(&mut self) {
+        self.elapsed = self.beats.len() as f64 * ENDING_BEAT_SECS;
+    }
+
+    /// Advance the reveal. Returns whether a new beat landed, for the render
+    /// loop's dirty contract.
+    fn advance(&mut self, delta: f64) -> bool {
+        if self.done() {
+            return false;
+        }
+        let before = self.revealed_count();
+        self.elapsed += delta;
+        self.revealed_count() != before
+    }
+}
+
 pub struct State {
     svc: DarkroomService,
     user_id: Uuid,
@@ -106,6 +203,9 @@ pub struct State {
     event_timer: f64,
     /// The ascent, if the ship has left the ground.
     pub flight: Option<Space>,
+    /// The epitaph, once the ascent is won. While this is up the run is over
+    /// and the save is already deleted, so nothing may write it back.
+    pub ending: Option<Ending>,
     /// When `tick` last ran, for live play.
     last_tick: DateTime<Utc>,
 }
@@ -127,6 +227,7 @@ impl State {
             event: None,
             event_timer: event::next_event_delay(&mut rng),
             flight: None,
+            ending: None,
             last_tick: Utc::now(),
         }
     }
@@ -160,6 +261,13 @@ impl State {
         let now = Utc::now();
         let delta = (now - self.last_tick).num_milliseconds().max(0) as f64 / 1000.0;
         self.last_tick = now;
+
+        // The run is over and the save is gone: the only thing still moving is
+        // the epitaph's reveal. Settling a game nobody will ever save again
+        // would only credit a village that no longer exists.
+        if let Some(ending) = self.ending.as_mut() {
+            return ending.advance(delta);
+        }
 
         let mut changed = false;
         // Read the value, never `has_changed()`: the loader drops its sender as
@@ -279,16 +387,17 @@ impl State {
                 self.save();
                 true
             }
+            // The one ending. The account keeps the badge and the chips; the
+            // save does not survive, so the room is dark again next time and
+            // the whole arc is there to walk a second time.
             Some(Flight::Won) => {
                 self.flight = None;
-                for line in space::ENDING {
-                    self.push_log(line.to_string());
-                }
-                if let Some(game) = self.game.as_mut() {
-                    game.completed = true;
-                }
                 self.view = View::Ship;
-                self.save();
+                if let Some(game) = self.game.as_ref() {
+                    self.ending = Some(Ending::for_run(game));
+                }
+                self.svc.reward_escape(self.user_id);
+                self.svc.delete_game(self.user_id);
                 true
             }
         }
@@ -1010,7 +1119,14 @@ impl State {
     // ---- persistence ----
 
     /// Persist the current game. Called after anything worth not losing.
+    ///
+    /// The one exception, guarded here so there is a single place to look: a
+    /// finished run has already been deleted, and writing the in-memory game
+    /// back would undo the wipe the ending performed.
     pub fn save(&self) {
+        if self.ending.is_some() {
+            return;
+        }
         if let Some(game) = self.game.as_ref() {
             self.svc.save_game(self.user_id, game);
         }
@@ -1019,6 +1135,9 @@ impl State {
     /// Settle one last time and persist, so the credited clock stops here
     /// rather than at whenever the last action happened.
     pub fn save_on_leave(&mut self) {
+        if self.ending.is_some() {
+            return;
+        }
         self.park();
         self.settle();
         self.save();

@@ -340,7 +340,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
             chip_service.clone(),
             db.clone(),
         ),
-        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            activity_publisher.clone(),
+            chip_service.clone(),
+            db.clone(),
+        ),
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
@@ -522,7 +526,11 @@ fn make_app_with_chat_service_and_permissions(
             chip_service.clone(),
             db.clone(),
         ),
-        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -732,7 +740,11 @@ pub fn make_app_with_paired_client(
             chip_service.clone(),
             db.clone(),
         ),
-        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(db.clone()),
+        darkroom_service: crate::app::door::darkroom::svc::DarkroomService::new(
+            ActivityPublisher::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
+            chip_service.clone(),
+            db.clone(),
+        ),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),

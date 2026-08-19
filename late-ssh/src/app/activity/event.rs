@@ -117,6 +117,7 @@ pub enum ActivityGame {
     Blackjack,
     Brogue,
     Chess,
+    Darkroom,
     Dcss,
     GreenDragon,
     LeWord,
@@ -145,6 +146,7 @@ impl ActivityGame {
             Self::Blackjack => "blackjack",
             Self::Brogue => "brogue",
             Self::Chess => "chess",
+            Self::Darkroom => "darkroom",
             Self::Dcss => "dcss",
             Self::GreenDragon => "greendragon",
             Self::LeWord => "le_word",
@@ -173,6 +175,7 @@ impl ActivityGame {
             Self::Blackjack => "Blackjack",
             Self::Brogue => "Brogue",
             Self::Chess => "Chess",
+            Self::Darkroom => "A Dark Room",
             Self::Dcss => "DCSS",
             Self::GreenDragon => "Green Dragon",
             Self::LeWord => "Le Word",
@@ -247,6 +250,7 @@ impl ActivityEvent {
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Brogue => "conquered Brogue",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::Darkroom => "flew out of A Dark Room",
             ActivityGame::Dcss => "escaped DCSS with the Orb of Zot",
             ActivityGame::GreenDragon => "prevailed in the Green Dragon",
             ActivityGame::LeWord => "solved Le Word",
@@ -311,6 +315,7 @@ impl ActivityEvent {
             ActivityGame::Dcss => "delved into the Dungeon Crawl".to_string(),
             ActivityGame::Brogue => "descended into Brogue".to_string(),
             ActivityGame::GreenDragon => "walked into the Green Dragon".to_string(),
+            ActivityGame::Darkroom => "woke up in A Dark Room".to_string(),
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess

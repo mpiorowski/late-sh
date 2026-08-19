@@ -175,7 +175,7 @@ pub(crate) fn bot_app_context() -> String {
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), Profiles (5), and Leaderboards (6).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"N unread mentions\" counter in the top-right corner of the frame; or press Ctrl+/ and type mentions. The unread count lives in the top border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, and Rebels; each is launched from there, not from its own top-level page. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It is also the only door with an ending: flying the starship out pays 10,000 chips and the [ADE] badge once per account, then wipes the save so the room starts dark again.\n\
         - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat. Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
         - Lateania rides the backtick cycle too, with a twist: pressing ` inside the world hops out like a single-press leave (the character autosaves out of the world, same as a confirmed Esc), and for the next 5 minutes Lateania stays a stop on the cycle, so ` from Home hops straight back into the same character, skipping the character-select gate. While that window is live the Games hub sidebar marks Lateania with the same green dot the roguelikes get. An explicit Esc-Esc leave drops it off the cycle immediately.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
@@ -425,15 +425,21 @@ fn chips_help_lines() -> Vec<String> {
         "".to_string(),
         "5. Games hub (page 3)".to_string(),
         "  Door games pay for one-off feats, once per account, and they are the biggest payouts in the app:".to_string(),
-        "    Lateania: defeat the Archdemon Mal'gareth      10,000 chips".to_string(),
-        "    Lateania: defeat the King Who Was Promised Nothing".to_string(),
-        "                                                  20,000 chips".to_string(),
+        "    Lateania: any of the four crowns              10,000 chips".to_string(),
+        "              (Mal'gareth, the King Who Was Promised Nothing,".to_string(),
+        "               Yssgar the Sundering Deep, Kaethyr Ascendant)".to_string(),
         "    NetHack: claim the Amulet of Yendor           10,000 chips".to_string(),
         "    NetHack: ascend                               20,000 chips".to_string(),
+        "    DCSS: pick up the Orb of Zot                  10,000 chips".to_string(),
+        "    DCSS: escape the dungeon with the Orb         20,000 chips".to_string(),
+        "    Brogue: escape the Dungeons of Doom           10,000 chips".to_string(),
+        "    Brogue: the super-victory (mastery)           20,000 chips".to_string(),
         "    Green Dragon: slay the Green Dragon           10,000 chips".to_string(),
-        "  Lateania's deeper crowns, Yssgar the Sundering Deep and Kaethyr Ascendant, pay no chips: the profile badge is the whole prize.".to_string(),
+        "    A Dark Room: fly the starship off the rock    10,000 chips".to_string(),
+        "  Each of those also grants a permanent profile badge; the full code guide is on the Leaderboards page (6).".to_string(),
+        "  A Dark Room's ending wipes the save so the room starts dark again, but the chips and the badge only ever land once.".to_string(),
         "  Lateania gold is its own in-world currency and never converts to chips.".to_string(),
-        "  DCSS, Brogue, Usurper, dopewars, CodeKeep, BashQuest, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
+        "  Usurper, dopewars, CodeKeep, BashQuest, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
         "".to_string(),
         "6. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
@@ -442,7 +448,8 @@ fn chips_help_lines() -> Vec<String> {
         "".to_string(),
         "What does not pay chips".to_string(),
         "  Chatting, posting News, RSS, showcases, profiles, voice, and the Artboard pay nothing.".to_string(),
-        "  Leaderboard badges and profile awards are prestige only, never chips.".to_string(),
+        "  Monthly leaderboard awards are prestige only; the one-off door feats above are the".to_string(),
+        "  exception, and each pays its chips once per account.".to_string(),
         "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, and quests.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
@@ -856,14 +863,20 @@ fn arcade_help_lines() -> Vec<String> {
         "  [LA]      Lateris (Tetris)",
         "  [24#]     2048",
         "  [SN]      Snake",
-        "  The Lateania, NetHack, and Green Dragon badges are one-off feats, shown with no rank digit.",
-        "  [LMG]     Lateania Archdemon",
-        "  [LKN]     Lateania Frontier King",
-        "  [LYS]     Lateania Sundering Deep",
-        "  [LKA]     Lateania Kaethyr Ascendant",
-        "  [NHA]     NetHack Amulet",
-        "  [NHY]     NetHack Ascension",
-        "  [GDS]     Green Dragon Slayer",
+        "  The door badges are one-off feats, shown with no rank digit. Each pays its chips once",
+        "  per account, on the first grant; the full guide is on the Leaderboards page.",
+        "  [LMG]     Lateania Archdemon             10,000 chips",
+        "  [LKN]     Lateania Frontier King         10,000 chips",
+        "  [LYS]     Lateania Sundering Deep        10,000 chips",
+        "  [LKA]     Lateania Kaethyr Ascendant     10,000 chips",
+        "  [NHA]     NetHack Amulet                 10,000 chips",
+        "  [NHY]     NetHack Ascension              20,000 chips",
+        "  [DCO]     DCSS Orb of Zot                10,000 chips",
+        "  [DCW]     DCSS Escape                    20,000 chips",
+        "  [BRE]     Brogue Escape                  10,000 chips",
+        "  [BRM]     Brogue Mastery                 20,000 chips",
+        "  [GDS]     Green Dragon Slayer            10,000 chips",
+        "  [ADE]     A Dark Room Escape             10,000 chips",
     ]
     .into_iter()
     .map(str::to_string)

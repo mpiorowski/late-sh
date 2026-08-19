@@ -95,8 +95,8 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled("One-off feats", heading)));
     lines.push(Line::from(Span::styled(
-        "Earned once per account and kept forever, no rank digit. Each pays a one-time chip \
-         reward on first grant, except Lateania's two deepest crowns, which are prestige only.",
+        "Earned once per account and kept forever, no rank digit. Each pays its chips once, on \
+         the first grant; a repeat feat pays nothing more.",
         dim,
     )));
     lines.push(Line::from(""));
@@ -104,57 +104,62 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "LMG",
             "Lateania Archdemon",
-            "slay the Archdemon Mal'gareth (pays chips)",
+            "slay the Archdemon Mal'gareth (10,000 chips)",
         ),
         (
             "LKN",
             "Lateania Frontier King",
-            "slay the King Who Was Promised Nothing (pays chips)",
+            "slay the King Who Was Promised Nothing (10,000 chips)",
         ),
         (
             "LYS",
             "Lateania Sundering Deep",
-            "slay Yssgar, the Sundering Deep (no chips, badge only)",
+            "slay Yssgar, the Sundering Deep (10,000 chips)",
         ),
         (
             "LKA",
             "Kaethyr Ascendant",
-            "slay Kaethyr Ascendant in Kaelmyr (no chips, badge only)",
+            "slay Kaethyr Ascendant in Kaelmyr (10,000 chips)",
         ),
         (
             "NHA",
             "NetHack Amulet",
-            "pick up the Amulet of Yendor (pays chips)",
+            "pick up the Amulet of Yendor (10,000 chips)",
         ),
         (
             "NHY",
             "NetHack Ascension",
-            "ascend to demigodhood (pays chips)",
+            "ascend to demigodhood (20,000 chips)",
         ),
         (
             "DCO",
             "DCSS Orb of Zot",
-            "pick up the Orb of Zot (pays chips)",
+            "pick up the Orb of Zot (10,000 chips)",
         ),
         (
             "DCW",
             "DCSS Escape",
-            "escape the dungeon with the Orb (pays chips)",
+            "escape the dungeon with the Orb (20,000 chips)",
         ),
         (
             "BRE",
             "Brogue Escape",
-            "escape the Dungeons of Doom (pays chips)",
+            "escape the Dungeons of Doom (10,000 chips)",
         ),
         (
             "BRM",
             "Brogue Mastery",
-            "the Dungeons of Doom's super-victory (pays chips)",
+            "the Dungeons of Doom's super-victory (20,000 chips)",
         ),
         (
             "GDS",
             "Green Dragon Slayer",
-            "slay the green dragon, first kill only (pays chips)",
+            "slay the green dragon, first kill only (10,000 chips)",
+        ),
+        (
+            "ADE",
+            "A Dark Room Escape",
+            "fly the starship off the rock, first escape only (10,000 chips)",
         ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));

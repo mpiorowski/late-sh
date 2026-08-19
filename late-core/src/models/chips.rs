@@ -118,6 +118,7 @@ chip_moves!(
     /// The same, for a seat whose crashes outran its food.
     SsnakeArenaLost,
     GreendragonDragonSlain,
+    DarkroomEscape,
     NethackAmuletAcquired,
     NethackAscension,
     DcssOrbFound,
@@ -126,6 +127,8 @@ chip_moves!(
     BrogueMastery,
     LateaniaArchdemonDefeat,
     LateaniaFrontierKingDefeat,
+    LateaniaSunderingDeepDefeat,
+    LateaniaKaethyrAscendantDefeat,
 );
 
 /// Which way a move touches the balance, and under what guard.
@@ -167,6 +170,7 @@ impl ChipMove {
             Self::SsnakeArenaEarned => "ssnake_arena_earned",
             Self::SsnakeArenaLost => "ssnake_arena_lost",
             Self::GreendragonDragonSlain => "greendragon_dragon_slain",
+            Self::DarkroomEscape => "darkroom_escape",
             Self::NethackAmuletAcquired => "nethack_amulet_acquired",
             Self::NethackAscension => "nethack_ascension",
             Self::DcssOrbFound => "dcss_orb_found",
@@ -175,6 +179,8 @@ impl ChipMove {
             Self::BrogueMastery => "brogue_mastery",
             Self::LateaniaArchdemonDefeat => "lateania_archdemon_defeat",
             Self::LateaniaFrontierKingDefeat => "lateania_frontier_king_defeat",
+            Self::LateaniaSunderingDeepDefeat => "lateania_sundering_deep_defeat",
+            Self::LateaniaKaethyrAscendantDefeat => "lateania_kaethyr_ascendant_defeat",
         }
     }
 
@@ -204,6 +210,7 @@ impl ChipMove {
             | Self::DailyBriscolaWin
             | Self::TronWin
             | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound
@@ -211,7 +218,9 @@ impl ChipMove {
             | Self::BrogueEscape
             | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
-            | Self::LateaniaFrontierKingDefeat => "game_payout_claims",
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat => "game_payout_claims",
         }
     }
 
@@ -234,6 +243,7 @@ impl ChipMove {
             | Self::TronWin
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound
@@ -241,7 +251,9 @@ impl ChipMove {
             | Self::BrogueEscape
             | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
-            | Self::LateaniaFrontierKingDefeat => ChipDirection::Credit,
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat => ChipDirection::Credit,
             Self::Bet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
@@ -276,6 +288,7 @@ impl ChipMove {
             | Self::SsnakeArenaEarned
             | Self::SsnakeArenaLost
             | Self::GreendragonDragonSlain
+            | Self::DarkroomEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound
@@ -283,7 +296,9 @@ impl ChipMove {
             | Self::BrogueEscape
             | Self::BrogueMastery
             | Self::LateaniaArchdemonDefeat
-            | Self::LateaniaFrontierKingDefeat => true,
+            | Self::LateaniaFrontierKingDefeat
+            | Self::LateaniaSunderingDeepDefeat
+            | Self::LateaniaKaethyrAscendantDefeat => true,
         }
     }
 

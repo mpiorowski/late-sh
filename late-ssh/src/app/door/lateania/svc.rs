@@ -30,7 +30,10 @@ use late_core::{
             LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY, LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
             award_badge, grant_unique_milestone_award,
         },
-        reward::{LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY},
+        reward::{
+            LATEANIA_ARCHDEMON_REWARD_KEY, LATEANIA_FRONTIER_KING_REWARD_KEY,
+            LATEANIA_KAETHYR_ASCENDANT_REWARD_KEY, LATEANIA_SUNDERING_DEEP_REWARD_KEY,
+        },
         user::User,
     },
 };
@@ -275,16 +278,19 @@ const FRONTIER_KING_ACHIEVEMENT: BossAchievement = BossAchievement {
 const SUNDERING_DEEP_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "Yssgar, the Sundering Deep",
     award_category: LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
-    // The deepest crown pays no chips: the LYS badge alone marks it.
-    payout: None,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_SUNDERING_DEEP_REWARD_KEY,
+        chip_move: ChipMove::LateaniaSunderingDeepDefeat,
+    }),
 };
 
 const KAETHYR_ASCENDANT_ACHIEVEMENT: BossAchievement = BossAchievement {
     mob_name: "Kaethyr Ascendant, Who Sang the God Awake",
     award_category: LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
-    // Kaelmyr's last fight follows Yssgar's pattern: badge only, no chips,
-    // keeping the chip economy flat past the two paying crowns.
-    payout: None,
+    payout: Some(BossPayout {
+        reward_key: LATEANIA_KAETHYR_ASCENDANT_REWARD_KEY,
+        chip_move: ChipMove::LateaniaKaethyrAscendantDefeat,
+    }),
 };
 
 /// Account age (in days) at which an adventurer is a "citizen" of Lateania and

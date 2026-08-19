@@ -2528,9 +2528,11 @@ fn final_bosses_map_to_lifetime_achievements() {
 
     let yssgar = boss_achievement_for("Yssgar, the Sundering Deep")
         .expect("the Reaches' crowned boss should grant an achievement");
-    assert!(
-        yssgar.payout.is_none(),
-        "Yssgar's badge is the whole prize; no chip payout"
+    let yssgar_payout = yssgar.payout.expect("yssgar pays chips");
+    assert_eq!(yssgar_payout.reward_key, LATEANIA_SUNDERING_DEEP_REWARD_KEY);
+    assert_eq!(
+        yssgar_payout.chip_move,
+        ChipMove::LateaniaSunderingDeepDefeat
     );
     assert_eq!(
         yssgar.award_category,
@@ -2539,9 +2541,14 @@ fn final_bosses_map_to_lifetime_achievements() {
 
     let kaethyr = boss_achievement_for("Kaethyr Ascendant, Who Sang the God Awake")
         .expect("Kaelmyr's last boss should grant an achievement");
-    assert!(
-        kaethyr.payout.is_none(),
-        "Kaethyr's badge is the whole prize; no chip payout"
+    let kaethyr_payout = kaethyr.payout.expect("kaethyr pays chips");
+    assert_eq!(
+        kaethyr_payout.reward_key,
+        LATEANIA_KAETHYR_ASCENDANT_REWARD_KEY
+    );
+    assert_eq!(
+        kaethyr_payout.chip_move,
+        ChipMove::LateaniaKaethyrAscendantDefeat
     );
     assert_eq!(
         kaethyr.award_category,

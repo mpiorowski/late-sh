@@ -340,9 +340,6 @@ pub struct Game {
     /// Whether the whole map has been uncovered, which retires the scout's
     /// map offer.
     pub seen_all_map: bool,
-    /// Latched the first time the ship leaves the ground for good.
-    pub completed: bool,
-
     // ---- pacing (ours, not upstream) ----
     pub pace: Pace,
     /// Unix seconds the sim last settled to. Zero on a fresh save.

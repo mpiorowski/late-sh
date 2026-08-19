@@ -122,14 +122,14 @@ between sessions contribute nothing without any bookkeeping.
 | `model.rs` | **MPL.** The persistent `Game` (stores, carry, buildings, workers, population, the latched `seen_buildings`/`seen_jobs`, the room, every countdown) and the rules on it: `light_fire`/`stoke_fire` (whole-refusal on short wood, the first fire is free), `build` (whole-refusal, and refused outright while the room is Cold or worse: upstream's "builder just shivers"), `gather_wood`, trap collection, worker assignment, `refresh_build_options` (upstream's half-the-wood-and-seen-the-rest unlock rule, latched), plus the display helpers (`outside_title` hut ladder, `trap_rows` bare/baited split, `income_per_tick`). `Builder` is upstream's -1..4 level as a closed enum. |
 | `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
 | `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
-| `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order. No shared world, no tick loop, no published snapshot. |
+| `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order, and `reward_escape` (the ending's feed line, chips and badge, the Green Dragon `reward_dragon_kill` shape). No shared world, no tick loop, no published snapshot. |
 | `event.rs` | **MPL.** The scene machine and the fight. Upstream's per-scene closures become a closed `Effect` enum and its `isAvailable` predicates a closed `Condition` enum; its `setInterval` fight timers become second countdowns stepped from `State::tick`. `Ctx` writes, `Look` reads (the renderer never clones a save to list rows). |
 | `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL.** The three event pools, transcribed scene for scene. |
 | `world_data.rs`, `world.rs` | **MPL.** The wasteland: tiles, landmarks, weapons, weights and capacities; then generation, walking, supplies, danger, fights, clearing dungeons, going home and dying. Pure rules, tagged outcomes, no I/O. |
 | `space.rs` | **MPL.** The sixty-second ascent as a per-tick state machine, plus the ship's costs and the ending. |
-| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Ship), the cursor over `Row`s, the capped notification log, the live event modal and the live flight. `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
+| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Ship), the cursor over `Row`s, the capped notification log, the live event modal, the live flight, and the `Ending` (the epitaph's beats and its reveal clock). `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
 | `ui_event.rs`, `ui_world.rs` | The event modal and fight panel; the masked map and the ascent. |
-| `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance) and the Games-hub landing card (which credits upstream). |
+| `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance), the ending screen, and the Games-hub landing card (which credits upstream). |
 | `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, and `leave` (settle, save, return to the Games hub). |
 
 ## Persistence
@@ -205,6 +205,38 @@ in the door, so an absent player is never robbed of anything but time.
 **Deliberately dropped:** `dropbox.js` (cloud saves), `audio.js` /
 `audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets), roughly
 1,100 lines that the terminal replaces rather than translates.
+
+## The ending: the one thing here that ends
+
+Winning the ascent (`Flight::Won`) is the only terminal state the door has,
+and it is deliberately loud about it:
+
+- **The epitaph takes the whole panel.** `state::Ending` holds the beats
+  (upstream's three closing lines from `space::ENDING`, the run's last figures,
+  the badge, the way out) and a reveal clock; `ui::draw_ending` lays out every
+  beat from the first frame and leaves the unrevealed ones blank, so the text
+  never crawls up the screen as it arrives. Any key skips the wait; the next
+  key leaves the door. There is nothing behind the ending to go back to, so
+  that is the screen's only exit (`screen::ending_took_key`, which owns Esc and
+  the arrows too).
+- **The account keeps the run: chips and a badge.** `svc::reward_escape` is the
+  Green Dragon `reward_dragon_kill` shape: a `#lounge` feed line every time,
+  and — first escape only, deduped by the lifetime reward template
+  (migration 143, 10k chips) and the `NOT EXISTS` award insert — the payout
+  plus the rankless `ADE` profile badge. A replay pays nothing more, and the
+  ending's copy says "once per account" so that never reads as a broken
+  payout. Badge codes are registered in `late-core/src/models/profile_award.rs`
+  and `user.rs`'s chat-label SQL; see `app/leaderboard/CONTEXT.md`.
+- **The save does not survive.** The win deletes `darkroom_saves` for the user,
+  so the next visit is a dead fire in a dark room and the whole arc is there to
+  walk again. That makes `State::save` and `save_on_leave` load-bearing: both
+  return early while `ending` is up, or stepping out of the door would write
+  the finished run straight back over the wipe. `tick` returns early for the
+  same reason (it only advances the reveal): settling village time into a game
+  nobody will ever save again is pure waste.
+- **A dropped connection during the ending loses nothing.** The wipe and the
+  grant both fire the moment the ship gets through, not on dismissal. The
+  player misses the words, never the reward.
 
 ## Gotchas
 
@@ -309,12 +341,14 @@ Identical to what got v1 and v2 built:
    blob in `darkroom_saves` specifically so the existing delete-and-replay
    flow (the only way to start a new run today) does not erase it. Bumped
    once, in `State::tick_flight`'s `Flight::Won` arm (`state.rs`, next to
-   where `game.completed = true` is already set today): `liftoffs` on every
+   where the ending is built and the save deleted today): `liftoffs` on every
    win, `beacon_liftoffs` additionally when the run held the fleet beacon
    before the ascent. This is the one place v2's "no auto-reset, no
    prestige" decision gets a nuance: the *save itself* still never resets or
    carries a score, replaying is still exactly "delete and start over"; what's
-   new is that the account remembers how many times that has happened.
+   new is that the account remembers how many times that has happened. Note
+   the ending now performs that delete itself (see "The ending" above), so
+   v3's "delete and replay" is what winning already does.
 5. **New: permanent bonuses on a fresh save.** `Game::new()` reads the
    account's `DarkroomLegacy` once, at creation, and applies a deterministic,
    capped `LegacyBonus`, never touched again mid-run. First cut (numbers are
