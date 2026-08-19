@@ -379,10 +379,20 @@ impl LeaderboardService {
                     _ = interval.tick() => Wake::Timer,
                     _ = self.connected.notified() => Wake::Connect,
                 };
-                if wake == Wake::Timer
-                    && let Err(e) = self.flush_online_time().await
-                {
-                    tracing::warn!(error = ?e, "online time flush failed");
+                if wake == Wake::Timer {
+                    match self.flush_online_time().await {
+                        Ok(()) => {
+                            crate::metrics::record_online_time_flush(
+                                crate::metrics::OnlineTimeFlushResult::Flushed,
+                            );
+                        }
+                        Err(e) => {
+                            crate::metrics::record_online_time_flush(
+                                crate::metrics::OnlineTimeFlushResult::Failed,
+                            );
+                            tracing::warn!(error = ?e, "online time flush failed");
+                        }
+                    }
                 }
                 if !should_refresh(wake, self.has_subscribers(), self.snapshot_age()) {
                     tracing::debug!(?wake, "skipping leaderboard refresh");

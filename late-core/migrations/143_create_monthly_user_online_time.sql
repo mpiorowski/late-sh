@@ -4,7 +4,9 @@ CREATE TABLE user_online_time_monthly (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     total_milliseconds BIGINT NOT NULL CHECK (total_milliseconds >= 0),
     last_flush_id UUID NOT NULL,
-    PRIMARY KEY (month_start, user_id)
+    -- user_id leads so the ON DELETE CASCADE lookup is indexed; the board
+    -- query is served by idx_user_online_time_monthly_total below.
+    PRIMARY KEY (user_id, month_start)
 );
 
 CREATE INDEX idx_user_online_time_monthly_total

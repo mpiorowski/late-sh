@@ -2192,6 +2192,7 @@ fn tutorial_zone_is_safe_reachable_and_teaches_every_core_system() {
         );
     }
 }
+
 #[test]
 fn zone_level_bands_are_sane_and_cover_the_road() {
     let world = seed_world();

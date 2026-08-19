@@ -28,6 +28,15 @@ pub enum TranslationResult {
     Stale,
 }
 
+/// How a five-minute online-time flush resolved. `Failed` means the batch is
+/// retained in memory for retry; a sustained run of failures is accruing time
+/// that dies with the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnlineTimeFlushResult {
+    Flushed,
+    Failed,
+}
+
 #[cfg(feature = "otel")]
 mod inner {
     use std::sync::OnceLock;
@@ -37,7 +46,7 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
+    use super::{ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, TranslationResult};
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -356,11 +365,40 @@ mod inner {
     pub fn record_door_ingest_session_failure(game: DoorGame) {
         door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
+
+    fn online_time_flush_result_label(result: OnlineTimeFlushResult) -> &'static str {
+        match result {
+            OnlineTimeFlushResult::Flushed => "flushed",
+            OnlineTimeFlushResult::Failed => "failed",
+        }
+    }
+
+    fn online_time_flushes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_online_time_flushes_total")
+                .with_description(
+                    "Online-time flush passes by result; a failed pass retains its batch in memory for retry",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_online_time_flush(result: OnlineTimeFlushResult) {
+        online_time_flushes_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                online_time_flush_result_label(result),
+            )],
+        );
+    }
 }
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::{ActivityGame, DoorGame, RenderReason, TranslationResult};
+    use super::{ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, TranslationResult};
 
     pub fn record_ssh_connection() {}
     pub fn record_render(_reason: RenderReason) {}
@@ -379,6 +417,7 @@ mod inner {
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
+    pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
 }
 
 pub use inner::*;
