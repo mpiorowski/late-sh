@@ -61,13 +61,13 @@ fn every_equippable_item_carries_real_stats() {
 fn crafted_goods_form_a_clean_catalog() {
     assert_eq!(
         crafted().len(),
-        62,
-        "ten crafted kinds x six tiers, plus two masterwork sinks"
+        86,
+        "fourteen crafted kinds (ten plus the four oil families) x six tiers, plus two masterwork sinks"
     );
     for c in crafted() {
         assert!(
-            c.id >= CRAFTED_BASE && c.id < CRAFTED_BASE + 300,
-            "crafted item {} sits in the 4200 band",
+            c.id >= CRAFTED_BASE && c.id < CRAFTED_BASE + 400,
+            "crafted item {} sits in the 4200..4600 band",
             c.id
         );
         assert!(c.sell_price() >= 1, "crafted goods are worth something");
@@ -621,4 +621,22 @@ fn generated_loot_covers_the_previously_dropped_gear_slots() {
             );
         }
     }
+}
+
+#[test]
+fn oil_ids_roundtrip_school_and_tier() {
+    // `use_item` routes a vial to the coating action purely by id; a drifted
+    // id table would silently turn an oil into an unusable trinket.
+    for (s, school) in OIL_SCHOOLS.iter().enumerate() {
+        for t in 0..6u32 {
+            let id = oil_id(s as u32, t);
+            assert_eq!(
+                oil_school_tier(id),
+                Some((*school, t)),
+                "oil id {id} must map back to its school and tier"
+            );
+            assert!(item(id).is_some(), "oil id {id} resolves to a real item");
+        }
+    }
+    assert_eq!(oil_school_tier(poison_id(2)), None, "poisons are not oils");
 }

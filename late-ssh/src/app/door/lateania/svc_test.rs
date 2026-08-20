@@ -331,17 +331,22 @@ fn a_poison_coats_the_weapon_instead_of_being_drunk() {
     s.players.get_mut(&uid(1)).unwrap().inventory.push(poison);
     s.use_item(uid(1), poison);
     let p = &s.players[&uid(1)];
-    assert!(p.weapon_poison.is_some(), "the weapon is coated");
+    assert_eq!(
+        p.weapon_coat.map(|(school, _, _)| school),
+        Some(DamageType::Poison),
+        "the weapon is coated with poison"
+    );
     assert!(!p.inventory.contains(&poison), "the vial is used up");
 }
 
 #[test]
 fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
-    s.players.get_mut(&uid(1)).unwrap().weapon_poison = Some((10, POISON_CHARGES));
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat =
+        Some((DamageType::Poison, 10, POISON_CHARGES));
     s.tick();
     assert_eq!(
-        s.players[&uid(1)].weapon_poison.map(|(_, c)| c),
+        s.players[&uid(1)].weapon_coat.map(|(_, _, c)| c),
         Some(POISON_CHARGES - 1),
         "a landed strike spends one poison charge"
     );
@@ -349,6 +354,164 @@ fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
         s.mob_dots.get(&mob_id).is_some_and(|d| !d.is_empty()),
         "the struck foe is left with a poison DoT"
     );
+}
+
+#[test]
+fn an_oil_coats_the_weapon_with_its_school_and_replaces_the_last_coat() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let poison = super::super::items::poison_id(2);
+    let oil = super::super::items::oil_id(0, 2); // Firebrand Oil
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(poison);
+        p.inventory.push(oil);
+    }
+    s.use_item(uid(1), poison);
+    s.use_item(uid(1), oil);
+    let p = &s.players[&uid(1)];
+    assert_eq!(
+        p.weapon_coat,
+        Some((DamageType::Fire, OIL_PER_TICK[2], OIL_CHARGES)),
+        "the oil takes the one coat slot, replacing the poison"
+    );
+    assert!(!p.inventory.contains(&oil), "the vial is used up");
+}
+
+#[test]
+fn the_attack_bar_still_matches_a_real_character() {
+    // TIER_ATTACK_BAR is the yardstick the coat curves and the world pass's
+    // grind-rate budget are both written against, so it has to be measured
+    // rather than remembered: rebuild a real character at each crafting gate,
+    // wearing that tier's crafted weapon, and ask the engine what it swings for.
+    for t in 0..6usize {
+        let lvl = TIER_GATE_LEVEL[t];
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = lvl;
+        p.base_attack = Class::Warrior.stats_at(lvl).attack;
+        // Ability scores are rolled 4d6-drop-lowest at character creation, so
+        // the bar is measured at the flat 10s (a +0 modifier). A yardstick that
+        // moved with the dice would not be a yardstick.
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped
+            .insert(Slot::Weapon, super::super::items::smith_weapon_id(t as u32));
+        assert_eq!(
+            p.attack(),
+            TIER_ATTACK_BAR[t],
+            "tier {t} (level {lvl}): the bar moved, so every coat share moved with it"
+        );
+    }
+}
+
+#[test]
+fn the_coat_curves_stay_inside_their_share_of_the_bar() {
+    // The balance contract for weapon coats, in the only terms that mean
+    // anything: what fraction of a real swing the rider is worth. An oil
+    // sustains about a fifth of the auto for a whole fight; a poison bursts
+    // about a third of it for a handful of strikes. Both are held to a band,
+    // and both are held to it at *every* tier, so the curves can never quietly
+    // outgrow the attack curve the way they did before.
+    for t in 0..6usize {
+        let bar = TIER_ATTACK_BAR[t] as f64;
+        let oil = OIL_PER_TICK[t] as f64 / bar;
+        let poison = POISON_PER_TICK[t] as f64 / bar;
+        assert!(
+            (0.15..=0.22).contains(&oil),
+            "tier {t}: oil rider is {oil:.3} of the bar, outside the sustain band"
+        );
+        assert!(
+            (0.24..=0.32).contains(&poison),
+            "tier {t}: poison rider is {poison:.3} of the bar, outside the burst band"
+        );
+        assert!(
+            POISON_PER_TICK[t] > OIL_PER_TICK[t],
+            "tier {t}: poison must hit harder per tick than oil, or it is dead content"
+        );
+    }
+    // And the shape that keeps them from being the same item: the poison
+    // bursts, the oil lasts. A coat wound is live for its charges plus the
+    // trailing POISON_DOT_TICKS after the final swing.
+    let ticks = |charges: u8| (charges + POISON_DOT_TICKS - 1) as f64;
+    let oil_total = ticks(OIL_CHARGES) * OIL_PER_TICK[5] as f64;
+    let poison_total = ticks(POISON_CHARGES) * POISON_PER_TICK[5] as f64;
+    assert!(
+        poison_total < oil_total,
+        "the cheap vial must not out-total the prepared coat"
+    );
+    assert!(
+        poison_total / oil_total > 0.6,
+        "but it must stay a real alternative, not a strictly worse one"
+    );
+}
+
+#[test]
+fn a_coat_keeps_one_refreshing_wound_however_many_swings_land() {
+    // A coat re-seeds on every landed strike, at the very cadence its DoT
+    // ticks. If each strike opened its own wound, POISON_DOT_TICKS of them
+    // would be live at once and the rider would be paid three times over -
+    // which is not the bar the grind-rate budget is written against. One
+    // wound per attacker, refreshed, is the contract.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    // A neutral foe: `engaged_with` grabs whichever mob the map hands over
+    // first, and this test is about how many wounds a coat opens, not about
+    // what the foe's profile does to the number on each one.
+    if let Some(m) = s.mobs.get_mut(&mob_id) {
+        m.spawn.profile = DamageProfile::new(DamageType::Physical, None, None);
+    }
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    for _ in 0..5 {
+        s.tick();
+    }
+    let stacks = s.mob_dots.get(&mob_id).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(stacks.len(), 1, "five landed swings, one coat wound");
+    assert_eq!(stacks[0].per_tick, 10, "ticking for the rider exactly once");
+    let view = s.snapshot().players[&uid(1)].clone();
+    let foe = view
+        .mobs
+        .iter()
+        .find(|m| m.id == mob_id)
+        .expect("the foe is on the panel");
+    assert_eq!(
+        foe.dot_stacks, 1,
+        "and the panel shows one wound, not a growing pile"
+    );
+}
+
+#[test]
+fn ability_dots_still_stack_on_top_of_a_coat() {
+    // The other half of the rule: an ability DoT is one wound per cast and
+    // keeps stacking (its cooldown is what rations it), and it stacks
+    // alongside the coat's single wound rather than refreshing it.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
+    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
+    let stacks = s.mob_dots.get(&mob_id).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(stacks.len(), 3, "one coat wound plus two ability wounds");
+}
+
+#[test]
+fn an_oiled_strike_rides_the_zone_profile() {
+    // Against a foe weak to Fire, a fire oil's DoT seeds at 1.5x per tick;
+    // against one that resists it, at half. The multiplier is baked in by
+    // seed_mob_dot, so the coat is a real matchup lever, not flat flavor.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    if let Some(m) = s.mobs.get_mut(&mob_id) {
+        m.spawn.profile = DamageProfile::new(DamageType::Physical, None, Some(DamageType::Fire));
+    }
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    let seeded = s
+        .mob_dots
+        .get(&mob_id)
+        .and_then(|d| d.first())
+        .map(|dot| dot.per_tick);
+    assert_eq!(seeded, Some(15), "weak to fire: 10 per tick seeds as 15");
 }
 
 #[test]
@@ -4119,6 +4282,33 @@ fn the_long_road_matches_the_real_gates_and_tracks_titles() {
 }
 
 #[test]
+fn physical_walls_never_gate_the_long_road_past_the_treant() {
+    // This is a solo game: a Physical-locked class must be able to walk the
+    // whole mandatory road without another player. Physical-resist bosses may
+    // guard optional prizes, but on the Long Road only the Elder Treant wears
+    // one - and he sits at the low band where a tier-0 oil's flat rider
+    // out-punches the resist, so he teaches the coat instead of gating on it.
+    let w = seed_world();
+    for m in LONG_ROAD {
+        let spawn = w
+            .spawns
+            .iter()
+            .find(|sp| sp.name == m.boss)
+            .expect("road boss exists");
+        if m.boss == "the Elder Treant" {
+            assert_eq!(spawn.profile.resist, Some(DamageType::Physical));
+            continue;
+        }
+        assert_ne!(
+            spawn.profile.resist,
+            Some(DamageType::Physical),
+            "{} resists Physical on the mandatory road",
+            m.boss
+        );
+    }
+}
+
+#[test]
 fn every_quest_target_and_zone_is_real() {
     let w = seed_world();
     for q in STARTER_QUESTS {
@@ -4150,3 +4340,89 @@ fn every_quest_target_and_zone_is_real() {
         );
     }
 }
+
+#[test]
+fn the_top_poison_tier_is_no_longer_a_clone_of_the_fourth() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let vial = super::super::items::poison_id(5); // Voidvenom
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(vial);
+    s.use_item(uid(1), vial);
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat,
+        Some((DamageType::Poison, POISON_PER_TICK[5], POISON_CHARGES)),
+        "tier 5 continues the per-tick curve instead of clamping to tier 4's"
+    );
+    assert!(
+        POISON_PER_TICK[5] > POISON_PER_TICK[4],
+        "and the curve really does keep climbing at the top"
+    );
+}
+
+#[test]
+fn the_active_coat_shows_on_the_player_view() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 21, 8));
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert_eq!(
+        view.coat.as_deref(),
+        Some("fire coat x8"),
+        "the battle panels read the coat from the view"
+    );
+}
+
+#[test]
+fn a_coated_weapon_works_in_a_duel_too() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    assert!(
+        s.pvp_dots
+            .get(&uid(2))
+            .is_some_and(|d| d.iter().any(|dot| {
+                dot.owner == uid(1) && dot.per_tick == 10 && dot.school == DamageType::Fire
+            })),
+        "the landed duel swing seeds the coat's school DoT on the rival"
+    );
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat.map(|(_, _, c)| c),
+        Some(OIL_CHARGES - 1),
+        "the duel swing spends one coat charge"
+    );
+    // And the one-wound rule holds in a duel too. It matters more here than
+    // against a mob: a pvp dot is *not* pre-scaled, so each tick is charged
+    // against the victim's armor live, and a stacking coat would have made a
+    // 12-charge vial worth a third of an endgame duel all by itself.
+    // Both duellists need the hit points to still be trading blows five
+    // swings in, or the wound count below only proves someone died.
+    for id in [uid(1), uid(2)] {
+        let p = s.players.get_mut(&id).unwrap();
+        p.base_max_hp = 4000;
+        p.hp = p.max_hp();
+    }
+    for _ in 0..4 {
+        s.tick();
+    }
+    assert!(
+        s.players[&uid(1)].pvp_target == Some(uid(2)),
+        "the duel is still running"
+    );
+    let stacks = s.pvp_dots.get(&uid(2)).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(
+        stacks.iter().filter(|d| d.owner == uid(1)).count(),
+        1,
+        "five landed duel swings, one coat wound"
+    );
+}
+

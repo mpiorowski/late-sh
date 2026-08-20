@@ -125,6 +125,7 @@ fn world_state_round_trips_through_json() {
             owner,
             damage: 5,
             remaining_ticks: 3,
+            from_coat: false,
         }],
     );
     let json = world.to_json();

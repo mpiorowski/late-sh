@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-17 (the land map is now a drawn atlas rather than a derived trunk: every country sits at a hand-set place, the Overworld and Embergate are walled keeps each road leaves by its own wall junction, and `ROADS` is checked against `worldmap::land_links` so the picture can neither invent a road nor lose one; see §5.2 and the new gotcha in §11; the Ways no longer carry gate titles of their own - `CONTINENT_WAYSTONES` lost its third field and `svc::travel` its duplicate title check, so every title check now lives in `can_cross_progression_gate` and a waystone is offered on `waystone_is_known` alone, see §6; the overhead compass now always renders a `compass_glyph` direction + room count for a marked destination, and off-screen POI arrows are `PAN_LIMIT`-filtered rather than pointing at meaningless cross-block deltas; Aelunor, the Faewood - a twelve-zone, cavern-only forest continent of elves/high elves/druids/fae, 100 named creatures across five rarity tiers - and its own city Silvael are new, along with five more tameable beasts each carrying their own auto-skill ladder; see §1, §5.1, §6, §9, §11)
+- Last updated: 2026-08-20 (weapon coats corrected after review: a coat re-seeded its DoT on every strike at the same cadence the DoT ticked, so `POISON_DOT_TICKS` stacks ran live at once and every coat was silently worth 3x its documented rider - coats now keep **one refreshing wound per attacker** (`svc::DotSource`, persisted via `SavedMobDot::from_coat`, logged once), and both coat curves are re-tuned as a share of the newly measured `svc::TIER_ATTACK_BAR` into burst-vs-sustain shapes (poison ~30% of the auto for 5 strikes and 2 herbs, oil ~20% for 12). The world pass's grind-rate budget now **derives** its rider from those constants instead of declaring a `0.15` no assertion could check; zone-boss profiles are asserted rather than skipped; six stale "bosses keep their own" table comments corrected; one Aelunor glade rethemed Resonant -> Haunted so the region has a Holy coat lane. Spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -72,10 +72,10 @@ Current game scale:
 | `archipelago.rs` | The **Shattered Archipelago** data + address arithmetic: the four portal `VILLAGES` (rooms `8000+`), the 20 `ISLANDS` theme table (rooms `20000+`), `island_entrance`/`village_room`/`is_archipelago_room`/`has_waystone`, and `portal_destinations()` (the fast-travel menu). Rooms are generated in `world.rs`; the portal teleport (`travel`) lives in `svc.rs`. |
 | `pets.rs` | Combat companions. `PetSpecies` data table (`PET_SPECIES`, `pet_species_by_key`) of buyable beasts, and the live `Pet` (held on `PlayerState`, always co-located with its owner). Loyalty (earned by feeding) drives the level via a pure function; `max_hp`/`attack` scale with level. `PetSpecies` carries a `tame_level` (`0` = buyable Stable species; `>0` = the Animal Taming level a wild beast needs) and its own `skills: &'static [taming::PetSkill]` ladder (every pre-Aelunor species points at the shared `taming::PET_SKILLS`; Aelunor's five each carry their own, so different pets really do have different spells); `pet_species_by_key` searches `PET_SPECIES`, `taming::TAMEABLE`, **and** `taming::AELUNOR_TAMEABLE` so a saved pet of any kind reloads. The world wiring (buying/feeding/wounds, the bite each round, and the level-gated **pet auto-skills**) lives in `svc.rs`. Persisted by species key + loyalty (HP restored full on load). |
 | `taming.rs` | The **Animal Taming** trade. `TAMEABLE` = fifty-five tameable `PetSpecies` of Broceliande, small→large with `tame_level` rising 1..50 (harder and harder); `AELUNOR_TAMEABLE` = five more, native to Aelunor. `wild_beasts()` places every beast in **both** pools at a real safe room (Broceliande's zone forest gates, Aelunor's zone Wood-Gates, via `world::aelunor_entrances()`) and returns one combined list; `WildBeast.species` indexes the **combined** pool (`TAMEABLE` then `AELUNOR_TAMEABLE`), resolved through `beast_species(index)` rather than indexing `TAMEABLE` directly. `beasts_at(room)` filters it. `tame_chance(xp, beast)` drives the success roll (40% at the required level, +9%/surplus level, capped 95%, 0 if under-level); `tame_xp` scales the reward. **Pet auto-skills**: `PET_SKILLS` (Savage Bite L3 / Rend L8 / Intimidating Roar L15 / Loyal Guard L22 / Killing Pounce L30, `pet_skills_at(level)`) is the shared ladder every pre-Aelunor species uses; the five Aelunor species each carry a distinct `PetSkill` array of their own (see the Animal Taming section), including a `Mend` effect (a direct heal) no earlier pet had. `PetSkillEffect` is resolved in `svc.rs::fire_pet_skills`/`fire_pet_skills_pvp`, both of which now take the firing pet's own `skills` slice as a parameter rather than assuming the shared ladder. Only data + pure maths; the action/panel/combat wiring is in `svc.rs`/`state.rs`/`ui.rs`. |
-| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. Also the **raw-material catalog** (`materials()`/`material_id`/`MATERIAL_BASE = 4000`): 5 skills x 5 tiers of gathered materials (logs/ores/fish/herbs/hides), `Valuable` kind (immediately sellable), IDs `4000..4100` (skill index x 20 + tier). The **crafted-goods catalog** (`crafted()`/`CRAFTED_BASE = 4200` + the `*_id(tier)` helpers): intermediates (ingots/planks/leather) and finished goods (weapons/armor/potions/poisons/food), IDs `4200..4500`. And the **Sunderlakes fish catalog** (`fish()`/`FISH_BASE = 4600`/`FISH_COUNT = 40`): 40 species with a wide sell-price spread, ~a third `Consumable` (edible), the rest `Valuable`; `fish_well_fed(id)` gives the well-fed regen for the legendary "special" fish. All chained into `item()`. |
+| `items.rs` | Item catalog, equipment slots, consumables, valuables, shops, generated Frontier loot. Also the **raw-material catalog** (`materials()`/`material_id`/`MATERIAL_BASE = 4000`): 5 skills x 5 tiers of gathered materials (logs/ores/fish/herbs/hides), `Valuable` kind (immediately sellable), IDs `4000..4100` (skill index x 20 + tier). The **crafted-goods catalog** (`crafted()`/`CRAFTED_BASE = 4200` + the `*_id(tier)` helpers): intermediates (ingots/planks/leather) and finished goods (weapons/armor/potions/poisons/oils/food), IDs `4200..4600` (the four oil families sit at `oil_id`, `4500..4566`). And the **Sunderlakes fish catalog** (`fish()`/`FISH_BASE = 4600`/`FISH_COUNT = 40`): 40 species with a wide sell-price spread, ~a third `Consumable` (edible), the rest `Valuable`; `fish_well_fed(id)` gives the well-fed regen for the legendary "special" fish. All chained into `item()`. |
 | `skills.rs` | **Gathering skills** (`GatherSkill`: Woodcutting/Mining/Fishing/Foraging/Skinning) and **crafting skills** (`CraftSkill`: Smithing/Woodworking/Leatherworking/Alchemy/Cooking), both on one 1-50 xp curve (`xp_for_skill_level`/`skill_level_for_xp`/`skill_progress`), independent of class level and steepening past level 10. Persisted per-player as (skill key, xp) for each set. |
 | `crafting.rs` | **Recipes** (`Recipe`/`recipes()`/`recipe(i)`/`recipe_indices_for(skill)`): inputs -> output, gated by a `CraftSkill` + level. 50 recipes (10 per tier x 5 tiers) that **chain** (ore -> ingot -> weapon). Data only; `svc::craft` resolves and applies them. Built at runtime and cached (inputs are `Vec`, not a leaked slice). |
-| `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. |
+| `damage.rs` | Damage schools, mob resistance/weakness profiles, damage multiplier math. Also `ZoneTheme`: the closed 16-variant theme vocabulary of the world resist/weak pass, each an exhaustive const mapping to `(resist, weak)` (see the Abilities and damage section). |
 | `stats.rs` | D&D-style ability scores, 4d6-drop-lowest rolls, modifiers, HP/attack bonuses. |
 | `persist.rs` | JSON schemas for durable character saves and shared world saves. Versioned (`SCHEMA_VERSION`); new fields use `#[serde(default)]` so old saves load (e.g. `board_progress`/`board_done` for quests). |
 
@@ -333,15 +333,17 @@ Load-bearing decisions, all of them deliberate:
 - Five crafting trades (`skills::CraftSkill`) - Smithing, Woodworking, Leatherworking, Alchemy, Cooking - level 1..=50 on the same curve, tracked as a separate `craft_skills` map on `PlayerState` and persisted (schema v13).
 - `world::FEATURES` places the five **craft stations** (`FeatureKind::CraftStation(CraftSkill)`) in Embergate's Market Row (room 3): a forge, workbench, tannery, alchemy lab and cooking fire. `craft_stations_at(room)` gates crafting and builds the panel. Stations read as actionable gold in the room (`ui::is_craft_station`).
 - `u` opens the **Crafting** panel (`Panel::Crafting`) where any station stands; it lists every recipe worked at the stations here, each flagged craftable/gated (station + skill level + materials). `Enter` crafts the selected recipe (`svc::craft` / `craft_task`): it consumes the inputs (`PlayerState::consume`/`item_count`), adds the output, and trains the craft skill. Recipes **chain** - smelt ore -> ingot, then forge ingot + plank -> sword.
-- Crafted outputs are ordinary items, so they equip / are consumed / sell through the existing systems (weapons & armor equip, potions & food heal/restore, poisons are sellable valuables until the depth update makes them applyable).
+- Crafted outputs are ordinary items, so they equip / are consumed / sell through the existing systems (weapons & armor equip, potions & food heal/restore, poisons and oils coat the weapon - see Crafting depth below).
 - The **Trades** block shows all ten trades (gather then craft); the recipe `inputs` are summarised as `"3x Copper Ingot, 1x Oak Plank"`.
 
 ### Crafting depth [VOLATILE]
 
-- **Applied poisons**: using a crafted poison (`items::poison_tier` routes it out of the normal consumable path in `use_item`) coats the weapon - `PlayerState::weapon_poison = Some((per_tick, charges))` (transient, `POISON_CHARGES = 5`). Each landed melee strike in the combat round seeds a `DamageType::Poison` DoT on the struck foe via the existing `seed_mob_dot` and spends a charge; `POISON_PER_TICK` scales the damage by poison tier.
+- **Weapon coats (poisons + oils)**: using a crafted poison (`items::poison_tier`) or one of the four **weapon oils** (`items::oil_id`/`oil_school_tier`/`OIL_SCHOOLS` = Fire/Frost/Holy/Lightning, 6 tiers each, Alchemy recipes with a school-flavored second ingredient) routes out of the normal consumable path in `use_item` and coats the weapon - `PlayerState::weapon_coat = Some((school, per_tick, charges))` (transient, one slot: any new coat replaces the last; `POISON_CHARGES = 5`, `OIL_CHARGES = 12`). Each landed melee strike seeds a DoT of the coat's school via `seed_mob_dot`, which bakes the foe's resist/weak multiplier into the per-tick up front, so a matched oil is a real matchup lever, and spends a charge. Coats seed pvp dots in duels the same way, and the active coat shows in both battle panels' `you:` effects line via `PlayerView.coat` ("fire coat x8"). Oils are always flat riders added to the Physical auto, never a conversion of its school and never a multiplier on `attack()` - that line is reserved for the planned Thundersmith class (THUNDERSMITH.md).
+  - **One wound per coat, refreshed** (`svc::DotSource`): a coat re-seeds on every landed strike, at the very cadence its DoT ticks, so it keeps a single stack per attacker and refreshes it in place. Ability DoTs still stack, because a cooldown rations how often they can be cast. This is load-bearing, not housekeeping: while coats pushed a stack per strike, `POISON_DOT_TICKS` of them were live at once and every coat was silently worth three times its rider (`a_coat_keeps_one_refreshing_wound_however_many_swings_land`). The wound's source is persisted (`SavedMobDot::from_coat`) so a reload cannot untag a live coat and let a second stack open beside it. Only the opening of a wound is logged, never a refresh.
+  - **Two shapes, priced against the same bar**: `svc::TIER_ATTACK_BAR` is a *measured* auto-attack yardstick (a real character at each crafting gate wearing that tier's crafted weapon, pinned by `the_attack_bar_still_matches_a_real_character`), and both coat curves are written as a share of it. The oil sustains ~20% of the auto for 12 strikes; the poison bursts ~30% of it for 5, costs two herbs against the oils' three items, and owns the one school no oil covers. So a vial is roughly three quarters of an oil's damage in half the window for two thirds of the materials - cheaper, shorter, sharper, never simply worse. `the_coat_curves_stay_inside_their_share_of_the_bar` holds every tier of both curves to its band, which is what stops a curve quietly outgrowing the attack curve (it had: the oil rider was documented at 15% of output while really running three to six times that).
 - **Cooking buffs**: eating crafted food (`items::food_tier`) heals/restores as a normal consumable *and* pushes a `HealOverTime` self-effect (well-fed regen, `WELL_FED_TICKS`), reusing the ability HoT tick.
 - **Masterwork sinks**: two Legendary smithing recipes (`items::masterwork_id`, level 45) consume a heap of top-tier intermediates (8-10 mithril ingots + ironbark planks / dire leather) for gear a clear step above the tiered craftables - the endgame material sink.
-- None of this adds save state (`weapon_poison` is transient); no schema bump.
+- None of this adds save state (`weapon_coat` is transient); no schema bump.
 
 ### Animal Taming [VOLATILE]
 
@@ -355,7 +357,7 @@ Load-bearing decisions, all of them deliberate:
 - **First real pvp.** Before this, Lateania was pure PvE - no player could target another. `Room::pvp` (never `true` together with `safe`) marks a room as contested ground; `svc::engage_player`/`engage_player_task` let a player lock onto another adventurer standing in the same `pvp` room, mirroring `engage_mob`. The victim auto-retaliates (`pvp_target` set both ways) if they weren't already mid-fight with anything. `PlayerState::in_combat()` (`target.is_some() || pvp_target.is_some()`) is what movement/recall/mount/waypoint/travel actually gate on now - a duel holds you in place exactly like a mob fight always has.
 - **The exchange.** The tick's pvp-fighters pass (right after the mob-fighters pass) resolves one auto-attack per engaged pair per tick, reusing `attack()`/`strike_player` as-is (`strike_player`'s `mob_name` argument is just a display string, so a player-vs-player blow needed no changes there). Rogue opening strike, Berserker frenzy, and Ranger's wounded-target bonus all still apply to the attacker; armor mitigation, shields, Monk/Tank mitigation, the Warrior death-save, and veteran in-place resurrection all still apply to the victim exactly as they do against a mob.
 - **`target` and `pvp_target` are mutually exclusive, and both halves are load-bearing.** `engage_player` clears `target`; `set_target` (shared by `engage`/`engage_mob`) clears `pvp_target` and logs "You break off the duel." Every resolver reads pvp first, so a player holding both at once would have their abilities damage the rival while `Stun` landed its stun on the mob - and in the Waste, where contested ground and the mob roster share the same rooms, one auto-attack keypress used to be enough to get there (`locking_onto_a_mob_breaks_off_the_duel_so_abilities_hit_the_mob`).
-- **Abilities and pets also reach a `pvp_target` now.** `damage_target` (used by `Strike`/`Finisher`) checks `pvp_target` before `target` and routes through the new `strike_pvp_target` (a thin wrapper around `strike_player` that also handles pvp kill-crediting - shared by the auto-attack pass, abilities, pet bites, and pvp dots, so that logic lives in exactly one place). `DamageOverTime` seeds a `pvp_dots` entry (parallel to `mob_dots`, but keyed by victim id and carrying its own `DamageType` per stack, since a player's `strike_player` needs the real school every tick rather than a resist/weak multiplier baked in once); the tick resolves it the same way as mob dots, just through `strike_pvp_target`. `Stun` inserts into `pvp_stuns` (parallel to `mob_stuns`), checked at the top of each attacker's own turn in the pvp-fighters pass - a stunned adventurer skips their swing that round, same as a stunned mob does. A companion's bite and its unlockable auto-skills (`fire_pet_skills_pvp`, a pvp sibling of `fire_pet_skills`) fire against `pvp_target` too: `SavageBite`/`Pounce`/`Rend` route through `strike_pvp_target`/`seed_pvp_dot`; `Roar`/`Guard` are pure self-buffs and needed no changes. **Still auto-attack-only for mobs, not pvp:** poison-coated weapons (`weapon_poison`) still only seed a `mob_dots` entry - extending that to pvp is the one remaining gap.
+- **Abilities and pets also reach a `pvp_target` now.** `damage_target` (used by `Strike`/`Finisher`) checks `pvp_target` before `target` and routes through the new `strike_pvp_target` (a thin wrapper around `strike_player` that also handles pvp kill-crediting - shared by the auto-attack pass, abilities, pet bites, and pvp dots, so that logic lives in exactly one place). `DamageOverTime` seeds a `pvp_dots` entry (parallel to `mob_dots`, but keyed by victim id and carrying its own `DamageType` per stack, since a player's `strike_player` needs the real school every tick rather than a resist/weak multiplier baked in once); the tick resolves it the same way as mob dots, just through `strike_pvp_target`. `Stun` inserts into `pvp_stuns` (parallel to `mob_stuns`), checked at the top of each attacker's own turn in the pvp-fighters pass - a stunned adventurer skips their swing that round, same as a stunned mob does. A companion's bite and its unlockable auto-skills (`fire_pet_skills_pvp`, a pvp sibling of `fire_pet_skills`) fire against `pvp_target` too: `SavageBite`/`Pounce`/`Rend` route through `strike_pvp_target`/`seed_pvp_dot`; `Roar`/`Guard` are pure self-buffs and needed no changes. Coated weapons (`weapon_coat`, poisons and oils alike) work in duels too: the pvp auto-attack pass seeds a `pvp_dots` entry of the coat's school and spends a charge, mirroring the mob path.
 - **Death and spoils.** A real pvp kill (not a death-save or a spent veteran charge) reuses the ordinary death path unchanged - the victim becomes a corpse, keeps `CORPSE_LINGER_SECS` to be resurrected or release, and loses the same `carried_gold_death_loss` cut as any death. The only pvp-specific step is crediting that lost gold to the killer (diffed before/after the `strike_player` call, not a new field) alongside a flat xp bonus, incrementing persisted `pvp_kills: i64` (schema **v18**, `#[serde(default)]`), and awarding the reaver title track (`pvp_title_for`: Blooded → Reaver of the Waste → Dread of the Wildbound → Warlord of the Waste → Deathless Sovereign of the Waste at 1/10/50/150/500 kills) via the existing `award_title`.
 - **UI.** `OccupantView` gained `attackable`/`targeted`; the "Adventurers here" list marks a hostile row (`hostile`/`duel` tag, a `»` marker on your current target) and, only in a `pvp` room, is clickable (`ClickAction::AttackPlayer`) exactly like a foe roster row. `PlayerView.pvp`/`pvp_kills` expose the room flag and lifetime count. `OccupantView` also carries `level` now: both the "Adventurers here" list and the Follow panel prefix the name with `Lv{N}` (`roster_row`, same convention `MobView` already uses) and append a three-letter class abbreviation (`ui::class_abbrev`, hand-picked - not a naive truncation, since e.g. Warrior/Warlock would otherwise both read "WAR") into the status-tag slot, combined with any active status (`hostile·WAR`) rather than replacing it - so a foe's kit is visible before you ever engage.
 - **The continent.** `extend_wildbound` (rooms 30000+) builds three chained biomes - Duskmire Wood (cavern, levels ~13-60), the Hollowdeep (braided maze, ~44-67), the Scorched Flats (cavern, ~65-83) - each ending in one named apex boss (Wychelm Sovereign / Deathless Warden / Apex Sandwyrm, **levels 62 / 70 / 85** derived from their `boss_stats` through `Spawn::level()`; an earlier note here claimed 65/78/100, which overstated all three and wrongly implied the Sandwyrm was the world's ceiling - Kaelmyr and the deep Reaches are, see §7), carved with the same `carve_maze`/`carve_cavern` never-a-grid machinery as Broceliande. Every field room is `pvp: true`; the only havens are three small four-room gate towns (Last Watch, Barrowgate, Ashhold), one per biome, chained gate → field → next gate. Regular mobs are 20 base creature names per biome crossed with a shared five-tier affix ladder (`Lesser/·/Greater/Elder/Ancient`) - a 300-entry template pool, ~600 live spawns. Loot borrows `frontier_loot` at an offset tier per biome rather than a bespoke catalog (`broceliande_loot`'s shortcut): every table, **the apex boss's included**, is `loot_base + n`, the boss one affix ladder past its own deepest regular (tiers 5 / 12 / 18), and `wildbound_loot` clamps at `FRONTIER_TIERS - 2` so the Waste can never reach the catalog's top table. That clamp is load-bearing - the boss branch used to return `FRONTIER_TIERS - 1` outright, so all three apexes dropped the King Who Was Promised Nothing's own tier, guaranteed (`roll_loot` never rolls for a boss), off a 1500hp Duskmire mob reached by an ungated walk at gentle overworld multipliers. Pinned by `a_wildbound_apex_boss_pays_off_its_own_biome_not_the_frontier_crown`. Hung off the Sahra Wastes' `WILDBOUND_GATEWAY` (room 751, the Sand-Wyrm's Maw) by a plain walk south; `Last Watch, the Wildbound Waste` is a `CONTINENT_WAYSTONES` entry with no title gate.
@@ -561,11 +563,12 @@ Playable classes (17; the first five are the class-select `1-5` quick-pick):
 - Each of the five newcomers carries a full 1..=50 ability roster (ids 1700/1800/1900/2000/2100+) with a level-50 capstone and two archetype paths at `ARCHETYPE_LEVEL`. Progression reads as tiered: staged ability unlocks across the curve, the L10 archetype specialisation, and the shared five-level named milestones.
 
 Progression:
-- Level cap is `Class::MAX_LEVEL = 50`.
-- `xp_for_level` keeps early levels quick, then adds a much steeper post-level-8 term so midgame and Frontier progress target roughly week-scale casual play instead of a 1-2 sitting clear; `level_for_xp` caps at 50.
+- Level cap is `Class::MAX_LEVEL = 100`.
+- `xp_for_level` keeps early levels quick, then adds a much steeper post-level-8 term so midgame and Frontier progress target roughly week-scale casual play instead of a 1-2 sitting clear; `level_for_xp` caps at `MAX_LEVEL`.
 - `Class::stats_at(level)` computes HP/resource/attack/resource regen.
 - Ability scores are rolled before class selection and persist after class choice.
-- Constitution adjusts max HP by level; class primary score adjusts attack.
+- Constitution and the class's `primary_score` are the only two of the six scores wired to mechanics: CON adds max HP that grows with level (`AbilityScores::hp_bonus`), the primary score adds a flat attack modifier (`attack_bonus`). The other four are display only, see §11.
+- The sheet and the class-select screen glow the primary score's row in the class accent. Both the label (`ui::primary_label`) and the accent (`ui::class_accent`, `ui::class_emblem`) are matched exhaustively over `Class`, so a new calling breaks the build instead of rendering with no attribute highlighted and a nameless "Adventurer" bust.
 
 ### Abilities and damage
 
@@ -576,6 +579,117 @@ Progression:
 - `DamageProfile` lets each mob deal one attack type, resist up to one incoming school, and be weak to up to one incoming school.
 - Resist halves damage, weak adds 50 percent, and minimum damage is 1.
 - Auto-attacks are physical and still pass through mob resistances.
+- Every generated zone carries a themed resist/weak profile on its regulars: see the dedicated section below, **The world resist/weak pass**.
+
+### The world resist/weak pass [STABLE]
+
+Landed 2026-08-20. Every generated zone gives its regular mobs a themed
+resist/weak profile, so school choice is a real lever across the whole Lv30-60+
+band instead of only against ~116 authored spawns. Data-only: the engine
+multipliers (resist halves, weak +50%, minimum 1) and the one-resist-one-weak
+`DamageProfile` shape are unchanged.
+
+**The theme vocabulary.** `damage::ZoneTheme` is a closed 16-variant enum; each
+variant maps exhaustively to `(resist, weak)`. Physical never appears in either
+slot, and every theme carries a weakness (weak-forward: the right school is a
+reward; walls are events, and rare).
+
+| theme | resist | weak | flavor |
+|---|---|---|---|
+| Ashen | Fire | Frost | magma-born flesh |
+| Sunscorched | - | Frost | heat without fire-born flesh |
+| Frozen | Frost | Fire | ice country |
+| Verdant | - | Fire | burnable greenwood |
+| Tidal | - | Lightning | open water, wet ground |
+| Drowned | Frost | Lightning | the cold deep |
+| Storm | Lightning | Arcane | storm-born |
+| Resonant | - | Arcane | song, echo, standing wards |
+| Undead | Shadow | Holy | barrow-flesh |
+| Haunted | - | Holy | ghosts without the flesh |
+| Profane | Holy | Shadow | god-cults, the profaned divine |
+| Fae | - | Shadow | glamour |
+| Beastwild | - | Poison | living beasts and vermin |
+| Fungal | Poison | Fire | spore and rot |
+| Construct | Poison | Lightning | bloodless made things |
+| Crystal | - | Lightning | glass and shard |
+
+**Placement.** One theme table per generated region, beside its zone data and
+in the same order: `FRONTIER/REACHES/KAELMYR/LAKES/BROCELIANDE/AELUNOR_ZONE_THEMES`
+in `world.rs`, `ISLAND_THEMES` in `archipelago.rs`; 126 themed zones. Regulars
+inherit the theme at spawn build (an Aelunor spawn wears its zone theme
+whatever affix it rolls). **Every boss carries a weakness** - bosses are the
+fights players actually prepare for, so the prep mechanic must exist there:
+generated zone bosses inherit their zone theme's weak but **never** its
+resist (a weakness is pure reward; a resist on a boss is a class tax with no
+counterplay, so boss resists stay rare authored events - the 14 Physical
+walls and the elemental crowns). Authored crowns keep their hand-picked
+profiles; the zone teaches the school, the boss is the exam, and the oil
+already in your bag is the answer.
+
+**The two hard rules** (global, no exceptions): nothing anywhere is weak to
+Physical, and no regular anywhere resists it - a Physical resist on a regular
+is a zone-wide tax on the seven Physical-locked classes with no counterplay.
+The twelve authored regulars that used to resist it were re-themed
+(constructs/stone to Poison, wraiths/shades to Shadow, cold-sea creatures to
+Frost), each keeping its weakness.
+
+**The solo rule** (this is a solo game, no grouping fallback): a Physical
+resist on a boss may only guard an optional prize or sit at the low band
+where a tier-0 oil's flat rider out-punches the halving. Exactly 14 bosses
+wear one - the Elder Treant (the road's teaching fight, ~L5-8, where a 20g
+Sparkseed Oil already beats hitting a neutral boss dry), the Fallen Paladin
+(optional Sunken Citadel), and Aelunor's 12 zone bosses (optional region,
+weak Holy, so the blessed-oil rider lands at 150%). The mandatory Long Road
+past the Treant never demands a school a Physical-locked class can't bring;
+never add a Physical resist to a road crown. Pinned by
+`physical_walls_never_gate_the_long_road_past_the_treant` (`svc_test.rs`).
+
+**Census bands** (declared, test-enforced): per school 10..=30 weak zones and
+<=10 resist zones; Holy keeps >=4 resist zones (the Profane predators - without
+them the two mono-Holy classes silently win the school game); resists <= a
+third of any region; >=5 weak schools per region; no school owns more than a
+quarter of a region's weaknesses. Nothing resists Arcane.
+
+**The martial lever** is the weapon-coat family (poisons + the four Alchemy
+oils; mechanics in Crafting depth): flat, charge-limited school riders on the
+Physical auto that ride `seed_mob_dot`'s baked-in resist/weak multiplier.
+Coats are never a conversion of the auto's school and never a multiplier on
+`attack()` - both are reserved for the planned Thundersmith class
+(THUNDERSMITH.md), whose whole identity is industrializing this system.
+
+**The balance budget**, enforced by the routed grind-rate model in
+`world_test.rs`: 75% auto / 25% abilities from the real roster mix, plus the
+coat rider; "before" is exactly 1.0 everywhere since regulars were
+`(None, None)`. Bands: per-zone swing within +-15%; per-class themed-zone
+average within +-3%; a >=+5% best zone-and-coat answer for every class in
+every region (the meaningfulness floor); a <=+18% routed ceiling with <=12
+points of spread between the best- and worst-served class. The mono-Holy
+classes top the table by design (holy oil stacking with their own school in
+Undead/Haunted lanes): the deliberate buff to today's weakest two.
+
+The rider in that model is **derived from the engine, never declared**:
+`OIL_PER_TICK` over `TIER_ATTACK_BAR` (both in `svc.rs`, both pinned to a live
+character by `svc_test.rs`), converted through `AUTO_SHARE`. It lands near 14%
+of output. This is the one part of the pass that has already failed once: the
+rider was a hardcoded `0.15` while the real coat was worth three to six times
+that, and no assertion in the file could see it. A model that measures a
+constant instead of the game is not a budget.
+
+**Tests** (`world_test.rs`): `every_generated_zone_spawn_wears_its_zone_theme`
+(regulars wear the theme, zone bosses wear its weak and no resist),
+`no_regular_resists_physical_and_nothing_is_weak_to_physical`,
+`every_boss_carries_a_weakness`,
+`the_school_census_stays_inside_its_declared_bands`,
+`the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class`; in
+`svc_test.rs`, `the_attack_bar_still_matches_a_real_character` and
+`the_coat_curves_stay_inside_their_share_of_the_bar`. Re-theming a zone means
+editing its table row and letting these judge the census and budget; they, not
+prose, are the contract.
+
+**Visibility**: the targeted foe's traits line (`rank · strikes with X · weak
+to Y · shrugs off Z`) in both battle surfaces, plus the per-hit log tags.
+Deliberately no pre-fight display: the first swing is the probe, and pre-fight
+knowledge is reserved as the future Thundersmith Ledger's territory.
 
 ### Combat rules
 
@@ -759,6 +873,7 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 - `view.occupants` includes other players in the room regardless of class; service follow selection only allows classed targets in the same room.
 - Boon perks apply on room entry and can spam log lines if movement loops through boon rooms.
 - Hunted game cooldowns are not persisted across process restart.
+- **Four of the six ability scores are dead weight.** Nothing outside `stats.rs` reads STR/DEX/INT/WIS/CHA unless that score happens to be the class's `primary_score`: a Berserker's INT, a Mage's CHA, a Monk's STR all decide nothing. Only CON (`hp_bonus`, level-scaled, the one score that matters to everyone) and the primary score (`attack_bonus`, a flat modifier of at most +-4, which is a rounding error against a late-game attack curve plus gear) touch a number a player feels. Class selection still rolls all six and offers `r` to reroll, so the screen promises a build decision the game does not honour. Fixing it means either giving the other four real hooks (DEX to dodge/crit, INT/WIS to resource pool or regen, CHA to prices or taming, STR to carry weight or melee riders) or cutting the roll down to the scores that are real.
 - World content is authored as Rust data. A future data-file loader should preserve the existing `World`, `Room`, `MobSpawn`, `Feature`, and `CritterSpawn` shapes.
 - **The authored core cannot level a player through itself.** Its 31 spawns hold 6,276 xp in total (about Lv11) while the Archdemon at its end wants roughly Lv40 on bare class stats, so players are pushed into the ungated side countries to level and return over-levelled. The consequence is that the run up to the Obsidian Throne plays as trivial even though its trash is correctly tuned at ~1/3 of its boss, matching every other boss on that ladder. Fixing this means raising the core's xp budget (or its late trash), not re-tuning the boss: the Archdemon's damage was already lifted 48 -> 58 to match the ladder's own ~1.6x boss-to-trash damage ratio, which he alone was missing at 1.33x. See §7 for the whole shape.
 - **No quest content bridges Lv15-30, Lv35-52, or anything past Lv78**, and none of the five side countries has a single quest, despite Aelunor and Broceliande being the de facto route from the authored core to the Archdemon. Boards exist only in the three capitals and at the Kaelmyr ash-cairn. This is the emptiest part of the game for a new player and the most likely place to lose them.

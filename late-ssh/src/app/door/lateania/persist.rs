@@ -216,6 +216,13 @@ pub struct SavedMobDot {
     pub owner: Uuid,
     pub damage: i32,
     pub remaining_ticks: u8,
+    /// True for a weapon-coat wound, which keeps one refreshing stack per
+    /// attacker rather than stacking (see `svc::DotSource`). Defaulting to
+    /// false hydrates pre-coat saves as ability stacks, which is what they
+    /// were; without it a reload would untag a live coat and let a second
+    /// stack open beside it.
+    #[serde(default)]
+    pub from_coat: bool,
 }
 
 fn one() -> i32 {
