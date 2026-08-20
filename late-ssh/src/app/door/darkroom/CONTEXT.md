@@ -346,6 +346,14 @@ outside the save.
   ends the run with no warning reads as a bug rather than a risk.
 - **`Phase::Fighting` is boxed.** A live fight carries a stat line, three timer
   collections and two statuses; unboxed it would set the size of every `Phase`.
+- **A press inside the modal keeps the cursor on the row it pressed.** Upstream
+  is a page of buttons that never move: using one greys it out and leaves it
+  where it was. `State::keep_cursor_on` reproduces that, tracking the row
+  rather than its index, and only resets to the top when the event, the scene
+  or the phase changed. The event key is part of that comparison on purpose:
+  nearly every event calls its opening scene `start`, so comparing scene keys
+  alone reads as "same screen" when a button has walked into a different event
+  entirely.
 - **The thief skim is not a starved trade.** Every other income source skips
   its whole payout when an input runs short; the skim drains to zero and books
   only what was actually there into `Game::stolen` (upstream `addStolen`),

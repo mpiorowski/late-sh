@@ -9,6 +9,7 @@
 //! `tick` is called by the app and is correct at any cadence.
 
 use std::collections::VecDeque;
+use std::mem::{Discriminant, discriminant};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
@@ -30,6 +31,12 @@ use super::space::{self, Flight, Space};
 use super::svc::{DarkroomService, GameLoad};
 use super::world::{self, Direction, Step};
 use super::world_data::{self, Weapon};
+
+/// Which screen of the modal is up: the event, the scene inside it, and the
+/// phase of that scene. All three are needed, not just the scene: nearly every
+/// event names its opening scene `start`, so a scene key alone reads as
+/// unchanged when a button has walked into a whole different event.
+type EventScreen = (&'static str, &'static str, Discriminant<event::Phase>);
 
 /// How many notification lines the log keeps. Upstream fades them out of a
 /// scrolling column; a fixed window is the terminal equivalent.
@@ -277,6 +284,14 @@ impl State {
     /// The loaded game, or `None` while the DB round-trip is in flight.
     pub fn game(&self) -> Option<&Game> {
         self.game.as_ref()
+    }
+
+    /// The loaded game, mutably. Tests only: in production every change to the
+    /// game goes through an action on `State`, and nothing outside should be
+    /// reaching in.
+    #[cfg(test)]
+    pub(crate) fn game_mut(&mut self) -> Option<&mut Game> {
+        self.game.as_mut()
     }
 
     /// Notification lines, newest last.
@@ -837,6 +852,7 @@ impl State {
     }
 
     fn event_press(&mut self, row: event::Row) {
+        let before = self.event_screen();
         let mut out = Vec::new();
         let outcome = {
             let (Some(game), Some(active)) = (self.game.as_mut(), self.event.as_mut()) else {
@@ -859,9 +875,44 @@ impl State {
         for message in out {
             self.push_log(message);
         }
-        self.cursor = 0;
+        self.keep_cursor_on(row, before);
         self.finish_event(outcome);
         self.save();
+    }
+
+    /// Two presses that leave this unchanged are looking at the same list of
+    /// rows; anything else has replaced them.
+    fn event_screen(&self) -> Option<EventScreen> {
+        self.event.as_ref().map(|active| {
+            (
+                active.event.key,
+                active.scene.key,
+                discriminant(&active.phase),
+            )
+        })
+    }
+
+    /// Put the cursor back where the player left it.
+    ///
+    /// Upstream is a page of buttons that never move: using one greys it out
+    /// for its cooldown and leaves it exactly where it was. A terminal cursor
+    /// has to be put back on purpose, and it follows the *row* rather than its
+    /// index, so a weapon that ran out of ammo and dropped off the list cannot
+    /// silently slide the selection onto a different one.
+    ///
+    /// A press that changed the scene or the phase gets the cursor back at the
+    /// top, because those rows really are a different screen.
+    fn keep_cursor_on(&mut self, row: event::Row, before: Option<EventScreen>) {
+        if self.event_screen() != before {
+            self.cursor = 0;
+            return;
+        }
+        let target = Row::Event(row);
+        if let Some(index) = self.rows().iter().position(|listed| *listed == target) {
+            self.cursor = index;
+        }
+        // The row is gone. Leaving the cursor put keeps the player near where
+        // they were; `selected` clamps it to the list.
     }
 
     fn light_fire(&mut self) {

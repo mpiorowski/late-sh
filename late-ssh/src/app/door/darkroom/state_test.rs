@@ -3,7 +3,9 @@ use late_core::models::darkroom_save::DarkroomSave;
 use late_core::test_utils::create_test_user;
 use uuid::Uuid;
 
-use super::model::Game;
+use super::data::Resource;
+use super::event::{self, Active};
+use super::model::{Expedition, Game, View};
 use super::space::{Flight, Space};
 use super::state::{Ending, EndingBeat, Escape, Row, State};
 use super::svc::DarkroomService;
@@ -191,5 +193,110 @@ fn the_beacon_ending_says_something_else_and_pays_its_own_badge() {
     assert_eq!(
         Escape::WithBeacon.feed_detail(),
         Some("followed the fleet beacon home")
+    );
+}
+
+/// Swinging a weapon has to leave the cursor on that weapon.
+///
+/// Upstream is a page of buttons that do not move: using one greys it out for
+/// its cooldown and leaves it exactly where it was. This used to snap the
+/// cursor back to the top of the list on every press, so a fight with more
+/// than one weapon meant scrolling back down after every single blow.
+#[tokio::test]
+async fn attacking_leaves_the_cursor_on_the_weapon_you_swung() {
+    use super::world_data::Weapon;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "darkroom-fight-cursor").await;
+    let svc = darkroom_service(&test_db.db);
+
+    let mut state = State::new(svc, user.id, Utc::now());
+    load_game(&mut state).await;
+
+    // Out in the wasteland carrying three weapons, so the row under the
+    // cursor is not the first one.
+    let mut trip = Expedition {
+        hp: 500,
+        water: 10,
+        ..Expedition::default()
+    };
+    trip.add(Resource::BoneSpear, 1);
+    trip.add(Resource::IronSword, 1);
+    trip.add(Resource::SteelSword, 1);
+    state.game_mut().expect("loaded").expedition = Some(trip);
+    state.view = View::World;
+
+    // The immortal wanderer: 500 health, so it survives being hit and the
+    // fight stays on the same screen.
+    let command = super::scenes_executioner::by_key("executioner-command").expect("the boss");
+    let scene = command.scene("6").expect("the fight");
+    state.event = Some(Active::resume(command, scene, 500));
+
+    let steel = Row::Event(event::Row::Attack(Weapon::SteelSword));
+    let index = state
+        .rows()
+        .iter()
+        .position(|row| *row == steel)
+        .expect("the steel sword is one of the rows");
+    assert!(
+        index > 0,
+        "the test needs a row that is not already the first"
+    );
+    state.cursor = index;
+
+    state.select();
+
+    assert_eq!(
+        state.selected(),
+        steel,
+        "the cursor jumped off the weapon that was just swung"
+    );
+    assert!(
+        matches!(
+            state.event.as_ref().map(|a| &a.phase),
+            Some(event::Phase::Fighting(_))
+        ),
+        "the boss should still be standing, so the rows have not changed"
+    );
+}
+
+/// The other half of the same rule: a press that genuinely replaces the rows
+/// does put the cursor back at the top, because staying on index 2 of a list
+/// that is now something else entirely is worse than starting over.
+#[tokio::test]
+async fn walking_into_a_new_scene_puts_the_cursor_back_at_the_top() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "darkroom-scene-cursor").await;
+    let svc = darkroom_service(&test_db.db);
+
+    let mut state = State::new(svc, user.id, Utc::now());
+    load_game(&mut state).await;
+    state.game_mut().expect("loaded").expedition = Some(Expedition {
+        hp: 100,
+        water: 10,
+        ..Expedition::default()
+    });
+    state.view = View::World;
+
+    // The elevator bank, with a button per deck.
+    let antechamber =
+        super::scenes_executioner::by_key("executioner-antechamber").expect("the antechamber");
+    let start = antechamber.scene("start").expect("the bank of elevators");
+    state.event = Some(Active::resume(antechamber, start, 0));
+
+    // Take the third elevator rather than the first.
+    state.cursor = 2;
+    assert_eq!(state.selected(), Row::Event(event::Row::Button(2)));
+
+    state.select();
+
+    assert_eq!(
+        state.event.as_ref().map(|active| active.event.key),
+        Some("executioner-martial"),
+        "the third elevator opens the martial wing"
+    );
+    assert_eq!(
+        state.cursor, 0,
+        "a new wing is a new list of rows, so the cursor starts over"
     );
 }
