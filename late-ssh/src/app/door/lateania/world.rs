@@ -100,6 +100,30 @@ impl Dir {
 
 pub type RoomId = u32;
 
+/// One authored zone row shared by every continent's `*_ZONES_DATA` table:
+/// (zone, adjective, ground, landmark, creatures, three mob names, boss).
+type ZoneData = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    [&'static str; 3],
+    &'static str,
+);
+
+/// Aelunor's glade row: same shape as [`ZoneData`], except the three mob slots
+/// are indices into the shared affixed-beast table rather than names.
+type GladeData = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    [usize; 3],
+    &'static str,
+);
+
 /// A single location in the world: a node in the room graph.
 #[derive(Clone, Debug)]
 pub struct Room {
@@ -7456,9 +7480,6 @@ pub fn is_reaches_room(id: RoomId) -> bool {
     (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_ZONE_STRIDE).contains(&id)
 }
 
-/// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
-/// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Reaches zone, in `REACHES_ZONES_DATA` order. Regulars inherit the theme's
 /// profile; the zone boss wears the theme's weakness but never its resist
@@ -7486,7 +7507,9 @@ const REACHES_ZONE_THEMES: [ZoneTheme; REACHES_ZONES] = [
     ZoneTheme::Profane,   // Sundering Deep
 ];
 
-const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+/// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
+/// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
+const REACHES_ZONES_DATA: [ZoneData; 20] = [
     (
         "Saltmarsh Shallows",
         "brackish",
@@ -8035,10 +8058,6 @@ pub fn is_kaelmyr_room(id: RoomId) -> bool {
     (KAELMYR_BASE..KAELMYR_BASE + KAELMYR_ZONES as u32 * KAELMYR_ZONE_STRIDE).contains(&id)
 }
 
-/// Twenty zones of Kaelmyr: (zone, adjective, ground, landmark, creatures, three
-/// mob names, boss). The tribe threading is carried in the mob/boss names and
-/// the landmarks; `kaelmyr_desc` supplies the paragraph prose.
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Kaelmyr zone, in `KAELMYR_ZONES_DATA` order. Regulars inherit the theme's
 /// profile; the zone boss wears the theme's weakness but never its resist
@@ -8068,7 +8087,10 @@ const KAELMYR_ZONE_THEMES: [ZoneTheme; KAELMYR_ZONES] = [
     ZoneTheme::Profane,     // Sundering Wound
 ];
 
-const KAELMYR_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+/// Twenty zones of Kaelmyr: (zone, adjective, ground, landmark, creatures, three
+/// mob names, boss). The tribe threading is carried in the mob/boss names and
+/// the landmarks; `kaelmyr_desc` supplies the paragraph prose.
+const KAELMYR_ZONES_DATA: [ZoneData; 20] = [
     (
         "Cinderfall Shore",
         "ash-choked",
@@ -8682,11 +8704,6 @@ pub fn is_lakes_room(id: RoomId) -> bool {
     (LAKES_BASE..LAKES_BASE + LAKES_ZONES as u32 * LAKES_ZONE_STRIDE).contains(&id)
 }
 
-/// Fourteen zones of the Sunderlakes: (zone, adjective, water noun, landmark,
-/// creatures, three mob names, a notable/boss). Kept peaceful - the mob names
-/// lean toward wildlife and lost things rather than horrors, and the notables
-/// are lake-guardians more than tyrants. `lakes_desc` supplies the prose.
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Sunderlakes zone, in `LAKES_ZONES_DATA` order. Regulars inherit the
 /// theme's profile; the zone boss wears the theme's weakness but never its resist
@@ -8708,7 +8725,11 @@ const LAKES_ZONE_THEMES: [ZoneTheme; LAKES_ZONES] = [
     ZoneTheme::Beastwild, // Mere-Mother's Deep
 ];
 
-const LAKES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 14] = [
+/// Fourteen zones of the Sunderlakes: (zone, adjective, water noun, landmark,
+/// creatures, three mob names, a notable/boss). Kept peaceful - the mob names
+/// lean toward wildlife and lost things rather than horrors, and the notables
+/// are lake-guardians more than tyrants. `lakes_desc` supplies the prose.
+const LAKES_ZONES_DATA: [ZoneData; 14] = [
     (
         "Anglers' Dock",
         "sun-dappled",
@@ -9481,12 +9502,6 @@ pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
         .map(|&(name, _, _, tier, _)| (name, tier))
 }
 
-/// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
-/// feature, the creatures that haunt it, three regular mob names, the zone
-/// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies
-/// the paragraph prose. Zone names must NOT start with "The " (the builder does
-/// not prepend it here, but keeps them clean for the leaked zone label).
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Broceliande zone, in `BROCELIANDE_ZONES_DATA` order. Regulars inherit the
 /// theme's profile; the zone boss wears the theme's weakness but never its resist
@@ -9516,7 +9531,12 @@ const BROCELIANDE_ZONE_THEMES: [ZoneTheme; BROCELIANDE_ZONES] = [
     ZoneTheme::Fae,       // World-Oak Crown
 ];
 
-const BROCELIANDE_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+/// Twenty zones of Broceliande: (zone, adjective, greenery noun, a landmark
+/// feature, the creatures that haunt it, three regular mob names, the zone
+/// notable/boss). Celtic/arthurian tone throughout; `broceliande_desc` supplies
+/// the paragraph prose. Zone names must NOT start with "The " (the builder does
+/// not prepend it here, but keeps them clean for the leaked zone label).
+const BROCELIANDE_ZONES_DATA: [ZoneData; 20] = [
     (
         "Woodward's Holt",
         "sun-dappled",
@@ -10189,12 +10209,6 @@ const AELUNOR_CREATURES: [&str; 20] = [
     "Wild Hunt Rider",
 ];
 
-/// Twelve zones: (name, adjective, greenery noun, a landmark feature, the
-/// creatures that haunt it, three "native" indices into `AELUNOR_CREATURES`
-/// this zone favours, the zone's own named boss). Chained gate to gate, the
-/// same shape as `BROCELIANDE_ZONES_DATA`. Zone names must NOT start with
-/// "The " (the builder does not prepend it).
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Aelunor glade, in `AELUNOR_ZONES_DATA` order. Regulars inherit the theme's
 /// profile whatever affix they roll (the affix buys stats and loot, not a
@@ -10215,7 +10229,12 @@ const AELUNOR_ZONE_THEMES: [ZoneTheme; AELUNOR_ZONES] = [
     ZoneTheme::Resonant,  // the Heartwood Sanctum
 ];
 
-const AELUNOR_ZONES_DATA: [(&str, &str, &str, &str, &str, [usize; 3], &str); 12] = [
+/// Twelve zones: (name, adjective, greenery noun, a landmark feature, the
+/// creatures that haunt it, three "native" indices into `AELUNOR_CREATURES`
+/// this zone favours, the zone's own named boss). Chained gate to gate, the
+/// same shape as `BROCELIANDE_ZONES_DATA`. Zone names must NOT start with
+/// "The " (the builder does not prepend it).
+const AELUNOR_ZONES_DATA: [GladeData; 12] = [
     (
         "Silverleaf Eaves",
         "sun-dappled",
@@ -10582,8 +10601,7 @@ fn extend_aelunor(
             // a wanderer Epic-band gear off an ordinary fight.
             let elite = (rarity * rarity) as i32;
             let theme = AELUNOR_ZONE_THEMES[z];
-            let profile =
-                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak());
+            let profile = DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak());
             spawns.push(MobSpawn {
                 id: spawn_id,
                 name: mob_name,
@@ -11426,9 +11444,6 @@ fn wildbound_named(creature: &str, tier: usize) -> &'static str {
     )
 }
 
-/// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
-/// creatures that haunt it, three regular mob names, and the zone boss.
-#[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Frontier zone, in `FRONTIER_ZONES_DATA` order, derived from the zone's
 /// flavor. Regulars inherit the theme's profile; the zone boss wears the theme's weakness but never its resist
@@ -11456,7 +11471,9 @@ const FRONTIER_ZONE_THEMES: [ZoneTheme; FRONTIER_ZONES] = [
     ZoneTheme::Profane,     // Hollow Crown
 ];
 
-const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
+/// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
+/// creatures that haunt it, three regular mob names, and the zone boss.
+const FRONTIER_ZONES_DATA: [ZoneData; 20] = [
     (
         "Ashen Wastes",
         "ashen",

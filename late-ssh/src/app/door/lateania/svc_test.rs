@@ -489,8 +489,22 @@ fn ability_dots_still_stack_on_top_of_a_coat() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
     s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
     s.tick();
-    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
-    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
+    s.seed_mob_dot(
+        uid(1),
+        7,
+        DamageType::Poison,
+        3,
+        DotSource::Ability,
+        "Venom",
+    );
+    s.seed_mob_dot(
+        uid(1),
+        7,
+        DamageType::Poison,
+        3,
+        DotSource::Ability,
+        "Venom",
+    );
     let stacks = s.mob_dots.get(&mob_id).map(Vec::as_slice).unwrap_or(&[]);
     assert_eq!(stacks.len(), 3, "one coat wound plus two ability wounds");
 }
@@ -4388,11 +4402,9 @@ fn a_coated_weapon_works_in_a_duel_too() {
     s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
     s.tick();
     assert!(
-        s.pvp_dots
-            .get(&uid(2))
-            .is_some_and(|d| d.iter().any(|dot| {
-                dot.owner == uid(1) && dot.per_tick == 10 && dot.school == DamageType::Fire
-            })),
+        s.pvp_dots.get(&uid(2)).is_some_and(|d| d.iter().any(|dot| {
+            dot.owner == uid(1) && dot.per_tick == 10 && dot.school == DamageType::Fire
+        })),
         "the landed duel swing seeds the coat's school DoT on the rival"
     );
     assert_eq!(
@@ -4425,4 +4437,3 @@ fn a_coated_weapon_works_in_a_duel_too() {
         "five landed duel swings, one coat wound"
     );
 }
-

@@ -781,8 +781,7 @@ impl Active {
                         rows.push(Row::Button(index));
                     }
                 }
-                if !rows.contains(&Row::Leave)
-                    && !rows.iter().any(|row| self.row_ready(*row, look))
+                if !rows.contains(&Row::Leave) && !rows.iter().any(|row| self.row_ready(*row, look))
                 {
                     // A dead-end scene, or one whose every row is cost-gated
                     // out of reach (the burning junction on an empty

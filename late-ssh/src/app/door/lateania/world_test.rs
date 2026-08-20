@@ -2281,8 +2281,7 @@ fn themed_regions() -> [(&'static str, &'static [ZoneTheme], u32, u32); 7] {
 }
 
 fn zone_index(home: RoomId, base: u32, stride: u32, zones: usize) -> Option<usize> {
-    (home >= base && home < base + stride * zones as u32)
-        .then(|| ((home - base) / stride) as usize)
+    (home >= base && home < base + stride * zones as u32).then(|| ((home - base) / stride) as usize)
 }
 
 /// The seven schools a theme may name (Physical is banned from both slots).
@@ -2407,18 +2406,19 @@ fn every_boss_carries_a_weakness() {
         .filter(|s| s.boss && s.profile.weak.is_none())
         .map(|s| s.name)
         .collect();
-    assert!(
-        neutral.is_empty(),
-        "bosses without a weakness: {neutral:?}"
-    );
+    assert!(neutral.is_empty(), "bosses without a weakness: {neutral:?}");
 }
 
 #[test]
 fn the_school_census_stays_inside_its_declared_bands() {
     let regions = themed_regions();
     let total_zones: usize = regions.iter().map(|(_, t, _, _)| t.len()).sum();
-    let school_pos =
-        |d: DamageType| THEMED_SCHOOLS.iter().position(|s| *s == d).expect("themed school");
+    let school_pos = |d: DamageType| {
+        THEMED_SCHOOLS
+            .iter()
+            .position(|s| *s == d)
+            .expect("themed school")
+    };
 
     let mut weak = [0usize; 7];
     let mut resist = [0usize; 7];
@@ -2438,7 +2438,7 @@ fn the_school_census_stays_inside_its_declared_bands() {
         // most, and no single school owns more than a quarter of a region's
         // weaknesses, so every region offers several different answers.
         assert!(
-            region_resists <= (themes.len() + 2) / 3,
+            region_resists <= themes.len().div_ceil(3),
             "{region}: {region_resists} resist zones of {}",
             themes.len()
         );
@@ -2557,9 +2557,8 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
     let mut routed_best: Vec<(super::super::classes::Class, f64)> = Vec::new();
     for class in super::super::classes::Class::ALL {
         let mix = class_school_mix(class);
-        let ability_mult = |theme: ZoneTheme| -> f64 {
-            mix.iter().map(|(d, w)| w * mult(theme, *d)).sum::<f64>()
-        };
+        let ability_mult =
+            |theme: ZoneTheme| -> f64 { mix.iter().map(|(d, w)| w * mult(theme, *d)).sum::<f64>() };
 
         // Uncoated redistribution budget: within a zone a class may swing up
         // to +-15%, and its average across every themed zone stays within a
@@ -2596,8 +2595,7 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
                     .iter()
                     .map(|s| mult(*theme, *s))
                     .fold(0.0f64, f64::max);
-                let rate =
-                    AUTO + ABILITIES_SHARE * ability_mult(*theme) + oil_rider * coat_best;
+                let rate = AUTO + ABILITIES_SHARE * ability_mult(*theme) + oil_rider * coat_best;
                 region_best = region_best.max(rate);
             }
             let edge = region_best / (1.0 + oil_rider);

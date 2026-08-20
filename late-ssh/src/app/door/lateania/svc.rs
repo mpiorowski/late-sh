@@ -7006,7 +7006,13 @@ impl WorldState {
         // Poisons and oils aren't drunk - they coat your weapon.
         if let Some(tier) = super::items::poison_tier(item_id) {
             let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
-            self.coat_weapon(user_id, item_id, DamageType::Poison, per_tick, POISON_CHARGES);
+            self.coat_weapon(
+                user_id,
+                item_id,
+                DamageType::Poison,
+                per_tick,
+                POISON_CHARGES,
+            );
             return;
         }
         if let Some((school, tier)) = super::items::oil_school_tier(item_id) {
