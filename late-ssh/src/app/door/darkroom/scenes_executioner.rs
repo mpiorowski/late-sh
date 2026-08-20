@@ -582,6 +582,9 @@ static ENGINEERING: Event = Event {
                 "the flames fill the corridor.",
             ],
             // No way out of this one but through: upstream offers no leave.
+            // Both buttons carry a cost, so `Active::rows` falls back to a
+            // leave row for a wanderer who can pay neither, rather than
+            // holding the SSH session hostage.
             buttons: &[
                 Button {
                     text: "extinguish",

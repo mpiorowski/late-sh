@@ -781,11 +781,14 @@ impl Active {
                         rows.push(Row::Button(index));
                     }
                 }
-                if matches!(self.phase, Phase::Story)
-                    && self.scene.buttons.is_empty()
-                    && self.loot.is_empty()
+                if !rows.contains(&Row::Leave)
+                    && !rows.iter().any(|row| self.row_ready(*row, look))
                 {
-                    // A scene with nothing on it is a dead end; always leavable.
+                    // A dead-end scene, or one whose every row is cost-gated
+                    // out of reach (the burning junction on an empty
+                    // canteen): always leavable. A browser player could
+                    // refresh the page out of that corner; over SSH this row
+                    // is the only door.
                     rows.push(Row::Leave);
                 }
             }
@@ -1448,7 +1451,11 @@ fn affordable(cost: Cost, look: &Look<'_>) -> bool {
     match cost {
         Cost::Store(item, amount) => look.quantity(item) >= amount,
         Cost::Water(amount) => look.trip.is_some_and(|trip| trip.water >= amount),
-        Cost::Hp(amount) => look.trip.is_some_and(|trip| trip.hp >= amount),
+        // Strictly more than the cost: upstream lets the payment land the
+        // wanderer on 0 hp, walking dead until the next hit. Same rule as the
+        // stim: over SSH a button that silently ends the run reads as a bug,
+        // so a cost may never be the killing blow.
+        Cost::Hp(amount) => look.trip.is_some_and(|trip| trip.hp > amount),
     }
 }
 

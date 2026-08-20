@@ -650,6 +650,108 @@ fn the_medic_turns_venomous_once_and_its_bite_keeps_working() {
     );
 }
 
+/// Walk the engineering wing's `start` scene until the weighted branch lands
+/// on the burning junction (`1-3`), whose two buttons are both cost-gated.
+fn reach_burning_junction(ctx: &mut Ctx<'_>, out: &mut Vec<String>) -> Active {
+    let engineering = find(
+        &super::scenes_executioner::EXECUTIONER,
+        "executioner-engineering",
+    );
+    for seed in 0..64u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut active = Active::start(engineering, ctx, &mut rng, out);
+        active.press(Row::Button(0), ctx, &mut rng, out);
+        if active.scene.key == "1-3" {
+            return active;
+        }
+    }
+    panic!("the weighted branch never landed on the burning junction");
+}
+
+/// The burning junction's buttons both cost (5 water / 10 hp) and the scene
+/// has no leave, faithfully to upstream. A browser player who can afford
+/// neither can refresh the page; over SSH the modal swallows Esc, so a modal
+/// with zero pressable rows would hold the session hostage until the
+/// connection dropped.
+#[test]
+fn the_burning_junction_always_leaves_a_way_out() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 4,
+        water: 0,
+        ..Expedition::default()
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut active = reach_burning_junction(&mut ctx, &mut out);
+
+    assert!(
+        !active.row_ready(Row::Button(0), &ctx.look()),
+        "no water to extinguish with"
+    );
+    assert!(
+        !active.row_ready(Row::Button(1), &ctx.look()),
+        "not enough blood to rush through with"
+    );
+    let rows = active.rows(&ctx.look());
+    assert!(
+        rows.contains(&Row::Leave),
+        "a modal with nothing pressable must offer leave, got {rows:?}"
+    );
+    assert!(active.row_ready(Row::Leave, &ctx.look()));
+    assert_eq!(
+        active.press(Row::Leave, &mut ctx, &mut rng, &mut out),
+        Outcome::Done
+    );
+}
+
+/// Upstream lets the hp cost land on exactly-enough health and leaves the
+/// wanderer standing at 0 hp, alive until something else hits them. Same rule
+/// as the stim: over SSH a button that silently ends the run reads as a bug,
+/// so the cost refuses when paying it would take the last of the health.
+#[test]
+fn rushing_through_the_flames_can_never_be_the_killing_blow() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 10,
+        water: 0,
+        ..Expedition::default()
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut active = reach_burning_junction(&mut ctx, &mut out);
+    assert!(
+        !active.row_ready(Row::Button(1), &ctx.look()),
+        "10 hp is exactly the cost, and the cost may not kill"
+    );
+
+    // One point more and the wanderer limps through alive.
+    ctx.trip.as_mut().expect("on a trip").hp = 11;
+    assert!(active.row_ready(Row::Button(1), &ctx.look()));
+    let rows = active.rows(&ctx.look());
+    assert!(
+        !rows.contains(&Row::Leave),
+        "a solvent wanderer gets no way out but through, got {rows:?}"
+    );
+    assert_eq!(
+        active.press(Row::Button(1), &mut ctx, &mut rng, &mut out),
+        Outcome::Continue
+    );
+    assert_eq!(ctx.trip.as_ref().expect("on a trip").hp, 1);
+}
+
 /// The elevator bank is the only way into the three wings, so a button that
 /// says one deck and opens another would be silent and unrecoverable. Both
 /// halves come off `Deck`; this is what pins that they still line up.

@@ -480,7 +480,6 @@ pub enum GatherOutcome {
 
 impl Game {
     /// A brand new save: a dark room, a dead fire, and nothing else.
-    /// A brand new save: a dark room, a dead fire, and nothing else.
     ///
     /// `veteran` says whether this account has ever finished the game before,
     /// which is the one thing a fresh run inherits (the caller reads it off

@@ -343,7 +343,25 @@ outside the save.
   at one in five), not what the table reads. Do not "fix" it back.
 - **The stim costs blood, so its row refuses at low health.** Upstream lets you
   kill yourself with it; `row_ready` does not, because over SSH a button that
-  ends the run with no warning reads as a bug rather than a risk.
+  ends the run with no warning reads as a bug rather than a risk. `Cost::Hp`
+  follows the same rule: `affordable` wants strictly more hp than the cost
+  (upstream allows exactly-enough and leaves the wanderer walking at 0), so a
+  button's cost can never be the killing blow.
+- **A modal with nothing pressable always grows a leave row.** The burning
+  junction (engineering `1-3`) is upstream-faithful: two cost-gated buttons,
+  no leave. A browser player who can pay neither refreshes the page; over SSH
+  the modal swallows Esc, so `Active::rows` appends `Row::Leave` whenever no
+  listed row passes `row_ready`. Any future all-cost-gated scene is covered by
+  the same fallback.
+- **A parked fight resumes with a clean status layer.** `CombatSnapshot`
+  persists only the event, the scene and `enemy_hp`; `Active::resume` rebuilds
+  through `Fight::start`, which zeroes statuses, special timers, the bleed and
+  the fired `at_health` thresholds. Deliberate: persisting the layer would
+  grow the save schema for two fights, and the cost of the reset is bounded
+  (the enemy's health is kept, and its specials simply start their clocks
+  over). It does hand a parked immortal-wanderer or robot fight a mild edge;
+  if that ever reads as an exploit, the fix is persisting the layer in
+  `CombatSnapshot`, not blocking the park.
 - **`Phase::Fighting` is boxed.** A live fight carries a stat line, three timer
   collections and two statuses; unboxed it would set the size of every `Phase`.
 - **A press inside the modal keeps the cursor on the row it pressed.** Upstream
