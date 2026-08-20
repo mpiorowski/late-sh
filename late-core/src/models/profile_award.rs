@@ -20,6 +20,38 @@ pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
 pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
 
+/// Every rankless milestone award: the one-off badges a game grants outright
+/// rather than the monthly ranked boards. They differ from the ranked awards
+/// in three ways at once (no `#1` suffix on the badge, shown whatever month
+/// they were earned, granted by the game rather than the monthly snapshot), so
+/// the set is worth naming once instead of being spelled out at each of those
+/// three call sites.
+///
+/// Adding a game's badge means adding it here, to `award_category_code`, to
+/// `award_category_label` and to `award_category_priority`, and the two badge
+/// legends (`app/profile_modal/badges.rs`, `app/help_modal/data.rs`) are
+/// tested against this list so a new badge cannot ship undocumented.
+pub static MILESTONE_AWARD_CATEGORIES: [&str; 13] = [
+    LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+    LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+    LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+    LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    NETHACK_AMULET_AWARD_CATEGORY,
+    NETHACK_ASCENSION_AWARD_CATEGORY,
+    DCSS_ORB_AWARD_CATEGORY,
+    DCSS_WIN_AWARD_CATEGORY,
+    BROGUE_ESCAPE_AWARD_CATEGORY,
+    BROGUE_MASTERY_AWARD_CATEGORY,
+    GREENDRAGON_DRAGON_AWARD_CATEGORY,
+    DARKROOM_ESCAPE_AWARD_CATEGORY,
+    DARKROOM_BEACON_AWARD_CATEGORY,
+];
+
+/// Whether an award is one of those: granted outright, badge carries no rank.
+pub fn is_milestone_award(category: &str) -> bool {
+    MILESTONE_AWARD_CATEGORIES.contains(&category)
+}
+
 /// The milestone ladders, one per game, weakest first. Chat author labels show
 /// only the highest badge a player holds on each ladder, so a shelf of crowns
 /// does not push the message off the line; the profile page still lists every
@@ -284,22 +316,7 @@ pub async fn grant_unique_milestone_award(
 }
 
 pub fn award_badge(category: &str, rank: i32) -> String {
-    if matches!(
-        category,
-        LATEANIA_ARCHDEMON_AWARD_CATEGORY
-            | LATEANIA_FRONTIER_KING_AWARD_CATEGORY
-            | LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY
-            | LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY
-            | NETHACK_AMULET_AWARD_CATEGORY
-            | NETHACK_ASCENSION_AWARD_CATEGORY
-            | DCSS_ORB_AWARD_CATEGORY
-            | DCSS_WIN_AWARD_CATEGORY
-            | BROGUE_ESCAPE_AWARD_CATEGORY
-            | BROGUE_MASTERY_AWARD_CATEGORY
-            | GREENDRAGON_DRAGON_AWARD_CATEGORY
-            | DARKROOM_ESCAPE_AWARD_CATEGORY
-            | DARKROOM_BEACON_AWARD_CATEGORY
-    ) {
+    if is_milestone_award(category) {
         return award_category_code(category).to_string();
     }
     let prefix = award_category_code(category);

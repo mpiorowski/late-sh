@@ -10,7 +10,9 @@ use uuid::Uuid;
 use super::marketplace::{
     BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
 };
-use super::profile_award::{PROFILE_AWARD_RANK_LIMIT, top_badge_per_game};
+use super::profile_award::{
+    MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -550,6 +552,10 @@ impl User {
             return Ok(Vec::new());
         }
 
+        // The rankless milestone badges show whatever month they were earned,
+        // unlike the ranked boards. Bound as a parameter so the set lives in
+        // `profile_award` alone rather than being respelled in SQL.
+        let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
         let rows = client
             .query(
                 "SELECT u.id,
@@ -640,7 +646,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon', 'darkroom_escape', 'darkroom_beacon')
+                        OR pa.category = ANY($7)
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -651,6 +657,7 @@ impl User {
                     &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
+                    &milestone_categories,
                 ],
             )
             .await?;
