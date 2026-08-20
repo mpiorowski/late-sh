@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::model::Game;
 use super::space::{Flight, Space};
-use super::state::{Ending, EndingBeat, Row, State};
+use super::state::{Ending, EndingBeat, Escape, Row, State};
 use super::svc::DarkroomService;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::games::chips::svc::ChipService;
@@ -150,7 +150,7 @@ async fn winning_the_ascent_wipes_the_save_and_pays_the_badge() {
 /// wait: an ending nobody can hurry is an ending people kill their terminal on.
 #[test]
 fn the_ending_reveals_a_beat_at_a_time_until_a_key_skips_it() {
-    let mut ending = Ending::for_run(&Game::new());
+    let mut ending = Ending::for_run(&Game::new(false), Escape::Plain);
 
     assert_eq!(ending.revealed_count(), 1, "it opens on the first line");
     assert!(!ending.done());
@@ -158,4 +158,38 @@ fn the_ending_reveals_a_beat_at_a_time_until_a_key_skips_it() {
     ending.reveal_all();
     assert_eq!(ending.revealed_count(), ending.beats().len());
     assert!(ending.done(), "a skipped reveal is a finished one");
+}
+
+/// Flying out holding the fleet beacon is a different ending, with different
+/// words and a different badge. The two must never be confused: they are
+/// separate lifetime payouts, and an account can hold both.
+#[test]
+fn the_beacon_ending_says_something_else_and_pays_its_own_badge() {
+    let plain = Ending::for_run(&Game::new(false), Escape::Plain);
+    let beacon = Ending::for_run(&Game::new(false), Escape::WithBeacon);
+
+    let opens_with = |ending: &Ending| match ending.beats().first() {
+        Some(EndingBeat::Prose(line)) => (*line).to_string(),
+        other => panic!("an ending opens on prose, got {other:?}"),
+    };
+    assert_eq!(opens_with(&plain), super::space::ENDING[0]);
+    assert_eq!(opens_with(&beacon), super::space::BEACON_ENDING[0]);
+
+    assert!(
+        beacon
+            .beats()
+            .contains(&EndingBeat::Award(Escape::WithBeacon)),
+        "the beacon run has to award the beacon badge"
+    );
+    assert!(plain.beats().contains(&EndingBeat::Award(Escape::Plain)));
+    assert_eq!(Escape::Plain.award_category(), "darkroom_escape");
+    assert_eq!(Escape::WithBeacon.award_category(), "darkroom_beacon");
+
+    // And #lounge tells the two apart: flying out is the whole story for one
+    // of them and only half of it for the other.
+    assert_eq!(Escape::Plain.feed_detail(), None);
+    assert_eq!(
+        Escape::WithBeacon.feed_detail(),
+        Some("followed the fleet beacon home")
+    );
 }

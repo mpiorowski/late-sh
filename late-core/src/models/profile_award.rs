@@ -18,6 +18,57 @@ pub const BROGUE_ESCAPE_AWARD_CATEGORY: &str = "brogue_escape";
 pub const BROGUE_MASTERY_AWARD_CATEGORY: &str = "brogue_mastery";
 pub const GREENDRAGON_DRAGON_AWARD_CATEGORY: &str = "greendragon_dragon";
 pub const DARKROOM_ESCAPE_AWARD_CATEGORY: &str = "darkroom_escape";
+pub const DARKROOM_BEACON_AWARD_CATEGORY: &str = "darkroom_beacon";
+
+/// The milestone ladders, one per game, weakest first. Chat author labels show
+/// only the highest badge a player holds on each ladder, so a shelf of crowns
+/// does not push the message off the line; the profile page still lists every
+/// award. A game with a single milestone badge (Green Dragon) needs no entry.
+///
+/// This is the one place the ordering lives. Adding a badge to a game means
+/// adding it here, not writing another pair of comparisons at the call site.
+pub static BADGE_LADDERS: [&[&str]; 5] = [
+    &[
+        LATEANIA_ARCHDEMON_AWARD_CATEGORY,
+        LATEANIA_FRONTIER_KING_AWARD_CATEGORY,
+        LATEANIA_SUNDERING_DEEP_AWARD_CATEGORY,
+        LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
+    ],
+    &[
+        NETHACK_AMULET_AWARD_CATEGORY,
+        NETHACK_ASCENSION_AWARD_CATEGORY,
+    ],
+    &[DCSS_ORB_AWARD_CATEGORY, DCSS_WIN_AWARD_CATEGORY],
+    &[BROGUE_ESCAPE_AWARD_CATEGORY, BROGUE_MASTERY_AWARD_CATEGORY],
+    &[
+        DARKROOM_ESCAPE_AWARD_CATEGORY,
+        DARKROOM_BEACON_AWARD_CATEGORY,
+    ],
+];
+
+/// Drop every badge code that a badge higher on the same game's ladder
+/// supersedes, keeping the input's order. Codes belonging to no ladder pass
+/// through untouched.
+pub fn top_badge_per_game<'a>(badges: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    let held: Vec<&str> = badges.into_iter().collect();
+    let mut superseded: Vec<&'static str> = Vec::new();
+    for ladder in BADGE_LADDERS {
+        // Everything below the highest rung this player holds is hidden.
+        let highest = ladder
+            .iter()
+            .rposition(|category| held.contains(&award_category_code(category)));
+        if let Some(highest) = highest {
+            superseded.extend(
+                ladder[..highest]
+                    .iter()
+                    .map(|category| award_category_code(category)),
+            );
+        }
+    }
+    held.into_iter()
+        .filter(|badge| !superseded.contains(badge))
+        .collect()
+}
 
 #[derive(Clone, Debug)]
 pub struct ProfileAward {
@@ -247,6 +298,7 @@ pub fn award_badge(category: &str, rank: i32) -> String {
             | BROGUE_MASTERY_AWARD_CATEGORY
             | GREENDRAGON_DRAGON_AWARD_CATEGORY
             | DARKROOM_ESCAPE_AWARD_CATEGORY
+            | DARKROOM_BEACON_AWARD_CATEGORY
     ) {
         return award_category_code(category).to_string();
     }
@@ -275,6 +327,7 @@ pub fn award_category_code(category: &str) -> &'static str {
         BROGUE_MASTERY_AWARD_CATEGORY => "BRM",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "GDS",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "ADE",
+        DARKROOM_BEACON_AWARD_CATEGORY => "ADB",
         _ => "LB",
     }
 }
@@ -298,6 +351,7 @@ pub fn award_category_label(category: &str) -> &'static str {
         BROGUE_MASTERY_AWARD_CATEGORY => "Brogue Mastery",
         GREENDRAGON_DRAGON_AWARD_CATEGORY => "Green Dragon Slayer",
         DARKROOM_ESCAPE_AWARD_CATEGORY => "A Dark Room Escape",
+        DARKROOM_BEACON_AWARD_CATEGORY => "A Dark Room Homefleet",
         _ => "Leaderboard",
     }
 }
@@ -321,6 +375,7 @@ pub fn award_category_priority(category: &str) -> i32 {
         BROGUE_ESCAPE_AWARD_CATEGORY => 19,
         BROGUE_MASTERY_AWARD_CATEGORY => 20,
         DARKROOM_ESCAPE_AWARD_CATEGORY => 21,
+        DARKROOM_BEACON_AWARD_CATEGORY => 22,
         _ => 99,
     }
 }
@@ -351,7 +406,8 @@ pub fn format_score_value(category: &str, value: i64) -> String {
         | BROGUE_ESCAPE_AWARD_CATEGORY
         | BROGUE_MASTERY_AWARD_CATEGORY
         | GREENDRAGON_DRAGON_AWARD_CATEGORY
-        | DARKROOM_ESCAPE_AWARD_CATEGORY => {
+        | DARKROOM_ESCAPE_AWARD_CATEGORY
+        | DARKROOM_BEACON_AWARD_CATEGORY => {
             format!("{value} chips")
         }
         _ => format!("{value} score"),

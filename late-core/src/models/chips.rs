@@ -119,6 +119,7 @@ chip_moves!(
     SsnakeArenaLost,
     GreendragonDragonSlain,
     DarkroomEscape,
+    DarkroomBeaconEscape,
     NethackAmuletAcquired,
     NethackAscension,
     DcssOrbFound,
@@ -171,6 +172,7 @@ impl ChipMove {
             Self::SsnakeArenaLost => "ssnake_arena_lost",
             Self::GreendragonDragonSlain => "greendragon_dragon_slain",
             Self::DarkroomEscape => "darkroom_escape",
+            Self::DarkroomBeaconEscape => "darkroom_beacon_escape",
             Self::NethackAmuletAcquired => "nethack_amulet_acquired",
             Self::NethackAscension => "nethack_ascension",
             Self::DcssOrbFound => "dcss_orb_found",
@@ -211,6 +213,7 @@ impl ChipMove {
             | Self::TronWin
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound
@@ -244,6 +247,7 @@ impl ChipMove {
             | Self::SsnakeArenaEarned
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound
@@ -289,6 +293,7 @@ impl ChipMove {
             | Self::SsnakeArenaLost
             | Self::GreendragonDragonSlain
             | Self::DarkroomEscape
+            | Self::DarkroomBeaconEscape
             | Self::NethackAmuletAcquired
             | Self::NethackAscension
             | Self::DcssOrbFound

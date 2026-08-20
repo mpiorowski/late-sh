@@ -3,7 +3,7 @@ use super::model::{BuildOutcome, Builder, BuyOutcome, CraftOutcome, Game};
 
 /// A game whose builder is up and holding enough wood for a trap.
 fn ready_to_build() -> Game {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.builder = Builder::Helping;
     game.set_store(Resource::Wood, 200);
     game
@@ -54,7 +54,7 @@ fn a_cold_room_refuses_to_build() {
 
 #[test]
 fn the_outside_title_follows_the_hut_count() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     let expect = [
         (0, "A Silent Forest"),
         (1, "A Lonely Hut"),
@@ -73,7 +73,7 @@ fn the_outside_title_follows_the_hut_count() {
 
 #[test]
 fn traps_split_into_baited_and_bare() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.buildings.insert(Building::Trap, 5);
 
     game.set_store(Resource::Bait, 2);
@@ -148,7 +148,7 @@ fn craft_rows_wait_for_the_workshop_and_then_stay() {
 
 #[test]
 fn the_trading_post_only_sells_what_has_been_seen() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.set_store(Resource::Fur, 500);
     game.set_store(Resource::Scales, 30);
     game.set_store(Resource::Teeth, 20);
@@ -175,7 +175,7 @@ fn the_trading_post_only_sells_what_has_been_seen() {
 
 #[test]
 fn buying_refuses_whole_and_the_compass_is_a_one_off() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.raise(Building::TradingPost);
     game.set_store(Resource::Fur, 500);
     game.set_store(Resource::Scales, 30);
@@ -219,7 +219,7 @@ fn the_builder_never_offers_a_mine() {
 
 #[test]
 fn income_per_tick_totals_every_source() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.builder = Builder::Helping;
     game.population = 4;
     game.workers.insert(super::data::Job::Hunter, 2);
@@ -237,7 +237,7 @@ fn income_per_tick_totals_every_source() {
 
 #[test]
 fn embarking_needs_meat_packed_and_still_on_the_shelf() {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.set_store(Resource::CuredMeat, 10);
     assert!(
         !game.can_embark(),
@@ -249,4 +249,68 @@ fn embarking_needs_meat_packed_and_still_on_the_shelf() {
     // is nothing to actually take.
     game.set_store(Resource::CuredMeat, 0);
     assert!(!game.can_embark());
+}
+
+/// A fabricator recipe by the item it makes.
+fn recipe(item: Resource) -> &'static data::Fabricable {
+    data::FABRICABLES
+        .iter()
+        .find(|fabricable| fabricable.item == item)
+        .expect("the fabricator makes it")
+}
+
+#[test]
+fn the_fabricator_needs_the_blueprint_before_the_alloy() {
+    let mut game = Game::new(false);
+    game.fabricator = true;
+    game.set_store(Resource::AlienAlloy, 10);
+    let hypo = recipe(Resource::Hypo);
+
+    // A gated recipe stays off the panel until the blueprint comes home, and
+    // three recipes need no blueprint at all.
+    assert!(!game.fabricable_available(hypo));
+    assert!(game.fabricable_available(recipe(Resource::EnergyBlade)));
+
+    game.blueprints.insert(data::Blueprint::Hypo);
+    assert!(game.fabricable_available(hypo));
+
+    // A batch recipe makes the whole batch for one alloy.
+    assert_eq!(game.fabricate(hypo), CraftOutcome::Crafted(Resource::Hypo));
+    assert_eq!(game.store(Resource::Hypo), 5);
+    assert_eq!(game.store(Resource::AlienAlloy), 9);
+}
+
+#[test]
+fn fabricating_refuses_whole_on_short_alloy_and_stops_at_the_ceiling() {
+    let mut game = Game::new(false);
+    game.fabricator = true;
+    game.blueprints.insert(data::Blueprint::KineticArmour);
+    let armour = recipe(Resource::KineticArmour);
+    game.set_store(Resource::AlienAlloy, 1);
+
+    // Two alloy for the armour and only one on the shelf: nothing is spent.
+    assert_eq!(
+        game.fabricate(armour),
+        CraftOutcome::Missing(Resource::AlienAlloy)
+    );
+    assert_eq!(game.store(Resource::AlienAlloy), 1);
+    assert_eq!(game.store(Resource::KineticArmour), 0);
+
+    game.set_store(Resource::AlienAlloy, 10);
+    assert_eq!(
+        game.fabricate(armour),
+        CraftOutcome::Crafted(Resource::KineticArmour)
+    );
+    // One suit is all anyone needs, and the second attempt costs nothing.
+    assert_eq!(
+        game.fabricate(armour),
+        CraftOutcome::AtMaximum(Resource::KineticArmour)
+    );
+    assert_eq!(game.store(Resource::AlienAlloy), 8);
+    assert_eq!(game.store(Resource::KineticArmour), 1);
+    assert_eq!(
+        game.max_health(),
+        super::world_data::BASE_HEALTH + 75,
+        "and wearing it is what it was for"
+    );
 }

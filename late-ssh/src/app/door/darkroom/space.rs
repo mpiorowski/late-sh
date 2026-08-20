@@ -219,3 +219,15 @@ pub const ENDING: [&str; 3] = [
     "the fire in the room burns down to nothing. nobody is left to stoke it.",
     "the wanderer is gone.",
 ];
+
+/// The other ending, for a ship that lifts off carrying the fleet beacon taken
+/// off the immortal wanderer. Upstream's `Space.showExpansionEnding`,
+/// transcribed line for line: the beacon has coordinates, and what is waiting
+/// at them is worse than not knowing.
+pub const BEACON_ENDING: [&str; 5] = [
+    "the beacon pulses gently as the ship glides through space. coordinates are locked. nothing to do but wait.",
+    "the beacon glows a solid blue, and then goes dim. the ship slows.",
+    "gradually, the vast wanderer homefleet comes into view. massive worldships drift unnaturally through clouds of debris, scarred and dead.",
+    "the air is running out.",
+    "the capsule is cold.",
+];

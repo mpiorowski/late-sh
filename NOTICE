@@ -372,7 +372,8 @@ MPL-2.0 compliance notes:
   - MPL-2.0 is file-level copyleft. The files in this port that carry material
     derived from upstream (late-ssh/src/app/door/darkroom/data.rs, model.rs,
     sim.rs, event.rs, world.rs, world_data.rs, space.rs, scenes_village.rs,
-    scenes_encounters.rs and scenes_setpieces.rs) each carry the MPL-2.0 header
+    scenes_encounters.rs, scenes_setpieces.rs and scenes_executioner.rs) each
+    carry the MPL-2.0 header
     and the Exhibit B notice, and remain under MPL-2.0. The rest of the port
     (pace.rs, persist.rs, svc.rs, state.rs, ui.rs, ui_event.rs, ui_world.rs,
     screen.rs) is our own work under the repository's FSL-1.1-MIT.

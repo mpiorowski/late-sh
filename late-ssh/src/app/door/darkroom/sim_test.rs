@@ -13,7 +13,7 @@ fn clock() -> DateTime<Utc> {
 
 /// A game whose clock has already been primed, as the load path does.
 fn started(now: DateTime<Utc>) -> Game {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.last_settled = now.timestamp();
     game
 }
