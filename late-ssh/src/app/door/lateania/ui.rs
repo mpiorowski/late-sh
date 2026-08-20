@@ -3579,6 +3579,9 @@ fn battle_side_panel(
     if view.empower > 0 {
         effects.push(format!("empowered +{}", view.empower));
     }
+    if let Some(coat) = &view.coat {
+        effects.push(coat.clone());
+    }
     if view.stunned {
         effects.push("stunned".to_string());
     }
@@ -5686,6 +5689,9 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
     }
     if view.empower > 0 {
         effects.push(format!("empowered +{}", view.empower));
+    }
+    if let Some(coat) = &view.coat {
+        effects.push(coat.clone());
     }
     if view.stunned {
         effects.push("stunned".to_string());

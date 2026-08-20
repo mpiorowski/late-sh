@@ -8,6 +8,7 @@
 use std::sync::OnceLock;
 
 use super::classes::Class;
+use super::damage::DamageType;
 
 /// Where an item can be worn. Consumables and valuables have no slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1286,10 +1287,11 @@ pub fn materials() -> &'static [Item] {
 // ---- Crafted goods -------------------------------------------------------
 //
 // Crafting turns raw materials into refined intermediates (ingots, planks,
-// leather) and finished goods (weapons, armor, potions, poisons, food). IDs live
-// in 4200..4500, clear of the raw materials (4000..4100). Recipes in
-// `crafting.rs` reference these ids by the const helpers below; `item` resolves
-// them like any other. Five tiers each, mirroring the material tiers.
+// leather) and finished goods (weapons, armor, potions, poisons, oils, food).
+// IDs live in 4200..4600, clear of the raw materials (4000..4100) and below the
+// Sunderlakes fish (4600..). Recipes in `crafting.rs` reference these ids by
+// the const helpers below; `item` resolves them like any other. Six tiers each,
+// mirroring the material tiers.
 
 pub const CRAFTED_BASE: u32 = 4200;
 
@@ -1327,11 +1329,37 @@ pub const fn food_id(tier: u32) -> u32 {
 pub const fn masterwork_id(n: u32) -> u32 {
     CRAFTED_BASE + 180 + n
 }
+/// Weapon oils, the martial school lever of the world resist/weak pass
+/// (CONTEXT.md, "The world resist/weak pass" section): a flat, charge-limited rider added to the
+/// Physical auto, one school per family. `school` indexes `OIL_SCHOOLS`.
+pub const fn oil_id(school: u32, tier: u32) -> u32 {
+    CRAFTED_BASE + 300 + school * 20 + tier
+}
+
+/// The four oil schools, in `oil_id` family order. Deliberately not all seven:
+/// Shadow, Arcane, and Poison stay caster-and-poison-flavored lanes.
+pub const OIL_SCHOOLS: [DamageType; 4] = [
+    DamageType::Fire,
+    DamageType::Frost,
+    DamageType::Holy,
+    DamageType::Lightning,
+];
 
 /// The tier of a poison item id, if `id` is one (used to route it to the
 /// weapon-coating action instead of the normal consumable path).
 pub fn poison_tier(id: u32) -> Option<u32> {
     (0..6).find(|&t| poison_id(t) == id)
+}
+
+/// The school and tier of a weapon-oil item id, if `id` is one (used to route
+/// it to the weapon-coating action, same as `poison_tier`).
+pub fn oil_school_tier(id: u32) -> Option<(DamageType, u32)> {
+    for (s, school) in OIL_SCHOOLS.iter().enumerate() {
+        if let Some(t) = (0..6).find(|&t| oil_id(s as u32, t) == id) {
+            return Some((*school, t));
+        }
+    }
+    None
 }
 
 /// The tier of a cooked-food item id, if `id` is one (food grants a well-fed
@@ -1412,6 +1440,48 @@ const POISON_NAMES: [&str; 6] = [
     "Wyrm Venom",
     "Voidvenom",
 ];
+/// Oil names per `OIL_SCHOOLS` family, six tiers each.
+const OIL_NAMES: [[&str; 6]; 4] = [
+    [
+        "Sparkseed Oil",
+        "Emberbrand Oil",
+        "Firebrand Oil",
+        "Pyreheart Oil",
+        "Dragonfire Oil",
+        "Sunflare Oil",
+    ],
+    [
+        "Chillrime Oil",
+        "Rimefrost Oil",
+        "Winterbite Oil",
+        "Glacierheart Oil",
+        "Deepfrost Oil",
+        "Worldwinter Oil",
+    ],
+    [
+        "Blessed Oil",
+        "Consecrated Oil",
+        "Radiant Oil",
+        "Sanctified Oil",
+        "Dawnflame Oil",
+        "Godlight Oil",
+    ],
+    [
+        "Sparkcharged Oil",
+        "Stormkissed Oil",
+        "Thunderlaced Oil",
+        "Stormheart Oil",
+        "Levinbrand Oil",
+        "Skysunder Oil",
+    ],
+];
+const OIL_DESCS: [&str; 4] = [
+    "A vial of ember-laced oil, meant to set a blade alight.",
+    "A vial of rime-cold oil, meant to frost a blade's edge.",
+    "A vial of consecrated oil, meant to bless a blade.",
+    "A vial of storm-charged oil, meant to make a blade crackle.",
+];
+
 const FOOD_NAMES: [&str; 6] = [
     "Grilled Bream",
     "Pan-Seared Trout",
@@ -1457,6 +1527,7 @@ fn build_crafted() -> Vec<Item> {
     const POTION_HEAL: [i32; 6] = [25, 45, 75, 120, 180, 270];
     const POTION_PRICE: [i64; 6] = [20, 45, 90, 160, 260, 400];
     const POISON_PRICE: [i64; 6] = [15, 40, 80, 140, 220, 350];
+    const OIL_PRICE: [i64; 6] = [20, 50, 100, 170, 260, 400];
     const FOOD_HEAL: [i32; 6] = [20, 35, 55, 85, 130, 195];
     const FOOD_REST: [i32; 6] = [10, 20, 35, 55, 85, 130];
     const FOOD_PRICE: [i64; 6] = [15, 35, 70, 120, 190, 300];
@@ -1550,6 +1621,15 @@ fn build_crafted() -> Vec<Item> {
             FINAL_RARITY[t],
             POISON_PRICE[t],
         ));
+        for s in 0..4usize {
+            out.push(utility(
+                oil_id(s as u32, tu),
+                OIL_NAMES[s][t],
+                OIL_DESCS[s],
+                FINAL_RARITY[t],
+                OIL_PRICE[t],
+            ));
+        }
         out.push(consumable(
             food_id(tu),
             FOOD_NAMES[t],

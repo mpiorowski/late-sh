@@ -266,105 +266,58 @@ Cheap where it counts, reusing existing patterns (all verified present):
 - Whether probe results are account-wide or per character (per character
   proposed; the ledger is the character's story).
 
-## 13. Handoff brief: the world resist/weak pass
+## 13. The world resist/weak pass (landed)
 
-A companion change, run as its own piece of work (own session, own review). This
-design works without it (the cell economy carries the class) and gets better
-with it. Everything below is code-verified as of 2026-08-20.
+Formerly a full handoff brief; the pass shipped 2026-08-20, together with the
+weapon oils (promoted from follow-up once it was clear placement alone left
+the seven Physical-locked classes a mathematically zero matchup game). **The
+spec now lives in `CONTEXT.md`, section "The world resist/weak pass"**: theme
+vocabulary and tables, the two Physical rules, census bands, the routed
+grind-rate budget, and the tests that are the contract. This section keeps
+only what it means for this class.
 
-### Why
+### What the Thundersmith inherits
 
-The recon fantasy is only as rich as the world's profile data, and today most of
-the Lv30-60 band has nothing to learn: every generated region's regulars are
-`(None, None)` (Frontier, Reaches, Kaelmyr, archipelago, lakes, Broceliande,
-Aelunor's 100 creatures). Only ~116 authored spawns vary. Meanwhile resist/weak
-already applies to all ability damage, so a placement pass hands *every* class a
-school game, not just the Thundersmith.
+- **Real ledger data everywhere.** 126 themed zones; one profile per zone for
+  regulars is now test-enforced, so the zone-keyed Ledger (§5) can never be
+  wrong about a regular. Bosses keep authored profiles, so the ledger
+  rightly does not cover them: the §4 recon dance survives exclusively for
+  bosses, exactly where it should activate.
+- **The monopoly is fenced in code.** Oils are flat riders, never a
+  conversion of the auto's school, never a multiplier on `attack()`; both
+  levers remain reserved for the cells. Everyone else plays matchups now
+  (casters: rotations; martials: oils and geography); his edge stays
+  legible as degree, not kind.
+- **Boss walls are his signature moment by contract.** Physical resist now
+  exists only on bosses, everywhere - the one wall the gun uniquely walks
+  through.
+- **The seven-cell rack is his exclusive reach** (proposed): oils cover four
+  schools deliberately; Shadow/Arcane/Poison zone weaknesses (22/18/13
+  zones) have no martial answer. Cells covering all seven schools makes
+  "he industrializes matchups" a capability gap, not just a number gap.
 
-### Locked decision: resist/weak is per zone
+### Re-price at ship time
 
-One profile per zone for regulars, derived from the zone's theme (the Frontier's
-20 zones already carry strong themes: the Ashen Wastes resist Fire and fear
-Frost, and so on). Bosses and marked elites may deviate from their zone.
+The pass moved numbers this doc still states pre-pass:
 
-Rationale: this matches how the world data already works (the three dungeons and
-three Wildbound biomes are exactly one profile per zone, and it plays fine), it
-aligns with the Thundersmith's zone-keyed Ledger, and it keeps the whole pass
-tunable as a small table instead of 400+ per-species rows.
-
-### Verified facts the brief inherits
-
-- **Everyone is an auto-attacker.** At band gear (Lv45, ~+100 attack), every
-  class including the Mage is ~75% auto damage; autos ride `attack()` and gear,
-  ability magnitudes are flat constants. "Melee vs caster" here is trait and
-  roster, not the basic attack. Nobody's school lever rides the dominant source.
-- **Flat riders decay by construction.** The existing weapon poison is
-  `POISON_PER_TICK = [4, 8, 14, 22, 34]`: flat, capped, ~10% of output at Lv45,
-  ~5% at endgame. Anything built on this pattern cannot compound with gear.
-- **Current school census (116 authored profiles):** expected multipliers Holy
-  1.140, Fire 1.057, Lightning 1.031, Arcane 1.013, Frost 0.974, Physical 0.934,
-  Shadow 0.921. Nothing resists Arcane. Nothing is weak to Physical. Holy has
-  zero resists anywhere.
-- **Resist halves, weak adds 50%, one of each per mob, minimum damage 1.** The
-  engine multipliers are fixed and stay fixed.
-
-### Design rules
-
-1. **Weak-forward on regulars.** Every zone gets a theme weakness; weaknesses
-   reward the right answer and are fun. Resists on regulars are rare, roughly a
-   third of zones at most; walls are only fun when they are events.
-2. **No Physical resist on regular mobs, ever.** Zone-wide Physical resist is a
-   50% tax on the seven Physical-locked classes with zero counterplay. Physical
-   resist lives on bosses and marked elites only, where it reads as "bring a
-   caster, an oil, or the smith" (Aelunor's bosses already do this and it plays
-   fine).
-3. **Nothing is ever weak to Physical.** Preserves the current 0/116 reality and
-   the Thundersmith's scrap-floor economics.
-4. **Holy gets predators.** Add Holy-resist zones (demonic, hallowed-corrupt
-   themes) or Cleric/Paladin quietly become the school winners. Counterpoint to
-   weigh deliberately: those are two of the weakest classes today, so a couple
-   of Holy-weak lanes could be an intentional buff. Decide on purpose, not by
-   accident.
-5. **Oils are the martial lever, and they are flat riders only.** Elemental oils
-   (fire, frost, holy, ...) via Alchemy, literally the `weapon_poison` code path
-   with a school parameter: a flat, charge-limited DoT/rider *added* to the
-   Physical auto. Never a conversion of the auto's school, never a multiplier on
-   `attack()`; both are the Thundersmith's monopoly and the line that keeps the
-   pass from breaking the game. An oil at x1.5 in the right zone is ~+5% total
-   damage: a decision lever, not a power lever.
-
-### Expected net effect (the balance argument)
-
-- Weakness zones only touch school damage; autos are Physical and nothing is
-  weak to Physical, so a matchup zone gives a caster +50% on the ~25% ability
-  slice (~+12% total) and a martial's autos nothing. The pass is a small
-  situational caster buff.
-- Physical-resist bosses tax whoever leans hardest on Physical: a Warrior's kit
-  is ~90% Physical, a Mage's ~75%. Both hurt, the martial more, exactly at the
-  fights where composition and prep should matter.
-- Baselines do not move: the neutral case (auto, Physical, unthemed foe) is
-  untouched by construction.
-
-### Don't-break-the-game protocol
-
-1. **Data-only.** No engine changes: same `DamageProfile`, same 50/150
-   multipliers, one resist + one weak per mob. The whole pass is placement in
-   the builders, reviewable as a diff of themed assignments.
-2. **Invariants as tests**, in the codebase's existing balance-test style (cf.
-   `no_beast_is_out_classed_by_an_easier_one`): no Physical resist on regulars,
-   every zone weakness derivable from its theme table, per-school resist/weak
-   counts within declared bands so Holy cannot silently stay predator-free.
-3. **A before/after sim budget.** Run a per-class grind-rate model across every
-   zone. Within a zone, matchups may swing a class up to ±15%; each class's
-   *average* across the band must stay within a few percent of today.
-   Redistribution yes, rebalancing no. A class whose average moves past the
-   budget means the placement is wrong, not the class.
-
-### What the Thundersmith gets out of it
-
-Real ledger data everywhere: every zone becomes probeable, auto-chamber fires on
-real information across the whole band, and the counter-cell lines earn their
-crafting cost. The pass also gives every other class its own smaller school
-game (casters: situational rotations; martials: oils and geography), which keeps
-the Thundersmith's edge legible as *degree*, not *kind*: everyone plays
-matchups, he industrializes them.
+- **Top-state uptime.** §9's "known weakness chambered" (+15-20%) was
+  priced against a mostly-neutral world; now every zone has a weakness and
+  auto-chamber makes it the default in known land. Re-run the sim; if the
+  fueled edge lands high, the doc's own levers apply (tier-5 multiplier or
+  shots-per-cell, never the frame).
+- **The bar moved.** The Ranger benchmark (382/tick) predates oils; an
+  oiled Ranger in a matched zone is ~+6.5%. Re-anchor §9 against the oiled
+  Ranger or the stated gap silently shrinks by a third.
+- **§3's census paragraph is stale** (Physical 4th by resist count at
+  15/116): the world is now ~5,000 profiled regulars and boss-only Physical
+  resists. The "every Aelunor boss resists Physical" line still holds.
+- **§11's cost map** says the loaded cell reuses the `weapon_poison`
+  pattern; that field is now the one-slot `weapon_coat`, and the cell must
+  be a *separate* transient - a coat legitimately rides on top of a cell
+  shot (flat rider + multiplied shot, each in its lane).
+- **Extend the routed sim, don't exempt him.** Add a Thundersmith row where
+  "routed" means fueled-and-informed and assert his band explicitly:
+  prepared edge inside the §9 targets, dry state pinned to the bottom
+  third, no state that reaches the top row without per-fight spend. The
+  contract - OP only if prepared - becomes an assertion that fails the
+  build, not a sentence in this doc.

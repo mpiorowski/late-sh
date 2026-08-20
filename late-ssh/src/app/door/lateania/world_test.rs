@@ -2222,3 +2222,347 @@ fn zone_level_bands_are_sane_and_cover_the_road() {
         .expect("home region listed");
     assert!(road.levels.is_some(), "the home region has hostile levels");
 }
+
+// ---- The world resist/weak pass (spec: CONTEXT.md, same-named section) -------------
+//
+// One theme per generated zone; regulars wear the theme's resist/weak, bosses
+// keep their authored profiles. The tests below pin the placement to the theme
+// tables, hold the school census inside declared bands, and run the routed
+// grind-rate model that keeps the pass meaningful without rebalancing anyone.
+
+/// Every themed region: name, theme table, base room id, and rooms per zone.
+/// A spawn's home maps back to its zone by `(home - base) / stride`.
+fn themed_regions() -> [(&'static str, &'static [ZoneTheme], u32, u32); 7] {
+    use super::super::archipelago;
+    [
+        (
+            "Frontier",
+            &FRONTIER_ZONE_THEMES,
+            FRONTIER_BASE,
+            FRONTIER_W * FRONTIER_H,
+        ),
+        (
+            "Reaches",
+            &REACHES_ZONE_THEMES,
+            REACHES_BASE,
+            REACHES_ZONE_STRIDE,
+        ),
+        (
+            "Kaelmyr",
+            &KAELMYR_ZONE_THEMES,
+            KAELMYR_BASE,
+            KAELMYR_ZONE_STRIDE,
+        ),
+        (
+            "Sunderlakes",
+            &LAKES_ZONE_THEMES,
+            LAKES_BASE,
+            LAKES_ZONE_STRIDE,
+        ),
+        (
+            "Broceliande",
+            &BROCELIANDE_ZONE_THEMES,
+            BROCELIANDE_BASE,
+            BROCELIANDE_ZONE_STRIDE,
+        ),
+        (
+            "Aelunor",
+            &AELUNOR_ZONE_THEMES,
+            AELUNOR_BASE,
+            AELUNOR_ZONE_STRIDE,
+        ),
+        (
+            "Archipelago",
+            &archipelago::ISLAND_THEMES,
+            archipelago::ARCH_BASE,
+            archipelago::ARCH_STRIDE,
+        ),
+    ]
+}
+
+fn zone_index(home: RoomId, base: u32, stride: u32, zones: usize) -> Option<usize> {
+    (home >= base && home < base + stride * zones as u32)
+        .then(|| ((home - base) / stride) as usize)
+}
+
+/// The seven schools a theme may name (Physical is banned from both slots).
+const THEMED_SCHOOLS: [DamageType; 7] = [
+    DamageType::Fire,
+    DamageType::Frost,
+    DamageType::Holy,
+    DamageType::Shadow,
+    DamageType::Poison,
+    DamageType::Arcane,
+    DamageType::Lightning,
+];
+
+#[test]
+fn every_generated_regular_wears_its_zone_theme() {
+    let world = seed_world();
+    let mut regulars = 0usize;
+    let mut bosses = 0usize;
+    for (region, themes, base, stride) in themed_regions() {
+        for spawn in &world.spawns {
+            let Some(z) = zone_index(spawn.home, base, stride, themes.len()) else {
+                continue;
+            };
+            if spawn.boss {
+                // Bosses deviate on purpose: the pass never touches an
+                // authored boss profile, so a crown fight is exactly what it
+                // was before the pass.
+                bosses += 1;
+                continue;
+            }
+            let theme = themes[z];
+            regulars += 1;
+            assert_eq!(
+                spawn.profile.resist,
+                theme.resist(),
+                "{region} zone {z}: {} wears the zone resist",
+                spawn.name
+            );
+            assert_eq!(
+                spawn.profile.weak,
+                theme.weak(),
+                "{region} zone {z}: {} wears the zone weakness",
+                spawn.name
+            );
+        }
+    }
+    assert!(
+        regulars > 2000,
+        "the pass covers the generated regions ({regulars} regulars seen)"
+    );
+    assert!(
+        bosses >= 100,
+        "the zone bosses were seen and skipped ({bosses})"
+    );
+}
+
+#[test]
+fn no_regular_resists_physical_and_nothing_is_weak_to_physical() {
+    let world = seed_world();
+    // Nothing in the whole world, authored or generated, boss or regular, is
+    // ever weak to Physical: the neutral auto-attack baseline never inflates.
+    for spawn in &world.spawns {
+        assert_ne!(
+            spawn.profile.weak,
+            Some(DamageType::Physical),
+            "{} must not be weak to Physical",
+            spawn.name
+        );
+    }
+    // No regular anywhere resists Physical: a Physical resist is a 50% tax on
+    // the seven Physical-locked classes with no counterplay, so it lives on
+    // bosses only, where "bring a caster, an oil, or the smith" is the point.
+    for spawn in world.spawns.iter().filter(|s| !s.boss) {
+        assert_ne!(
+            spawn.profile.resist,
+            Some(DamageType::Physical),
+            "regular {} must not resist Physical",
+            spawn.name
+        );
+    }
+    // The theme vocabulary itself can never emit Physical, and every theme
+    // carries a weakness (weak-forward).
+    for theme in ZoneTheme::ALL {
+        assert_ne!(theme.resist(), Some(DamageType::Physical), "{theme:?}");
+        assert_ne!(theme.weak(), Some(DamageType::Physical), "{theme:?}");
+        assert!(theme.weak().is_some(), "{theme:?} must carry a weakness");
+    }
+}
+
+#[test]
+fn the_school_census_stays_inside_its_declared_bands() {
+    let regions = themed_regions();
+    let total_zones: usize = regions.iter().map(|(_, t, _, _)| t.len()).sum();
+    let school_pos =
+        |d: DamageType| THEMED_SCHOOLS.iter().position(|s| *s == d).expect("themed school");
+
+    let mut weak = [0usize; 7];
+    let mut resist = [0usize; 7];
+    for (region, themes, _, _) in &regions {
+        let mut region_weak = [0usize; 7];
+        let mut region_resists = 0usize;
+        for theme in *themes {
+            let w = school_pos(theme.weak().expect("weak-forward"));
+            weak[w] += 1;
+            region_weak[w] += 1;
+            if let Some(r) = theme.resist() {
+                resist[school_pos(r)] += 1;
+                region_resists += 1;
+            }
+        }
+        // Walls are events: resist zones stay a rough third of a region at
+        // most, and no single school owns more than a quarter of a region's
+        // weaknesses, so every region offers several different answers.
+        assert!(
+            region_resists <= (themes.len() + 2) / 3,
+            "{region}: {region_resists} resist zones of {}",
+            themes.len()
+        );
+        let lanes = region_weak.iter().filter(|c| **c > 0).count();
+        assert!(
+            lanes >= 5,
+            "{region}: only {lanes} weak schools represented"
+        );
+        let max_lane = region_weak.iter().max().copied().unwrap_or(0);
+        assert!(
+            max_lane <= themes.len().div_ceil(4),
+            "{region}: one school owns {max_lane} of {} zones",
+            themes.len()
+        );
+    }
+    // Global bands per school. Holy keeps predators (rule 4: without resist
+    // zones the two Holy classes silently become the school winners), no
+    // school's weakness count runs away, and every school has a real lane.
+    for (i, school) in THEMED_SCHOOLS.iter().enumerate() {
+        assert!(
+            (10..=30).contains(&weak[i]),
+            "{school:?}: {} weak zones of {total_zones} is outside 10..=30",
+            weak[i]
+        );
+        assert!(
+            resist[i] <= 10,
+            "{school:?}: {} resist zones is past the band",
+            resist[i]
+        );
+    }
+    assert!(
+        resist[school_pos(DamageType::Holy)] >= 4,
+        "Holy needs its predators"
+    );
+    let total_resists: usize = resist.iter().sum();
+    assert!(
+        total_resists * 3 <= total_zones,
+        "{total_resists} resist zones of {total_zones}: walls must stay rare"
+    );
+}
+
+/// The per-class offensive school mix at the Lv45 anchor, read from the real
+/// ability roster: each Strike/DoT/Finisher unlocked by 45 contributes its
+/// total effect per cooldown tick, normalized to shares per school.
+fn class_school_mix(class: super::super::classes::Class) -> Vec<(DamageType, f64)> {
+    use super::super::abilities::{ABILITIES, AbilityEffect};
+    let mut weights: Vec<(DamageType, f64)> = Vec::new();
+    for a in ABILITIES {
+        if a.class != class || a.level_req > 45 {
+            continue;
+        }
+        let ticks = match a.effect {
+            AbilityEffect::Strike | AbilityEffect::Finisher => 1.0,
+            AbilityEffect::DamageOverTime => 1.0 + a.duration as f64,
+            _ => continue,
+        };
+        let dps = a.magnitude as f64 * ticks / a.cooldown_ticks.max(1) as f64;
+        match weights.iter_mut().find(|(d, _)| *d == a.damage_type) {
+            Some((_, w)) => *w += dps,
+            None => weights.push((a.damage_type, dps)),
+        }
+    }
+    let total: f64 = weights.iter().map(|(_, w)| w).sum();
+    for (_, w) in &mut weights {
+        *w /= total;
+    }
+    weights
+}
+
+#[test]
+fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
+    // The grind-rate model, from CONTEXT.md ("The world resist/weak pass"): at band
+    // gear every class is ~75% auto damage (always Physical, and regulars are
+    // never weak to or resistant against it), ~25% abilities in the class's
+    // school mix, and a weapon oil adds a flat rider worth ~15% of output in
+    // the coat's school. Before this pass every generated regular was
+    // (None, None), so the "before" rate is exactly 1.0 in every zone: each
+    // assertion below is a live before/after budget.
+    const AUTO: f64 = 0.75;
+    const ABILITIES_SHARE: f64 = 0.25;
+    const OIL_RIDER: f64 = 0.15;
+    let oil_schools = super::super::items::OIL_SCHOOLS;
+
+    let mult = |theme: ZoneTheme, school: DamageType| -> f64 {
+        if theme.weak() == Some(school) {
+            1.5
+        } else if theme.resist() == Some(school) {
+            0.5
+        } else {
+            1.0
+        }
+    };
+
+    let regions = themed_regions();
+    let mut routed_best: Vec<(super::super::classes::Class, f64)> = Vec::new();
+    for class in super::super::classes::Class::ALL {
+        let mix = class_school_mix(class);
+        let ability_mult = |theme: ZoneTheme| -> f64 {
+            mix.iter().map(|(d, w)| w * mult(theme, *d)).sum::<f64>()
+        };
+
+        // Uncoated redistribution budget: within a zone a class may swing up
+        // to +-15%, and its average across every themed zone stays within a
+        // few percent of the old all-neutral world. Redistribution yes,
+        // rebalancing no.
+        let mut rates: Vec<f64> = Vec::new();
+        for (region, themes, _, _) in &regions {
+            for (z, theme) in themes.iter().enumerate() {
+                let rate = AUTO + ABILITIES_SHARE * ability_mult(*theme);
+                assert!(
+                    (0.85..=1.15).contains(&rate),
+                    "{class:?} in {region} zone {z}: {rate:.3} is outside the +-15% band"
+                );
+                rates.push(rate);
+            }
+        }
+        let avg = rates.iter().sum::<f64>() / rates.len() as f64;
+        assert!(
+            (0.97..=1.03).contains(&avg),
+            "{class:?}: themed-zone average {avg:.3} moved past the budget"
+        );
+
+        // The routed model: a player picks the zone and the coat. Neutral
+        // play is a coated weapon on unthemed ground (1 + OIL_RIDER).
+        // Floor: in every region there is a zone-and-coat answer worth at
+        // least +5%, so the school game is worth playing everywhere, for
+        // everyone. The legacy poison coat is left out of the model; it only
+        // adds options, never removes one.
+        let mut global_best: f64 = 0.0;
+        for (region, themes, _, _) in &regions {
+            let mut region_best: f64 = 0.0;
+            for theme in *themes {
+                let coat_best = oil_schools
+                    .iter()
+                    .map(|s| mult(*theme, *s))
+                    .fold(0.0f64, f64::max);
+                let rate =
+                    AUTO + ABILITIES_SHARE * ability_mult(*theme) + OIL_RIDER * coat_best;
+                region_best = region_best.max(rate);
+            }
+            let edge = region_best / (1.0 + OIL_RIDER);
+            assert!(
+                edge >= 1.05,
+                "{class:?} in {region}: best routed edge {edge:.3} is under the +5% floor"
+            );
+            global_best = global_best.max(edge);
+        }
+        routed_best.push((class, global_best));
+    }
+
+    // Ceiling: nobody's best-case routing runs away. The two mono-Holy
+    // classes top the table by design (a Holy oil stacks with their own
+    // school in the Undead/Haunted lanes - the deliberate buff to today's
+    // weakest classes), and even they stay under +18%; the spread between
+    // the best- and worst-served class stays within 12 points.
+    let max = routed_best.iter().map(|(_, e)| *e).fold(0.0f64, f64::max);
+    let min = routed_best.iter().map(|(_, e)| *e).fold(f64::MAX, f64::min);
+    for (class, edge) in &routed_best {
+        assert!(
+            *edge <= 1.18,
+            "{class:?}: routed best {edge:.3} is past the +18% ceiling"
+        );
+    }
+    assert!(
+        max - min <= 0.12,
+        "routed spread {max:.3} - {min:.3} is past 12 points"
+    );
+}

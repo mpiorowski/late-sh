@@ -331,17 +331,22 @@ fn a_poison_coats_the_weapon_instead_of_being_drunk() {
     s.players.get_mut(&uid(1)).unwrap().inventory.push(poison);
     s.use_item(uid(1), poison);
     let p = &s.players[&uid(1)];
-    assert!(p.weapon_poison.is_some(), "the weapon is coated");
+    assert_eq!(
+        p.weapon_coat.map(|(school, _, _)| school),
+        Some(DamageType::Poison),
+        "the weapon is coated with poison"
+    );
     assert!(!p.inventory.contains(&poison), "the vial is used up");
 }
 
 #[test]
 fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
     let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
-    s.players.get_mut(&uid(1)).unwrap().weapon_poison = Some((10, POISON_CHARGES));
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat =
+        Some((DamageType::Poison, 10, POISON_CHARGES));
     s.tick();
     assert_eq!(
-        s.players[&uid(1)].weapon_poison.map(|(_, c)| c),
+        s.players[&uid(1)].weapon_coat.map(|(_, _, c)| c),
         Some(POISON_CHARGES - 1),
         "a landed strike spends one poison charge"
     );
@@ -349,6 +354,48 @@ fn a_coated_weapon_poisons_the_foe_and_spends_a_charge() {
         s.mob_dots.get(&mob_id).is_some_and(|d| !d.is_empty()),
         "the struck foe is left with a poison DoT"
     );
+}
+
+#[test]
+fn an_oil_coats_the_weapon_with_its_school_and_replaces_the_last_coat() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let poison = super::super::items::poison_id(2);
+    let oil = super::super::items::oil_id(0, 2); // Firebrand Oil
+    {
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.inventory.push(poison);
+        p.inventory.push(oil);
+    }
+    s.use_item(uid(1), poison);
+    s.use_item(uid(1), oil);
+    let p = &s.players[&uid(1)];
+    assert_eq!(
+        p.weapon_coat,
+        Some((DamageType::Fire, OIL_PER_TICK[2], OIL_CHARGES)),
+        "the oil takes the one coat slot, replacing the poison"
+    );
+    assert!(!p.inventory.contains(&oil), "the vial is used up");
+}
+
+#[test]
+fn an_oiled_strike_rides_the_zone_profile() {
+    // Against a foe weak to Fire, a fire oil's DoT seeds at 1.5x per tick;
+    // against one that resists it, at half. The multiplier is baked in by
+    // seed_mob_dot, so the coat is a real matchup lever, not flat flavor.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    if let Some(m) = s.mobs.get_mut(&mob_id) {
+        m.spawn.profile = DamageProfile::new(DamageType::Physical, None, Some(DamageType::Fire));
+    }
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    let seeded = s
+        .mob_dots
+        .get(&mob_id)
+        .and_then(|d| d.first())
+        .map(|(_, per_tick, _)| *per_tick);
+    assert_eq!(seeded, Some(15), "weak to fire: 10 per tick seeds as 15");
 }
 
 #[test]
@@ -4149,4 +4196,61 @@ fn every_quest_target_and_zone_is_real() {
             "frontier zone {z} entrance missing"
         );
     }
+}
+
+#[test]
+fn the_top_poison_tier_is_no_longer_a_clone_of_the_fourth() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    let vial = super::super::items::poison_id(5); // Voidvenom
+    s.players.get_mut(&uid(1)).unwrap().inventory.push(vial);
+    s.use_item(uid(1), vial);
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat,
+        Some((DamageType::Poison, 50, POISON_CHARGES)),
+        "tier 5 continues the per-tick curve past tier 4's 34"
+    );
+}
+
+#[test]
+fn the_active_coat_shows_on_the_player_view() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 21, 8));
+    let view = s.snapshot().players[&uid(1)].clone();
+    assert_eq!(
+        view.coat.as_deref(),
+        Some("fire coat x8"),
+        "the battle panels read the coat from the view"
+    );
+}
+
+#[test]
+fn a_coated_weapon_works_in_a_duel_too() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.join(uid(2));
+    s.choose_class(uid(2), Class::Warrior);
+    let pvp_room = any_pvp_room(&s.world);
+    s.players.get_mut(&uid(1)).unwrap().room = pvp_room;
+    s.players.get_mut(&uid(2)).unwrap().room = pvp_room;
+    s.engage_player(uid(1), uid(2));
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    assert!(
+        s.pvp_dots
+            .get(&uid(2))
+            .is_some_and(|d| d.iter().any(|(owner, per_tick, dtype, _)| {
+                *owner == uid(1) && *per_tick == 10 && *dtype == DamageType::Fire
+            })),
+        "the landed duel swing seeds the coat's school DoT on the rival"
+    );
+    assert_eq!(
+        s.players[&uid(1)].weapon_coat.map(|(_, _, c)| c),
+        Some(OIL_CHARGES - 1),
+        "the duel swing spends one coat charge"
+    );
 }

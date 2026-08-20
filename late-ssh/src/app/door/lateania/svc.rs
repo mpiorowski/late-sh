@@ -993,6 +993,8 @@ pub struct PlayerView {
     pub empower: i32,
     /// True while the player is stunned (skipping their actions).
     pub stunned: bool,
+    /// The active weapon coat as a display line ("fire coat x8"), if any.
+    pub coat: Option<String>,
     pub abilities: Vec<AbilityView>,
     pub inventory: Vec<InvView>,
     pub shop: Option<ShopView>,
@@ -1122,6 +1124,7 @@ impl PlayerView {
             shield: 0,
             empower: 0,
             stunned: false,
+            coat: None,
             abilities: Vec::new(),
             inventory: Vec::new(),
             shop: None,
@@ -2311,9 +2314,12 @@ struct PlayerState {
     last_broadcast: Option<Instant>,
     /// Riding the companion (Wildbound mounts). Session-only.
     mounted: bool,
-    /// A weapon coated with poison: (damage per tick, strikes remaining). Each
-    /// landed melee hit leaves a poison DoT and spends one charge. Transient.
-    weapon_poison: Option<(i32, u8)>,
+    /// A coated weapon: the coat's school, damage per tick, and strikes
+    /// remaining. The poison vials and the four alchemy oils share this one
+    /// slot, so applying any coat replaces the last. Each landed melee hit
+    /// leaves a DoT of the coat's school (through the foe's resist/weak
+    /// profile) and spends one charge. Transient.
+    weapon_coat: Option<(DamageType, i32, u8)>,
     /// The friendly NPC the player is currently escorting, if any (transient).
     escort: Option<EscortState>,
     /// Transient warning gate for the start-room Frontier entrance.
@@ -3210,12 +3216,21 @@ const TAME_COOLDOWN: Duration = Duration::from_secs(30);
 /// self-limiting (only co-located players hear it); a global channel needs a
 /// brake or one voice can flood every log in Lateania.
 const BROADCAST_COOLDOWN: Duration = Duration::from_secs(10);
-/// Poison damage per tick applied by a coated weapon, by poison tier (0..5).
-const POISON_PER_TICK: [i32; 5] = [4, 8, 14, 22, 34];
+/// Poison damage per tick applied by a coated weapon, by poison tier (0..6).
+/// Voidvenom (tier 5) continues the curve; it used to silently clamp to the
+/// tier-4 value despite costing 350g.
+const POISON_PER_TICK: [i32; 6] = [4, 8, 14, 22, 34, 50];
 /// Strikes a single weapon-coating lasts before the poison is spent.
 const POISON_CHARGES: u8 = 5;
-/// Ticks each poisoned strike festers in the foe.
+/// Ticks each coated strike (poison or oil) festers in the foe.
 const POISON_DOT_TICKS: u8 = 3;
+/// Oil damage per tick, by oil tier (0..6). Sized half again above the poison
+/// curve: the oil is the deliberate zone-prep coat of the world resist/weak
+/// pass, the poison the cheap burst vial anyone can mix.
+const OIL_PER_TICK: [i32; 6] = [6, 12, 21, 33, 51, 76];
+/// Strikes a single oil coating lasts. Several fights' worth, so choosing an
+/// oil is a route decision made at the zone gate, not per-fight busywork.
+const OIL_CHARGES: u8 = 12;
 /// Ticks a cooked meal's well-fed regen lasts.
 const WELL_FED_TICKS: u8 = 8;
 
@@ -3363,7 +3378,7 @@ impl WorldState {
             rpg_mode: true,
             last_broadcast: None,
             mounted: false,
-            weapon_poison: None,
+            weapon_coat: None,
             escort: None,
             frontier_descent_pending: false,
             resurrection_cap: 0,
@@ -6871,9 +6886,15 @@ impl WorldState {
 
     fn use_item(&mut self, user_id: Uuid, item_id: u32) {
         let Some(it) = item(item_id) else { return };
-        // Poisons aren't drunk - they coat your weapon.
+        // Poisons and oils aren't drunk - they coat your weapon.
         if let Some(tier) = super::items::poison_tier(item_id) {
-            self.coat_weapon(user_id, item_id, tier);
+            let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
+            self.coat_weapon(user_id, item_id, DamageType::Poison, per_tick, POISON_CHARGES);
+            return;
+        }
+        if let Some((school, tier)) = super::items::oil_school_tier(item_id) {
+            let per_tick = OIL_PER_TICK[(tier as usize).min(OIL_PER_TICK.len() - 1)];
+            self.coat_weapon(user_id, item_id, school, per_tick, OIL_CHARGES);
             return;
         }
         let ItemKind::Consumable { heal, restore } = it.kind else {
@@ -6917,9 +6938,17 @@ impl WorldState {
         self.dirty = true;
     }
 
-    /// Coat the player's weapon with a poison: each landed melee hit will leave a
-    /// poison DoT until the charges run out. Consumes the vial.
-    fn coat_weapon(&mut self, user_id: Uuid, item_id: u32, tier: u32) {
+    /// Coat the player's weapon with a poison or an oil: each landed melee hit
+    /// will leave a DoT of the coat's school until the charges run out. One
+    /// coat slot: applying a new coat replaces the old. Consumes the vial.
+    fn coat_weapon(
+        &mut self,
+        user_id: Uuid,
+        item_id: u32,
+        school: DamageType,
+        per_tick: i32,
+        charges: u8,
+    ) {
         let has = self
             .players
             .get(&user_id)
@@ -6928,18 +6957,17 @@ impl WorldState {
         if !has {
             return;
         }
-        let per_tick = POISON_PER_TICK[(tier as usize).min(POISON_PER_TICK.len() - 1)];
-        let name = item(item_id).map(|i| i.name).unwrap_or("poison");
+        let name = item(item_id).map(|i| i.name).unwrap_or("coating");
         if let Some(p) = self.players.get_mut(&user_id) {
             if let Some(pos) = p.inventory.iter().position(|i| *i == item_id) {
                 p.inventory.remove(pos);
             }
-            p.weapon_poison = Some((per_tick, POISON_CHARGES));
+            p.weapon_coat = Some((school, per_tick, charges));
         }
         self.log_to(
             user_id,
             LogKind::Combat,
-            format!("You coat your weapon with {name} ({POISON_CHARGES} strikes)."),
+            format!("You coat your weapon with {name} ({charges} strikes)."),
         );
         self.dirty = true;
     }
@@ -7365,26 +7393,22 @@ impl WorldState {
                 self.kill_mob(user_id, mob_id);
                 continue;
             }
-            // A poison-coated weapon leaves a festering DoT in the struck foe and
-            // spends one charge (the target is the player's current mob).
-            let poison = self.players.get(&user_id).and_then(|p| p.weapon_poison);
-            if let Some((per_tick, charges)) = poison {
-                self.seed_mob_dot(
-                    user_id,
-                    per_tick,
-                    DamageType::Poison,
-                    POISON_DOT_TICKS,
-                    "Your poison",
-                );
+            // A coated weapon (poison or oil) leaves a festering DoT of the
+            // coat's school in the struck foe, through the foe's resist/weak
+            // profile, and spends one charge (the target is the player's
+            // current mob).
+            let coat = self.players.get(&user_id).and_then(|p| p.weapon_coat);
+            if let Some((school, per_tick, charges)) = coat {
+                self.seed_mob_dot(user_id, per_tick, school, POISON_DOT_TICKS, coat_source(school));
                 if let Some(p) = self.players.get_mut(&user_id) {
                     let left = charges.saturating_sub(1);
-                    p.weapon_poison = (left > 0).then_some((per_tick, left));
+                    p.weapon_coat = (left > 0).then_some((school, per_tick, left));
                 }
                 if charges <= 1 {
                     self.log_to(
                         user_id,
                         LogKind::System,
-                        "The last of the poison is spent.".to_string(),
+                        "The last of the coating is spent.".to_string(),
                     );
                 }
             }
@@ -7562,6 +7586,31 @@ impl WorldState {
             self.strike_pvp_target(attacker_id, victim_id, atk, DamageType::Physical, "a rival");
             if self.players.get(&victim_id).is_some_and(|v| v.dead) {
                 continue;
+            }
+            // A coated weapon works in a duel exactly as against a mob: the
+            // landed swing seeds a DoT of the coat's school on the rival
+            // (through their armor each tick, via the pvp dot pass) and
+            // spends a charge.
+            let coat = self.players.get(&attacker_id).and_then(|p| p.weapon_coat);
+            if let Some((school, per_tick, charges)) = coat {
+                self.seed_pvp_dot(
+                    attacker_id,
+                    per_tick,
+                    school,
+                    POISON_DOT_TICKS,
+                    coat_source(school),
+                );
+                if let Some(p) = self.players.get_mut(&attacker_id) {
+                    let left = charges.saturating_sub(1);
+                    p.weapon_coat = (left > 0).then_some((school, per_tick, left));
+                }
+                if charges <= 1 {
+                    self.log_to(
+                        attacker_id,
+                        LogKind::System,
+                        "The last of the coating is spent.".to_string(),
+                    );
+                }
             }
             // A living, fighting companion piles onto the same target, same as
             // it does against a mob - biting through `strike_pvp_target` so it
@@ -9633,6 +9682,9 @@ impl WorldState {
                     shield: player.shield,
                     empower: player.empower,
                     stunned: player.stunned > 0,
+                    coat: player
+                        .weapon_coat
+                        .map(|(school, _, charges)| format!("{} coat x{charges}", school.label())),
                     abilities,
                     inventory,
                     shop,
@@ -9717,6 +9769,20 @@ impl WorldState {
 }
 
 // ---- Free helpers: titles, tags, gold, and the log buffer ----------------
+
+/// The combat-log voice of a weapon coat's school ("Your burning oil ...").
+fn coat_source(school: DamageType) -> &'static str {
+    match school {
+        DamageType::Poison => "Your poison",
+        DamageType::Fire => "Your burning oil",
+        DamageType::Frost => "Your freezing oil",
+        DamageType::Holy => "Your blessed oil",
+        DamageType::Lightning => "Your crackling oil",
+        DamageType::Shadow => "Your darkened oil",
+        DamageType::Arcane => "Your humming oil",
+        DamageType::Physical => "Your coating",
+    }
+}
 
 /// A short combat-log suffix announcing a resist or weakness, empty for normal.
 fn defense_tag(defense: Defense, _dtype: DamageType) -> &'static str {

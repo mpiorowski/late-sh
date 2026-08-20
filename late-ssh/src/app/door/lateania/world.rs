@@ -21,7 +21,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 
-use super::damage::{DamageProfile, DamageType};
+use super::damage::{DamageProfile, DamageType, ZoneTheme};
 use super::skills::{CraftSkill, GatherSkill};
 
 // ---- Core world types: directions, rooms, spawns, behaviour --------------
@@ -5570,6 +5570,11 @@ pub fn seed_world() -> World {
             ),
         },
         // ---- The Sunken Citadel (tier 7-8) ------------------------------
+        // Bloodless citadel constructs: they shrug off venom, not steel. A
+        // Physical resist on a regular is a zone-wide tax on the seven
+        // Physical-locked classes with no counterplay, so it lives on bosses
+        // only (the world resist/weak pass, rule 2 - enforced globally by
+        // `no_regular_resists_physical_and_nothing_is_weak_to_physical`).
         MobSpawn {
             id: 60,
             name: "a faceless sentinel",
@@ -5582,7 +5587,7 @@ pub fn seed_world() -> World {
             boss: false,
             profile: DamageProfile::new(
                 DamageType::Physical,
-                Some(DamageType::Physical),
+                Some(DamageType::Poison),
                 Some(DamageType::Arcane),
             ),
         },
@@ -5598,7 +5603,7 @@ pub fn seed_world() -> World {
             boss: false,
             profile: DamageProfile::new(
                 DamageType::Physical,
-                Some(DamageType::Physical),
+                Some(DamageType::Poison),
                 Some(DamageType::Arcane),
             ),
         },
@@ -6054,9 +6059,15 @@ fn extend_archipelago(
                     58 + tier * 4 + depth,
                 )
             };
-            let profile = match behavior {
-                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
-                _ => DamageProfile::new(DamageType::Physical, None, None),
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, None)
+            } else {
+                let theme = super::archipelago::ISLAND_THEMES[isle];
+                DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
                 id: spawn_id,
@@ -7446,6 +7457,32 @@ pub fn is_reaches_room(id: RoomId) -> bool {
 /// Twenty zones of the Sundered Reaches: (zone, adjective, ground, landmark,
 /// creatures, three mob names, boss). Reuses `frontier_desc` for prose.
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Reaches zone, in `REACHES_ZONES_DATA` order. Regulars inherit the theme's
+/// profile; zone bosses keep their own.
+const REACHES_ZONE_THEMES: [ZoneTheme; REACHES_ZONES] = [
+    ZoneTheme::Tidal,     // Saltmarsh Shallows
+    ZoneTheme::Tidal,     // Wreckers' Coast
+    ZoneTheme::Resonant,  // Weeping Cliffs
+    ZoneTheme::Verdant,   // Kelpwood Drowned
+    ZoneTheme::Fae,       // Sirens' Reef
+    ZoneTheme::Haunted,   // Sinking Isles
+    ZoneTheme::Storm,     // Stormwall Straits
+    ZoneTheme::Drowned,   // Brine Caverns
+    ZoneTheme::Haunted,   // Sunken Valmaris
+    ZoneTheme::Drowned,   // Pearl Abyss
+    ZoneTheme::Beastwild, // Coral Throne Reach
+    ZoneTheme::Crystal,   // Glass Currents
+    ZoneTheme::Beastwild, // Leviathan's Wake
+    ZoneTheme::Undead,    // Mourning Depths
+    ZoneTheme::Storm,     // Tempest Spire Reach
+    ZoneTheme::Beastwild, // Trench of Maws
+    ZoneTheme::Profane,   // Drowned Pantheon
+    ZoneTheme::Resonant,  // Black Maelstrom
+    ZoneTheme::Fae,       // Abyssal Court
+    ZoneTheme::Profane,   // Sundering Deep
+];
+
 const REACHES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
     (
         "Saltmarsh Shallows",
@@ -7873,9 +7910,15 @@ fn extend_reaches(
                     56 + tier * 4 + depth,
                 )
             };
-            let profile = match behavior {
-                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
-                _ => DamageProfile::new(DamageType::Physical, None, None),
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, None)
+            } else {
+                let theme = REACHES_ZONE_THEMES[z];
+                DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
                 id: spawn_id,
@@ -7991,6 +8034,33 @@ pub fn is_kaelmyr_room(id: RoomId) -> bool {
 /// mob names, boss). The tribe threading is carried in the mob/boss names and
 /// the landmarks; `kaelmyr_desc` supplies the paragraph prose.
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Kaelmyr zone, in `KAELMYR_ZONES_DATA` order. Regulars inherit the theme's
+/// profile; zone bosses keep their own. The burnt continent leans Frost-weak
+/// on purpose: fear of the cold is the land's through-line.
+const KAELMYR_ZONE_THEMES: [ZoneTheme; KAELMYR_ZONES] = [
+    ZoneTheme::Sunscorched, // Cinderfall Shore
+    ZoneTheme::Sunscorched, // Emberkin Terraces
+    ZoneTheme::Ashen,       // Calder Vhael
+    ZoneTheme::Sunscorched, // Pyre-Roads
+    ZoneTheme::Beastwild,   // Sunless Vents
+    ZoneTheme::Haunted,     // Cinderbound Fields
+    ZoneTheme::Construct,   // Slagworks Ruin
+    ZoneTheme::Undead,      // Ashen Barrows
+    ZoneTheme::Crystal,     // Gloamwright Deeps
+    ZoneTheme::Crystal,     // Black Deserts
+    ZoneTheme::Crystal,     // Volcanoglass Reach
+    ZoneTheme::Ashen,       // Ashfall Wastes
+    ZoneTheme::Resonant,    // Stormheld Ascent
+    ZoneTheme::Storm,       // Thunderspires
+    ZoneTheme::Resonant,    // Cinder-Storms
+    ZoneTheme::Resonant,    // Hollowing
+    ZoneTheme::Profane,     // Choirhold Caverns
+    ZoneTheme::Tidal,       // Drowned Wound
+    ZoneTheme::Beastwild,   // Unquenched Throne
+    ZoneTheme::Profane,     // Sundering Wound
+];
+
 const KAELMYR_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
     (
         "Cinderfall Shore",
@@ -8474,9 +8544,15 @@ fn extend_kaelmyr(
                     116 + tier * 4 + depth,
                 )
             };
-            let profile = match behavior {
-                MobBehavior::Caster(school) => DamageProfile::new(school, None, None),
-                _ => DamageProfile::new(DamageType::Physical, None, None),
+            let attack = match behavior {
+                MobBehavior::Caster(school) => school,
+                _ => DamageType::Physical,
+            };
+            let profile = if boss_mob {
+                DamageProfile::new(attack, None, None)
+            } else {
+                let theme = KAELMYR_ZONE_THEMES[z];
+                DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
                 id: spawn_id,
@@ -8602,6 +8678,26 @@ pub fn is_lakes_room(id: RoomId) -> bool {
 /// lean toward wildlife and lost things rather than horrors, and the notables
 /// are lake-guardians more than tyrants. `lakes_desc` supplies the prose.
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Sunderlakes zone, in `LAKES_ZONES_DATA` order. Regulars inherit the
+/// theme's profile; zone notables keep their own.
+const LAKES_ZONE_THEMES: [ZoneTheme; LAKES_ZONES] = [
+    ZoneTheme::Tidal,     // Anglers' Dock
+    ZoneTheme::Beastwild, // Reed Labyrinth
+    ZoneTheme::Drowned,   // Sunken Grotto
+    ZoneTheme::Beastwild, // Isle Meres
+    ZoneTheme::Verdant,   // Willow Drowns
+    ZoneTheme::Drowned,   // Weeping Caverns
+    ZoneTheme::Verdant,   // Lily Reaches
+    ZoneTheme::Haunted,   // Drowned Orchard
+    ZoneTheme::Beastwild, // Glasswater Deep
+    ZoneTheme::Fae,       // Fenlight Marsh
+    ZoneTheme::Fae,       // Mirror Meres
+    ZoneTheme::Drowned,   // Fathom Caverns
+    ZoneTheme::Haunted,   // Drowned Valley
+    ZoneTheme::Beastwild, // Mere-Mother's Deep
+];
+
 const LAKES_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 14] = [
     (
         "Anglers' Dock",
@@ -9013,7 +9109,12 @@ fn extend_lakes(
                         11 + tier + depth / 2,
                     )
                 };
-            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            let profile = if boss_mob {
+                DamageProfile::new(DamageType::Physical, None, None)
+            } else {
+                let theme = LAKES_ZONE_THEMES[z];
+                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
+            };
             spawns.push(MobSpawn {
                 id: spawn_id,
                 name: mob_name,
@@ -9374,6 +9475,33 @@ pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
 /// the paragraph prose. Zone names must NOT start with "The " (the builder does
 /// not prepend it here, but keeps them clean for the leaked zone label).
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Broceliande zone, in `BROCELIANDE_ZONES_DATA` order. Regulars inherit the
+/// theme's profile; zone notables keep their own. The Greenwood leans
+/// Fire-weak on purpose: burning the wood is the answer the country teaches.
+const BROCELIANDE_ZONE_THEMES: [ZoneTheme; BROCELIANDE_ZONES] = [
+    ZoneTheme::Beastwild, // Woodward's Holt
+    ZoneTheme::Verdant,   // Oakheart Grove
+    ZoneTheme::Fungal,    // Fernlight Hollow
+    ZoneTheme::Resonant,  // Druid's Circle
+    ZoneTheme::Beastwild, // Briarmaze Thicket
+    ZoneTheme::Fae,       // Whispering Fens
+    ZoneTheme::Haunted,   // Verdant Ruins
+    ZoneTheme::Fae,       // Moonshadow Glade
+    ZoneTheme::Beastwild, // Steaming Jungle
+    ZoneTheme::Verdant,   // Vine-Choked Deep
+    ZoneTheme::Undead,    // Standing Kings
+    ZoneTheme::Undead,    // Barrowgreen
+    ZoneTheme::Fae,       // Faerie Reaches
+    ZoneTheme::Beastwild, // Wyrmfern Hollows
+    ZoneTheme::Haunted,   // Greenmantle Keep
+    ZoneTheme::Verdant,   // Thornwyrd Maze
+    ZoneTheme::Fae,       // Cernunmoor
+    ZoneTheme::Fungal,    // Worldroot Deep
+    ZoneTheme::Resonant,  // Greenmarch Heart
+    ZoneTheme::Fae,       // World-Oak Crown
+];
+
 const BROCELIANDE_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
     (
         "Woodward's Holt",
@@ -9906,7 +10034,12 @@ fn extend_broceliande(
                         15 + tier + depth / 2,
                     )
                 };
-            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            let profile = if boss_mob {
+                DamageProfile::new(DamageType::Physical, None, None)
+            } else {
+                let theme = BROCELIANDE_ZONE_THEMES[z];
+                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
+            };
             spawns.push(MobSpawn {
                 id: spawn_id,
                 name: mob_name,
@@ -10046,6 +10179,25 @@ const AELUNOR_CREATURES: [&str; 20] = [
 /// same shape as `BROCELIANDE_ZONES_DATA`. Zone names must NOT start with
 /// "The " (the builder does not prepend it).
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Aelunor glade, in `AELUNOR_ZONES_DATA` order. Regulars inherit the theme's
+/// profile whatever affix they roll (the affix buys stats and loot, not a
+/// different school game); zone bosses keep their authored profile.
+const AELUNOR_ZONE_THEMES: [ZoneTheme; AELUNOR_ZONES] = [
+    ZoneTheme::Verdant,   // Silverleaf Eaves
+    ZoneTheme::Resonant,  // the Whispering Boughs
+    ZoneTheme::Verdant,   // Mossheart Glade
+    ZoneTheme::Fae,       // the Sunfall Canopy
+    ZoneTheme::Beastwild, // Thistledown Hollow
+    ZoneTheme::Resonant,  // the Elder Ring
+    ZoneTheme::Fae,       // Duskpetal Grove
+    ZoneTheme::Tidal,     // the Starlit Fen
+    ZoneTheme::Fungal,    // Wychroot Deeps
+    ZoneTheme::Fae,       // the Faerie Loom
+    ZoneTheme::Tidal,     // Moonwell Thicket
+    ZoneTheme::Resonant,  // the Heartwood Sanctum
+];
+
 const AELUNOR_ZONES_DATA: [(&str, &str, &str, &str, &str, [usize; 3], &str); 12] = [
     (
         "Silverleaf Eaves",
@@ -10412,7 +10564,9 @@ fn extend_aelunor(
             // local floor as the prize does, or a first-glade Legendary hands
             // a wanderer Epic-band gear off an ordinary fight.
             let elite = (rarity * rarity) as i32;
-            let profile = DamageProfile::new(DamageType::Physical, None, None);
+            let theme = AELUNOR_ZONE_THEMES[z];
+            let profile =
+                DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak());
             spawns.push(MobSpawn {
                 id: spawn_id,
                 name: mob_name,
@@ -11258,6 +11412,32 @@ fn wildbound_named(creature: &str, tier: usize) -> &'static str {
 /// Per-zone flavour: name, adjective, ground noun, a landmark feature, the
 /// creatures that haunt it, three regular mob names, and the zone boss.
 #[allow(clippy::type_complexity)]
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// Frontier zone, in `FRONTIER_ZONES_DATA` order, derived from the zone's
+/// flavor. Regulars inherit the theme's profile; zone bosses keep their own.
+const FRONTIER_ZONE_THEMES: [ZoneTheme; FRONTIER_ZONES] = [
+    ZoneTheme::Ashen,       // Ashen Wastes
+    ZoneTheme::Tidal,       // Sunken Fens
+    ZoneTheme::Fae,         // Glimmerwood
+    ZoneTheme::Beastwild,   // Howling Steppe
+    ZoneTheme::Sunscorched, // Cinder Barrens
+    ZoneTheme::Tidal,       // Tideglass Coast
+    ZoneTheme::Undead,      // Bonewhite Reach
+    ZoneTheme::Haunted,     // Verdigris Ruins
+    ZoneTheme::Storm,       // Stormspire Highlands
+    ZoneTheme::Haunted,     // Umbral Depths
+    ZoneTheme::Sunscorched, // Saltglass Desert
+    ZoneTheme::Fungal,      // Fungal Hollow
+    ZoneTheme::Crystal,     // Clockwork Ruins
+    ZoneTheme::Beastwild,   // Bloodmarsh
+    ZoneTheme::Resonant,    // Singing Canyon
+    ZoneTheme::Frozen,      // Frostfang Tundra
+    ZoneTheme::Crystal,     // Obsidian Flats
+    ZoneTheme::Haunted,     // Driftbone Sea
+    ZoneTheme::Sunscorched, // Emberfall Caldera
+    ZoneTheme::Profane,     // Hollow Crown
+];
+
 const FRONTIER_ZONES_DATA: [(&str, &str, &str, &str, &str, [&str; 3], &str); 20] = [
     (
         "Ashen Wastes",
@@ -11573,6 +11753,7 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                     spawn_id += 1;
                 } else if idx.is_multiple_of(2) {
                     let ti = tier as i32;
+                    let theme = FRONTIER_ZONE_THEMES[z];
                     spawns.push(MobSpawn {
                         id: spawn_id,
                         name: mob_names[(idx as usize) % 3],
@@ -11583,7 +11764,11 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         respawn_secs: 90,
                         loot: super::items::frontier_loot(z),
                         boss: false,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                        profile: DamageProfile::new(
+                            DamageType::Physical,
+                            theme.resist(),
+                            theme.weak(),
+                        ),
                     });
                     spawn_id += 1;
                 }
@@ -12167,7 +12352,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         90,
         false,
         COMMON_LOOT,
-        p(D::Fire, Some(D::Physical), Some(D::Frost)),
+        p(D::Fire, Some(D::Poison), Some(D::Frost)),
     );
     mob(
         spawns,
@@ -12296,7 +12481,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         120,
         false,
         COMMON_LOOT,
-        p(D::Frost, Some(D::Physical), Some(D::Fire)),
+        p(D::Frost, Some(D::Frost), Some(D::Fire)),
     );
     mob(
         spawns,
@@ -12386,7 +12571,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         144,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -12397,7 +12582,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         150,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -12408,7 +12593,7 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         156,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Arcane)),
+        p(D::Physical, Some(D::Shadow), Some(D::Arcane)),
     );
     mob(
         spawns,
@@ -12891,7 +13076,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         44,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Fire)),
+        p(D::Physical, Some(D::Poison), Some(D::Fire)),
     );
 
     // ---- Tasmania (7 rooms): the harbor capital (SAFE) ------------------
@@ -13043,7 +13228,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         70,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Lightning)),
+        p(D::Physical, Some(D::Frost), Some(D::Lightning)),
     );
     mob(
         spawns,
@@ -13414,7 +13599,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         74,
         false,
         COMMON_LOOT,
-        p(D::Poison, Some(D::Physical), Some(D::Fire)),
+        p(D::Poison, Some(D::Poison), Some(D::Fire)),
     );
     mob(
         spawns,
@@ -13678,7 +13863,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         74,
         false,
         COMMON_LOOT,
-        p(D::Shadow, Some(D::Physical), Some(D::Holy)),
+        p(D::Shadow, Some(D::Shadow), Some(D::Holy)),
     );
     mob(
         spawns,
@@ -13763,7 +13948,7 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         72,
         false,
         COMMON_LOOT,
-        p(D::Physical, Some(D::Physical), Some(D::Frost)),
+        p(D::Physical, Some(D::Poison), Some(D::Frost)),
     );
     mob(
         spawns,
