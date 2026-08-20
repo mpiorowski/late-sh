@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-20 (the world resist/weak pass: every generated zone now names a `damage::ZoneTheme` and its regulars wear the theme's resist/weak while bosses keep their authored profiles, pinned by four world_test invariants incl. a routed grind-rate budget; plus the four Alchemy weapon oils - `weapon_poison` generalized to the one-slot `weapon_coat`, oils are flat school riders on the auto that ride `seed_mob_dot`'s baked-in resist/weak multiplier; spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
+- Last updated: 2026-08-20 (the world resist/weak pass: every generated zone now names a `damage::ZoneTheme`, its regulars wear the theme's resist/weak, and every boss in the world carries a weakness (zone bosses inherit the theme's weak but never its resist; authored crowns keep or gained hand-picked ones) - pinned by world_test invariants incl. a routed grind-rate budget and `every_boss_carries_a_weakness`; plus the four Alchemy weapon oils - `weapon_poison` generalized to the one-slot `weapon_coat`, oils are flat school riders on the auto that ride `seed_mob_dot`'s baked-in resist/weak multiplier; spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -614,9 +614,14 @@ reward; walls are events, and rare).
 in the same order: `FRONTIER/REACHES/KAELMYR/LAKES/BROCELIANDE/AELUNOR_ZONE_THEMES`
 in `world.rs`, `ISLAND_THEMES` in `archipelago.rs`; 126 themed zones. Regulars
 inherit the theme at spawn build (an Aelunor spawn wears its zone theme
-whatever affix it rolls); **bosses keep their authored profiles bit-for-bit**,
-so no crown fight moved and Physical resist survives only on bosses, where
-"bring a caster, an oil, or the smith" is the point.
+whatever affix it rolls). **Every boss carries a weakness** - bosses are the
+fights players actually prepare for, so the prep mechanic must exist there:
+generated zone bosses inherit their zone theme's weak but **never** its
+resist (a weakness is pure reward; a resist on a boss is a class tax with no
+counterplay, so boss resists stay rare authored events - the 14 Physical
+walls and the elemental crowns). Authored crowns keep their hand-picked
+profiles; the zone teaches the school, the boss is the exam, and the oil
+already in your bag is the answer.
 
 **The two hard rules** (global, no exceptions): nothing anywhere is weak to
 Physical, and no regular anywhere resists it - a Physical resist on a regular
@@ -624,6 +629,17 @@ is a zone-wide tax on the seven Physical-locked classes with no counterplay.
 The twelve authored regulars that used to resist it were re-themed
 (constructs/stone to Poison, wraiths/shades to Shadow, cold-sea creatures to
 Frost), each keeping its weakness.
+
+**The solo rule** (this is a solo game, no grouping fallback): a Physical
+resist on a boss may only guard an optional prize or sit at the low band
+where a tier-0 oil's flat rider out-punches the halving. Exactly 14 bosses
+wear one - the Elder Treant (the road's teaching fight, ~L5-8, where a 20g
+Sparkseed Oil already beats hitting a neutral boss dry), the Fallen Paladin
+(optional Sunken Citadel), and Aelunor's 12 zone bosses (optional region,
+weak Holy, so the blessed-oil rider lands at 150%). The mandatory Long Road
+past the Treant never demands a school a Physical-locked class can't bring;
+never add a Physical resist to a road crown. Pinned by
+`physical_walls_never_gate_the_long_road_past_the_treant` (`svc_test.rs`).
 
 **Census bands** (declared, test-enforced): per school 10..=30 weak zones and
 <=10 resist zones; Holy keeps >=4 resist zones (the Profane predators - without
@@ -650,6 +666,7 @@ the deliberate buff to today's weakest two.
 
 **Tests** (`world_test.rs`): `every_generated_regular_wears_its_zone_theme`,
 `no_regular_resists_physical_and_nothing_is_weak_to_physical`,
+`every_boss_carries_a_weakness`,
 `the_school_census_stays_inside_its_declared_bands`,
 `the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class`.
 Re-theming a zone means editing its table row and letting these judge the

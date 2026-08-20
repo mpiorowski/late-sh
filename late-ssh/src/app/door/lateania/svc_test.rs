@@ -4166,6 +4166,33 @@ fn the_long_road_matches_the_real_gates_and_tracks_titles() {
 }
 
 #[test]
+fn physical_walls_never_gate_the_long_road_past_the_treant() {
+    // This is a solo game: a Physical-locked class must be able to walk the
+    // whole mandatory road without another player. Physical-resist bosses may
+    // guard optional prizes, but on the Long Road only the Elder Treant wears
+    // one - and he sits at the low band where a tier-0 oil's flat rider
+    // out-punches the resist, so he teaches the coat instead of gating on it.
+    let w = seed_world();
+    for m in LONG_ROAD {
+        let spawn = w
+            .spawns
+            .iter()
+            .find(|sp| sp.name == m.boss)
+            .expect("road boss exists");
+        if m.boss == "the Elder Treant" {
+            assert_eq!(spawn.profile.resist, Some(DamageType::Physical));
+            continue;
+        }
+        assert_ne!(
+            spawn.profile.resist,
+            Some(DamageType::Physical),
+            "{} resists Physical on the mandatory road",
+            m.boss
+        );
+    }
+}
+
+#[test]
 fn every_quest_target_and_zone_is_real() {
     let w = seed_world();
     for q in STARTER_QUESTS {

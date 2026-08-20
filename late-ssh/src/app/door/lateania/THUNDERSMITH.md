@@ -1,9 +1,11 @@
 # The Thundersmith, a class design
 
-Status: design only, not implemented. Drafted 2026-08-06; revised 2026-08-20 after
-a code-verified balance pass. Every engine claim below was re-checked against
-source; the benchmark class is now the Ranger (not the Rogue), measured at the
-Lv30-60 band where the game is actually played, not at L100.
+Status: design only, not implemented. Drafted 2026-08-06; revised 2026-08-20
+twice: after a code-verified balance pass, and again the same day after the
+world resist/weak pass and the weapon oils landed (spec: `CONTEXT.md`, "The
+world resist/weak pass"). Every engine claim below reflects the landed world;
+the benchmark class is the Ranger (not the Rogue), measured at the Lv30-60
+band where the game is actually played, not at L100.
 
 *A bulky master smith with a storm-cell scattergun. He is not stronger than you.
 He is prepared, and that's worse.*
@@ -28,8 +30,9 @@ it is never a one-time unlock. If preparation can be paid once and forgotten, th
 design has failed.
 
 Not locked. The class is available at class select like any other. Access is free,
-power is gated: being good costs Smithing ~50, materials, and a survived recon
-fight per zone. An unlock gate on top adds annoyance, not depth.
+power is gated: being good costs Smithing ~50, materials, and a survived first
+walk of every land he wants in the ledger. An unlock gate on top adds
+annoyance, not depth.
 
 ## 2. Frame
 
@@ -64,7 +67,7 @@ the gear curve instead, so tier-5 cells matter as much at the top as in the band
 |---|---|---|---|
 | Scrap shot | Physical | **x0.90** | unlimited, free; the never-empty floor |
 | Storm-cells t1-t5 (signature) | Lightning | x1.10 / x1.15 / x1.20 / x1.27 / **x1.35** | crafted |
-| Counter-cells (ember / frost / holy / ...) | one line per school | one notch below the same tier's storm | crafted |
+| Counter-cells (ember / rime / blessed / gloom / rune / venom) | one line per remaining school | one notch below the same tier's storm | crafted |
 
 - Cells are consumed per shot. Combat runs one auto per 2s tick, so a 20-shot
   cell is ~40 seconds of fighting; cells therefore craft in **bandoliers**
@@ -72,48 +75,71 @@ the gear curve instead, so tier-5 cells matter as much at the top as in the band
 - Tier-5 cells require Smithing ~50 and masterwork-grade materials. This is the
   power ceiling and the crafting system's endgame consumer.
 - Scrap keeps the dry state playable but honest, and it stings twice: x0.90 on
-  the multiplier, and Physical is the worst-expectation school in the game.
-  Corrected census (116 authored profiles): Physical is 4th by resist count
-  (Frost 23, Shadow 19, Fire 18, Physical 15) but **nothing in the world is weak
-  to it** (0 of 116), giving it the near-worst expected multiplier (0.934).
-  Notably, every Aelunor boss resists Physical: an entire continent already
-  punishes the unprepared shot.
-- Why lightning as the brand holds up: resisted by 2 profiles, a weakness on 9,
-  expected multiplier 1.031, behind only Holy (1.140) and Fire (1.057). Nothing
-  resists Arcane (0 of 116), but nothing meaningfully seeks it either (weak on 3).
+  the multiplier, and Physical is the only school the world never rewards.
+  Post-pass census (test-enforced, no drift possible): nothing anywhere is
+  weak to Physical, no regular anywhere resists it, and Physical resist
+  lives on exactly 14 bosses (the Elder Treant - the game's first crown -
+  the Fallen Paladin, and Aelunor's twelve). So scrap is safe on trash but
+  worst-in-class everywhere: it misses the weakness every one of the 126
+  themed zones now carries, and it halves against the walls that matter.
+- Why lightning as the brand holds up, post-pass: Lightning is the widest
+  weak lane in the world (25 of 126 themed zones - the coasts, the lakes,
+  the glass countries) against 6 Storm-zone resists. The brand school is
+  also the best default cell, which keeps storm affinity honest.
+- **The rack covers all seven non-Physical schools, and that is the point.**
+  Oils deliberately cover four (fire/frost/holy/lightning); the Shadow,
+  Arcane, and Poison lanes (22/18/13 themed zones) have no martial answer
+  but his. His counter-lines are also multipliers where oils are flat
+  riders. Together that is the capability gap that makes "everyone plays
+  matchups, he industrializes them" literal rather than rhetorical.
 
-## 4. The loop (recon fights)
+## 4. The loop (provision, march, execute)
 
-No free information. A mob's resist/weak profile is never shown up front (true for
-everyone; the engine only reveals it via the post-hit `defense_tag` log line).
-The Thundersmith's edge is that he can *act* on what he learns.
+A correction from the landed world: **information is not the scarce good.**
+The battle panel reads a targeted foe's school/weak/resist out loud for
+everyone (`MobView.weak/resist`, both layouts), and every regular in a zone
+shares the zone theme. The original "no free information" probe dance is
+dead as designed. What stays scarce is the *answer*: having the right line
+crafted, carried, and chambered. The loop is provisioning, not spying.
 
-1. **Probe.** Each school fired reveals its result (weak / resisted / neutral),
-   reusing the existing tag machinery. Every probe round is a real combat round;
-   recon costs HP and shells. Sharp players binary-search schools; sloppy ones
-   empty a bandolier.
-2. **Fighting retreat.** Signature utility ability: a concussion blast that stuns
-   and withdraws cleanly (unlike flee's uncontrolled first-exit). Probe damage
-   persists on the mob (shared-world HP), so the return pass faces a dented foe.
-3. **Re-arm.** Swapping loaded cells from the carried bandolier is an
-   out-of-combat action, doable at the boss door. Crafting *new* cells requires a
-   craft station (forge in Embergate), so expeditions are provisioned in advance.
-4. **Execute.** Return, auto-chamber (below), shred.
+1. **Read the land.** The first engage in a new zone writes it into the
+   ledger. Mid-fight the traits line tells anyone; only the ledger remembers
+   it at the forge, forever. Walking a land once is still a real cost - a
+   survived trip, not a wiki lookup.
+2. **Provision.** Crafting new cells requires a craft station (forge in
+   Embergate), so expeditions are provisioned in advance. The ledger is the
+   shopping list: bandolier composition against the route ahead is the skill
+   expression. Swapping loaded cells from the carried bandolier stays an
+   out-of-combat action, doable at the boss door.
+3. **Fighting retreat.** Signature utility ability: a concussion blast that
+   stuns and withdraws cleanly (unlike flee's uncontrolled first-exit).
+   Dealt damage persists (shared-world HP), so the return pass faces a
+   dented foe. This is now chiefly the tool for **authored crowns**: since
+   the boss-weakness pass, a generated zone boss wears its zone's weakness
+   (the ledger already knows it), but the hand-authored crowns keep bespoke
+   profiles and hit hardest, so the first pull on one is still a read paid
+   in HP.
+4. **Execute.** Auto-chamber (below), shred.
 
-The loop self-balances: trash dies to anything, so the recon dance only activates
-on fights that matter.
+The loop self-balances: trash dies to anything, so provisioning discipline
+only pays where fights matter - and it is paid per bandolier, never once.
 
 ## 5. The Ledger
 
-Field notes, **keyed by zone, not by species.** Verified data model: resist/weak
-is per-zone in practice. Every generated region's regulars carry no profile at
-all (Frontier, Reaches, Kaelmyr, archipelago, lakes, Broceliande, Aelunor's 100
-creatures), the three dungeons and the three Wildbound biomes carry exactly one
-profile per zone, and only ~116 authored spawns vary individually. A per-species
-ledger over 426 regular foes would be almost entirely duplicate rows (the same
-clutter wall that got per-species titles removed); a zone-keyed ledger makes the
-first probe in a place a real "you've read this land" moment and shrinks the
-schema bump to a small persisted set of zone keys.
+Field notes, **keyed by zone, not by species** - and since the world pass
+this is the enforced data model, not a design bet: every generated zone's
+regulars share one `ZoneTheme` profile, guaranteed by
+`every_generated_regular_wears_its_zone_theme`. A zone key therefore
+captures every regular in the land. Bosses deliberately deviate and are
+**not** ledger rows: a crown is read the hard way, every character, every
+time.
+
+Given that the battle panel already reads a targeted foe's profile aloud,
+what the ledger buys is **distance**: mid-fight everyone knows; only he
+knows at the forge, before the march, with zero keypresses at the door. The
+ledger is §4's provisioning input and the auto-chamber key, not secret
+knowledge. Persisted as a small set of zone keys - still the only schema
+bump.
 
 **Auto-chamber (QoL):** on engage, if the zone is in the ledger and the
 counter-school is carried, it loads itself with one log line ("You know this
@@ -211,10 +237,23 @@ comparison.
 | Scrap shot (dry) | 280-300 | bottom three |
 
 The spread is the design contract: unambiguous #1 while fueled and informed,
-Druid's neighborhood while dry. Re-verify the same table at Lv55 before shipping;
-the multipliers are level-independent by construction, so drift there means a
-frame or roster bug, not a cell bug. If the fueled number lands above +25%,
-tighten the tier-5 multiplier or shots-per-cell, not the frame.
+Druid's neighborhood while dry.
+
+Two post-pass caveats on this table, both re-verified at ship time:
+
+- **The bar is now the oiled Ranger.** The 382 figure predates the oils; a
+  matched oil is worth ~+6.5%, so in exactly the zones where prepared
+  players live the bar is ~405. The stated gaps must hold against that, or
+  they silently shrink by a third.
+- **The top row's uptime is now standard, not a spike.** Every zone carries
+  a weakness and auto-chamber loads it in known land, so "known weakness
+  chambered" is his *sustained* state wherever the ledger reaches. Judge
+  the +15-20% ceiling as an hourly rate, not a lucky matchup.
+
+Re-verify the same table at Lv45 and Lv55 before shipping; the multipliers
+are level-independent by construction, so drift there means a frame or
+roster bug, not a cell bug. If the fueled number lands above +25%, tighten
+the tier-5 multiplier or shots-per-cell, not the frame.
 
 ## 10. Costs, as rates
 
@@ -226,7 +265,7 @@ Every cost is a recurring rate, never a one-time gate. Smithing ~50 is the
 | Smithing ~50 + masterwork materials | access to tier-5 cells, the ceiling |
 | Tier 2-3 upkeep | target ~10-15 min of gathering/smithing per hour of fueled combat |
 | Tier-5 upkeep | steep by design; rationed for bosses, not for grinding |
-| The recon fight, per zone | survive learning each land the hard way |
+| The first walk, per zone | survive reaching each land once to ledger it |
 | PvP | pure burn, no Scrapwright rebate |
 
 Scrapwright turns skill into margin: clean trash play runs a ~20% shell rebate,
@@ -237,8 +276,14 @@ dividend on knowledge.
 
 Cheap where it counts, reusing existing patterns (all verified present):
 
-- Loaded ammo: the `weapon_poison` transient pattern (`Some((school, mult_pct, shots)`-shaped),
-  no save state for the chambered cell; bandolier contents are inventory items.
+- Loaded ammo: its own transient field in the `weapon_coat` mold
+  (`Some((school, mult_pct, shots))`), separate from `weapon_coat` itself -
+  but **the gun never holds a coat**: using a poison or oil as a
+  Thundersmith is refused ("the shardgun's heat would cook it off").
+  Stacking a matched oil rider on top of a matched cell shot was too much
+  buff on the one class that needs none; oils stay the mundane martial's
+  lever, cells stay his, and the two never combine. No save state for the
+  chambered cell; bandolier contents are inventory items.
 - Cell application: the two auto-attack call sites (the combat round's mob strike
   and the pvp strike) swap `DamageType::Physical` for the chambered school and
   scale `attack()` by the cell's percent. Two call sites, one helper.
@@ -263,61 +308,59 @@ Cheap where it counts, reusing existing patterns (all verified present):
   notch-below rule.
 - Doorway advantage: one denied strike, or two vs non-boss. First nerf lever.
 - Scrapwright refund rate (1 shell per mob kill proposed, ~20% rebate).
-- Whether probe results are account-wide or per character (per character
+- Whether ledger entries are account-wide or per character (per character
   proposed; the ledger is the character's story).
+- Whether the counter-rack ships all six lines at once, or the
+  Shadow/Arcane/Poison lines (the lanes no oil covers) unlock deeper in the
+  Smithing climb - staging his exclusivity as a late reward.
+- Fueled uptime: with every zone weak to something, the top state is the
+  default in read land. If the sim says that runs hot, shots-per-cell is
+  the dial that prices uptime without touching the per-shot feel.
 
 ## 13. The world resist/weak pass (landed)
 
 Formerly a full handoff brief; the pass shipped 2026-08-20, together with the
 weapon oils (promoted from follow-up once it was clear placement alone left
 the seven Physical-locked classes a mathematically zero matchup game). **The
-spec now lives in `CONTEXT.md`, section "The world resist/weak pass"**: theme
+spec lives in `CONTEXT.md`, section "The world resist/weak pass"**: theme
 vocabulary and tables, the two Physical rules, census bands, the routed
-grind-rate budget, and the tests that are the contract. This section keeps
-only what it means for this class.
+grind-rate budget, and the tests that are the contract. Its consequences for
+this class are folded into the sections above (the census and the
+seven-school rack in §3, the provisioning loop in §4, the guaranteed ledger
+model in §5, the oiled bar and uptime caveats in §9, the coat exclusion in
+§11, the new knobs in §12). What remains here:
 
-### What the Thundersmith inherits
+### What the class inherits
 
-- **Real ledger data everywhere.** 126 themed zones; one profile per zone for
-  regulars is now test-enforced, so the zone-keyed Ledger (§5) can never be
-  wrong about a regular. Bosses keep authored profiles, so the ledger
-  rightly does not cover them: the §4 recon dance survives exclusively for
-  bosses, exactly where it should activate.
-- **The monopoly is fenced in code.** Oils are flat riders, never a
-  conversion of the auto's school, never a multiplier on `attack()`; both
-  levers remain reserved for the cells. Everyone else plays matchups now
-  (casters: rotations; martials: oils and geography); his edge stays
-  legible as degree, not kind.
-- **Boss walls are his signature moment by contract.** Physical resist now
-  exists only on bosses, everywhere - the one wall the gun uniquely walks
-  through.
-- **The seven-cell rack is his exclusive reach** (proposed): oils cover four
-  schools deliberately; Shadow/Arcane/Poison zone weaknesses (22/18/13
-  zones) have no martial answer. Cells covering all seven schools makes
-  "he industrializes matchups" a capability gap, not just a number gap.
+- **The monopoly is fenced in code, and the fence runs both ways.** Oils
+  are flat riders, never a conversion of the auto's school, never a
+  multiplier on `attack()`; both levers remain reserved for the cells. In
+  exchange he is the one class that cannot coat a weapon at all (§11).
+  Everyone else plays matchups now; his edge stays legible as degree, not
+  kind.
+- **Every boss carries a weakness** (`every_boss_carries_a_weakness`):
+  zone bosses inherit their zone's weak lane, authored crowns carry
+  bespoke ones. For him that means the rack always has a boss answer -
+  there is no fight in the game where a chambered counter-cell reads
+  "nothing", and the Shadow/Arcane/Poison boss lanes are answerable by
+  casters and him alone (oils cover only fire/frost/holy/lightning).
+- **Boss walls are his signature moment by contract - but never a group
+  tax.** Physical resist exists on exactly 14 bosses and zero regulars,
+  everywhere, test-enforced, and every one of those bosses guards an
+  optional prize or sits at the low band where a tier-0 oil already answers
+  the fight (the solo rule in CONTEXT.md, pinned by
+  `physical_walls_never_gate_the_long_road_past_the_treant`). An oiled
+  martial always clears the wall - slower, roughly two-thirds pace - so
+  the Thundersmith's edge here is comfort and speed, not access. Do not
+  "improve" his signature by adding Physical resists to road crowns.
 
-### Re-price at ship time
+### Verify at ship time
 
-The pass moved numbers this doc still states pre-pass:
-
-- **Top-state uptime.** §9's "known weakness chambered" (+15-20%) was
-  priced against a mostly-neutral world; now every zone has a weakness and
-  auto-chamber makes it the default in known land. Re-run the sim; if the
-  fueled edge lands high, the doc's own levers apply (tier-5 multiplier or
-  shots-per-cell, never the frame).
-- **The bar moved.** The Ranger benchmark (382/tick) predates oils; an
-  oiled Ranger in a matched zone is ~+6.5%. Re-anchor §9 against the oiled
-  Ranger or the stated gap silently shrinks by a third.
-- **§3's census paragraph is stale** (Physical 4th by resist count at
-  15/116): the world is now ~5,000 profiled regulars and boss-only Physical
-  resists. The "every Aelunor boss resists Physical" line still holds.
-- **§11's cost map** says the loaded cell reuses the `weapon_poison`
-  pattern; that field is now the one-slot `weapon_coat`, and the cell must
-  be a *separate* transient - a coat legitimately rides on top of a cell
-  shot (flat rider + multiplied shot, each in its lane).
-- **Extend the routed sim, don't exempt him.** Add a Thundersmith row where
-  "routed" means fueled-and-informed and assert his band explicitly:
-  prepared edge inside the §9 targets, dry state pinned to the bottom
-  third, no state that reaches the top row without per-fight spend. The
-  contract - OP only if prepared - becomes an assertion that fails the
-  build, not a sentence in this doc.
+- Re-run the §9 table at Lv45 and Lv55 with both §9 caveats applied (the
+  oiled-Ranger bar, top-row uptime as the sustained state). Levers if hot:
+  tier-5 multiplier, shots-per-cell, doorway advantage - never the frame.
+- Extend the routed world sim in `world_test.rs`, don't exempt him: add a
+  Thundersmith row where "routed" means fueled-and-informed, asserting the
+  prepared band inside the §9 targets, the dry state in the bottom third,
+  and no path to the top row without per-fight spend. The contract - OP
+  only if prepared - becomes an assertion that fails the build.

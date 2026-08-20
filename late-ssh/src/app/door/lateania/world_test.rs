@@ -2373,6 +2373,25 @@ fn no_regular_resists_physical_and_nothing_is_weak_to_physical() {
 }
 
 #[test]
+fn every_boss_carries_a_weakness() {
+    // Bosses are the fights players actually prepare for, so the prep
+    // mechanic must exist there: every boss in the world names a weakness
+    // (weak-forward: pure reward - an unprepared fighter loses nothing,
+    // a provisioned one is paid). Resists stay rare authored events.
+    let world = seed_world();
+    let neutral: Vec<&str> = world
+        .spawns
+        .iter()
+        .filter(|s| s.boss && s.profile.weak.is_none())
+        .map(|s| s.name)
+        .collect();
+    assert!(
+        neutral.is_empty(),
+        "bosses without a weakness: {neutral:?}"
+    );
+}
+
+#[test]
 fn the_school_census_stays_inside_its_declared_bands() {
     let regions = themed_regions();
     let total_zones: usize = regions.iter().map(|(_, t, _, _)| t.len()).sum();

@@ -6063,10 +6063,12 @@ fn extend_archipelago(
                 MobBehavior::Caster(school) => school,
                 _ => DamageType::Physical,
             };
+            // The boss wears the island's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = super::archipelago::ISLAND_THEMES[isle];
             let profile = if boss_mob {
-                DamageProfile::new(attack, None, None)
+                DamageProfile::new(attack, None, theme.weak())
             } else {
-                let theme = super::archipelago::ISLAND_THEMES[isle];
                 DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
@@ -7914,10 +7916,12 @@ fn extend_reaches(
                 MobBehavior::Caster(school) => school,
                 _ => DamageType::Physical,
             };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = REACHES_ZONE_THEMES[z];
             let profile = if boss_mob {
-                DamageProfile::new(attack, None, None)
+                DamageProfile::new(attack, None, theme.weak())
             } else {
-                let theme = REACHES_ZONE_THEMES[z];
                 DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
@@ -8548,10 +8552,12 @@ fn extend_kaelmyr(
                 MobBehavior::Caster(school) => school,
                 _ => DamageType::Physical,
             };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = KAELMYR_ZONE_THEMES[z];
             let profile = if boss_mob {
-                DamageProfile::new(attack, None, None)
+                DamageProfile::new(attack, None, theme.weak())
             } else {
-                let theme = KAELMYR_ZONE_THEMES[z];
                 DamageProfile::new(attack, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
@@ -9109,10 +9115,12 @@ fn extend_lakes(
                         11 + tier + depth / 2,
                     )
                 };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = LAKES_ZONE_THEMES[z];
             let profile = if boss_mob {
-                DamageProfile::new(DamageType::Physical, None, None)
+                DamageProfile::new(DamageType::Physical, None, theme.weak())
             } else {
-                let theme = LAKES_ZONE_THEMES[z];
                 DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
@@ -10034,10 +10042,12 @@ fn extend_broceliande(
                         15 + tier + depth / 2,
                     )
                 };
+            // The boss wears the zone's weakness but never its resist:
+            // prep is a pure reward on the fight players provision for.
+            let theme = BROCELIANDE_ZONE_THEMES[z];
             let profile = if boss_mob {
-                DamageProfile::new(DamageType::Physical, None, None)
+                DamageProfile::new(DamageType::Physical, None, theme.weak())
             } else {
-                let theme = BROCELIANDE_ZONE_THEMES[z];
                 DamageProfile::new(DamageType::Physical, theme.resist(), theme.weak())
             };
             spawns.push(MobSpawn {
@@ -11738,6 +11748,10 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                 }
                 if is_boss_room {
                     let ti = tier as i32;
+                    // The boss wears the zone's weakness but never its
+                    // resist: prep is a pure reward on the fight players
+                    // provision for.
+                    let theme = FRONTIER_ZONE_THEMES[z];
                     spawns.push(MobSpawn {
                         id: spawn_id,
                         name: boss,
@@ -11748,7 +11762,7 @@ fn extend_frontier(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>
                         respawn_secs: 600,
                         loot: super::items::frontier_loot(z),
                         boss: true,
-                        profile: DamageProfile::new(DamageType::Physical, None, None),
+                        profile: DamageProfile::new(DamageType::Physical, None, theme.weak()),
                     });
                     spawn_id += 1;
                 } else if idx.is_multiple_of(2) {
@@ -12818,7 +12832,9 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         130,
         true,
         &[1006, 1110, 1111, 1201, 1301],
-        DamageProfile::physical(),
+        // Living flesh: the cheapest coat in the game (a tier-0 poison
+        // vial) answers the game's first boss - the earliest prep lesson.
+        DamageProfile::new(DamageType::Physical, None, Some(DamageType::Poison)),
     );
 }
 
