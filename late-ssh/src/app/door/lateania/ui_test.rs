@@ -1024,3 +1024,73 @@ fn the_land_map_only_offers_the_scroll_key_when_it_overflows() {
         .unwrap_or_default();
     assert!(short.contains("[ ] scroll"), "{short}");
 }
+
+#[test]
+fn every_class_glows_the_ability_that_drives_its_attack() {
+    // The character sheet marks one attribute row as the class's key ability -
+    // the score that feeds `attack_bonus`. The mapping used to be a hand-kept
+    // list of the first five classes, so a Berserker (STR) or a Bard (CHA) read
+    // as if no attribute mattered to them at all.
+    use crate::app::door::lateania::classes::Class;
+    use ratatui::style::Modifier;
+
+    for class in Class::ALL {
+        let mut view = crate::app::door::lateania::svc::empty_player_view();
+        view.classed = true;
+        view.class_name = class.name().to_string();
+        view.class_key = class.as_key().to_string();
+
+        let labels: Vec<&str> = view.scores.rows().iter().map(|(l, _, _)| *l).collect();
+        let glowing: Vec<String> = super::character_panel(&view)
+            .iter()
+            .filter_map(|line| {
+                let label = line.spans.first()?;
+                let name = label.content.trim().to_string();
+                if !labels.contains(&name.as_str()) {
+                    return None;
+                }
+                label
+                    .style
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+                    .then_some(name)
+            })
+            .collect();
+
+        assert_eq!(
+            glowing,
+            vec![class.primary_score().label().to_string()],
+            "{} should glow exactly its key ability",
+            class.name()
+        );
+    }
+}
+
+#[test]
+fn every_class_wears_its_own_emblem_under_the_portrait() {
+    // Same stale-list bug as the key ability: the portrait emblem was a
+    // hand-kept map of ten class names, so the other seven callings stood under
+    // a nameless "Adventurer" bust. Each class also gets its own glyph - two
+    // callings sharing a mark makes the portrait say less than nothing.
+    use crate::app::door::lateania::classes::Class;
+
+    let mut seen: Vec<String> = Vec::new();
+    for class in Class::ALL {
+        let portrait =
+            super::composed_portrait(class.as_key(), &[0u8; 4], ratatui::style::Color::White);
+        let emblem = portrait.last().map(line_text).unwrap_or_default();
+        assert!(
+            emblem.contains(class.name()),
+            "{} stands under \"{}\"",
+            class.name(),
+            emblem.trim()
+        );
+        let glyph = emblem.trim().chars().next().expect("an emblem glyph");
+        assert!(
+            !seen.contains(&glyph.to_string()),
+            "{} reuses the {glyph} emblem",
+            class.name()
+        );
+        seen.push(glyph.to_string());
+    }
+}

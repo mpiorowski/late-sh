@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-20 (the world resist/weak pass: every generated zone now names a `damage::ZoneTheme`, its regulars wear the theme's resist/weak, and every boss in the world carries a weakness (zone bosses inherit the theme's weak but never its resist; authored crowns keep or gained hand-picked ones) - pinned by world_test invariants incl. a routed grind-rate budget and `every_boss_carries_a_weakness`; plus the four Alchemy weapon oils - `weapon_poison` generalized to the one-slot `weapon_coat`, oils are flat school riders on the auto that ride `seed_mob_dot`'s baked-in resist/weak multiplier; spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
+- Last updated: 2026-08-20 (class rendering now derives from the `Class` enum instead of hand-kept name lists: every calling glows its key ability on the sheet and the class-select screen, carries a class accent colour, and stands under its own portrait emblem, where twelve of seventeen used to render with no attribute highlighted and seven under a nameless "Adventurer" bust; pinned by `ui_test::every_class_glows_the_ability_that_drives_its_attack` and `every_class_wears_its_own_emblem_under_the_portrait`. Also recorded in §11: four of the six ability scores are read by nothing)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -561,11 +561,12 @@ Playable classes (17; the first five are the class-select `1-5` quick-pick):
 - Each of the five newcomers carries a full 1..=50 ability roster (ids 1700/1800/1900/2000/2100+) with a level-50 capstone and two archetype paths at `ARCHETYPE_LEVEL`. Progression reads as tiered: staged ability unlocks across the curve, the L10 archetype specialisation, and the shared five-level named milestones.
 
 Progression:
-- Level cap is `Class::MAX_LEVEL = 50`.
-- `xp_for_level` keeps early levels quick, then adds a much steeper post-level-8 term so midgame and Frontier progress target roughly week-scale casual play instead of a 1-2 sitting clear; `level_for_xp` caps at 50.
+- Level cap is `Class::MAX_LEVEL = 100`.
+- `xp_for_level` keeps early levels quick, then adds a much steeper post-level-8 term so midgame and Frontier progress target roughly week-scale casual play instead of a 1-2 sitting clear; `level_for_xp` caps at `MAX_LEVEL`.
 - `Class::stats_at(level)` computes HP/resource/attack/resource regen.
 - Ability scores are rolled before class selection and persist after class choice.
-- Constitution adjusts max HP by level; class primary score adjusts attack.
+- Constitution and the class's `primary_score` are the only two of the six scores wired to mechanics: CON adds max HP that grows with level (`AbilityScores::hp_bonus`), the primary score adds a flat attack modifier (`attack_bonus`). The other four are display only, see §11.
+- The sheet and the class-select screen glow the primary score's row in the class accent. Both the label (`ui::primary_label`) and the accent (`ui::class_accent`, `ui::class_emblem`) are matched exhaustively over `Class`, so a new calling breaks the build instead of rendering with no attribute highlighted and a nameless "Adventurer" bust.
 
 ### Abilities and damage
 
@@ -859,6 +860,7 @@ Put DB/service orchestration tests that cannot stay pure in adjacent `_test.rs` 
 - `view.occupants` includes other players in the room regardless of class; service follow selection only allows classed targets in the same room.
 - Boon perks apply on room entry and can spam log lines if movement loops through boon rooms.
 - Hunted game cooldowns are not persisted across process restart.
+- **Four of the six ability scores are dead weight.** Nothing outside `stats.rs` reads STR/DEX/INT/WIS/CHA unless that score happens to be the class's `primary_score`: a Berserker's INT, a Mage's CHA, a Monk's STR all decide nothing. Only CON (`hp_bonus`, level-scaled, the one score that matters to everyone) and the primary score (`attack_bonus`, a flat modifier of at most +-4, which is a rounding error against a late-game attack curve plus gear) touch a number a player feels. Class selection still rolls all six and offers `r` to reroll, so the screen promises a build decision the game does not honour. Fixing it means either giving the other four real hooks (DEX to dodge/crit, INT/WIS to resource pool or regen, CHA to prices or taming, STR to carry weight or melee riders) or cutting the roll down to the scores that are real.
 - World content is authored as Rust data. A future data-file loader should preserve the existing `World`, `Room`, `MobSpawn`, `Feature`, and `CritterSpawn` shapes.
 - **The authored core cannot level a player through itself.** Its 31 spawns hold 6,276 xp in total (about Lv11) while the Archdemon at its end wants roughly Lv40 on bare class stats, so players are pushed into the ungated side countries to level and return over-levelled. The consequence is that the run up to the Obsidian Throne plays as trivial even though its trash is correctly tuned at ~1/3 of its boss, matching every other boss on that ladder. Fixing this means raising the core's xp budget (or its late trash), not re-tuning the boss: the Archdemon's damage was already lifted 48 -> 58 to match the ladder's own ~1.6x boss-to-trash damage ratio, which he alone was missing at 1.33x. See §7 for the whole shape.
 - **No quest content bridges Lv15-30, Lv35-52, or anything past Lv78**, and none of the five side countries has a single quest, despite Aelunor and Broceliande being the de facto route from the authored core to the Archdemon. Boards exist only in the three capitals and at the Kaelmyr ash-cairn. This is the emptiest part of the game for a new player and the most likely place to lose them.
