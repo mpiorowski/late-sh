@@ -3153,6 +3153,40 @@ struct MobInstance {
     summon_cooldown: u8,
 }
 
+/// Where a damage-over-time stack came from. The two behave differently on
+/// re-application and the difference is load-bearing: an ability DoT is one
+/// wound per cast and stacks, because a cooldown rations how often it can be
+/// cast. A weapon coat re-seeds on *every* landed strike, at the same cadence
+/// the DoT itself ticks, so stacking it would multiply the coat's rider by its
+/// duration (a 3-tick DoT reseeded every tick pays three times over). A coat
+/// therefore keeps exactly one stack per attacker and refreshes it in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DotSource {
+    Ability,
+    Coat,
+}
+
+/// One live damage-over-time stack on a mob. `per_tick` already has the
+/// target's resist/weak baked in (see `seed_mob_dot`).
+#[derive(Clone, Copy, Debug)]
+struct MobDot {
+    owner: Uuid,
+    per_tick: i32,
+    remaining: u8,
+    source: DotSource,
+}
+
+/// One live damage-over-time stack on a player. Unlike `MobDot` this carries
+/// its school live, since every tick re-applies the victim's armor.
+#[derive(Clone, Copy, Debug)]
+struct PvpDot {
+    owner: Uuid,
+    per_tick: i32,
+    school: DamageType,
+    remaining: u8,
+    source: DotSource,
+}
+
 struct WorldState {
     room_id: Uuid,
     world: World,
@@ -3163,15 +3197,15 @@ struct WorldState {
     mobs: HashMap<u32, MobInstance>,
     /// mob id -> stun ticks remaining.
     mob_stuns: HashMap<u32, u8>,
-    /// mob id -> active damage-over-time stacks (owner, per-tick, remaining).
-    mob_dots: HashMap<u32, Vec<(Uuid, i32, u8)>>,
+    /// mob id -> active damage-over-time stacks.
+    mob_dots: HashMap<u32, Vec<MobDot>>,
     /// Pvp equivalents of `mob_stuns`/`mob_dots`, keyed by the victim's user
     /// id instead of a mob id (see `strike_pvp_target`/`seed_pvp_dot`). Each
     /// dot stack also carries its `DamageType`, since (unlike a mob's baked-in
     /// resist/weak) a player's `strike_player` needs the real school on every
     /// tick to apply the right armor reduction.
     pvp_stuns: HashMap<Uuid, u8>,
-    pvp_dots: HashMap<Uuid, Vec<(Uuid, i32, DamageType, u8)>>,
+    pvp_dots: HashMap<Uuid, Vec<PvpDot>>,
     /// Kills accumulated during a tick, drained for the activity feed.
     pending_kills: Vec<KillOutcome>,
     generation: u64,
@@ -3216,21 +3250,47 @@ const TAME_COOLDOWN: Duration = Duration::from_secs(30);
 /// self-limiting (only co-located players hear it); a global channel needs a
 /// brake or one voice can flood every log in Lateania.
 const BROADCAST_COOLDOWN: Duration = Duration::from_secs(10);
+/// The auto-attack bar a tier-`t` coat is measured against: `attack()` for a
+/// character at that tier's crafting gate wearing that tier's crafted weapon.
+/// Measured from the engine, not guessed - `the_attack_bar_still_matches_a_real
+/// _character` rebuilds a real player at each gate and pins every entry. The
+/// coat curves below and the world pass's grind-rate budget are both written as
+/// a share of this, so neither can drift away from what a fight actually looks
+/// like (they once did: the oil rider was certified at 15% of output while
+/// really running three to six times that).
+#[cfg(test)]
+pub(super) const TIER_ATTACK_BAR: [i32; 6] = [12, 31, 52, 77, 106, 148];
+/// Character level at each crafting tier's gate, the level `TIER_ATTACK_BAR` is
+/// measured at (mirrors `crafting::LEVEL_REQ`).
+#[cfg(test)]
+pub(super) const TIER_GATE_LEVEL: [i32; 6] = [1, 8, 16, 26, 38, 55];
 /// Poison damage per tick applied by a coated weapon, by poison tier (0..6).
-/// Voidvenom (tier 5) continues the curve; it used to silently clamp to the
-/// tier-4 value despite costing 350g.
-const POISON_PER_TICK: [i32; 6] = [4, 8, 14, 22, 34, 50];
+/// The burst half of the coat family: about 30% of the auto bar but only
+/// `POISON_CHARGES` strikes of it, so a vial is roughly three quarters of an
+/// oil's damage packed into half the window. Cheap, and the right answer when
+/// the fight will be over quickly.
+pub(super) const POISON_PER_TICK: [i32; 6] = [3, 9, 15, 23, 32, 45];
 /// Strikes a single weapon-coating lasts before the poison is spent.
-const POISON_CHARGES: u8 = 5;
-/// Ticks each coated strike (poison or oil) festers in the foe.
-const POISON_DOT_TICKS: u8 = 3;
-/// Oil damage per tick, by oil tier (0..6). Sized half again above the poison
-/// curve: the oil is the deliberate zone-prep coat of the world resist/weak
-/// pass, the poison the cheap burst vial anyone can mix.
-const OIL_PER_TICK: [i32; 6] = [6, 12, 21, 33, 51, 76];
+pub(super) const POISON_CHARGES: u8 = 5;
+/// Ticks each coated strike (poison or oil) festers in the foe. A coat re-seeds
+/// every landed strike and refreshes rather than stacks (see `DotSource`), so
+/// this is the wound's lifetime after the last swing, not a multiplier on it.
+pub(super) const POISON_DOT_TICKS: u8 = 3;
+/// Oil damage per tick, by oil tier (0..6). The sustain half: about a fifth of
+/// the auto bar, held for `OIL_CHARGES` strikes, which is the whole of a boss
+/// fight. Sized so a coated character gains roughly 15% of total output, the
+/// figure the world pass's routed budget is written against.
+pub(super) const OIL_PER_TICK: [i32; 6] = [2, 6, 10, 15, 21, 30];
 /// Strikes a single oil coating lasts. Several fights' worth, so choosing an
 /// oil is a route decision made at the zone gate, not per-fight busywork.
-const OIL_CHARGES: u8 = 12;
+pub(super) const OIL_CHARGES: u8 = 12;
+/// Share of a character's output that comes from the Physical auto-attack at
+/// band gear; the rest is abilities in the class's school mix. The routed
+/// grind-rate budget in `world_test.rs` splits output this way, and the coat
+/// rider converts through it (a rider worth 20% of the auto is worth
+/// `0.20 * AUTO_SHARE` of total output).
+#[cfg(test)]
+pub(super) const AUTO_SHARE: f64 = 0.75;
 /// Ticks a cooked meal's well-fed regen lasts.
 const WELL_FED_TICKS: u8 = 8;
 
@@ -3523,7 +3583,7 @@ impl WorldState {
         self.players.remove(&user_id);
         let before: usize = self.mob_dots.values().map(Vec::len).sum();
         for stacks in self.mob_dots.values_mut() {
-            stacks.retain(|(owner, _, _)| *owner != user_id);
+            stacks.retain(|dot| dot.owner != user_id);
         }
         self.mob_dots.retain(|_, stacks| !stacks.is_empty());
         let after: usize = self.mob_dots.values().map(Vec::len).sum();
@@ -3859,16 +3919,15 @@ impl WorldState {
             .mob_dots
             .iter()
             .flat_map(|(mob_id, stacks)| {
-                stacks
-                    .iter()
-                    .filter_map(|(owner, damage, remaining_ticks)| {
-                        (*remaining_ticks > 0).then_some(SavedMobDot {
-                            mob_id: *mob_id,
-                            owner: *owner,
-                            damage: *damage,
-                            remaining_ticks: *remaining_ticks,
-                        })
+                stacks.iter().filter_map(|dot| {
+                    (dot.remaining > 0).then_some(SavedMobDot {
+                        mob_id: *mob_id,
+                        owner: dot.owner,
+                        damage: dot.per_tick,
+                        remaining_ticks: dot.remaining,
+                        from_coat: dot.source == DotSource::Coat,
                     })
+                })
             })
             .collect::<Vec<_>>();
         mob_dots.sort_by_key(|dot| (dot.mob_id, dot.owner));
@@ -3908,11 +3967,16 @@ impl WorldState {
         self.mob_dots.clear();
         for dot in &saved.mob_dots {
             if dot.remaining_ticks > 0 && self.mobs.contains_key(&dot.mob_id) {
-                self.mob_dots.entry(dot.mob_id).or_default().push((
-                    dot.owner,
-                    dot.damage,
-                    dot.remaining_ticks,
-                ));
+                self.mob_dots.entry(dot.mob_id).or_default().push(MobDot {
+                    owner: dot.owner,
+                    per_tick: dot.damage,
+                    remaining: dot.remaining_ticks,
+                    source: if dot.from_coat {
+                        DotSource::Coat
+                    } else {
+                        DotSource::Ability
+                    },
+                });
             }
         }
 
@@ -5988,6 +6052,7 @@ impl WorldState {
                         tick,
                         ability.damage_type,
                         ability.duration,
+                        DotSource::Ability,
                         ability.name,
                     );
                 } else {
@@ -5996,6 +6061,7 @@ impl WorldState {
                         tick,
                         ability.damage_type,
                         ability.duration,
+                        DotSource::Ability,
                         ability.name,
                     );
                 }
@@ -6123,6 +6189,7 @@ impl WorldState {
         per_tick: i32,
         dtype: DamageType,
         duration: u8,
+        origin: DotSource,
         source: &str,
     ) {
         let Some(mob_id) = self.players.get(&user_id).and_then(|p| p.target) else {
@@ -6134,16 +6201,40 @@ impl WorldState {
             .get(&mob_id)
             .map(|m| m.spawn.profile.apply(per_tick, dtype).0)
             .unwrap_or(per_tick);
-        self.mob_dots
-            .entry(mob_id)
-            .or_default()
-            .push((user_id, scaled, duration));
+        let stacks = self.mob_dots.entry(mob_id).or_default();
+        // A coat refreshes its own single wound; an ability opens a new one.
+        let existing = match origin {
+            DotSource::Coat => stacks
+                .iter_mut()
+                .find(|d| d.owner == user_id && d.source == DotSource::Coat),
+            DotSource::Ability => None,
+        };
+        let opened = match existing {
+            Some(dot) => {
+                dot.per_tick = scaled;
+                dot.remaining = duration;
+                false
+            }
+            None => {
+                stacks.push(MobDot {
+                    owner: user_id,
+                    per_tick: scaled,
+                    remaining: duration,
+                    source: origin,
+                });
+                true
+            }
+        };
         self.mark_world_dirty();
-        self.log_to(
-            user_id,
-            LogKind::Combat,
-            format!("{source} festers in the foe ({} damage).", dtype.label()),
-        );
+        // Only the wound opening is worth a line. A coat re-seeds every swing,
+        // so logging refreshes would bury the fight in its own upkeep.
+        if opened {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{source} festers in the foe ({} damage).", dtype.label()),
+            );
+        }
         self.dirty = true;
     }
 
@@ -6158,20 +6249,45 @@ impl WorldState {
         per_tick: i32,
         dtype: DamageType,
         duration: u8,
+        origin: DotSource,
         source: &str,
     ) {
         let Some(victim_id) = self.players.get(&user_id).and_then(|p| p.pvp_target) else {
             return;
         };
-        self.pvp_dots
-            .entry(victim_id)
-            .or_default()
-            .push((user_id, per_tick, dtype, duration));
-        self.log_to(
-            user_id,
-            LogKind::Combat,
-            format!("{source} festers in your rival ({} damage).", dtype.label()),
-        );
+        let stacks = self.pvp_dots.entry(victim_id).or_default();
+        // Same one-wound-per-coat rule as `seed_mob_dot`.
+        let existing = match origin {
+            DotSource::Coat => stacks
+                .iter_mut()
+                .find(|d| d.owner == user_id && d.source == DotSource::Coat),
+            DotSource::Ability => None,
+        };
+        let opened = match existing {
+            Some(dot) => {
+                dot.per_tick = per_tick;
+                dot.school = dtype;
+                dot.remaining = duration;
+                false
+            }
+            None => {
+                stacks.push(PvpDot {
+                    owner: user_id,
+                    per_tick,
+                    school: dtype,
+                    remaining: duration,
+                    source: origin,
+                });
+                true
+            }
+        };
+        if opened {
+            self.log_to(
+                user_id,
+                LogKind::Combat,
+                format!("{source} festers in your rival ({} damage).", dtype.label()),
+            );
+        }
         self.dirty = true;
     }
 
@@ -6289,6 +6405,7 @@ impl WorldState {
                         per_tick,
                         DamageType::Physical,
                         3,
+                        DotSource::Ability,
                         &format!("Your {pet_name}'s Rend"),
                     );
                 }
@@ -7180,14 +7297,14 @@ impl WorldState {
             let mut total = 0;
             let mut owner = None;
             if let Some(stacks) = self.mob_dots.get_mut(&mob_id) {
-                for (uid, per, rem) in stacks.iter_mut() {
-                    if *rem > 0 {
-                        total += *per;
-                        *rem -= 1;
-                        owner = Some(*uid);
+                for dot in stacks.iter_mut() {
+                    if dot.remaining > 0 {
+                        total += dot.per_tick;
+                        dot.remaining -= 1;
+                        owner = Some(dot.owner);
                     }
                 }
-                stacks.retain(|(_, _, rem)| *rem > 0);
+                stacks.retain(|dot| dot.remaining > 0);
                 if stacks.is_empty() {
                     self.mob_dots.remove(&mob_id);
                 }
@@ -7399,7 +7516,14 @@ impl WorldState {
             // current mob).
             let coat = self.players.get(&user_id).and_then(|p| p.weapon_coat);
             if let Some((school, per_tick, charges)) = coat {
-                self.seed_mob_dot(user_id, per_tick, school, POISON_DOT_TICKS, coat_source(school));
+                self.seed_mob_dot(
+                    user_id,
+                    per_tick,
+                    school,
+                    POISON_DOT_TICKS,
+                    DotSource::Coat,
+                    coat_source(school),
+                );
                 if let Some(p) = self.players.get_mut(&user_id) {
                     let left = charges.saturating_sub(1);
                     p.weapon_coat = (left > 0).then_some((school, per_tick, left));
@@ -7598,6 +7722,7 @@ impl WorldState {
                     per_tick,
                     school,
                     POISON_DOT_TICKS,
+                    DotSource::Coat,
                     coat_source(school),
                 );
                 if let Some(p) = self.players.get_mut(&attacker_id) {
@@ -7674,13 +7799,13 @@ impl WorldState {
         for victim_id in pvp_dot_victims {
             let mut ticks: Vec<(Uuid, i32, DamageType)> = Vec::new();
             if let Some(stacks) = self.pvp_dots.get_mut(&victim_id) {
-                for (attacker_id, per, dtype, rem) in stacks.iter_mut() {
-                    if *rem > 0 {
-                        ticks.push((*attacker_id, *per, *dtype));
-                        *rem -= 1;
+                for dot in stacks.iter_mut() {
+                    if dot.remaining > 0 {
+                        ticks.push((dot.owner, dot.per_tick, dot.school));
+                        dot.remaining -= 1;
                     }
                 }
-                stacks.retain(|(_, _, _, rem)| *rem > 0);
+                stacks.retain(|dot| dot.remaining > 0);
                 if stacks.is_empty() {
                     self.pvp_dots.remove(&victim_id);
                 }
@@ -8636,6 +8761,7 @@ impl WorldState {
                         per_tick,
                         DamageType::Physical,
                         3,
+                        DotSource::Ability,
                         &format!("Your {pet_name}'s Rend"),
                     );
                 }

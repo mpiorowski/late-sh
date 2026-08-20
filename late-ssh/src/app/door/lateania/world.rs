@@ -7461,7 +7461,8 @@ pub fn is_reaches_room(id: RoomId) -> bool {
 #[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Reaches zone, in `REACHES_ZONES_DATA` order. Regulars inherit the theme's
-/// profile; zone bosses keep their own.
+/// profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
 const REACHES_ZONE_THEMES: [ZoneTheme; REACHES_ZONES] = [
     ZoneTheme::Tidal,     // Saltmarsh Shallows
     ZoneTheme::Tidal,     // Wreckers' Coast
@@ -8040,8 +8041,10 @@ pub fn is_kaelmyr_room(id: RoomId) -> bool {
 #[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Kaelmyr zone, in `KAELMYR_ZONES_DATA` order. Regulars inherit the theme's
-/// profile; zone bosses keep their own. The burnt continent leans Frost-weak
-/// on purpose: fear of the cold is the land's through-line.
+/// profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+/// The burnt continent leans Frost-weak on purpose: fear of the cold is the
+/// land's through-line.
 const KAELMYR_ZONE_THEMES: [ZoneTheme; KAELMYR_ZONES] = [
     ZoneTheme::Sunscorched, // Cinderfall Shore
     ZoneTheme::Sunscorched, // Emberkin Terraces
@@ -8686,7 +8689,8 @@ pub fn is_lakes_room(id: RoomId) -> bool {
 #[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Sunderlakes zone, in `LAKES_ZONES_DATA` order. Regulars inherit the
-/// theme's profile; zone notables keep their own.
+/// theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
 const LAKES_ZONE_THEMES: [ZoneTheme; LAKES_ZONES] = [
     ZoneTheme::Tidal,     // Anglers' Dock
     ZoneTheme::Beastwild, // Reed Labyrinth
@@ -9485,8 +9489,10 @@ pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
 #[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Broceliande zone, in `BROCELIANDE_ZONES_DATA` order. Regulars inherit the
-/// theme's profile; zone notables keep their own. The Greenwood leans
-/// Fire-weak on purpose: burning the wood is the answer the country teaches.
+/// theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
+/// The Greenwood leans Fire-weak on purpose: burning the wood is the answer
+/// the country teaches.
 const BROCELIANDE_ZONE_THEMES: [ZoneTheme; BROCELIANDE_ZONES] = [
     ZoneTheme::Beastwild, // Woodward's Holt
     ZoneTheme::Verdant,   // Oakheart Grove
@@ -10192,10 +10198,11 @@ const AELUNOR_CREATURES: [&str; 20] = [
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Aelunor glade, in `AELUNOR_ZONES_DATA` order. Regulars inherit the theme's
 /// profile whatever affix they roll (the affix buys stats and loot, not a
-/// different school game); zone bosses keep their authored profile.
+/// different school game); the glade bosses keep their own authored profile
+/// (Shadow, resisting Physical, weak to Holy - the region's own school game).
 const AELUNOR_ZONE_THEMES: [ZoneTheme; AELUNOR_ZONES] = [
     ZoneTheme::Verdant,   // Silverleaf Eaves
-    ZoneTheme::Resonant,  // the Whispering Boughs
+    ZoneTheme::Haunted,   // the Whispering Boughs
     ZoneTheme::Verdant,   // Mossheart Glade
     ZoneTheme::Fae,       // the Sunfall Canopy
     ZoneTheme::Beastwild, // Thistledown Hollow
@@ -11424,7 +11431,8 @@ fn wildbound_named(creature: &str, tier: usize) -> &'static str {
 #[allow(clippy::type_complexity)]
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
 /// Frontier zone, in `FRONTIER_ZONES_DATA` order, derived from the zone's
-/// flavor. Regulars inherit the theme's profile; zone bosses keep their own.
+/// flavor. Regulars inherit the theme's profile; the zone boss wears the theme's weakness but never its resist
+/// (prep is a pure reward on the fight players provision for).
 const FRONTIER_ZONE_THEMES: [ZoneTheme; FRONTIER_ZONES] = [
     ZoneTheme::Ashen,       // Ashen Wastes
     ZoneTheme::Tidal,       // Sunken Fens

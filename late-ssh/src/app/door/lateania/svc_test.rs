@@ -380,6 +380,122 @@ fn an_oil_coats_the_weapon_with_its_school_and_replaces_the_last_coat() {
 }
 
 #[test]
+fn the_attack_bar_still_matches_a_real_character() {
+    // TIER_ATTACK_BAR is the yardstick the coat curves and the world pass's
+    // grind-rate budget are both written against, so it has to be measured
+    // rather than remembered: rebuild a real character at each crafting gate,
+    // wearing that tier's crafted weapon, and ask the engine what it swings for.
+    for t in 0..6usize {
+        let lvl = TIER_GATE_LEVEL[t];
+        let mut s = world();
+        s.join(uid(1));
+        s.choose_class(uid(1), Class::Warrior);
+        let p = s.players.get_mut(&uid(1)).unwrap();
+        p.level = lvl;
+        p.base_attack = Class::Warrior.stats_at(lvl).attack;
+        // Ability scores are rolled 4d6-drop-lowest at character creation, so
+        // the bar is measured at the flat 10s (a +0 modifier). A yardstick that
+        // moved with the dice would not be a yardstick.
+        p.scores = super::super::stats::AbilityScores::default();
+        p.equipped
+            .insert(Slot::Weapon, super::super::items::smith_weapon_id(t as u32));
+        assert_eq!(
+            p.attack(),
+            TIER_ATTACK_BAR[t],
+            "tier {t} (level {lvl}): the bar moved, so every coat share moved with it"
+        );
+    }
+}
+
+#[test]
+fn the_coat_curves_stay_inside_their_share_of_the_bar() {
+    // The balance contract for weapon coats, in the only terms that mean
+    // anything: what fraction of a real swing the rider is worth. An oil
+    // sustains about a fifth of the auto for a whole fight; a poison bursts
+    // about a third of it for a handful of strikes. Both are held to a band,
+    // and both are held to it at *every* tier, so the curves can never quietly
+    // outgrow the attack curve the way they did before.
+    for t in 0..6usize {
+        let bar = TIER_ATTACK_BAR[t] as f64;
+        let oil = OIL_PER_TICK[t] as f64 / bar;
+        let poison = POISON_PER_TICK[t] as f64 / bar;
+        assert!(
+            (0.15..=0.22).contains(&oil),
+            "tier {t}: oil rider is {oil:.3} of the bar, outside the sustain band"
+        );
+        assert!(
+            (0.24..=0.32).contains(&poison),
+            "tier {t}: poison rider is {poison:.3} of the bar, outside the burst band"
+        );
+        assert!(
+            POISON_PER_TICK[t] > OIL_PER_TICK[t],
+            "tier {t}: poison must hit harder per tick than oil, or it is dead content"
+        );
+    }
+    // And the shape that keeps them from being the same item: the poison
+    // bursts, the oil lasts. A coat wound is live for its charges plus the
+    // trailing POISON_DOT_TICKS after the final swing.
+    let ticks = |charges: u8| (charges + POISON_DOT_TICKS - 1) as f64;
+    let oil_total = ticks(OIL_CHARGES) * OIL_PER_TICK[5] as f64;
+    let poison_total = ticks(POISON_CHARGES) * POISON_PER_TICK[5] as f64;
+    assert!(
+        poison_total < oil_total,
+        "the cheap vial must not out-total the prepared coat"
+    );
+    assert!(
+        poison_total / oil_total > 0.6,
+        "but it must stay a real alternative, not a strictly worse one"
+    );
+}
+
+#[test]
+fn a_coat_keeps_one_refreshing_wound_however_many_swings_land() {
+    // A coat re-seeds on every landed strike, at the very cadence its DoT
+    // ticks. If each strike opened its own wound, POISON_DOT_TICKS of them
+    // would be live at once and the rider would be paid three times over -
+    // which is not the bar the grind-rate budget is written against. One
+    // wound per attacker, refreshed, is the contract.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    // A neutral foe: `engaged_with` grabs whichever mob the map hands over
+    // first, and this test is about how many wounds a coat opens, not about
+    // what the foe's profile does to the number on each one.
+    if let Some(m) = s.mobs.get_mut(&mob_id) {
+        m.spawn.profile = DamageProfile::new(DamageType::Physical, None, None);
+    }
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    for _ in 0..5 {
+        s.tick();
+    }
+    let stacks = s.mob_dots.get(&mob_id).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(stacks.len(), 1, "five landed swings, one coat wound");
+    assert_eq!(stacks[0].per_tick, 10, "ticking for the rider exactly once");
+    let view = s.snapshot().players[&uid(1)].clone();
+    let foe = view
+        .mobs
+        .iter()
+        .find(|m| m.id == mob_id)
+        .expect("the foe is on the panel");
+    assert_eq!(
+        foe.dot_stacks, 1,
+        "and the panel shows one wound, not a growing pile"
+    );
+}
+
+#[test]
+fn ability_dots_still_stack_on_top_of_a_coat() {
+    // The other half of the rule: an ability DoT is one wound per cast and
+    // keeps stacking (its cooldown is what rations it), and it stacks
+    // alongside the coat's single wound rather than refreshing it.
+    let (mut s, mob_id) = engaged_with(MobBehavior::Brute);
+    s.players.get_mut(&uid(1)).unwrap().weapon_coat = Some((DamageType::Fire, 10, OIL_CHARGES));
+    s.tick();
+    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
+    s.seed_mob_dot(uid(1), 7, DamageType::Poison, 3, DotSource::Ability, "Venom");
+    let stacks = s.mob_dots.get(&mob_id).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(stacks.len(), 3, "one coat wound plus two ability wounds");
+}
+
+#[test]
 fn an_oiled_strike_rides_the_zone_profile() {
     // Against a foe weak to Fire, a fire oil's DoT seeds at 1.5x per tick;
     // against one that resists it, at half. The multiplier is baked in by
@@ -394,7 +510,7 @@ fn an_oiled_strike_rides_the_zone_profile() {
         .mob_dots
         .get(&mob_id)
         .and_then(|d| d.first())
-        .map(|(_, per_tick, _)| *per_tick);
+        .map(|dot| dot.per_tick);
     assert_eq!(seeded, Some(15), "weak to fire: 10 per tick seeds as 15");
 }
 
@@ -4235,8 +4351,12 @@ fn the_top_poison_tier_is_no_longer_a_clone_of_the_fourth() {
     s.use_item(uid(1), vial);
     assert_eq!(
         s.players[&uid(1)].weapon_coat,
-        Some((DamageType::Poison, 50, POISON_CHARGES)),
-        "tier 5 continues the per-tick curve past tier 4's 34"
+        Some((DamageType::Poison, POISON_PER_TICK[5], POISON_CHARGES)),
+        "tier 5 continues the per-tick curve instead of clamping to tier 4's"
+    );
+    assert!(
+        POISON_PER_TICK[5] > POISON_PER_TICK[4],
+        "and the curve really does keep climbing at the top"
     );
 }
 
@@ -4270,8 +4390,8 @@ fn a_coated_weapon_works_in_a_duel_too() {
     assert!(
         s.pvp_dots
             .get(&uid(2))
-            .is_some_and(|d| d.iter().any(|(owner, per_tick, dtype, _)| {
-                *owner == uid(1) && *per_tick == 10 && *dtype == DamageType::Fire
+            .is_some_and(|d| d.iter().any(|dot| {
+                dot.owner == uid(1) && dot.per_tick == 10 && dot.school == DamageType::Fire
             })),
         "the landed duel swing seeds the coat's school DoT on the rival"
     );
@@ -4280,4 +4400,29 @@ fn a_coated_weapon_works_in_a_duel_too() {
         Some(OIL_CHARGES - 1),
         "the duel swing spends one coat charge"
     );
+    // And the one-wound rule holds in a duel too. It matters more here than
+    // against a mob: a pvp dot is *not* pre-scaled, so each tick is charged
+    // against the victim's armor live, and a stacking coat would have made a
+    // 12-charge vial worth a third of an endgame duel all by itself.
+    // Both duellists need the hit points to still be trading blows five
+    // swings in, or the wound count below only proves someone died.
+    for id in [uid(1), uid(2)] {
+        let p = s.players.get_mut(&id).unwrap();
+        p.base_max_hp = 4000;
+        p.hp = p.max_hp();
+    }
+    for _ in 0..4 {
+        s.tick();
+    }
+    assert!(
+        s.players[&uid(1)].pvp_target == Some(uid(2)),
+        "the duel is still running"
+    );
+    let stacks = s.pvp_dots.get(&uid(2)).map(Vec::as_slice).unwrap_or(&[]);
+    assert_eq!(
+        stacks.iter().filter(|d| d.owner == uid(1)).count(),
+        1,
+        "five landed duel swings, one coat wound"
+    );
 }
+

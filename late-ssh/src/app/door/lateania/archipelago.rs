@@ -55,8 +55,9 @@ pub const ARCH_SEED: u64 = 0x15_1A9D_5EED_u64;
 pub const ISLAND_COUNT: usize = ISLANDS.len();
 
 /// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
-/// island, in `ISLANDS` order. Regulars inherit the theme's profile; island
-/// bosses keep their own.
+/// island, in `ISLANDS` order. Regulars inherit the theme's profile; the
+/// island boss wears the theme's weakness but never its resist (prep is a
+/// pure reward on the fight players provision for).
 pub const ISLAND_THEMES: [ZoneTheme; ISLAND_COUNT] = [
     ZoneTheme::Crystal,   // Isle of Glass Sands
     ZoneTheme::Tidal,     // Coral Crown Atoll

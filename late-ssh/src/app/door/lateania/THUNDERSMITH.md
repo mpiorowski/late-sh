@@ -87,11 +87,12 @@ the gear curve instead, so tier-5 cells matter as much at the top as in the band
   the glass countries) against 6 Storm-zone resists. The brand school is
   also the best default cell, which keeps storm affinity honest.
 - **The rack covers all seven non-Physical schools, and that is the point.**
-  Oils deliberately cover four (fire/frost/holy/lightning); the Shadow,
-  Arcane, and Poison lanes (22/18/13 themed zones) have no martial answer
-  but his. His counter-lines are also multipliers where oils are flat
-  riders. Together that is the capability gap that makes "everyone plays
-  matchups, he industrializes them" literal rather than rhetorical.
+  Oils deliberately cover four (fire/frost/holy/lightning) and the poison
+  vial owns the fifth, which leaves **Shadow and Arcane** - 22 and 17 of the
+  126 themed zones, and every foe in them - with no martial answer but his.
+  His counter-lines are also multipliers where coats are flat riders.
+  Together that is the capability gap that makes "everyone plays matchups,
+  he industrializes them" literal rather than rhetorical.
 
 ## 4. The loop (provision, march, execute)
 
@@ -129,10 +130,12 @@ only pays where fights matter - and it is paid per bandolier, never once.
 Field notes, **keyed by zone, not by species** - and since the world pass
 this is the enforced data model, not a design bet: every generated zone's
 regulars share one `ZoneTheme` profile, guaranteed by
-`every_generated_regular_wears_its_zone_theme`. A zone key therefore
-captures every regular in the land. Bosses deliberately deviate and are
-**not** ledger rows: a crown is read the hard way, every character, every
-time.
+`every_generated_zone_spawn_wears_its_zone_theme`. A zone key therefore
+captures every regular in the land, and since the boss-weakness pass it
+captures the zone boss's weakness too (same test: a zone boss wears the
+theme's weak and no resist). The **authored crowns** are the deliberate
+deviation and are **not** ledger rows: a crown is read the hard way, every
+character, every time.
 
 Given that the battle panel already reads a targeted foe's profile aloud,
 what the ledger buys is **distance**: mid-fight everyone knows; only he
@@ -311,8 +314,8 @@ Cheap where it counts, reusing existing patterns (all verified present):
 - Whether ledger entries are account-wide or per character (per character
   proposed; the ledger is the character's story).
 - Whether the counter-rack ships all six lines at once, or the
-  Shadow/Arcane/Poison lines (the lanes no oil covers) unlock deeper in the
-  Smithing climb - staging his exclusivity as a late reward.
+  Shadow/Arcane lines (the two lanes no coat covers at all) unlock deeper
+  in the Smithing climb - staging his exclusivity as a late reward.
 - Fueled uptime: with every zone weak to something, the top state is the
   default in read land. If the sim says that runs hot, shots-per-cell is
   the dial that prices uptime without touching the per-shot feel.
@@ -342,8 +345,8 @@ model in §5, the oiled bar and uptime caveats in §9, the coat exclusion in
   zone bosses inherit their zone's weak lane, authored crowns carry
   bespoke ones. For him that means the rack always has a boss answer -
   there is no fight in the game where a chambered counter-cell reads
-  "nothing", and the Shadow/Arcane/Poison boss lanes are answerable by
-  casters and him alone (oils cover only fire/frost/holy/lightning).
+  "nothing", and the Shadow and Arcane boss lanes are answerable by casters
+  and him alone (the coat rack reaches the other five schools, not those).
 - **Boss walls are his signature moment by contract - but never a group
   tax.** Physical resist exists on exactly 14 bosses and zero regulars,
   everywhere, test-enforced, and every one of those bosses guards an

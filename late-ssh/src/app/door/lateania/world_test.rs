@@ -2297,7 +2297,12 @@ const THEMED_SCHOOLS: [DamageType; 7] = [
 ];
 
 #[test]
-fn every_generated_regular_wears_its_zone_theme() {
+fn every_generated_zone_spawn_wears_its_zone_theme() {
+    // Aelunor's glade bosses are the one authored exception inside a themed
+    // region: they carry a hand-written Shadow/resist-Physical/weak-Holy
+    // profile that is the region's whole school game, so they are named here
+    // rather than silently skipped.
+    const AELUNOR: &str = "Aelunor";
     let world = seed_world();
     let mut regulars = 0usize;
     let mut bosses = 0usize;
@@ -2306,14 +2311,31 @@ fn every_generated_regular_wears_its_zone_theme() {
             let Some(z) = zone_index(spawn.home, base, stride, themes.len()) else {
                 continue;
             };
+            let theme = themes[z];
             if spawn.boss {
-                // Bosses deviate on purpose: the pass never touches an
-                // authored boss profile, so a crown fight is exactly what it
-                // was before the pass.
                 bosses += 1;
+                if region == AELUNOR {
+                    continue;
+                }
+                // A zone boss wears the zone's weakness and never its resist:
+                // the fight players provision for is where the prep mechanic
+                // has to exist, and a resist there would be a class tax with
+                // no counterplay. Asserted, not assumed - this branch used to
+                // `continue` on a comment claiming bosses were untouched,
+                // which stopped being true the moment they were.
+                assert_eq!(
+                    spawn.profile.resist, None,
+                    "{region} zone {z}: boss {} must not resist a school",
+                    spawn.name
+                );
+                assert_eq!(
+                    spawn.profile.weak,
+                    theme.weak(),
+                    "{region} zone {z}: boss {} wears the zone weakness",
+                    spawn.name
+                );
                 continue;
             }
-            let theme = themes[z];
             regulars += 1;
             assert_eq!(
                 spawn.profile.resist,
@@ -2335,7 +2357,7 @@ fn every_generated_regular_wears_its_zone_theme() {
     );
     assert!(
         bosses >= 100,
-        "the zone bosses were seen and skipped ({bosses})"
+        "the zone bosses were seen and checked ({bosses})"
     );
 }
 
@@ -2491,13 +2513,34 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
     // The grind-rate model, from CONTEXT.md ("The world resist/weak pass"): at band
     // gear every class is ~75% auto damage (always Physical, and regulars are
     // never weak to or resistant against it), ~25% abilities in the class's
-    // school mix, and a weapon oil adds a flat rider worth ~15% of output in
-    // the coat's school. Before this pass every generated regular was
-    // (None, None), so the "before" rate is exactly 1.0 in every zone: each
-    // assertion below is a live before/after budget.
-    const AUTO: f64 = 0.75;
-    const ABILITIES_SHARE: f64 = 0.25;
-    const OIL_RIDER: f64 = 0.15;
+    // school mix, and a weapon oil adds a flat rider in the coat's school.
+    // Before this pass every generated regular was (None, None), so the
+    // "before" rate is exactly 1.0 in every zone: each assertion below is a
+    // live before/after budget.
+    //
+    // The rider is *derived from the engine*, never declared here. It used to
+    // be a bare 0.15 and the real coat was worth three to six times that,
+    // which no assertion in this file could see. Now it is read off the real
+    // coat curve against the real attack bar (both pinned to a live character
+    // by svc_test), at the tier where the coat weighs heaviest - so if anyone
+    // retunes a coat, this budget moves with it.
+    use super::super::svc::{AUTO_SHARE, OIL_PER_TICK, TIER_ATTACK_BAR};
+    const AUTO: f64 = AUTO_SHARE;
+    const ABILITIES_SHARE: f64 = 1.0 - AUTO_SHARE;
+    // The rider a typical coated character carries: the coat curve's mean
+    // share of the attack bar, converted to a share of total output. The mean
+    // is the right input because the model asks what routing is worth to a
+    // player, not what the worst-rounded tier looks like - and no tier can
+    // hide behind it, because `the_coat_curves_stay_inside_their_share_of_the
+    // _bar` pins every tier to a tight band on the same two constants.
+    let oil_rider = (0..6)
+        .map(|t| OIL_PER_TICK[t] as f64 / TIER_ATTACK_BAR[t] as f64 * AUTO_SHARE)
+        .sum::<f64>()
+        / 6.0;
+    assert!(
+        oil_rider <= 0.16,
+        "the oil rider is worth {oil_rider:.3} of output: past what this budget was written for"
+    );
     let oil_schools = super::super::items::OIL_SCHOOLS;
 
     let mult = |theme: ZoneTheme, school: DamageType| -> f64 {
@@ -2540,7 +2583,7 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
         );
 
         // The routed model: a player picks the zone and the coat. Neutral
-        // play is a coated weapon on unthemed ground (1 + OIL_RIDER).
+        // play is a coated weapon on unthemed ground (1 + the rider).
         // Floor: in every region there is a zone-and-coat answer worth at
         // least +5%, so the school game is worth playing everywhere, for
         // everyone. The legacy poison coat is left out of the model; it only
@@ -2554,10 +2597,10 @@ fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
                     .map(|s| mult(*theme, *s))
                     .fold(0.0f64, f64::max);
                 let rate =
-                    AUTO + ABILITIES_SHARE * ability_mult(*theme) + OIL_RIDER * coat_best;
+                    AUTO + ABILITIES_SHARE * ability_mult(*theme) + oil_rider * coat_best;
                 region_best = region_best.max(rate);
             }
-            let edge = region_best / (1.0 + OIL_RIDER);
+            let edge = region_best / (1.0 + oil_rider);
             assert!(
                 edge >= 1.05,
                 "{class:?} in {region}: best routed edge {edge:.3} is under the +5% floor"

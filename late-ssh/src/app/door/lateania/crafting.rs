@@ -146,13 +146,17 @@ fn build_recipes() -> Vec<Recipe> {
             xp: craft,
             inputs: vec![ing(herb(t), 2)],
         });
+        // Two herbs against the oils' three items: the poison is the budget
+        // coat, buying about three quarters of an oil's damage for two thirds
+        // of the materials, in a burst shape and in the one school no oil
+        // covers. Cheaper, shorter, sharper - not simply worse.
         r.push(Recipe {
             output: poison_id(t),
             output_qty: 1,
             skill: Alchemy,
             level_req: gate,
             xp: craft,
-            inputs: vec![ing(herb(t), 3)],
+            inputs: vec![ing(herb(t), 2)],
         });
 
         // ---- Alchemy: the four weapon oils (the martial lever of the

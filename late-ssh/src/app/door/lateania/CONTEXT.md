@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-20 (class rendering now derives from the `Class` enum instead of hand-kept name lists: every calling glows its key ability on the sheet and the class-select screen, carries a class accent colour, and stands under its own portrait emblem, where twelve of seventeen used to render with no attribute highlighted and seven under a nameless "Adventurer" bust; pinned by `ui_test::every_class_glows_the_ability_that_drives_its_attack` and `every_class_wears_its_own_emblem_under_the_portrait`. Also recorded in §11: four of the six ability scores are read by nothing)
+- Last updated: 2026-08-20 (weapon coats corrected after review: a coat re-seeded its DoT on every strike at the same cadence the DoT ticked, so `POISON_DOT_TICKS` stacks ran live at once and every coat was silently worth 3x its documented rider - coats now keep **one refreshing wound per attacker** (`svc::DotSource`, persisted via `SavedMobDot::from_coat`, logged once), and both coat curves are re-tuned as a share of the newly measured `svc::TIER_ATTACK_BAR` into burst-vs-sustain shapes (poison ~30% of the auto for 5 strikes and 2 herbs, oil ~20% for 12). The world pass's grind-rate budget now **derives** its rider from those constants instead of declaring a `0.15` no assertion could check; zone-boss profiles are asserted rather than skipped; six stale "bosses keep their own" table comments corrected; one Aelunor glade rethemed Resonant -> Haunted so the region has a Holy coat lane. Spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -338,7 +338,9 @@ Load-bearing decisions, all of them deliberate:
 
 ### Crafting depth [VOLATILE]
 
-- **Weapon coats (poisons + oils)**: using a crafted poison (`items::poison_tier`) or one of the four **weapon oils** (`items::oil_id`/`oil_school_tier`/`OIL_SCHOOLS` = Fire/Frost/Holy/Lightning, 6 tiers each, Alchemy recipes with a school-flavored second ingredient) routes out of the normal consumable path in `use_item` and coats the weapon - `PlayerState::weapon_coat = Some((school, per_tick, charges))` (transient, one slot: any new coat replaces the last; `POISON_CHARGES = 5`, `OIL_CHARGES = 12`). Each landed melee strike seeds a DoT of the coat's school via `seed_mob_dot`, which bakes the foe's resist/weak multiplier into the per-tick up front, so a matched oil is a real matchup lever, and spends a charge; `POISON_PER_TICK`/`OIL_PER_TICK` scale by tier, six real entries each (oils half again above poison: the deliberate zone-prep coat vs the cheap burst vial). Coats seed pvp dots in duels the same way, and the active coat shows in both battle panels' `you:` effects line via `PlayerView.coat` ("fire coat x8"). Oils are always flat riders added to the Physical auto, never a conversion of its school and never a multiplier on `attack()` - that line is reserved for the planned Thundersmith class (THUNDERSMITH.md).
+- **Weapon coats (poisons + oils)**: using a crafted poison (`items::poison_tier`) or one of the four **weapon oils** (`items::oil_id`/`oil_school_tier`/`OIL_SCHOOLS` = Fire/Frost/Holy/Lightning, 6 tiers each, Alchemy recipes with a school-flavored second ingredient) routes out of the normal consumable path in `use_item` and coats the weapon - `PlayerState::weapon_coat = Some((school, per_tick, charges))` (transient, one slot: any new coat replaces the last; `POISON_CHARGES = 5`, `OIL_CHARGES = 12`). Each landed melee strike seeds a DoT of the coat's school via `seed_mob_dot`, which bakes the foe's resist/weak multiplier into the per-tick up front, so a matched oil is a real matchup lever, and spends a charge. Coats seed pvp dots in duels the same way, and the active coat shows in both battle panels' `you:` effects line via `PlayerView.coat` ("fire coat x8"). Oils are always flat riders added to the Physical auto, never a conversion of its school and never a multiplier on `attack()` - that line is reserved for the planned Thundersmith class (THUNDERSMITH.md).
+  - **One wound per coat, refreshed** (`svc::DotSource`): a coat re-seeds on every landed strike, at the very cadence its DoT ticks, so it keeps a single stack per attacker and refreshes it in place. Ability DoTs still stack, because a cooldown rations how often they can be cast. This is load-bearing, not housekeeping: while coats pushed a stack per strike, `POISON_DOT_TICKS` of them were live at once and every coat was silently worth three times its rider (`a_coat_keeps_one_refreshing_wound_however_many_swings_land`). The wound's source is persisted (`SavedMobDot::from_coat`) so a reload cannot untag a live coat and let a second stack open beside it. Only the opening of a wound is logged, never a refresh.
+  - **Two shapes, priced against the same bar**: `svc::TIER_ATTACK_BAR` is a *measured* auto-attack yardstick (a real character at each crafting gate wearing that tier's crafted weapon, pinned by `the_attack_bar_still_matches_a_real_character`), and both coat curves are written as a share of it. The oil sustains ~20% of the auto for 12 strikes; the poison bursts ~30% of it for 5, costs two herbs against the oils' three items, and owns the one school no oil covers. So a vial is roughly three quarters of an oil's damage in half the window for two thirds of the materials - cheaper, shorter, sharper, never simply worse. `the_coat_curves_stay_inside_their_share_of_the_bar` holds every tier of both curves to its band, which is what stops a curve quietly outgrowing the attack curve (it had: the oil rider was documented at 15% of output while really running three to six times that).
 - **Cooking buffs**: eating crafted food (`items::food_tier`) heals/restores as a normal consumable *and* pushes a `HealOverTime` self-effect (well-fed regen, `WELL_FED_TICKS`), reusing the ability HoT tick.
 - **Masterwork sinks**: two Legendary smithing recipes (`items::masterwork_id`, level 45) consume a heap of top-tier intermediates (8-10 mithril ingots + ironbark planks / dire leather) for gear a clear step above the tiered craftables - the endgame material sink.
 - None of this adds save state (`weapon_coat` is transient); no schema bump.
@@ -656,22 +658,33 @@ Coats are never a conversion of the auto's school and never a multiplier on
 (THUNDERSMITH.md), whose whole identity is industrializing this system.
 
 **The balance budget**, enforced by the routed grind-rate model in
-`world_test.rs` (75% auto / 25% abilities from the real roster mix / 15% oil
-rider; "before" is exactly 1.0 everywhere since regulars were `(None, None)`):
-per-zone swing within +-15%; per-class themed-zone average within +-3%; a
->=+5% best zone-and-coat answer for every class in every region (the
-meaningfulness floor); a <=+18% routed ceiling with <=12 points of spread
-between the best- and worst-served class. The mono-Holy classes top the table
-by design (holy oil stacking with their own school in Undead/Haunted lanes):
-the deliberate buff to today's weakest two.
+`world_test.rs`: 75% auto / 25% abilities from the real roster mix, plus the
+coat rider; "before" is exactly 1.0 everywhere since regulars were
+`(None, None)`. Bands: per-zone swing within +-15%; per-class themed-zone
+average within +-3%; a >=+5% best zone-and-coat answer for every class in
+every region (the meaningfulness floor); a <=+18% routed ceiling with <=12
+points of spread between the best- and worst-served class. The mono-Holy
+classes top the table by design (holy oil stacking with their own school in
+Undead/Haunted lanes): the deliberate buff to today's weakest two.
 
-**Tests** (`world_test.rs`): `every_generated_regular_wears_its_zone_theme`,
+The rider in that model is **derived from the engine, never declared**:
+`OIL_PER_TICK` over `TIER_ATTACK_BAR` (both in `svc.rs`, both pinned to a live
+character by `svc_test.rs`), converted through `AUTO_SHARE`. It lands near 14%
+of output. This is the one part of the pass that has already failed once: the
+rider was a hardcoded `0.15` while the real coat was worth three to six times
+that, and no assertion in the file could see it. A model that measures a
+constant instead of the game is not a budget.
+
+**Tests** (`world_test.rs`): `every_generated_zone_spawn_wears_its_zone_theme`
+(regulars wear the theme, zone bosses wear its weak and no resist),
 `no_regular_resists_physical_and_nothing_is_weak_to_physical`,
 `every_boss_carries_a_weakness`,
 `the_school_census_stays_inside_its_declared_bands`,
-`the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class`.
-Re-theming a zone means editing its table row and letting these judge the
-census and budget; they, not prose, are the contract.
+`the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class`; in
+`svc_test.rs`, `the_attack_bar_still_matches_a_real_character` and
+`the_coat_curves_stay_inside_their_share_of_the_bar`. Re-theming a zone means
+editing its table row and letting these judge the census and budget; they, not
+prose, are the contract.
 
 **Visibility**: the targeted foe's traits line (`rank · strikes with X · weak
 to Y · shrugs off Z`) in both battle surfaces, plus the per-hit log tags.
