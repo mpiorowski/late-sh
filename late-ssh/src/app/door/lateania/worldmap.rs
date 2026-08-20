@@ -286,6 +286,60 @@ fn resolve_collision(
     current.min(candidate)
 }
 
+/// The atlas region to hard-filter the view to, or `None` to skip that
+/// filter entirely. Only kicks in when the viewport is actually centred on
+/// the player's own position (`center == coords[player_room]`) - a live,
+/// player-following view. The camera can also pan away to review
+/// already-explored history elsewhere (see `the_camera_pans_and_clamps_to_
+/// the_field`), and "which single region is being viewed" isn't well-defined
+/// at an intentional cross-region collision cell (the Mistfen under
+/// Whisperwood and the like: several *different* regions deliberately share
+/// one coordinate there), so a panned view keeps today's plain
+/// `resolve_collision` behaviour instead of this harder cut - its
+/// player-room and lowest-id tie-breaks already handle that case correctly
+/// on their own.
+fn live_filter_region(
+    coords: &HashMap<RoomId, Coord>,
+    center: Coord,
+    player_room: RoomId,
+    player_region: Option<&'static str>,
+) -> Option<&'static str> {
+    if coords.get(&player_room) == Some(&center) {
+        player_region
+    } else {
+        None
+    }
+}
+
+/// Whether `id` belongs on-screen at all for a viewport whose live-view
+/// region filter resolved to `filter_region` (see `live_filter_region`). The
+/// player's own room always counts, wherever it is; a room with no atlas
+/// entry (an id outside every `REGIONS` range - hand-authored connective
+/// rooms the atlas simply doesn't list) always counts too, so nothing
+/// structural goes silently invisible; everything else only counts if it's
+/// in the region actually being viewed.
+///
+/// This is a harder cut than `resolve_collision`'s same-region *preference*:
+/// that only ever picks a winner for a single contested cell, so two regions
+/// that don't literally collide (adjacent or interleaved in the flat
+/// embedding without sharing a cell) still both rendered at once, reading as
+/// "overlapping" even when every actual collision was already resolved
+/// correctly. Filtering candidates down to one region *before* they ever
+/// reach `resolve_collision` removes that case entirely: a foreign region
+/// never appears on screen while viewing a different one, full stop.
+fn in_viewed_region(id: RoomId, player_room: RoomId, filter_region: Option<&'static str>) -> bool {
+    if id == player_room {
+        return true;
+    }
+    let Some(region) = filter_region else {
+        return true;
+    };
+    match super::world::region_atlas_entry(id) {
+        Some((name, _)) => name == region,
+        None => true,
+    }
+}
+
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
 /// `visited` is the player's explored-room set.
 ///
@@ -304,9 +358,13 @@ pub fn viewport_explored(
     let rx = cols / 2;
     let ry = rows / 2;
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let filter_region = live_filter_region(coords, center, player_room, player_region);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
+            continue;
+        }
+        if !in_viewed_region(id, player_room, filter_region) {
             continue;
         }
         at.entry((c.x, c.y))
@@ -539,9 +597,11 @@ pub fn room_at(
     player_room: RoomId,
 ) -> Option<RoomId> {
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let filter_region = live_filter_region(coords, at, player_room, player_region);
     visible(coords, at, 0, 0)
         .into_iter()
         .filter(|(id, _)| *id == player_room || visited.contains(id))
+        .filter(|(id, _)| in_viewed_region(*id, player_room, filter_region))
         .map(|(id, _)| id)
         .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
 }
@@ -713,9 +773,13 @@ pub fn map_canvas(
     // is (see `resolve_collision`) instead of whichever happened to be last
     // out of a hash-ordered iterator.
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
+    let filter_region = live_filter_region(coords, center, player_room, player_region);
     let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {
+            continue;
+        }
+        if !in_viewed_region(id, player_room, filter_region) {
             continue;
         }
         winners

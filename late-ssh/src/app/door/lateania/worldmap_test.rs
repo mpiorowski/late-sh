@@ -2,7 +2,7 @@ use super::{
     Coord, MAX_VIEWPORT_COLS, MapCamera, PAN_LIMIT, collisions, derive_bounds, derive_coords,
     dump_level, visible,
 };
-use crate::app::door::lateania::world::seed_world;
+use crate::app::door::lateania::world::{region_atlas_entry, seed_world};
 
 #[test]
 fn every_room_gets_a_coordinate() {
@@ -293,20 +293,73 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
         "only the player shows under full fog"
     );
 
-    // With everything visited, fog matches the plain viewport everywhere except
-    // the player's own cell, which they always win (see the collision test).
+    // With everything visited, fog alone would match the plain viewport
+    // everywhere except the player's own cell (which they always win, see
+    // the collision test below). The live region filter (`live_filter_
+    // region`) also hides any fully-visited room outside the region the
+    // player is standing in, since this view is centred on the player's own
+    // position - so a divergence must be explained by exactly one of those
+    // two reasons, never anything else.
     let all: HashSet<_> = world.rooms.keys().copied().collect();
     let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
     let plain = super::viewport(&coords, center, cols, rows);
     let (cx, cy) = (cols as usize / 2, rows as usize / 2);
+    let player_region = region_atlas_entry(world.start_room).map(|(name, _)| name);
     assert_eq!(lit[cy][cx], Some(world.start_room));
     for (r, (lit_row, plain_row)) in lit.iter().zip(plain.iter()).enumerate() {
         for (c, (l, p)) in lit_row.iter().zip(plain_row.iter()).enumerate() {
-            if (r, c) != (cy, cx) {
-                assert_eq!(l, p, "cell ({r}, {c}) diverged from the fog-less view");
+            if (r, c) == (cy, cx) || l == p {
+                continue;
             }
+            let plain_region = p.and_then(region_atlas_entry).map(|(name, _)| name);
+            assert!(
+                l.is_none() && p.is_some() && plain_region != player_region,
+                "cell ({r}, {c}) diverged from the fog-less view for a reason other than \
+                 the live region filter: lit={l:?} plain={p:?}"
+            );
         }
     }
+}
+
+#[test]
+fn live_view_hides_a_visited_room_outside_the_players_current_region() {
+    use std::collections::HashSet;
+    // The region filter (`live_filter_region`) only kicks in when the view is
+    // centred on the player's own position - Tony's original complaint was
+    // regions bleeding into the live view around the player, not into a
+    // panned-away review of already-explored history elsewhere (see
+    // `the_camera_pans_and_clamps_to_the_field`, which keeps working exactly
+    // as before). Room 665 is a real, fully-visited room in "The Overworld &
+    // Capitals", a different region than the start room's "Embergate & the
+    // King's Road" - it must vanish from a start-room-centred view even
+    // though nothing else about it is hidden (it's visited, no fog reason to
+    // hide it, and the fog-less `viewport` still shows it).
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let center = coords[&world.start_room];
+    let (cols, rows) = (21, 11);
+    let all: HashSet<_> = world.rooms.keys().copied().collect();
+
+    assert_eq!(
+        region_atlas_entry(world.start_room).map(|(name, _)| name),
+        Some("Embergate & the King's Road")
+    );
+    assert_eq!(
+        region_atlas_entry(665).map(|(name, _)| name),
+        Some("The Overworld & Capitals")
+    );
+
+    let plain = super::viewport(&coords, center, cols, rows);
+    assert!(
+        plain.iter().flatten().any(|id| *id == Some(665)),
+        "fixture assumption broke: room 665 should be visible in the plain, region-unaware view"
+    );
+
+    let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
+    assert!(
+        !lit.iter().flatten().any(|id| *id == Some(665)),
+        "a fully-visited room in a different region must not render in a player-centred view"
+    );
 }
 
 // ---- collision resolution favours where the player actually stands -------
