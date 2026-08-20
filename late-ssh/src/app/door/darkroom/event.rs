@@ -381,8 +381,6 @@ pub enum Effect {
     EnterBattleship,
     /// One of the three decks is picked clean; its elevator stops offering.
     ClearDeck(Deck),
-    /// The immortal wanderer is down and the bridge is quiet.
-    ClearCommandDeck,
     /// The battleship's regenerative machines: back to full health.
     HealFull,
 }
@@ -1754,11 +1752,6 @@ pub fn apply(effect: Effect, ctx: &mut Ctx<'_>, rng: &mut impl Rng, out: &mut Ve
         Effect::ClearDeck(deck) => {
             if let Some(trip) = &mut ctx.trip {
                 trip.battleship.decks.insert(deck);
-            }
-        }
-        Effect::ClearCommandDeck => {
-            if let Some(trip) = &mut ctx.trip {
-                trip.battleship.command_cleared = true;
             }
         }
         Effect::HealFull => {

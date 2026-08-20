@@ -110,8 +110,9 @@ pub enum Deck {
 impl Deck {
     pub const ALL: [Deck; 3] = [Deck::Engineering, Deck::Medical, Deck::Martial];
 
-    /// The event key of the wing this deck's elevator opens on.
-    pub fn scene(self) -> &'static str {
+    /// The event key of the wing this deck's elevator opens on. `const` so the
+    /// antechamber's buttons can be built from it rather than repeating it.
+    pub const fn scene(self) -> &'static str {
         match self {
             Deck::Engineering => "executioner-engineering",
             Deck::Medical => "executioner-medical",
@@ -119,7 +120,8 @@ impl Deck {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// What its button on the elevator bank says.
+    pub const fn label(self) -> &'static str {
         match self {
             Deck::Engineering => "engineering",
             Deck::Medical => "medical",
@@ -142,8 +144,6 @@ pub struct Battleship {
     /// `World.state.executioner`, which is also what opens the fabricator.
     pub entered: bool,
     pub decks: BTreeSet<Deck>,
-    /// The immortal wanderer is down and the command deck is clear.
-    pub command_cleared: bool,
 }
 
 impl Battleship {

@@ -431,23 +431,26 @@ static ANTECHAMBER: Event = Event {
             "a large hatch opens into a wide corridor.",
             "the corridor leads to a bank of elevators, which appear to be functional.",
         ],
+        // Each deck's button names the deck once; what it says and where it
+        // goes both come off `Deck`, so a wing cannot end up labelled one
+        // thing and opening another.
         buttons: &[
             Button {
-                text: "engineering",
+                text: Deck::Engineering.label(),
                 available: &[Condition::DeckPending(Deck::Engineering)],
-                next: Next::Event("executioner-engineering"),
+                next: Next::Event(Deck::Engineering.scene()),
                 ..Button::EMPTY
             },
             Button {
-                text: "medical",
+                text: Deck::Medical.label(),
                 available: &[Condition::DeckPending(Deck::Medical)],
-                next: Next::Event("executioner-medical"),
+                next: Next::Event(Deck::Medical.scene()),
                 ..Button::EMPTY
             },
             Button {
-                text: "martial",
+                text: Deck::Martial.label(),
                 available: &[Condition::DeckPending(Deck::Martial)],
-                next: Next::Event("executioner-martial"),
+                next: Next::Event(Deck::Martial.scene()),
                 ..Button::EMPTY
             },
             Button {
@@ -1449,8 +1452,10 @@ static COMMAND: Event = Event {
                 "time to get out of here.",
             ],
             // The wreck becomes an outpost, which is also what stops the
-            // square from ever offering the antechamber again.
-            on_load: &[Effect::ClearDungeon, Effect::ClearCommandDeck],
+            // square from ever offering the antechamber again. That, and the
+            // beacon now sitting in the pack, is the whole record that this
+            // happened: upstream sets no flag here either.
+            on_load: &[Effect::ClearDungeon],
             buttons: &[LEAVE],
             ..Scene::EMPTY
         },

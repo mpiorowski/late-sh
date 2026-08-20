@@ -757,13 +757,6 @@ impl Blueprint {
         }
     }
 
-    /// The blueprint a carried token redeems into, if it is one.
-    pub fn of(token: Resource) -> Option<Blueprint> {
-        Blueprint::ALL
-            .into_iter()
-            .find(|blueprint| blueprint.token() == token)
-    }
-
     pub fn label(self) -> &'static str {
         self.item().label()
     }

@@ -649,3 +649,34 @@ fn the_medic_turns_venomous_once_and_its_bite_keeps_working() {
         "the bleed ticks on its own"
     );
 }
+
+/// The elevator bank is the only way into the three wings, so a button that
+/// says one deck and opens another would be silent and unrecoverable. Both
+/// halves come off `Deck`; this is what pins that they still line up.
+#[test]
+fn every_elevator_button_opens_the_wing_it_is_labelled_with() {
+    let antechamber = find(
+        &super::scenes_executioner::EXECUTIONER,
+        "executioner-antechamber",
+    );
+    let start = antechamber.scene("start").expect("the bank of elevators");
+
+    for deck in super::model::Deck::ALL {
+        let button = start
+            .buttons
+            .iter()
+            .find(|button| button.text == deck.label())
+            .unwrap_or_else(|| panic!("no button for the {} deck", deck.label()));
+        assert_eq!(
+            button.next,
+            event::Next::Event(deck.scene()),
+            "the {} button opens the wrong wing",
+            deck.label()
+        );
+        assert!(
+            super::scenes_executioner::by_key(deck.scene()).is_some(),
+            "the {} deck names an event that does not exist",
+            deck.label()
+        );
+    }
+}
