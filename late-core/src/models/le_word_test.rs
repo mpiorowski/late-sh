@@ -40,7 +40,8 @@ async fn game_progress_and_daily_win_persist() {
         &client,
         GameParams {
             user_id: user.id,
-            puzzle_date: today,
+            mode: "daily".to_string(),
+            puzzle_date: Some(today),
             answer_word: "hunch".to_string(),
             guesses: serde_json::json!(["glass", "hunch"]),
             current_guess: String::new(),
@@ -76,4 +77,69 @@ async fn game_progress_and_daily_win_persist() {
             .await
             .expect("win check")
     );
+}
+
+#[tokio::test]
+async fn daily_and_replay_progress_use_separate_slots() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    let user = create_test_user(&test_db.db, "le-word-replay-player").await;
+    let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+
+    Game::upsert(
+        &client,
+        GameParams {
+            user_id: user.id,
+            mode: "daily".to_string(),
+            puzzle_date: Some(today),
+            answer_word: "hunch".to_string(),
+            guesses: serde_json::json!(["glass"]),
+            current_guess: String::new(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("save daily game");
+    Game::upsert(
+        &client,
+        GameParams {
+            user_id: user.id,
+            mode: "replay".to_string(),
+            puzzle_date: None,
+            answer_word: "apple".to_string(),
+            guesses: serde_json::json!([]),
+            current_guess: "sh".to_string(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("save replay game");
+    Game::upsert(
+        &client,
+        GameParams {
+            user_id: user.id,
+            mode: "replay".to_string(),
+            puzzle_date: None,
+            answer_word: "shade".to_string(),
+            guesses: serde_json::json!(["apple"]),
+            current_guess: String::new(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("replace replay game");
+
+    let games = Game::list_by_user_id(&client, user.id)
+        .await
+        .expect("load game slots");
+    assert_eq!(games.len(), 2);
+    let daily = games.iter().find(|game| game.mode == "daily").unwrap();
+    let replay = games.iter().find(|game| game.mode == "replay").unwrap();
+    assert_eq!(daily.puzzle_date, Some(today));
+    assert_eq!(daily.answer_word, "hunch");
+    assert_eq!(replay.puzzle_date, None);
+    assert_eq!(replay.answer_word, "shade");
 }

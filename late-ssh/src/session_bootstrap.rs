@@ -35,7 +35,7 @@ pub struct ArcadeSessionPreloads {
     pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
     pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
-    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_le_word_games: Vec<late_core::models::le_word::Game>,
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
@@ -65,7 +65,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_traffic_track_scores,
         initial_traffic_high_score,
         initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_games,
         initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
@@ -154,12 +154,11 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
             }
         },
         async {
-            let today = le_word_service.today();
-            match le_word_service.load_game(user_id, today).await {
-                Ok(game) => game,
+            match le_word_service.load_games(user_id).await {
+                Ok(games) => games,
                 Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load Le Word game state");
-                    None
+                    tracing::warn!(error = ?e, "failed to load Le Word game states");
+                    Vec::new()
                 }
             }
         },
@@ -220,7 +219,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_traffic_track_scores,
         initial_traffic_high_score,
         initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_games,
         initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
@@ -281,7 +280,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_traffic_track_scores,
         initial_traffic_high_score,
         initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_games,
         initial_rubiks_cube_game,
         initial_sudoku_games,
         initial_nonogram_games,
@@ -420,7 +419,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_traffic_high_score,
         le_word_service: state.le_word_service.clone(),
         initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_games,
         sudoku_service: state.sudoku_service.clone(),
         initial_sudoku_games,
         nonogram_service: state.nonogram_service.clone(),

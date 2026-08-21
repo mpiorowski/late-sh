@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{DAILY_WIN_REWARD_CHIPS, LetterScore, MAX_GUESSES, State, WORD_LEN};
+use super::state::{DAILY_WIN_REWARD_CHIPS, LetterScore, MAX_GUESSES, Mode, State, WORD_LEN};
 use crate::app::arcade::ui::{
     GameBottomBar, centered_rect, draw_game_frame, keys_line, status_line, tip_line,
 };
@@ -49,23 +49,27 @@ struct LeWordLayout {
 }
 
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
+    let (mode, reward) = match state.mode {
+        Mode::Daily => ("daily", DAILY_WIN_REWARD_CHIPS.to_string()),
+        Mode::Replay => ("replay", "none".to_string()),
+    };
     let bottom = GameBottomBar {
         status: status_line(vec![
-            ("mode", "daily".to_string(), theme::AMBER_GLOW()),
+            ("mode", mode.to_string(), theme::AMBER_GLOW()),
             (
                 "guess",
                 format!("{}/{}", state.guesses.len().min(MAX_GUESSES), MAX_GUESSES),
                 theme::SUCCESS(),
             ),
-            ("reward", "250".to_string(), theme::TEXT_BRIGHT()),
+            ("reward", reward, theme::TEXT_BRIGHT()),
         ]),
         keys: keys_line(vec![
             ("a-z", "type"),
             ("Backspace", "delete"),
             ("Enter", "guess"),
-            ("?", "help"),
+            ("1/2", "daily/replay"),
+            ("0x2", "new"),
             ("!", "rules"),
-            ("`", "dashboard"),
             ("Esc", "exit"),
         ]),
         tip: Some(tip_line(state.message.clone())),
@@ -84,13 +88,17 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     }
 
     if state.won {
+        let subtitle = match state.mode {
+            Mode::Daily => "Come back tomorrow",
+            Mode::Replay => "0 twice: new word",
+        };
         draw_result_panel(
             frame,
             board_area,
             layout.board,
             layout.keyboard,
             "YOU WON!",
-            "Come back tomorrow",
+            subtitle,
             theme::SUCCESS(),
         );
     } else if state.is_game_over {
@@ -111,7 +119,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 }
 
 fn draw_rules_modal(frame: &mut Frame, area: Rect) {
-    let modal = centered_rect(area, 58.min(area.width), 16.min(area.height));
+    let modal = centered_rect(area, 62.min(area.width), 19.min(area.height));
     let rules = Paragraph::new(vec![
         Line::from(Span::styled(
             "Le Word Rules",
@@ -137,9 +145,13 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         ]),
         Line::from(""),
         Line::from("A new daily answer appears once per day."),
+        Line::from("Replay mode uses saved random-word boards."),
+        Line::from("Replay solves do not earn chips or daily credit."),
         Line::from(format!(
             "Solving the daily earns {DAILY_WIN_REWARD_CHIPS} chips."
         )),
+        Line::from(""),
+        Line::from("1 daily  /  2 replay  /  0 twice: new random word"),
         Line::from(""),
         Line::from(Span::styled(
             "! / q / Esc closes",
