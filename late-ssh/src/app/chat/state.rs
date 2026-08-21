@@ -156,18 +156,26 @@ pub(crate) struct ModCommandOutput {
 pub(crate) struct PendingUrlUpload {
     pub url: String,
     pub room_id: Option<Uuid>,
+    /// The reply the composer was aiming at when the upload was asked for.
+    /// Submitting `/upload` clears the composer, so the target has to travel
+    /// with the request or the finished upload comes back as a plain message.
+    pub reply_target: Option<ReplyTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingClipboardImageUpload {
     pub room_id: Option<Uuid>,
+    /// See [`PendingUrlUpload::reply_target`]; `/paste-image` clears the
+    /// composer the same way.
+    pub reply_target: Option<ReplyTarget>,
     requested_at: Instant,
 }
 
 impl PendingClipboardImageUpload {
-    fn new(room_id: Option<Uuid>) -> Self {
+    fn new(room_id: Option<Uuid>, reply_target: Option<ReplyTarget>) -> Self {
         Self {
             room_id,
+            reply_target,
             requested_at: Instant::now(),
         }
     }
@@ -830,6 +838,9 @@ pub struct ChatState {
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     pub(crate) image_upload_pending: bool,
     pub(crate) image_upload_target_room_id: Option<Uuid>,
+    /// The reply the in-flight upload was composed against, handed back to the
+    /// composer when the URL lands.
+    image_upload_reply_target: Option<ReplyTarget>,
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
     requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
     pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
@@ -1046,6 +1057,7 @@ impl ChatState {
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
+            image_upload_reply_target: None,
             requested_url_upload: None,
             requested_clipboard_image_upload: None,
             pending_clipboard_image_upload: None,
@@ -3076,8 +3088,13 @@ impl ChatState {
                 return Some(Banner::error("File uploads are disabled"));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            self.requested_url_upload = Some(PendingUrlUpload {
+                url,
+                room_id,
+                reply_target,
+            });
             return None;
         }
 
@@ -3094,8 +3111,10 @@ impl ChatState {
                 ));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            self.requested_clipboard_image_upload =
+                Some(PendingClipboardImageUpload::new(room_id, reply_target));
             return None;
         }
 
@@ -3770,14 +3789,21 @@ impl ChatState {
         self.composer.input(input);
     }
 
+    /// Upload bytes that arrived while the composer is still open (a terminal
+    /// image paste), so whatever reply it was aiming at is still live here.
     pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
-        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+        self.start_image_upload_in_room(
+            bytes,
+            self.upload_target_room_id(),
+            self.reply_target.clone(),
+        )
     }
 
     pub(crate) fn start_image_upload_in_room(
         &mut self,
         bytes: Vec<u8>,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
     ) -> Option<Banner> {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
@@ -3787,7 +3813,7 @@ impl ChatState {
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Some(banner) = self.begin_image_upload(room_id, rx) {
+        if let Some(banner) = self.begin_image_upload(room_id, reply_target, rx) {
             return Some(banner);
         }
         let mime = mime.to_string();
@@ -3817,6 +3843,7 @@ impl ChatState {
     pub(crate) fn begin_image_upload(
         &mut self,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
         rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
     ) -> Option<Banner> {
         if self.image_upload_pending {
@@ -3837,12 +3864,24 @@ impl ChatState {
         self.image_upload_rx = Some(rx);
         self.image_upload_pending = true;
         self.image_upload_target_room_id = room_id;
+        self.image_upload_reply_target = reply_target;
         self.last_image_upload_at = Some(std::time::Instant::now());
         None
     }
 
     pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
         self.image_upload_target_room_id.take()
+    }
+
+    /// Put the finished upload's reply back on the composer. Reopening the
+    /// composer with the URL goes through `start_composing_in_room`, which
+    /// drops the reply target, so this runs after it.
+    pub(crate) fn restore_image_upload_reply_target(&mut self) {
+        self.reply_target = self.image_upload_reply_target.take();
+    }
+
+    pub(crate) fn clear_image_upload_reply_target(&mut self) {
+        self.image_upload_reply_target = None;
     }
 
     pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
@@ -3855,8 +3894,13 @@ impl ChatState {
         self.requested_clipboard_image_upload.take()
     }
 
-    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
-        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    pub(crate) fn begin_pending_clipboard_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
+    ) {
+        self.pending_clipboard_image_upload =
+            Some(PendingClipboardImageUpload::new(room_id, reply_target));
     }
 
     pub(crate) fn take_pending_clipboard_image_upload(

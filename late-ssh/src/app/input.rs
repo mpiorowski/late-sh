@@ -2416,7 +2416,12 @@ fn trigger_image_upload(app: &mut App, data: Vec<u8>) {
     ));
 }
 
-pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Option<uuid::Uuid>) {
+pub(crate) fn trigger_url_image_upload(
+    app: &mut App,
+    url: String,
+    room_id: Option<uuid::Uuid>,
+    reply_target: Option<crate::app::chat::state::ReplyTarget>,
+) {
     use crate::app::files::image_upload::download_and_reupload_url;
     let Some(files) = app.chat.files_config().cloned() else {
         app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -2426,7 +2431,7 @@ pub(crate) fn trigger_url_image_upload(app: &mut App, url: String, room_id: Opti
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
-    if let Some(banner) = app.chat.begin_image_upload(room_id, rx) {
+    if let Some(banner) = app.chat.begin_image_upload(room_id, reply_target, rx) {
         app.banner = Some(banner);
         return;
     }

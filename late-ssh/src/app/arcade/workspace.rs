@@ -3,6 +3,7 @@
 //! at UTC midnight, so abandoned puzzles fall out of the cycle on their own.
 //! Real-time score games (Lateris, Snake, Traffic, NES) never join.
 
+use crate::app::common::primitives::Screen;
 use crate::app::state::{
     App, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
@@ -65,6 +66,31 @@ pub(crate) fn active_daily_stop(app: &App) -> Option<ArcadeStop> {
     is_daily.then_some(stop)
 }
 
+/// Roll every Arcade daily over to today's puzzle. Reconnecting rebuilds them
+/// all, so this is what a session that stays up across UTC midnight needs: it
+/// used to keep serving yesterday's boards (and quietly save progress on them
+/// under today's date) until the client quit and rejoined, while the quest
+/// strip beside them had already rolled.
+///
+/// Skipped only while the player is looking at a board, so a puzzle is never
+/// swapped out mid-move; it rolls on the next tick once they look away.
+/// `is_playing_game` alone would not do: it stays set when a board is left
+/// open behind a page switch, which would park that session on yesterday's
+/// puzzles for good. Returns true when anything moved, so the caller can
+/// force a frame.
+pub(crate) fn refresh_daily_games(app: &mut App) -> bool {
+    if app.screen == Screen::Arcade && app.is_playing_game {
+        return false;
+    }
+    let mut changed = app.le_word_state.ensure_current_daily();
+    changed |= app.rubiks_cube_state.ensure_current_daily();
+    changed |= app.sudoku_state.ensure_current_daily();
+    changed |= app.nonogram_state.ensure_current_daily();
+    changed |= app.minesweeper_state.ensure_current_daily();
+    changed |= app.solitaire_state.ensure_current_daily();
+    changed
+}
+
 /// Arcade stops with an unfinished daily board, in lobby order.
 pub(crate) fn unfinished_daily_stops(app: &App) -> Vec<ArcadeStop> {
     ArcadeStop::ALL
@@ -85,7 +111,9 @@ pub(crate) fn unfinished_daily_stops(app: &App) -> Vec<ArcadeStop> {
 pub(crate) fn open_stop(app: &mut App, stop: ArcadeStop) {
     match stop {
         ArcadeStop::LeWord => {}
-        ArcadeStop::RubiksCube => app.rubiks_cube_state.ensure_current_daily(),
+        ArcadeStop::RubiksCube => {
+            app.rubiks_cube_state.ensure_current_daily();
+        }
         ArcadeStop::Sudoku => {
             let index = app.sudoku_state.first_unfinished_daily().unwrap_or(0);
             app.sudoku_state.open_daily(index);

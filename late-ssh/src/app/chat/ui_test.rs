@@ -260,6 +260,105 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     assert_ne!(base_key, chat_rows_cache_key(&ctx(base_versions), 40));
 }
 
+/// "(edited)" rides in the author header's stamp, and a message grouped under
+/// the one above it has no header, so editing the second message in a run
+/// used to leave no trace at all. An edit breaks the run instead.
+#[test]
+fn editing_a_grouped_message_gives_it_its_own_header() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let author_id = Uuid::from_u128(3);
+    let created = Utc::now();
+    let make_message = |id: u128, body: &str, updated| ChatMessage {
+        id: Uuid::from_u128(id),
+        created,
+        updated,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: author_id,
+        body: body.to_string(),
+    };
+
+    let first = make_message(10, "first thing", created);
+    let second = make_message(11, "second thing", created + chrono::Duration::seconds(30));
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (author_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::new();
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_styles = HashMap::new();
+    let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        inline_images: &inline_images,
+        unread_marker: None,
+        drunk_levels: &drunk_levels,
+        name_styles: &name_styles,
+        peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
+    };
+
+    let mut cache = ChatRowsCache::default();
+    // `ensure_chat_rows_cache` walks the slice newest-first.
+    ensure_chat_rows_cache(&mut cache, vec![&second, &first], 60, ctx);
+
+    let rendered: Vec<String> = cache
+        .all_rows
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert!(
+        rendered.iter().any(|row| row.contains("(edited)")),
+        "no edited marker anywhere in {rendered:#?}"
+    );
+    assert_eq!(
+        cache
+            .row_kind
+            .iter()
+            .zip(&cache.row_message)
+            .filter(|(kind, owner)| {
+                matches!(kind, RowKindLite::Header) && **owner == Some(second.id)
+            })
+            .count(),
+        1,
+        "the edited message should carry its own author header"
+    );
+}
+
 #[test]
 fn unread_boundary_ignores_read_and_own_messages() {
     let room_id = Uuid::from_u128(1);

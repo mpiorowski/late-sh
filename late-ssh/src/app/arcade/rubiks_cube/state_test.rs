@@ -134,6 +134,26 @@ fn net_slots_are_pinned_to_the_view() {
 }
 
 #[test]
+fn solved_daily_cube_refuses_reset() {
+    let mut state = solved_state();
+    state.user_moves = 3;
+    assert!(state.is_solved());
+
+    assert!(!state.request_reset(), "reset was armed on a solved cube");
+    assert!(!state.reset_pending());
+    assert!(
+        !state.request_reset(),
+        "second press scrambled a solved cube"
+    );
+    assert!(state.is_solved(), "a solved cube was scrambled again");
+    assert!(
+        state.message().contains("already solved"),
+        "unexpected message: {}",
+        state.message()
+    );
+}
+
+#[test]
 fn opposite_view_turns_restore_orientation() {
     for (first, second) in [
         (ViewTurn::Right, ViewTurn::Left),

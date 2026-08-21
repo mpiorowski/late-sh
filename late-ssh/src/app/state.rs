@@ -1988,13 +1988,11 @@ impl App {
         if self.screen == Screen::Artboard {
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Lateania {
             self.leave_lateania();
             self.door_delete_confirm = false;
-            self.force_full_repaint();
         }
 
         // Leaving the Games hub drops its transient prompts. Esc handles the
@@ -2008,7 +2006,6 @@ impl App {
 
         if self.screen == Screen::Rebels {
             self.leave_rebels();
-            self.force_full_repaint();
         }
 
         // The three roguelike doors detach instead of tearing down: a running
@@ -2025,10 +2022,6 @@ impl App {
         {
             self.leave_nethack();
         }
-        if self.screen == Screen::Nethack {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Dcss
             && !self
                 .dcss_state
@@ -2037,10 +2030,6 @@ impl App {
         {
             self.leave_dcss();
         }
-        if self.screen == Screen::Dcss {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Brogue
             && !self
                 .brogue_state
@@ -2049,38 +2038,28 @@ impl App {
         {
             self.leave_brogue();
         }
-        if self.screen == Screen::Brogue {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Usurper {
             self.leave_usurper();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Dopewars {
             self.leave_dopewars();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Bashquest {
             self.leave_bashquest();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Codekeep {
             self.leave_codekeep();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
             self.house.close();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
@@ -2090,10 +2069,18 @@ impl App {
             // "left the pairing" on their next sync, the same RAII
             // teardown Artboard uses for its color slot.
             self.scratchpad = None;
-            self.force_full_repaint();
         }
 
         self.screen = screen;
+
+        // Every top-level move repaints from scratch. ratatui only re-emits
+        // cells whose contents changed, and the two layouts rarely disagree
+        // on every cell: leaving Home for the Arcade used to strand the
+        // sidebar's bonsai emoji on screen, because a wide glyph the new
+        // layout writes a space over occupies two columns and only one of
+        // them differs. Clearing costs one full frame per page switch, which
+        // every door and the Artboard already paid for the same reason.
+        self.force_full_repaint();
 
         if matches!(self.screen, Screen::Dashboard) {
             self.chat.request_list();
@@ -2637,12 +2624,17 @@ impl App {
         self.audio.persist_radio_station(station);
     }
 
-    pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
+    pub(crate) fn request_paired_clipboard_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        reply_target: Option<crate::app::chat::state::ReplyTarget>,
+    ) -> bool {
         let Some(registry) = &self.paired_client_registry else {
             return false;
         };
         if registry.request_clipboard_image(&self.session_token) {
-            self.chat.begin_pending_clipboard_image_upload(room_id);
+            self.chat
+                .begin_pending_clipboard_image_upload(room_id, reply_target);
             return true;
         }
         false

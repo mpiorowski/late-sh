@@ -38,3 +38,29 @@ fn restored_finished_game_does_not_resubmit_its_final_score() {
 
     assert_eq!(state.score, 11_000, "the finished board is still on screen");
 }
+
+/// The board paints every cell on `theme::BG_SELECTION()`, so a hardcoded ANSI
+/// color can land on top of a background the same hue: the power-up star used
+/// to be `Color::Magenta`, which on the Amoled Ultra Violet palette (selection
+/// background `rgb(95, 68, 141)`) left the star and the powered-up snake all
+/// but invisible.
+#[test]
+fn board_colors_follow_the_active_theme() {
+    let at = || Position { x: 1, y: 1 };
+
+    crate::app::common::theme::set_current_by_id("amoled-ultraviolet");
+    let violet_star = ThingOnScreen::from_kind_at_pos(ThingKind::Drug, at()).color;
+    let violet_cobra =
+        ThingOnScreen::get_cobra_pixel("━".to_string(), at(), &CobraState::Alive).color;
+
+    crate::app::common::theme::set_current_by_id("late");
+    let late_star = ThingOnScreen::from_kind_at_pos(ThingKind::Drug, at()).color;
+    let late_cobra =
+        ThingOnScreen::get_cobra_pixel("━".to_string(), at(), &CobraState::Alive).color;
+
+    assert_ne!(violet_star, late_star, "the star ignores the active theme");
+    assert_ne!(
+        violet_cobra, late_cobra,
+        "the snake ignores the active theme"
+    );
+}

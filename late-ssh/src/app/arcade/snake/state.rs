@@ -3,6 +3,7 @@ use ratatui::style::Color;
 use uuid::Uuid;
 
 use super::svc::SnakeService;
+use crate::app::common::theme;
 use rand::Rng;
 
 const MAX_LEVEL: u8 = 125;
@@ -357,50 +358,56 @@ pub struct ThingOnScreen {
 }
 
 impl ThingOnScreen {
+    // Every glyph on the board is painted over `theme::BG_SELECTION()`, so all
+    // of these have to come from the palette rather than the ANSI 16: a fixed
+    // magenta star sat invisibly on the violet selection background of the
+    // Amoled Ultra Violet theme.
     fn from_kind_at_pos(kind: ThingKind, position: Position) -> Self {
         match kind {
             ThingKind::Food => Self {
                 position,
                 kind,
-                color: Color::Yellow,
+                color: theme::AMBER_GLOW(),
                 effect: Some(CobraEffect::Grow),
                 value: String::from("◉"),
             },
             ThingKind::Drug => Self {
                 position,
                 kind,
-                color: Color::Magenta,
+                color: theme::MENTION(),
                 effect: Some(CobraEffect::PowerUp),
                 value: String::from("★"),
             },
             ThingKind::Rock => Self {
                 position,
                 kind,
-                color: Color::Gray,
+                color: theme::TEXT_FAINT(),
                 effect: Some(CobraEffect::Blow),
                 value: String::from("×"),
             },
             ThingKind::Cobra => Self {
                 position,
                 kind,
-                color: Color::Green,
+                color: theme::SUCCESS(),
                 effect: None,
                 value: String::from("━"),
             },
             _ => Self {
                 position,
                 kind,
-                color: Color::White,
+                color: theme::TEXT_BRIGHT(),
                 effect: None,
                 value: String::new(),
             },
         }
     }
 
+    /// The powered-up snake wears the same color as the star that powered it
+    /// up, so the effect reads at a glance on every palette.
     pub fn get_cobra_pixel(value: String, position: Position, state: &CobraState) -> Self {
         let color = match state {
-            CobraState::PoweredUp => Color::Magenta,
-            _ => Color::Green,
+            CobraState::PoweredUp => theme::MENTION(),
+            _ => theme::SUCCESS(),
         };
         Self {
             position,
@@ -436,7 +443,7 @@ impl ThingOnScreen {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
-                color: Color::White,
+                color: theme::TEXT_BRIGHT(),
                 kind: ThingKind::Edge,
                 value,
             })

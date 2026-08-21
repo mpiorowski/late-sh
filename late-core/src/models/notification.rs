@@ -30,6 +30,10 @@ pub struct NotificationView {
     pub actor_username: String,
     pub room_slug: Option<String>,
     pub message_preview: String,
+    /// The viewer's read cursor in the room this mention was said in, `None`
+    /// if they have never opened it. The list's unread dot honors this the
+    /// same way [`Notification::unread_count`] does.
+    pub room_read_at: Option<DateTime<Utc>>,
 }
 
 impl Notification {
@@ -73,12 +77,15 @@ impl Notification {
                 "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id,
                         COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
-                        LEFT(m.body, 120) AS message_preview
+                        LEFT(m.body, 120) AS message_preview,
+                        crm.last_read_at AS room_read_at
                  FROM notifications n
                  JOIN users u ON u.id = n.actor_id
                  JOIN users recipient ON recipient.id = n.user_id
                  JOIN chat_rooms r ON r.id = n.room_id
                  JOIN chat_messages m ON m.id = n.message_id
+                 LEFT JOIN chat_room_members crm
+                        ON crm.room_id = n.room_id AND crm.user_id = $1
                  WHERE n.user_id = $1
                    AND NOT (
                         COALESCE(recipient.settings, '{}'::jsonb)
@@ -111,11 +118,19 @@ impl Notification {
                 actor_username: row.get("actor_username"),
                 room_slug: row.get("room_slug"),
                 message_preview: row.get("message_preview"),
+                room_read_at: row.get("room_read_at"),
             })
             .collect())
     }
 
     /// Count unread notifications for a user.
+    ///
+    /// Two cursors clear a mention, and either one is enough: the mention
+    /// feed's own watermark (opening the Mentions entry) and the read cursor of
+    /// the room the mention was said in. Without the second one a mention you
+    /// read in its own room sat on the rail badge until you also opened
+    /// Mentions. Both are `LEFT JOIN`ed to `-infinity`, so a room the user
+    /// never opened leaves its mentions unread.
     pub async fn unread_count(client: &Client, user_id: Uuid) -> Result<i64> {
         let row = client
             .query_one(
@@ -124,8 +139,11 @@ impl Notification {
                  JOIN chat_rooms r ON r.id = n.room_id
                  JOIN users recipient ON recipient.id = n.user_id
                  LEFT JOIN mention_feed_reads mfr ON mfr.user_id = $1
+                 LEFT JOIN chat_room_members crm
+                        ON crm.room_id = n.room_id AND crm.user_id = $1
                  WHERE n.user_id = $1
                    AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)
+                   AND n.created > COALESCE(crm.last_read_at, '-infinity'::timestamptz)
                    AND NOT (
                         COALESCE(recipient.settings, '{}'::jsonb)
                         @> jsonb_build_object(

@@ -81,6 +81,9 @@ pub struct State {
     pub scroll_offset: u16,
     pub reset_pending: bool,
     daily_snapshots: HashMap<String, BoardSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, BoardSnapshot>,
     pub svc: MinesweeperService,
 }
@@ -126,11 +129,36 @@ impl State {
             scroll_offset: 0,
             reset_pending: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_difficulty();
         state
+    }
+
+    /// Roll the daily boards forward when the UTC date changes under a live
+    /// session. Reconnecting rebuilds them in `new`, so a client left running
+    /// overnight was the only one still being handed yesterday's boards, and
+    /// saving one wrote yesterday's progress under today's puzzle date.
+    /// Returns true when the boards moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for diff in &DIFFICULTIES {
+            self.daily_snapshots.insert(
+                diff.key.to_string(),
+                generate_snapshot(Mode::Daily, diff, &self.svc),
+            );
+        }
+        if self.mode == Mode::Daily {
+            self.reset_pending = false;
+            self.load_mode_snapshot_for_selected_difficulty();
+        }
+        true
     }
 
     pub fn difficulty(&self) -> &DifficultyConfig {

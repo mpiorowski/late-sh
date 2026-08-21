@@ -1953,3 +1953,63 @@ async fn history_modal_opens_from_command_and_closes_on_esc() {
         "expected the history modal gone after Esc; frame={frame:?}"
     );
 }
+
+/// Uploading an image while replying used to come back as a plain message:
+/// both the `/paste-image` submit and reopening the composer with the finished
+/// URL run through paths that clear the reply target.
+#[tokio::test]
+async fn image_upload_keeps_the_reply_it_was_composed_against() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-upload-viewer").await;
+    let author = create_test_user(&test_db.db, "f-upload-author").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, author.id)
+        .await
+        .expect("join author");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "upload target".to_string(),
+        },
+    )
+    .await
+    .expect("create message");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "f-upload-flow-it");
+    app.resize(160, 32).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "upload target").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"r");
+    assert!(
+        app.chat.reply_target().is_some(),
+        "r should open a reply composer"
+    );
+
+    // Stand in for the upload itself: the reply target travels with the
+    // request from here, and the composer is reopened when the URL lands.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let reply_target = app.chat.reply_target().cloned();
+    assert!(
+        app.chat
+            .begin_image_upload(Some(lounge.id), reply_target, rx)
+            .is_none(),
+        "the upload should start"
+    );
+    tx.send(Ok("https://files.late.sh/chat/x.png".to_string()))
+        .expect("deliver the uploaded url");
+
+    wait_for_render_contains(&mut app, "files.late.sh/chat/x.png").await;
+    assert!(
+        app.chat.reply_target().is_some(),
+        "the upload dropped the reply it was composed against"
+    );
+}

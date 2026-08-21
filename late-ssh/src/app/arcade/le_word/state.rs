@@ -29,6 +29,9 @@ pub struct State {
     pub won: bool,
     pub show_rules: bool,
     pub message: String,
+    /// In flight only while a rolled-over day is fetching its word; see
+    /// `ensure_current_daily`.
+    word_reload_rx: Option<tokio::sync::oneshot::Receiver<Option<DailyWord>>>,
     pub svc: LeWordService,
 }
 
@@ -60,6 +63,7 @@ impl State {
             } else {
                 "Le Word is unavailable. Try again soon.".to_string()
             },
+            word_reload_rx: None,
             svc,
         };
         if let Some(game) = saved_game
@@ -79,6 +83,70 @@ impl State {
             };
         }
         state
+    }
+
+    /// Roll the round over when the UTC date changes under a live session.
+    /// The word itself lives in the database (the session's first one arrives
+    /// with the bootstrap), so this clears the board immediately and fetches
+    /// the new word in the background; `poll_word_reload` installs it. Returns
+    /// true when the round moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.puzzle_date == today {
+            return false;
+        }
+
+        self.puzzle_date = today;
+        self.answer = String::new();
+        self.daily_word_loaded = false;
+        self.guesses.clear();
+        self.current_guess.clear();
+        self.is_game_over = false;
+        self.won = false;
+        self.message = "Loading today's Le Word.".to_string();
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.word_reload_rx = Some(rx);
+        let svc = self.svc.clone();
+        // Pure state tests drive this without a runtime; the state is already
+        // cleared, and the poll below installs nothing when nothing arrives.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let word = match svc.ensure_daily_word().await {
+                    Ok(word) => Some(word),
+                    Err(error) => {
+                        tracing::error!(error = ?error, "failed to load the rolled-over Le Word");
+                        None
+                    }
+                };
+                let _ = tx.send(word);
+            });
+        }
+        true
+    }
+
+    /// Install a word fetched by `ensure_current_daily`. Returns true when the
+    /// screen changed.
+    pub fn poll_word_reload(&mut self) -> bool {
+        let Some(rx) = self.word_reload_rx.as_mut() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(Some(word)) => {
+                self.word_reload_rx = None;
+                self.puzzle_date = word.puzzle_date;
+                self.answer = word.answer_word;
+                self.daily_word_loaded = true;
+                self.message = "Guess today's Le Word.".to_string();
+                true
+            }
+            Ok(None) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                self.word_reload_rx = None;
+                self.message = "Le Word is unavailable. Try again soon.".to_string();
+                true
+            }
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
+        }
     }
 
     /// Today's word has at least one submitted guess and the run is not over.

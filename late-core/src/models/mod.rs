@@ -93,6 +93,8 @@ pub mod mud_character;
 pub mod mud_world_state;
 pub mod nonogram;
 pub mod notification;
+#[cfg(test)]
+mod notification_test;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;

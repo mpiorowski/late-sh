@@ -124,7 +124,16 @@ impl State {
         self.reset_pending
     }
 
+    /// Arm the reset on the first press, perform it on the second. A solved
+    /// daily is finished: re-scrambling it would put the day's cube back on
+    /// the board with the win already banked, so the key is refused outright
+    /// rather than armed.
     pub fn request_reset(&mut self) -> bool {
+        if self.is_solved() {
+            self.reset_pending = false;
+            self.message = format!("Daily cube {} is already solved.", self.daily_label());
+            return false;
+        }
         if self.reset_pending {
             self.reset_pending = false;
             return true;
@@ -156,12 +165,15 @@ impl State {
         self.save_async();
     }
 
-    pub fn ensure_current_daily(&mut self) {
+    /// Roll the cube forward when the UTC date changes under a live session.
+    /// Returns true when it moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
         let today = Utc::now().date_naive();
         if self.puzzle_date == today {
-            return;
+            return false;
         }
         *self = Self::new_for_date(self.user_id, self.svc.clone(), today);
+        true
     }
 
     fn apply_daily_scramble(&mut self) {

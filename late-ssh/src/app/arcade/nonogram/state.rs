@@ -99,6 +99,9 @@ pub struct State {
     player_grid: Vec<Vec<u8>>,
     is_game_over: bool,
     daily_snapshots: HashMap<String, PuzzleSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, PuzzleSnapshot>,
     pub svc: NonogramService,
 }
@@ -152,11 +155,37 @@ impl State {
             player_grid: Vec::new(),
             is_game_over: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_pack();
         state
+    }
+
+    /// Roll the daily puzzles forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Returns true when they moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for difficulty in DIFFICULTIES {
+            let Some(pack) = self.library.pack_by_size_key(difficulty.size_key) else {
+                continue;
+            };
+            let Some(snapshot) = generate_snapshot(pack, Mode::Daily, &self.svc, today) else {
+                continue;
+            };
+            self.daily_snapshots
+                .insert(difficulty.key.to_string(), snapshot);
+        }
+        if self.mode == Mode::Daily {
+            self.load_mode_snapshot_for_selected_pack();
+        }
+        true
     }
 
     pub fn has_puzzles(&self) -> bool {
