@@ -144,6 +144,15 @@ const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_DEFAULT: &[u8] = b"\x1b[0 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
+/// Name the window we're borrowing. `CSI 22;2t` pushes the title the user
+/// already had onto the terminal's own stack first, so [`POP_WINDOW_TITLE`]
+/// can hand it back on the way out: an `ssh late.sh` in one tab of ten should
+/// be findable by name without permanently renaming that tab. Terminals that
+/// implement neither leave the title alone, which is the behaviour we had.
+const SET_WINDOW_TITLE: &[u8] = b"\x1b[22;2t\x1b]2;late.sh\x1b\\";
+/// `CSI 23;2t`: restore the pushed title on the way out.
+const POP_WINDOW_TITLE: &[u8] = b"\x1b[23;2t";
+
 #[derive(Clone, Default)]
 pub(super) struct SharedBuffer {
     inner: Arc<Mutex<Vec<u8>>>,
@@ -3168,6 +3177,7 @@ impl App {
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
         }
+        buf.extend_from_slice(SET_WINDOW_TITLE);
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1003h = any-event mouse tracking (motion reports with or without a
         // button held). Dartboard needs drag + hover parity with standalone.
@@ -3195,6 +3205,7 @@ impl App {
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
         buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(POP_WINDOW_TITLE);
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
         }

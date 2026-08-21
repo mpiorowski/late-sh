@@ -7,6 +7,30 @@ fn extract_theme_id_reads_trimmed_string() {
 }
 
 #[test]
+fn extract_favorite_theme_ids_keeps_starred_order() {
+    let settings = json!({ "favorite_theme_ids": ["mocha", "gruvbox", "nord"] });
+    assert_eq!(
+        extract_favorite_theme_ids(&settings),
+        vec!["mocha", "gruvbox", "nord"]
+    );
+}
+
+#[test]
+fn extract_favorite_theme_ids_drops_junk_without_losing_the_rest() {
+    let settings = json!({
+        "favorite_theme_ids": ["  mocha  ", "", "mocha", 7, null, "nord"]
+    });
+    // Trimmed, deduped on first occurrence, non-strings and blanks skipped.
+    assert_eq!(extract_favorite_theme_ids(&settings), vec!["mocha", "nord"]);
+}
+
+#[test]
+fn extract_favorite_theme_ids_missing_is_empty() {
+    assert!(extract_favorite_theme_ids(&json!({})).is_empty());
+    assert!(extract_favorite_theme_ids(&json!({ "favorite_theme_ids": "nope" })).is_empty());
+}
+
+#[test]
 fn extract_theme_id_missing_returns_none() {
     let settings = json!({});
     assert_eq!(extract_theme_id(&settings), None);

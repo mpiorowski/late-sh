@@ -51,6 +51,32 @@ fn poll_row_widths_shrinks_labels_only_when_row_is_full() {
 }
 
 #[test]
+fn poll_title_shows_who_started_it() {
+    let (question, byline) = poll_title_parts("Which editor wins?", Some("mat"), 12, 80);
+
+    assert_eq!(question, "Which editor wins?");
+    assert_eq!(byline, " · @mat");
+}
+
+#[test]
+fn poll_title_drops_the_byline_before_it_eats_the_question() {
+    // Narrow strip: the question has to survive, the attribution does not.
+    let (question, byline) = poll_title_parts("Which editor wins?", Some("mat"), 12, 34);
+
+    assert_eq!(byline, "");
+    // The whole 12-cell budget goes to the question once the byline is gone.
+    assert_eq!(question, "Which edito…");
+}
+
+#[test]
+fn poll_title_without_an_author_reads_as_it_always_did() {
+    let (question, byline) = poll_title_parts("Which editor wins?", None, 12, 80);
+
+    assert_eq!(question, "Which editor wins?");
+    assert_eq!(byline, "");
+}
+
+#[test]
 fn author_badge_suffix_keeps_badges_compact() {
     assert_eq!(
         format_author_badge_suffix(&["mod", "dev"], None, None),
@@ -630,6 +656,7 @@ fn chat_view<'a>(
             loading: false,
             filtering: false,
             query: "",
+            sort: crate::app::chat::discover::state::SortMode::default(),
         },
         rows_cache,
         room_versions: ROOM_VERSIONS.get_or_init(HashMap::new),

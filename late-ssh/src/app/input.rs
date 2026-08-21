@@ -24,6 +24,7 @@ use vte::{Params, Parser, Perform};
 
 const PENDING_ESCAPE_FLUSH_DELAY: Duration = Duration::from_millis(40);
 const CTRL_G: u8 = 0x07;
+const CTRL_L: u8 = 0x0C;
 const CTRL_O: u8 = 0x0F;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
@@ -3539,6 +3540,13 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     // raw control bytes as drawing commands.
     if app.screen == Screen::Artboard && app.artboard_interacting {
         return false;
+    }
+
+    // The scratchpad spends Ctrl+L on its language cycle and says so in its
+    // own footer, so it keeps the key; every other screen gets the redraw.
+    if *byte == CTRL_L && app.screen != Screen::Scratchpad {
+        app.force_full_repaint();
+        return true;
     }
 
     match *byte {

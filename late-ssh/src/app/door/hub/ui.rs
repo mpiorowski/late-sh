@@ -124,11 +124,7 @@ fn sidebar_scroll(rows: &[SidebarRow], selected: usize, height: usize) -> usize 
 
 pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
     if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
-        frame.render_widget(
-            Paragraph::new("Terminal too small for Games")
-                .alignment(ratatui::layout::Alignment::Center),
-            area,
-        );
+        crate::app::common::primitives::draw_too_small(frame, area, "Games", MIN_WIDTH, MIN_HEIGHT);
         return;
     }
 

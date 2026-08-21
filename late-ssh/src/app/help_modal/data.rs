@@ -521,6 +521,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
+        "  Ctrl+L             redraw the screen if something outside late.sh scribbled on it",
         "  /shop              open the Shop",
         "  /aquarium          toggle the Aquarium in the Lounge after unlocking it in the Shop",
         "  /aquarium feed     feed your Aquarium with bought Aquarium Food",
@@ -767,6 +768,8 @@ fn social_help_lines() -> Vec<String> {
         "  Loads only when selected.",
         "  j / k or ↑ / ↓   navigate rooms",
         "  Enter             join selected public room",
+        "  /                 filter the list by room name",
+        "  s                 sort by recent activity or by member count",
         "",
         "Read-only profile modal",
         "  p                 open selected chat author's profile card",
@@ -1033,6 +1036,7 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
+        "  Ctrl+L            redraw the screen after outside terminal damage",
         "  /shop             open the Shop",
         "  /aquarium         toggle the Aquarium in the Lounge after unlocking it in the Shop",
         "  /aquarium feed    feed your Aquarium with bought Aquarium Food",
@@ -1193,7 +1197,8 @@ fn settings_help_lines() -> Vec<String> {
         "  Settings          username, late.fetch fields, country, timezone, notifications, layout toggles"
             .to_string(),
         "  Bio               multiline markdown bio".to_string(),
-        "  Themes            expanded theme browser".to_string(),
+        "  Themes            expanded theme browser; / searches it, f stars a theme into Favorites"
+            .to_string(),
         "  Tweaks            power-user toggles for appearance, compose, music, display, and startup"
             .to_string(),
         "  Account           link SSH keys across accounts, reset/revoke your IRC access token, or delete your account"

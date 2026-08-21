@@ -80,6 +80,15 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
+    // An open theme search owns Esc: it backs out of the search, not out of
+    // settings, the same way the Bio editor keeps its own keys.
+    if app.settings_modal_state.selected_tab() == Tab::Themes
+        && app.settings_modal_state.theme_searching()
+    {
+        handle_themes_tab_input(app, event);
+        return;
+    }
+
     if is_close_event(&event) {
         app.show_settings = false;
         return;
@@ -128,8 +137,35 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
 
 fn handle_themes_tab_input(app: &mut App, event: ParsedInput) {
     let state: &mut SettingsModalState = &mut app.settings_modal_state;
+
+    // While the search line is open every printable key edits the query, so
+    // only the arrows move the cursor: j/k have to stay typeable, the same
+    // bargain the Discover filter makes.
+    if state.theme_searching() {
+        match event {
+            ParsedInput::Byte(0x1B) => state.cancel_theme_search(),
+            ParsedInput::Arrow(b'B') => state.move_theme_cursor(1),
+            ParsedInput::Arrow(b'A') => state.move_theme_cursor(-1),
+            // Enter keeps the theme the cursor already previewed and puts the
+            // full tree back.
+            ParsedInput::Byte(b'\r') => state.cancel_theme_search(),
+            ParsedInput::Byte(0x15) => state.clear_theme_query(),
+            ParsedInput::Byte(0x7F | 0x08) | ParsedInput::Delete => state.backspace_theme_query(),
+            ParsedInput::Char(ch) => state.push_theme_query_char(ch),
+            ParsedInput::Byte(byte) if (32..127).contains(&byte) => {
+                state.push_theme_query_char(byte as char)
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match event {
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
+        ParsedInput::Byte(b'/') | ParsedInput::Char('/') => state.start_theme_search(),
+        ParsedInput::Byte(b'f' | b'F') | ParsedInput::Char('f' | 'F') => {
+            state.toggle_theme_favorite()
+        }
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => state.move_theme_cursor(1),

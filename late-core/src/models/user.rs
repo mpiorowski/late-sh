@@ -380,6 +380,7 @@ const TRANSLATE_MINE_TO_EN_KEY: &str = "translate_mine_to_en";
 const SHOW_FLAG_FALLBACK_KEY: &str = "show_flag_fallback";
 const CLUBHOUSE_TUTORIAL_DONE_KEY: &str = "clubhouse_tutorial_done";
 const FAVORITE_ROOM_IDS_KEY: &str = "favorite_room_ids";
+const FAVORITE_THEME_IDS_KEY: &str = "favorite_theme_ids";
 const BIO_KEY: &str = "bio";
 const COUNTRY_KEY: &str = "country";
 const TIMEZONE_KEY: &str = "timezone";
@@ -1459,6 +1460,31 @@ pub fn extract_favorite_room_ids(settings: &Value) -> Vec<Uuid> {
         };
         if seen.insert(id) {
             out.push(id);
+        }
+    }
+    out
+}
+
+/// Theme ids the user has starred, in the order they starred them. Ids are
+/// opaque strings rather than uuids and are not validated against the theme
+/// table here: a theme that gets renamed or retired simply stops matching, and
+/// the stale entry is inert until the user unstars it.
+pub fn extract_favorite_theme_ids(settings: &Value) -> Vec<String> {
+    let Some(entries) = settings
+        .get(FAVORITE_THEME_IDS_KEY)
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(id) = entry.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if seen.insert(id.to_string()) {
+            out.push(id.to_string());
         }
     }
     out

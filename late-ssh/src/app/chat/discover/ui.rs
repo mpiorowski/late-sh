@@ -16,6 +16,7 @@ pub struct DiscoverListView<'a> {
     pub loading: bool,
     pub filtering: bool,
     pub query: &'a str,
+    pub sort: super::state::SortMode,
 }
 
 /// Each room takes two rows: the `#slug` name on top, its stats underneath.

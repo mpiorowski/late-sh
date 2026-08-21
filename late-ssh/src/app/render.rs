@@ -598,6 +598,7 @@ impl App {
             loading: self.chat.discover.is_loading(),
             filtering: self.chat.discover.is_filtering(),
             query: self.chat.discover.query(),
+            sort: self.chat.discover.sort(),
         };
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),

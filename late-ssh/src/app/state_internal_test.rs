@@ -62,6 +62,25 @@ fn leave_alt_screen_hands_the_cursor_shape_back_to_the_terminal() {
 }
 
 #[test]
+fn alt_screen_names_the_window_and_gives_the_old_title_back() {
+    let enter = App::enter_alt_screen(true);
+    assert!(
+        enter
+            .windows(SET_WINDOW_TITLE.len())
+            .any(|w| w == SET_WINDOW_TITLE),
+        "expected the window title to be pushed and set on entry, got: {enter:?}"
+    );
+
+    let leave = App::leave_alt_screen();
+    assert!(
+        leave
+            .windows(POP_WINDOW_TITLE.len())
+            .any(|w| w == POP_WINDOW_TITLE),
+        "expected the user's own window title restored on exit, got: {leave:?}"
+    );
+}
+
+#[test]
 fn alt_screen_boundaries_recover_terminal_string_state() {
     assert!(App::enter_alt_screen(true).starts_with(terminal_string_terminator()));
     assert!(App::leave_alt_screen().starts_with(terminal_string_terminator()));

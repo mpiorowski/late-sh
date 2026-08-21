@@ -93,6 +93,7 @@ fn test_poll(options: Vec<(&str, i64)>) -> ActiveChatPoll {
             })
             .collect(),
         my_vote_option_id: None,
+        author_username: Some("polly".to_string()),
     }
 }
 

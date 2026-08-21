@@ -83,6 +83,111 @@ fn selection_tracks_filtered_list() {
     );
 }
 
+fn item_with_members(slug: &str, member_count: i64) -> DiscoverRoomItem {
+    DiscoverRoomItem {
+        member_count,
+        ..item(slug)
+    }
+}
+
+#[test]
+fn default_order_is_whatever_the_query_returned() {
+    let mut state = State::new();
+    state.set_items(vec![
+        item_with_members("quiet-but-huge", 500),
+        item_with_members("busy-today", 3),
+    ]);
+
+    assert_eq!(state.sort(), SortMode::Activity);
+    assert_eq!(
+        state
+            .visible_items()
+            .iter()
+            .map(|i| &i.slug)
+            .collect::<Vec<_>>(),
+        vec!["quiet-but-huge", "busy-today"]
+    );
+}
+
+#[test]
+fn sorting_by_members_puts_the_biggest_rooms_first() {
+    let mut state = State::new();
+    state.set_items(vec![
+        item_with_members("small", 3),
+        item_with_members("huge", 500),
+        item_with_members("medium", 40),
+    ]);
+
+    state.cycle_sort();
+
+    assert_eq!(state.sort(), SortMode::Members);
+    assert_eq!(
+        state
+            .visible_items()
+            .iter()
+            .map(|i| &i.slug)
+            .collect::<Vec<_>>(),
+        vec!["huge", "medium", "small"]
+    );
+
+    // And back again, without disturbing the underlying list.
+    state.cycle_sort();
+    assert_eq!(
+        state
+            .visible_items()
+            .iter()
+            .map(|i| &i.slug)
+            .collect::<Vec<_>>(),
+        vec!["small", "huge", "medium"]
+    );
+}
+
+/// Re-sorting moves rooms out from under the cursor, so the selection has to
+/// go back to the top rather than silently pointing at a different room.
+#[test]
+fn cycling_the_sort_resets_the_selection() {
+    let mut state = State::new();
+    state.set_items(vec![
+        item_with_members("small", 3),
+        item_with_members("huge", 500),
+    ]);
+    state.move_selection(1);
+    assert_eq!(state.selected_index(), 1);
+
+    state.cycle_sort();
+
+    assert_eq!(state.selected_index(), 0);
+    assert_eq!(
+        state.selected_item().map(|i| i.slug.clone()),
+        Some("huge".into())
+    );
+}
+
+#[test]
+fn sorting_applies_to_the_filtered_list_too() {
+    let mut state = State::new();
+    state.set_items(vec![
+        item_with_members("rust-small", 3),
+        item_with_members("python", 900),
+        item_with_members("rust-huge", 500),
+    ]);
+
+    state.start_filter();
+    for ch in "rust".chars() {
+        state.push_char(ch);
+    }
+    state.cycle_sort();
+
+    assert_eq!(
+        state
+            .visible_items()
+            .iter()
+            .map(|i| &i.slug)
+            .collect::<Vec<_>>(),
+        vec!["rust-huge", "rust-small"]
+    );
+}
+
 #[test]
 fn cancel_filter_restores_full_list() {
     let mut state = State::new();

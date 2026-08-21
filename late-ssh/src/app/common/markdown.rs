@@ -379,7 +379,11 @@ fn push_plain(spans: &mut Vec<Span<'static>>, text: &str, style: Style) {
     if text.is_empty() {
         return;
     }
-    spans.extend(mention_spans(text, style));
+    // The one place plain prose reaches: inline code and fenced blocks are
+    // rendered elsewhere, so `:shortcode:` inside code stays literal, which is
+    // the whole reason the expansion lives down here rather than on the body.
+    let text = super::emoji::expand_shortcodes(text);
+    spans.extend(mention_spans(&text, style));
 }
 
 fn render_wrapped(

@@ -53,6 +53,9 @@ pub struct ActiveChatPoll {
     pub poll: ChatPoll,
     pub options: Vec<ChatPollOptionSummary>,
     pub my_vote_option_id: Option<Uuid>,
+    /// Who started it, resolved with the poll so the strip can say so. `None`
+    /// only when the author's account is gone; a live poll always has one.
+    pub author_username: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -212,24 +215,28 @@ pub async fn list_active_polls_for_rooms(
 
     let poll_rows = client
         .query(
-            "SELECT DISTINCT ON (room_id) *
-	             FROM chat_polls
-	             WHERE room_id = ANY($1)
-	               AND active = true
-	               AND ends_at > current_timestamp
-	             ORDER BY room_id, ends_at DESC, id DESC",
+            "SELECT DISTINCT ON (p.room_id) p.*, u.username AS author_username
+	             FROM chat_polls p
+	             LEFT JOIN users u ON u.id = p.user_id
+	             WHERE p.room_id = ANY($1)
+	               AND p.active = true
+	               AND p.ends_at > current_timestamp
+	             ORDER BY p.room_id, p.ends_at DESC, p.id DESC",
             &[&room_ids],
         )
         .await?;
     let polls = poll_rows
         .into_iter()
-        .map(ChatPoll::from)
+        .map(|row| {
+            let author_username: Option<String> = row.get("author_username");
+            (ChatPoll::from(row), author_username)
+        })
         .collect::<Vec<_>>();
     if polls.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let poll_ids = polls.iter().map(|poll| poll.id).collect::<Vec<_>>();
+    let poll_ids = polls.iter().map(|(poll, _)| poll.id).collect::<Vec<_>>();
     let option_rows = client
         .query(
             "SELECT
@@ -274,7 +281,7 @@ pub async fn list_active_polls_for_rooms(
 
     Ok(polls
         .into_iter()
-        .map(|poll| {
+        .map(|(poll, author_username)| {
             let room_id = poll.room_id;
             let options = options_by_poll.remove(&poll.id).unwrap_or_default();
             let my_vote_option_id = votes_by_poll.remove(&poll.id);
@@ -284,6 +291,7 @@ pub async fn list_active_polls_for_rooms(
                     poll,
                     options,
                     my_vote_option_id,
+                    author_username,
                 },
             )
         })
@@ -312,12 +320,17 @@ pub async fn claim_expired_poll(
 ) -> Result<Option<ActiveChatPoll>> {
     let row = client
         .query_opt(
-            "UPDATE chat_polls
-             SET active = false, updated = current_timestamp
-             WHERE id = $1
-               AND active = true
-               AND ends_at <= current_timestamp
-             RETURNING *",
+            "WITH claimed AS (
+                 UPDATE chat_polls
+                 SET active = false, updated = current_timestamp
+                 WHERE id = $1
+                   AND active = true
+                   AND ends_at <= current_timestamp
+                 RETURNING *
+             )
+             SELECT c.*, u.username AS author_username
+             FROM claimed c
+             LEFT JOIN users u ON u.id = c.user_id",
             &[&poll_id],
         )
         .await?;
@@ -325,6 +338,7 @@ pub async fn claim_expired_poll(
     let Some(row) = row else {
         return Ok(None);
     };
+    let author_username: Option<String> = row.get("author_username");
     let poll = ChatPoll::from(row);
     let options = poll_option_summaries(client, &[poll.id])
         .await?
@@ -335,6 +349,7 @@ pub async fn claim_expired_poll(
         poll,
         options,
         my_vote_option_id: None,
+        author_username,
     }))
 }
 

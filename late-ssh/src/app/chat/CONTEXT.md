@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-17 (the room header's stream row now sizes its title and watcher count from the measured watch-link width instead of a hardcoded guess, so the watch URL renders instead of being the thing that gets dropped; see §11 Room Header. Previously: composer `/ban` and `/unban` join `/kick` as room moderation commands routed through `ModerationService::room_command`; chat-originated room actions now name the room by id instead of slug, and an ownership-granted ban can no longer touch an active staff ban; see Room Membership Commands items 5-6 and `stream/CONTEXT.md` §6)
+- Last updated: 2026-08-21 (Discover sorts by activity or member count with `s` (`discover::state::SortMode`); the active-poll strip names its author from `ActiveChatPoll::author_username`, dropping the byline before the question when the strip is narrow (`poll_title_parts`); the unread divider is a heavy amber rule; and `:shortcode:` emoji expand at render time through `common::emoji::expand_shortcodes`, hooked into the markdown renderer's `push_plain` so code spans and fences stay literal.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -476,6 +476,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 - `DiscoverRoomsLoaded { user_id, rooms }` and `DiscoverRoomsFailed { user_id, message }` are user-targeted.
 - `start_loading()` clears stale rows until results arrive; empty loaded state is distinct from loading.
 - Enter joins the selected public room.
+- `s` cycles the sort between `activity` (the query's own order: most recently active first) and `members` (largest first, slug breaking ties). The sort lives in `discover::state::SortMode` and is applied in `visible_items()` after filtering, so it reorders search results too; cycling resets the selection to the top because the old index points at a different room afterwards. Activity is the default and adds no sort work.
 - Rooms render two rows each (`ITEM_HEIGHT = 2` in `discover/ui.rs`): `#slug` plus the room's topic when a mod has set one (clipped to the row), then member/message counts and last activity. The preview pane repeats the topic in full under the room's stats, since that is where someone decides whether to join.
 
 ### Room Header

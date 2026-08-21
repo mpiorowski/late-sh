@@ -89,10 +89,29 @@ const CELL_EMPTY: u8 = 0;
 const CELL_FILLED: u8 = 1;
 const CELL_MARKED_EMPTY: u8 = 2;
 
+/// The two keys that throw away a board in progress. Both ask first, the way
+/// every other Arcade game does: a 20x20 grid is half an hour of work and `r`
+/// sits one key from the movement row (user feedback).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to clear the board",
+        }
+    }
+}
+
 pub struct State {
     pub user_id: Uuid,
     pub mode: Mode,
     pub cursor: (usize, usize),
+    pub reset_pending: Option<ResetKind>,
     library: Library,
     selected_difficulty: usize,
     current_puzzle_id: String,
@@ -146,6 +165,7 @@ impl State {
             user_id,
             mode: Mode::Daily,
             cursor: (0, 0),
+            reset_pending: None,
             library,
             selected_difficulty,
             current_puzzle_id: String::new(),
@@ -256,7 +276,26 @@ impl State {
     }
 
     /// Jump straight to a daily board: the backtick workspace entry path.
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    /// Disarm. Called by every other action, so an `r` pressed minutes ago can
+    /// never combine with an unrelated later keystroke into a wiped board.
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
+    }
+
     pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
@@ -264,18 +303,21 @@ impl State {
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let Some(pack) = self.selected_pack().cloned() else {
             return;
@@ -294,6 +336,7 @@ impl State {
     }
 
     pub fn reset_board(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -306,6 +349,7 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
+        self.clear_reset_pending();
         let Some(puzzle) = self.puzzle() else {
             return;
         };
@@ -319,6 +363,7 @@ impl State {
     }
 
     pub fn toggle_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -341,6 +386,7 @@ impl State {
     }
 
     pub fn toggle_mark(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -362,6 +408,7 @@ impl State {
     }
 
     pub fn clear_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -380,6 +427,7 @@ impl State {
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }
@@ -389,6 +437,7 @@ impl State {
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }

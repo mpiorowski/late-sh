@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
-- Last updated: 2026-08-20 (A Dark Room gained its 10th-anniversary content: a ravaged battleship that only appears once an account has finished the game, its three decks and the fabricator they unlock, and the immortal wanderer on the command deck whose fleet beacon turns the ascent into a second ending worth another 10,000 chips and the `ADB` badge. It pays badges only: no boards, no lifetime counters, no starting bonuses. Chat author labels now show one badge per game, top of the ladder only, for every game. Details in `late-ssh/src/app/door/darkroom/CONTEXT.md` and `late-ssh/src/app/leaderboard/CONTEXT.md`)
+- Last updated: 2026-08-21 (A batch of chat-room suggestions landed: global `Ctrl+L` force-repaint (every screen but the Scratchpad, which keeps the chord for its language cycle); one shared `primitives::draw_too_small` so every minimum-size screen names the size it needs and the size you have; the poll strip carries its author (`ActiveChatPoll::author_username`); display-time `:shortcode:` emoji expansion in `common/emoji.rs`, applied in the markdown renderer's plain-text funnel so code stays literal; a heavier unread divider; Discover sorts by activity or members (`s`); the Themes tab gained `/` search and `f` favourites (`users.settings.favorite_theme_ids`); Lateris gained a hold slot (`c`, migration 146); and nonogram `r`/`n` now confirm like every other Arcade game. Window title set/restored around the alt screen.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 
@@ -1219,7 +1219,7 @@ One global overlay owns general app help plus the former Pair, terminal FAQ, and
 
 - Module: `late-ssh/src/app/help_modal/`.
 - State flag on `App`: `show_help` paired with `help_modal_state`.
-- Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `Ctrl+R` and `Ctrl+L` are no longer global help keybindings.
+- Opening: global `?` in `app/input.rs`; `/binds` opens Chat, `/music` opens Music, Bonsai `?` opens Bonsai. `Ctrl+R` is no longer a global help keybinding, and `Ctrl+L` is now the global force-repaint chord (see the shortcuts table) rather than a help key.
 - Outer frame: `app/render.rs::app_frame_help_hint_title()` advertises `Settings Ctrl+O`, `Lobby Ctrl+G`, `Shop /shop`, and `Guide ?`; the aquarium moved to the `/aquarium` composer command.
 - Topics include Pair, Overview, Chat, Social, Directory, News, Arcade, Lobby, Lateania, Copy, Links, Images, Selection, Notifications, CLI YouTube, Economy, Bonsai, Settings, Architecture.
 - Footer keys: `Tab/S+Tab` switch topics, `j/k`/arrows scroll, `Esc/q/?` close.
@@ -1246,6 +1246,7 @@ Content invariants worth preserving when editing `data.rs`:
 | `4` | Global | Jump to Artboard |
 | `5` | Global | Jump to Directory |
 | `0` | Global | Jump to the Clubhouse |
+| `Ctrl+L` | Global (except the Scratchpad, which cycles its highlight language) | Force a full repaint: clears the client screen and re-emits every cell via `App::force_full_repaint`. The escape hatch when something outside late.sh scribbles on the terminal. |
 | `m` | Global | Toggle mute on paired client (persisted per device, so it sticks across sessions) |
 | `+` / `=` | Global | Volume up on paired client |
 | `-` / `_` | Global | Volume down on paired client |

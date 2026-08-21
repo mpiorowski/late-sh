@@ -3,8 +3,8 @@
 use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
-    with_session_key,
+    make_app_with_permissions, new_test_db, render_plain, strip_ansi, wait_for_render_contains,
+    wait_until, with_session_key,
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -1951,5 +1951,44 @@ async fn history_modal_opens_from_command_and_closes_on_esc() {
     assert!(
         !frame.contains("History ·"),
         "expected the history modal gone after Esc; frame={frame:?}"
+    );
+}
+
+/// Ctrl+L is the escape hatch for a terminal left damaged by something outside
+/// late.sh. It has to re-emit every cell: the failure mode worth pinning is a
+/// repaint that clears the screen and then sends an empty diff, leaving the
+/// user staring at a blank terminal that is worse than the damage.
+#[tokio::test]
+async fn ctrl_l_repaints_the_whole_screen_rather_than_blanking_it() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "ctrl-l-repaint").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "ctrl-l-repaint-flow-it");
+
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    // Let the screen settle: with nothing changed, a frame is only a small diff.
+    let _ = app.render().expect("render");
+    let settled = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
+
+    app.handle_input(b"\x0c");
+    let repainted = strip_ansi(&String::from_utf8_lossy(&app.render().expect("render")));
+
+    assert!(
+        repainted.contains("lounge"),
+        "expected Ctrl+L to re-emit the whole screen; repainted={repainted:?}"
+    );
+    assert!(
+        repainted.len() > settled.len(),
+        "expected the Ctrl+L frame to carry more than the settled diff; \
+         settled={} bytes, repainted={} bytes",
+        settled.len(),
+        repainted.len()
     );
 }

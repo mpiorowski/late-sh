@@ -22,6 +22,10 @@ use crate::app::{
 
 type DailyRewardTiers = &'static [(&'static str, i64)];
 
+/// Smallest area the Arcade lobby (quest strip + game grid) still fits in.
+const LOBBY_MIN_WIDTH: u16 = 50;
+const LOBBY_MIN_HEIGHT: u16 = 10;
+
 /// The three-tier games pay [`Difficulty::chips`] per tier. Solitaire's draw
 /// modes are not difficulties, but pay the medium and hard chip amounts; the
 /// mapping lives here per the `Difficulty` doc.
@@ -313,10 +317,13 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
         }
     }
 
-    if area.height < 10 || area.width < 50 {
-        frame.render_widget(
-            Paragraph::new("Terminal too small for The Arcade").alignment(Alignment::Center),
+    if area.height < LOBBY_MIN_HEIGHT || area.width < LOBBY_MIN_WIDTH {
+        crate::app::common::primitives::draw_too_small(
+            frame,
             area,
+            "The Arcade",
+            LOBBY_MIN_WIDTH,
+            LOBBY_MIN_HEIGHT,
         );
         return;
     }
