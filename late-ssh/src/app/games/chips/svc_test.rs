@@ -1,10 +1,106 @@
-use crate::app::games::chips::svc::ChipService;
+use crate::app::{
+    activity::event::{ActivityEvent, ActivityGame},
+    games::chips::svc::ChipService,
+};
+use chrono::NaiveDate;
 use late_core::{
-    models::chips::{ChipMove, UserChips},
+    models::{
+        chips::{ChipMove, Difficulty, INITIAL_CHIP_BALANCE, UserChips},
+        reward::{
+            DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate,
+            daily_puzzle_reward_key,
+        },
+    },
     test_utils::create_test_user,
 };
+use tokio::sync::broadcast;
 
 use crate::test_helpers::new_test_db;
+
+#[tokio::test]
+async fn sliding_puzzle_activity_rewards_pay_seeded_tiers_once_per_utc_day() {
+    let test_db = new_test_db().await;
+    let chips = ChipService::new(test_db.db.clone());
+    let payout_date = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+    let (activity_tx, _) = broadcast::channel(16);
+    let reward_task = chips.start_activity_reward_task(activity_tx.clone());
+    let mut cases = Vec::new();
+
+    for difficulty in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
+        let amount = difficulty.chips();
+        let user = create_test_user(
+            &test_db.db,
+            &format!("sliding-puzzle-{}-payout", difficulty.key()),
+        )
+        .await;
+        chips.ensure_chips(user.id).await.expect("initial chips");
+
+        let reward_key =
+            daily_puzzle_reward_key(DailyPuzzleRewardGame::SlidingPuzzle, difficulty.key());
+        let client = test_db.db.get().await.expect("db client");
+        let template = RewardTemplate::get_active_by_key(&**client, &reward_key)
+            .await
+            .expect("seeded Sliding Puzzle reward template");
+        assert_eq!(template.reward_chips, amount);
+        assert_eq!(template.claim_policy, REWARD_CLAIM_POLICY_UTC_DAY);
+        assert_eq!(template.game().expect("template game"), "sliding_puzzle");
+        assert_eq!(
+            template.payout_kind().expect("template payout kind"),
+            format!("daily_win_{}", difficulty.key())
+        );
+        drop(client);
+
+        let event = ActivityEvent::game_won_at(
+            user.id,
+            "sliding-puzzle-payout-user",
+            ActivityGame::SlidingPuzzle,
+            Some(difficulty.key().to_string()),
+            Some(42),
+            ActivityEvent::occurred_on_utc_date(payout_date),
+        );
+        activity_tx.send(event.clone()).expect("first win event");
+        activity_tx
+            .send(event)
+            .expect("repeated same-day win event");
+        cases.push((user.id, reward_key, amount));
+    }
+
+    drop(activity_tx);
+    reward_task.await.expect("activity reward task exits");
+
+    let client = test_db.db.get().await.expect("db client");
+    for (user_id, reward_key, amount) in cases {
+        let balance = UserChips::find(&client, user_id)
+            .await
+            .expect("load chip balance")
+            .expect("chip balance exists");
+        assert_eq!(balance.balance, INITIAL_CHIP_BALANCE + amount);
+        assert!(
+            chips
+                .has_daily_reward_claim(user_id, &reward_key, payout_date)
+                .await
+                .expect("load utc_day payout claim")
+        );
+
+        let ledger = client
+            .query_one(
+                "SELECT count(*)::bigint AS rows, COALESCE(sum(delta), 0)::bigint AS delta
+                 FROM chip_ledger
+                 WHERE user_id = $1
+                   AND reason = $2
+                   AND source_kind = $3",
+                &[
+                    &user_id,
+                    &ChipMove::DailyPuzzleWin.reason(),
+                    &ChipMove::DailyPuzzleWin.source_kind(),
+                ],
+            )
+            .await
+            .expect("daily puzzle ledger");
+        assert_eq!(ledger.get::<_, i64>("rows"), 1);
+        assert_eq!(ledger.get::<_, i64>("delta"), amount);
+    }
+}
 
 #[tokio::test]
 async fn transfer_chips_records_atomic_gift_ledgers() {

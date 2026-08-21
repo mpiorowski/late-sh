@@ -115,6 +115,9 @@ pub mod server_ban;
 pub mod shop_consumable_effect;
 pub mod showcase;
 pub mod showcase_feed_read;
+pub mod sliding_puzzle;
+#[cfg(test)]
+mod sliding_puzzle_test;
 pub mod snake;
 pub mod solitaire;
 pub mod stream_ban;

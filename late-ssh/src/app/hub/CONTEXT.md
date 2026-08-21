@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-08-07 (the leaderboard domain moved out: `LeaderboardService` now lives at `app/leaderboard/svc.rs` and the whole Leaderboard Data section at `app/leaderboard/CONTEXT.md`; hub keeps Shop, quests, and the aquarium)
+- Last updated: 2026-08-21 (Sliding Puzzle's easy/medium/hard reward, quest, and Arcade Wins tiers are documented alongside the rest of the Hub-owned economy surface)
 - Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -81,6 +81,7 @@ Current user-facing chip amounts:
   - hard / solitaire draw-3: 500 chips
   - Le Word daily: 100 chips
   - Rubik's Cube daily: 250 chips
+  - Sliding Puzzle easy/medium/hard: 100/250/500 chips
 - Bonsai watering pays 200 chips once per day when the daily care row changes from unwatered to watered.
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -122,7 +123,7 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score and hand-count signals so they do not spam the dashboard/sidebar feed.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. Blackjack and Poker publish hidden played-hand events on settlement, plus existing visible win events. Chess and Tron publish qualifying room-round/win events for seeded quests.
 
-Seeded daily Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1/draw-3, Le Word daily, Rubik's Cube daily, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips. Each slot rolls from its full difficulty bucket: there is no cross-slot domain avoidance, so the medium slot can draw a medium puzzle even after slot 1 took an easy puzzle. Rubik's Cube and draw-3 Solitaire each carry two quest templates so they sit in both tiers: Rubik's is medium daily (`solve_rubiks_cube`) and hard weekly (`solve_rubiks_cube_weekly`, migration 121); draw-3 Solitaire is hard weekly (`win_draw_3_solitaire`) and medium daily (`win_draw_3_solitaire_daily`, migration 121). The twins share completion params, so one solve ticks both when both are drawn.
+Seeded Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1/draw-3, Le Word daily, Rubik's Cube daily, Sliding Puzzle easy/medium/hard, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips. Sliding Puzzle uses `daily_puzzle_win` with its matching difficulty key; easy/medium are daily templates and hard is weekly. Each slot rolls from its full difficulty bucket: there is no cross-slot domain avoidance, so the medium slot can draw a medium puzzle even after slot 1 took an easy puzzle. Rubik's Cube and draw-3 Solitaire each carry two quest templates so they sit in both tiers: Rubik's is medium daily (`solve_rubiks_cube`) and hard weekly (`solve_rubiks_cube_weekly`, migration 121); draw-3 Solitaire is hard weekly (`win_draw_3_solitaire`) and medium daily (`win_draw_3_solitaire_daily`, migration 121). The twins share completion params, so one solve ticks both when both are drawn.
 
 ## Arcade Wins Scoring
 
@@ -132,6 +133,7 @@ The monthly Arcade Wins board is not a chip board. It awards points for daily pu
 - hard / draw-3: 5 points
 - Le Word daily: 1 point
 - Rubik's Cube daily: 3 points
+- Sliding Puzzle easy/medium/hard: 1/3/5 points
 
 This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
 

@@ -4,17 +4,19 @@ use ratatui::layout::Rect;
 
 use crate::app::state::{
     App, GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
-    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SNAKE,
-    GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
+    GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE,
+    GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
+    GAME_SELECTION_TRAFFIC,
 };
 
-const LOBBY_GAME_ORDER: [usize; 10] = [
+const LOBBY_GAME_ORDER: [usize; 11] = [
     GAME_SELECTION_2048,
     GAME_SELECTION_TETRIS,
     GAME_SELECTION_SNAKE,
     GAME_SELECTION_TRAFFIC,
     GAME_SELECTION_LE_WORD,
     GAME_SELECTION_RUBIKS_CUBE,
+    GAME_SELECTION_SLIDING_PUZZLE,
     GAME_SELECTION_SUDOKU,
     GAME_SELECTION_NONOGRAMS,
     GAME_SELECTION_MINESWEEPER,
@@ -90,6 +92,13 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
             }
             app.rubiks_cube_state.ensure_current_daily();
             return super::rubiks_cube::input::handle_key(&mut app.rubiks_cube_state, byte);
+        } else if app.game_selection == GAME_SELECTION_SLIDING_PUZZLE {
+            if byte == 0x1B || byte == b'q' || byte == b'Q' {
+                app.is_playing_game = false;
+                return true;
+            }
+            app.sliding_puzzle_state.ensure_current_daily();
+            return super::sliding_puzzle::input::handle_key(&mut app.sliding_puzzle_state, byte);
         } else if app.game_selection == GAME_SELECTION_LE_WORD {
             if byte == b'?' {
                 app.le_word_state.close_rules();
@@ -148,6 +157,7 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
                 || app.game_selection == GAME_SELECTION_SNAKE
                 || app.game_selection == GAME_SELECTION_TRAFFIC
                 || app.game_selection == GAME_SELECTION_RUBIKS_CUBE
+                || app.game_selection == GAME_SELECTION_SLIDING_PUZZLE
                 || app.game_selection == GAME_SELECTION_LE_WORD
                 || app.game_selection == GAME_SELECTION_SUDOKU
                 || (app.game_selection == GAME_SELECTION_NONOGRAMS
@@ -189,6 +199,9 @@ pub fn handle_arrow(app: &mut App, key: u8) -> bool {
         } else if app.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             app.rubiks_cube_state.ensure_current_daily();
             return super::rubiks_cube::input::handle_arrow(&mut app.rubiks_cube_state, key);
+        } else if app.game_selection == GAME_SELECTION_SLIDING_PUZZLE {
+            app.sliding_puzzle_state.ensure_current_daily();
+            return super::sliding_puzzle::input::handle_arrow(&mut app.sliding_puzzle_state, key);
         } else if app.game_selection == GAME_SELECTION_LE_WORD {
             return super::le_word::input::handle_arrow(&mut app.le_word_state, key);
         } else if app.game_selection == GAME_SELECTION_SUDOKU {
@@ -225,6 +238,15 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
     };
 
     let area = arcade_content_area(app);
+    if app.game_selection == GAME_SELECTION_SLIDING_PUZZLE {
+        app.sliding_puzzle_state.ensure_current_daily();
+        return super::sliding_puzzle::input::handle_mouse(
+            &mut app.sliding_puzzle_state,
+            area,
+            *mouse,
+        );
+    }
+
     if app.game_selection == GAME_SELECTION_LE_WORD {
         return super::le_word::input::handle_mouse(&mut app.le_word_state, area, *mouse);
     }

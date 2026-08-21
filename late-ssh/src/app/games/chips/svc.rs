@@ -346,6 +346,7 @@ const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewar
         ActivityGame::Minesweeper => Some(DailyPuzzleRewardGame::Minesweeper),
         ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
         ActivityGame::RubiksCube => Some(DailyPuzzleRewardGame::RubiksCube),
+        ActivityGame::SlidingPuzzle => Some(DailyPuzzleRewardGame::SlidingPuzzle),
         ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
         ActivityGame::Sudoku => Some(DailyPuzzleRewardGame::Sudoku),
         ActivityGame::Sshattrick => None,

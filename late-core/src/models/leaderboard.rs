@@ -62,7 +62,7 @@ roster!(
     /// daily game here enrolls it in all four surfaces at once. The one thing
     /// the roster cannot enforce: the new game's win-insert statement must
     /// compose `bump_daily_win_total_sql`, or its all-time board stays empty.
-    DailyPuzzle: Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube
+    DailyPuzzle: Sudoku, Nonogram, Minesweeper, Solitaire, LeWord, RubiksCube, SlidingPuzzle
 );
 
 roster!(
@@ -91,6 +91,7 @@ impl DailyPuzzle {
             Self::Solitaire => "solitaire",
             Self::LeWord => "le_word",
             Self::RubiksCube => "rubiks_cube",
+            Self::SlidingPuzzle => "sliding_puzzle",
         }
     }
 
@@ -102,6 +103,7 @@ impl DailyPuzzle {
             Self::Solitaire => "Solitaire",
             Self::LeWord => "Le Word",
             Self::RubiksCube => "Rubik's Cube",
+            Self::SlidingPuzzle => "Sliding Puzzle",
         }
     }
 
@@ -114,6 +116,7 @@ impl DailyPuzzle {
             Self::Solitaire => "solitaire_daily_wins",
             Self::LeWord => "le_word_daily_wins",
             Self::RubiksCube => "rubiks_cube_daily_wins",
+            Self::SlidingPuzzle => "sliding_puzzle_daily_wins",
         }
     }
 
@@ -122,7 +125,7 @@ impl DailyPuzzle {
     /// outside the puzzle's real set scores 0, never a silent default.
     fn points_sql(self) -> String {
         match self {
-            Self::Sudoku | Self::Nonogram | Self::Minesweeper => {
+            Self::Sudoku | Self::Nonogram | Self::Minesweeper | Self::SlidingPuzzle => {
                 let whens: String = Difficulty::ALL
                     .iter()
                     .map(|d| format!("WHEN '{}' THEN {}", d.key(), d.points()))
@@ -144,7 +147,11 @@ impl DailyPuzzle {
     /// Fixed-tier puzzles have no difficulty column and report `'daily'`.
     const fn status_difficulty_sql(self) -> &'static str {
         match self {
-            Self::Sudoku | Self::Nonogram | Self::Minesweeper | Self::Solitaire => "difficulty_key",
+            Self::Sudoku
+            | Self::Nonogram
+            | Self::Minesweeper
+            | Self::Solitaire
+            | Self::SlidingPuzzle => "difficulty_key",
             Self::LeWord | Self::RubiksCube => "'daily'",
         }
     }

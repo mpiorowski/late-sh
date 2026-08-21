@@ -14,9 +14,9 @@ use crate::app::{
     common::theme,
     state::{
         GAME_SELECTION_2048, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER,
-        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SNAKE,
-        GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU, GAME_SELECTION_TETRIS,
-        GAME_SELECTION_TRAFFIC,
+        GAME_SELECTION_NONOGRAMS, GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE,
+        GAME_SELECTION_SNAKE, GAME_SELECTION_SOLITAIRE, GAME_SELECTION_SUDOKU,
+        GAME_SELECTION_TETRIS, GAME_SELECTION_TRAFFIC,
     },
 };
 
@@ -233,8 +233,10 @@ pub fn keys_line(hints: Vec<(&'static str, &'static str)>) -> Line<'static> {
             spans.push(Span::styled(" · ", Style::default().fg(theme::AMBER_DIM())));
         }
         spans.push(Span::styled(key, Style::default().fg(theme::AMBER())));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
+        if !desc.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(desc, Style::default().fg(theme::TEXT_DIM())));
+        }
     }
     Line::from(spans)
 }
@@ -250,6 +252,7 @@ pub fn game_title(selection: usize) -> &'static str {
         GAME_SELECTION_SOLITAIRE => "Solitaire",
         GAME_SELECTION_SNAKE => "Snake",
         GAME_SELECTION_RUBIKS_CUBE => "Rubik's Cube",
+        GAME_SELECTION_SLIDING_PUZZLE => "Sliding Puzzle",
         GAME_SELECTION_TRAFFIC => "Traffic",
         _ => "The Arcade",
     }
@@ -262,6 +265,7 @@ pub struct ArcadeHubView<'a> {
     pub tetris_state: &'a super::tetris::state::State,
     pub snake_state: &'a super::snake::state::State,
     pub rubiks_cube_state: &'a super::rubiks_cube::state::State,
+    pub sliding_puzzle_state: &'a super::sliding_puzzle::state::State,
     pub le_word_state: &'a super::le_word::state::State,
     pub traffic_state: &'a super::traffic::state::State,
     pub sudoku_state: &'a super::sudoku::state::State,
@@ -294,6 +298,14 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
             return;
         } else if view.game_selection == GAME_SELECTION_RUBIKS_CUBE {
             super::rubiks_cube::ui::draw_game(frame, area, view.rubiks_cube_state, show_bottom_bar);
+            return;
+        } else if view.game_selection == GAME_SELECTION_SLIDING_PUZZLE {
+            super::sliding_puzzle::ui::draw_game(
+                frame,
+                area,
+                view.sliding_puzzle_state,
+                show_bottom_bar,
+            );
             return;
         } else if view.game_selection == GAME_SELECTION_LE_WORD {
             super::le_word::ui::draw_game(frame, area, view.le_word_state, show_bottom_bar);
@@ -524,6 +536,27 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                         view.daily_completion,
                         DailyPuzzle::RubiksCube,
                         &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
+                    ),
+                    label_width: 16,
+                },
+            );
+            draw_game_entry(
+                &mut lines,
+                &mut selected_line,
+                selection,
+                GameEntry {
+                    idx: GAME_SELECTION_SLIDING_PUZZLE,
+                    name: "Sliding Puzzle",
+                    descriptions: &["Slide numbered tiles into order."],
+                    selected_style: Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                    normal_style: Style::default().fg(theme::TEXT()),
+                    description_style: Style::default().fg(theme::TEXT_DIM()),
+                    status: daily_reward_status_spans(
+                        view.daily_completion,
+                        DailyPuzzle::SlidingPuzzle,
+                        TIERED_REWARDS,
                     ),
                     label_width: 16,
                 },

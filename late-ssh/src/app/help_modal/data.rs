@@ -365,7 +365,7 @@ fn chips_help_lines() -> Vec<String> {
         format!("  easy               {easy} chips"),
         format!("  medium             {medium} chips"),
         format!("  hard               {hard} chips"),
-        "  Sudoku, Nonograms, and Minesweeper each have all three difficulties.".to_string(),
+        "  Sudoku, Nonograms, Minesweeper, and Sliding Puzzle each have all three difficulties.".to_string(),
         format!("  Solitaire draw-1   {medium} chips"),
         format!("  Solitaire draw-3   {hard} chips"),
         format!(

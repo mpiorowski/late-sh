@@ -18,6 +18,10 @@ fn daily_puzzle_reward_game_accepts_only_daily_puzzle_games() {
         daily_puzzle_reward_game(ActivityGame::RubiksCube),
         Some(DailyPuzzleRewardGame::RubiksCube)
     );
+    assert_eq!(
+        daily_puzzle_reward_game(ActivityGame::SlidingPuzzle),
+        Some(DailyPuzzleRewardGame::SlidingPuzzle)
+    );
     assert_eq!(daily_puzzle_reward_game(ActivityGame::Lateris), None);
     assert_eq!(daily_puzzle_reward_game(ActivityGame::Blackjack), None);
 }

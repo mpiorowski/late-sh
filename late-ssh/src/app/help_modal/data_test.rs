@@ -79,6 +79,7 @@ fn chips_guide_lists_every_earning_surface() {
         "Solitaire draw-3",
         "Le Word daily",
         "Rubik's Cube daily",
+        "Sliding Puzzle",
         "Quests",
         "daily streak",
         "Bonsai",
