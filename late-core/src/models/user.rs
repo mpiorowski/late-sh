@@ -10,7 +10,9 @@ use uuid::Uuid;
 use super::marketplace::{
     BONSAI_VARIANT_SLOT, CHAT_BADGE_SLOT, CHAT_FLAG_SLOT, DYNAMIC_BONSAI_SKU,
 };
-use super::profile_award::PROFILE_AWARD_RANK_LIMIT;
+use super::profile_award::{
+    MILESTONE_AWARD_CATEGORIES, PROFILE_AWARD_RANK_LIMIT, top_badge_per_game,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -550,6 +552,10 @@ impl User {
             return Ok(Vec::new());
         }
 
+        // The rankless milestone badges show whatever month they were earned,
+        // unlike the ranked boards. Bound as a parameter so the set lives in
+        // `profile_award` alone rather than being respelled in SQL.
+        let milestone_categories: Vec<&str> = MILESTONE_AWARD_CATEGORIES.to_vec();
         let rows = client
             .query(
                 "SELECT u.id,
@@ -599,6 +605,7 @@ impl User {
                           WHEN 'brogue_mastery' THEN 'BRM'
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           WHEN 'darkroom_escape' THEN 'ADE'
+                          WHEN 'darkroom_beacon' THEN 'ADB'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -630,6 +637,7 @@ impl User {
                                    WHEN 'brogue_escape' THEN 19
                                    WHEN 'brogue_mastery' THEN 20
                                    WHEN 'darkroom_escape' THEN 21
+                                   WHEN 'darkroom_beacon' THEN 22
                                    ELSE 99
                                  END
                     ) AS badges
@@ -638,7 +646,7 @@ impl User {
                       AND pa.rank <= $6
                       AND (
                         pa.period_month = (date_trunc('month', now() AT TIME ZONE 'UTC')::date - INTERVAL '1 month')::date
-                        OR pa.category IN ('lateania_archdemon', 'lateania_frontier_king', 'lateania_sundering_deep', 'lateania_kaethyr_ascendant', 'nethack_amulet', 'nethack_ascension', 'dcss_orb', 'dcss_win', 'brogue_escape', 'brogue_mastery', 'greendragon_dragon', 'darkroom_escape')
+                        OR pa.category = ANY($7)
                       )
                  ) award ON true
                  WHERE u.id = ANY($1)",
@@ -649,6 +657,7 @@ impl User {
                     &DYNAMIC_BONSAI_SKU,
                     &CHAT_FLAG_SLOT,
                     &PROFILE_AWARD_RANK_LIMIT,
+                    &milestone_categories,
                 ],
             )
             .await?;
@@ -1102,27 +1111,11 @@ pub struct ChatAuthorMetadata {
 
 fn chat_profile_award_badges(raw: Option<String>) -> Option<String> {
     let raw = raw?;
-    // Collapse the lesser milestone when its superseding one is present:
-    // Kaethyr Ascendant implies Yssgar implies the Frontier King implies the
-    // Archdemon, an Ascension implies the Amulet, a DCSS escape implies the
-    // Orb pickup, and a Brogue mastery implies the escape. Profile views
-    // still show all; chat author labels show only the highest.
-    let has_kaethyr = raw.split_whitespace().any(|badge| badge == "LKA");
-    let has_sundering_deep = raw.split_whitespace().any(|badge| badge == "LYS");
-    let has_frontier_king = raw.split_whitespace().any(|badge| badge == "LKN");
-    let has_ascension = raw.split_whitespace().any(|badge| badge == "NHY");
-    let has_dcss_win = raw.split_whitespace().any(|badge| badge == "DCW");
-    let has_brogue_mastery = raw.split_whitespace().any(|badge| badge == "BRM");
-    let badges = raw
-        .split_whitespace()
-        .filter(|badge| !(has_kaethyr && matches!(*badge, "LYS" | "LKN" | "LMG")))
-        .filter(|badge| !(has_sundering_deep && (*badge == "LKN" || *badge == "LMG")))
-        .filter(|badge| !(has_frontier_king && *badge == "LMG"))
-        .filter(|badge| !(has_ascension && *badge == "NHA"))
-        .filter(|badge| !(has_dcss_win && *badge == "DCO"))
-        .filter(|badge| !(has_brogue_mastery && *badge == "BRE"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    // One badge per game: the lesser milestone drops out whenever the player
+    // also holds a higher one on that game's ladder (see `BADGE_LADDERS`).
+    // Profile views still list every award; chat author labels show only the
+    // top of each ladder, so a shelf of crowns cannot crowd out the message.
+    let badges = top_badge_per_game(raw.split_whitespace()).join(" ");
     (!badges.is_empty()).then_some(badges)
 }
 

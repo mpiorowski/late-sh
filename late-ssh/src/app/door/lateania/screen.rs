@@ -62,10 +62,6 @@ impl DoorGame for LateaniaDoorGame {
     fn handle_mouse(&self, app: &mut App, mouse: crate::app::input::MouseEvent) -> bool {
         handle_mouse(app, mouse)
     }
-
-    fn leave_active(&self, app: &mut App) -> bool {
-        leave_active_game(app)
-    }
 }
 
 pub struct LateaniaScreenView<'a> {
@@ -173,21 +169,6 @@ fn handle_arrow(app: &mut App, key: u8) -> bool {
             true
         }
         _ => false,
-    }
-}
-
-fn leave_active_game(app: &mut App) -> bool {
-    if app.door_delete_confirm {
-        app.door_delete_confirm = false;
-        return true;
-    }
-
-    if app.lateania_state.is_some() {
-        app.lateania_detached_at = None;
-        app.leave_lateania();
-        true
-    } else {
-        false
     }
 }
 

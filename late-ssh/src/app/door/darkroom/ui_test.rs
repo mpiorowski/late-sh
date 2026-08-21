@@ -3,7 +3,7 @@
 //! silently collide with its own count or lose characters off the right edge.
 
 use super::data::{Building, Resource};
-use super::ui::{SIDEBAR_LABEL_PAD, SIDEBAR_WIDTH};
+use super::ui::{SIDEBAR_LABEL_PAD, SIDEBAR_LABELS, SIDEBAR_WIDTH, sidebar_label};
 
 /// Every sidebar row is `"  " + {label:<PAD} + value`. A label as long as the
 /// pad leaves no gutter and renders as "trading post1".
@@ -11,7 +11,7 @@ use super::ui::{SIDEBAR_LABEL_PAD, SIDEBAR_WIDTH};
 fn every_label_leaves_a_gutter_before_its_value() {
     let collides: Vec<&str> = Resource::ALL
         .iter()
-        .map(|resource| resource.label())
+        .map(|resource| sidebar_label(*resource))
         .chain(Building::ALL.iter().map(|building| building.label()))
         // The traps row splits into a synthetic label upstream doesn't have.
         .chain(std::iter::once("baited trap"))
@@ -33,5 +33,21 @@ fn the_widest_stores_row_fits_the_sidebar() {
     assert!(
         widest <= SIDEBAR_WIDTH as usize,
         "widest stores row is {widest} cols but the sidebar is {SIDEBAR_WIDTH}"
+    );
+}
+
+/// The abbreviation list is an exception list, so an entry that is no shorter
+/// than the name it replaces is dead weight pretending to be a fix.
+#[test]
+fn every_sidebar_abbreviation_is_shorter_than_the_name_it_replaces() {
+    let useless: Vec<&str> = SIDEBAR_LABELS
+        .iter()
+        .filter(|(resource, short)| short.chars().count() >= resource.label().chars().count())
+        .map(|(_, short)| *short)
+        .collect();
+
+    assert!(
+        useless.is_empty(),
+        "these abbreviations buy nothing: {useless:?}"
     );
 }

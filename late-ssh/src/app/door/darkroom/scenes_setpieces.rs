@@ -122,6 +122,7 @@ const fn brawl(
             death_message: "",
             loot: spoils,
             next: Next::End,
+            ..Combat::PLAIN
         }),
         buttons,
         ..Scene::EMPTY

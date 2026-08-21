@@ -23,6 +23,7 @@ pub const DAILY_CHESS960_WIN_REWARD_KEY: &str = "daily_chess960_win_payout";
 pub const DAILY_CONNECT4_WIN_REWARD_KEY: &str = "daily_connect4_win_payout";
 pub const DAILY_REVERSI_WIN_REWARD_KEY: &str = "daily_reversi_win_payout";
 pub const DARKROOM_ESCAPE_REWARD_KEY: &str = "darkroom_escape";
+pub const DARKROOM_BEACON_REWARD_KEY: &str = "darkroom_beacon_escape";
 pub const LATEANIA_ARCHDEMON_REWARD_KEY: &str = "lateania_archdemon_defeat";
 pub const LATEANIA_FRONTIER_KING_REWARD_KEY: &str = "lateania_frontier_king_defeat";
 pub const LATEANIA_SUNDERING_DEEP_REWARD_KEY: &str = "lateania_sundering_deep_defeat";

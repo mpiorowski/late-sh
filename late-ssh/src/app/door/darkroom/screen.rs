@@ -53,15 +53,6 @@ impl DoorGame for DarkroomDoorGame {
     fn handle_arrow(&self, app: &mut App, key: u8) -> bool {
         handle_arrow(app, key)
     }
-
-    fn leave_active(&self, app: &mut App) -> bool {
-        if app.darkroom_state.is_some() {
-            leave(app);
-            true
-        } else {
-            false
-        }
-    }
 }
 
 pub struct DarkroomScreenView<'a> {

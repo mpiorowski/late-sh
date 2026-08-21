@@ -49,6 +49,9 @@ pub enum Resource {
     EnergyCell,
     AlienAlloy,
     Torch,
+    Hypo,
+    Stim,
+    Glowstone,
     BoneSpear,
     IronSword,
     SteelSword,
@@ -57,21 +60,36 @@ pub enum Resource {
     Bolas,
     Grenade,
     Bayonet,
+    PlasmaRifle,
+    EnergyBlade,
+    Disruptor,
     Waterskin,
     Cask,
     WaterTank,
+    FluidRecycler,
     Rucksack,
     Wagon,
     Convoy,
+    CargoDrone,
     LeatherArmour,
     IronArmour,
     SteelArmour,
+    KineticArmour,
     Compass,
+    /// Taken off the immortal wanderer on the battleship's command deck. Held,
+    /// never spent: what it changes is the ending.
+    FleetBeacon,
+    HypoBlueprint,
+    KineticArmourBlueprint,
+    DisruptorBlueprint,
+    PlasmaRifleBlueprint,
+    StimBlueprint,
+    GlowstoneBlueprint,
 }
 
 impl Resource {
     /// Every resource, in the order the stores panel lists them.
-    pub const ALL: [Resource; 37] = [
+    pub const ALL: [Resource; 53] = [
         Resource::Wood,
         Resource::Fur,
         Resource::Meat,
@@ -91,6 +109,9 @@ impl Resource {
         Resource::EnergyCell,
         Resource::AlienAlloy,
         Resource::Torch,
+        Resource::Hypo,
+        Resource::Stim,
+        Resource::Glowstone,
         Resource::BoneSpear,
         Resource::IronSword,
         Resource::SteelSword,
@@ -99,16 +120,29 @@ impl Resource {
         Resource::Bolas,
         Resource::Grenade,
         Resource::Bayonet,
+        Resource::PlasmaRifle,
+        Resource::EnergyBlade,
+        Resource::Disruptor,
         Resource::Waterskin,
         Resource::Cask,
         Resource::WaterTank,
+        Resource::FluidRecycler,
         Resource::Rucksack,
         Resource::Wagon,
         Resource::Convoy,
+        Resource::CargoDrone,
         Resource::LeatherArmour,
         Resource::IronArmour,
         Resource::SteelArmour,
+        Resource::KineticArmour,
         Resource::Compass,
+        Resource::FleetBeacon,
+        Resource::HypoBlueprint,
+        Resource::KineticArmourBlueprint,
+        Resource::DisruptorBlueprint,
+        Resource::PlasmaRifleBlueprint,
+        Resource::StimBlueprint,
+        Resource::GlowstoneBlueprint,
     ];
 
     /// Lowercase label, exactly as upstream prints it.
@@ -133,6 +167,9 @@ impl Resource {
             Resource::EnergyCell => "energy cell",
             Resource::AlienAlloy => "alien alloy",
             Resource::Torch => "torch",
+            Resource::Hypo => "hypo",
+            Resource::Stim => "stim",
+            Resource::Glowstone => "glow stone",
             Resource::BoneSpear => "bone spear",
             Resource::IronSword => "iron sword",
             Resource::SteelSword => "steel sword",
@@ -141,16 +178,29 @@ impl Resource {
             Resource::Bolas => "bolas",
             Resource::Grenade => "grenade",
             Resource::Bayonet => "bayonet",
+            Resource::PlasmaRifle => "plasma rifle",
+            Resource::EnergyBlade => "energy blade",
+            Resource::Disruptor => "disruptor",
             Resource::Waterskin => "waterskin",
             Resource::Cask => "cask",
             Resource::WaterTank => "water tank",
+            Resource::FluidRecycler => "fluid recycler",
             Resource::Rucksack => "rucksack",
             Resource::Wagon => "wagon",
             Resource::Convoy => "convoy",
+            Resource::CargoDrone => "cargo drone",
             Resource::LeatherArmour => "l armour",
             Resource::IronArmour => "i armour",
             Resource::SteelArmour => "s armour",
+            Resource::KineticArmour => "kinetic armour",
             Resource::Compass => "compass",
+            Resource::FleetBeacon => "fleet beacon",
+            Resource::HypoBlueprint => "hypo blueprint",
+            Resource::KineticArmourBlueprint => "kinetic armour blueprint",
+            Resource::DisruptorBlueprint => "disruptor blueprint",
+            Resource::PlasmaRifleBlueprint => "plasma rifle blueprint",
+            Resource::StimBlueprint => "stim blueprint",
+            Resource::GlowstoneBlueprint => "glow stone blueprint",
         }
     }
 
@@ -176,7 +226,9 @@ impl Resource {
             | Resource::Bullets
             | Resource::EnergyCell
             | Resource::AlienAlloy => ResourceKind::Good,
-            Resource::Torch => ResourceKind::Tool,
+            Resource::Torch | Resource::Hypo | Resource::Stim | Resource::Glowstone => {
+                ResourceKind::Tool
+            }
             Resource::BoneSpear
             | Resource::IronSword
             | Resource::SteelSword
@@ -184,7 +236,10 @@ impl Resource {
             | Resource::LaserRifle
             | Resource::Bolas
             | Resource::Grenade
-            | Resource::Bayonet => ResourceKind::Weapon,
+            | Resource::Bayonet
+            | Resource::PlasmaRifle
+            | Resource::EnergyBlade
+            | Resource::Disruptor => ResourceKind::Weapon,
             Resource::Waterskin
             | Resource::Cask
             | Resource::WaterTank
@@ -193,8 +248,18 @@ impl Resource {
             | Resource::Convoy
             | Resource::LeatherArmour
             | Resource::IronArmour
-            | Resource::SteelArmour => ResourceKind::Upgrade,
-            Resource::Compass => ResourceKind::Special,
+            | Resource::SteelArmour
+            | Resource::KineticArmour
+            | Resource::FluidRecycler
+            | Resource::CargoDrone => ResourceKind::Upgrade,
+            Resource::Compass
+            | Resource::FleetBeacon
+            | Resource::HypoBlueprint
+            | Resource::KineticArmourBlueprint
+            | Resource::DisruptorBlueprint
+            | Resource::PlasmaRifleBlueprint
+            | Resource::StimBlueprint
+            | Resource::GlowstoneBlueprint => ResourceKind::Special,
         }
     }
 }
@@ -638,6 +703,161 @@ pub static CRAFTABLES: [Craftable; 14] = [
     },
 ];
 
+// ---------------------------------------------------------------------------
+// The fabricator, salvaged out of the ravaged battleship
+// ---------------------------------------------------------------------------
+
+/// A fabricator recipe that has to be found before it can be made. Upstream
+/// keeps these as free-form `character.blueprints` keys redeemed out of the
+/// pack on the way home; a closed set means a save can never hold a blueprint
+/// for something the fabricator does not build.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Blueprint {
+    Hypo,
+    KineticArmour,
+    Disruptor,
+    PlasmaRifle,
+    Stim,
+    Glowstone,
+}
+
+impl Blueprint {
+    pub const ALL: [Blueprint; 6] = [
+        Blueprint::Hypo,
+        Blueprint::KineticArmour,
+        Blueprint::Disruptor,
+        Blueprint::PlasmaRifle,
+        Blueprint::Stim,
+        Blueprint::Glowstone,
+    ];
+
+    /// The loot item that redeems into this blueprint. Upstream drops these as
+    /// ordinary pack items and converts them in `World.redeemBlueprints`.
+    pub fn token(self) -> Resource {
+        match self {
+            Blueprint::Hypo => Resource::HypoBlueprint,
+            Blueprint::KineticArmour => Resource::KineticArmourBlueprint,
+            Blueprint::Disruptor => Resource::DisruptorBlueprint,
+            Blueprint::PlasmaRifle => Resource::PlasmaRifleBlueprint,
+            Blueprint::Stim => Resource::StimBlueprint,
+            Blueprint::Glowstone => Resource::GlowstoneBlueprint,
+        }
+    }
+
+    /// What holding it teaches the fabricator to make.
+    pub fn item(self) -> Resource {
+        match self {
+            Blueprint::Hypo => Resource::Hypo,
+            Blueprint::KineticArmour => Resource::KineticArmour,
+            Blueprint::Disruptor => Resource::Disruptor,
+            Blueprint::PlasmaRifle => Resource::PlasmaRifle,
+            Blueprint::Stim => Resource::Stim,
+            Blueprint::Glowstone => Resource::Glowstone,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        self.item().label()
+    }
+}
+
+/// One thing the fabricator makes. Upstream's `Fabricator.Craftables`: the
+/// same whole-refusal shape as the workshop, but paid for in alien alloy and
+/// gated on a blueprint rather than on a building.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fabricable {
+    pub item: Resource,
+    /// `None` where upstream leaves `maximum` undefined: weapons and tools
+    /// stack, upgrades are one apiece.
+    pub maximum: Option<u32>,
+    pub cost: &'static [(Resource, i64)],
+    /// How many one press makes (upstream's `quantity`, five hypos a go).
+    pub quantity: i64,
+    /// The blueprint that has to be found first, where upstream sets
+    /// `blueprintRequired`. Three recipes need none: the fabricator arrives
+    /// already knowing them.
+    pub blueprint: Option<Blueprint>,
+    pub build_msg: &'static str,
+}
+
+/// Everything the fabricator makes, in upstream's `Fabricator.Craftables`
+/// order.
+pub static FABRICABLES: [Fabricable; 9] = [
+    Fabricable {
+        item: Resource::EnergyBlade,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 1,
+        blueprint: None,
+        build_msg: "the blade hums, charged particles sparking and fizzing.",
+    },
+    Fabricable {
+        item: Resource::FluidRecycler,
+        maximum: Some(1),
+        cost: &[(Resource::AlienAlloy, 2)],
+        quantity: 1,
+        blueprint: None,
+        build_msg: "water out, water in. waste not, want not.",
+    },
+    Fabricable {
+        item: Resource::CargoDrone,
+        maximum: Some(1),
+        cost: &[(Resource::AlienAlloy, 2)],
+        quantity: 1,
+        blueprint: None,
+        build_msg: "the workhorse of the wanderer fleet.",
+    },
+    Fabricable {
+        item: Resource::KineticArmour,
+        maximum: Some(1),
+        cost: &[(Resource::AlienAlloy, 2)],
+        quantity: 1,
+        blueprint: Some(Blueprint::KineticArmour),
+        build_msg: "wanderer soldiers succeed by subverting the enemy's rage.",
+    },
+    Fabricable {
+        item: Resource::Disruptor,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 1,
+        blueprint: Some(Blueprint::Disruptor),
+        build_msg: "somtimes it is best not to fight.",
+    },
+    Fabricable {
+        item: Resource::Hypo,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 5,
+        blueprint: Some(Blueprint::Hypo),
+        build_msg: "a handful of hypos. life in a vial.",
+    },
+    Fabricable {
+        item: Resource::Stim,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 1,
+        blueprint: Some(Blueprint::Stim),
+        build_msg: "sometimes it is best to fight without restraint.",
+    },
+    Fabricable {
+        item: Resource::PlasmaRifle,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 1,
+        blueprint: Some(Blueprint::PlasmaRifle),
+        build_msg: "the peak of wanderer weapons technology, sleek and deadly.",
+    },
+    Fabricable {
+        item: Resource::Glowstone,
+        maximum: None,
+        cost: &[(Resource::AlienAlloy, 1)],
+        quantity: 1,
+        blueprint: Some(Blueprint::Glowstone),
+        build_msg: "a smooth, perfect sphere. its light is inextinguishable.",
+    },
+];
+
 /// One thing the trading post sells. Upstream's `TradeGoods` entries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TradeGood {
@@ -1012,3 +1232,21 @@ pub const MSG_SEEN_FOREST: &str = "the sky is grey and the wind blows relentless
 pub const SECTION_BUILD: &str = "build:";
 pub const SECTION_CRAFT: &str = "craft:";
 pub const SECTION_BUY: &str = "buy:";
+
+/// The fabricator's panel: its title, its button legend, and the legend over
+/// the list of blueprints found so far (upstream `Fabricator.init`).
+pub const FABRICATOR_TITLE: &str = "A Whirring Fabricator";
+pub const SECTION_FABRICATE: &str = "fabricate:";
+pub const SECTION_BLUEPRINTS: &str = "blueprints";
+
+/// What the village says when the strange device comes home from the ravaged
+/// battleship (upstream `World.goHome`).
+pub const MSG_FABRICATOR_FOUND: &str = "builder knows the strange device when she sees it. takes it for herself real quick. doesn't ask where it came from.";
+
+/// The fabricator's one arrival line, said the first time it is looked at.
+pub const MSG_FABRICATOR_SEEN: &str =
+    "the familiar hum of wanderer machinery coming to life. finally, real tools.";
+
+/// What a blueprint carried home is worth (upstream `World.redeemBlueprints`).
+pub const MSG_BLUEPRINTS_REDEEMED: &str =
+    "blueprints feed into the fabricator data port. possibilities grow.";

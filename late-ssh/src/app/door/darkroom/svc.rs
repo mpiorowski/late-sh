@@ -16,10 +16,9 @@ use late_core::{
     models::{
         chips::ChipMove,
         darkroom_save::DarkroomSave,
-        profile_award::{
-            DARKROOM_ESCAPE_AWARD_CATEGORY, award_badge, grant_unique_milestone_award,
-        },
-        reward::DARKROOM_ESCAPE_REWARD_KEY,
+        darkroom_veteran::DarkroomVeteran,
+        profile_award::{award_badge, grant_unique_milestone_award},
+        reward::{DARKROOM_BEACON_REWARD_KEY, DARKROOM_ESCAPE_REWARD_KEY},
     },
 };
 use serde_json::Value;
@@ -33,6 +32,7 @@ use crate::app::{
 
 use super::model::Game;
 use super::persist;
+use super::state::Escape;
 
 /// The async result of loading a session's game.
 #[derive(Clone)]
@@ -99,20 +99,43 @@ impl DarkroomService {
         let (tx, rx) = watch::channel(GameLoad::Loading);
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            let game = match inner.db.get().await {
-                Ok(client) => match DarkroomSave::load(&client, user_id).await {
-                    Ok(Some(blob)) => persist::from_json(&blob),
-                    Ok(None) => Game::new(),
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "darkroom save load failed");
-                        Game::new()
-                    }
-                },
+            let mut game = match inner.db.get().await {
+                Ok(client) => {
+                    let veteran = has_escaped(&client, user_id).await;
+                    let mut game = match DarkroomSave::load(&client, user_id).await {
+                        Ok(Some(blob)) => persist::from_json(&blob),
+                        Ok(None) => Game::new(veteran),
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "darkroom save load failed");
+                            Game::new(veteran)
+                        }
+                    };
+                    // The account's history is read on every load, not only on
+                    // the first: whoever earned the unlock mid-save should see
+                    // the wreck without throwing that save away. A legacy read
+                    // that fails reads as no history, which costs a veteran
+                    // one landmark rather than costing everyone the run.
+                    game.veteran = veteran;
+                    game
+                }
                 Err(e) => {
                     tracing::warn!(error = ?e, "darkroom db get failed on load");
-                    Game::new()
+                    Game::new(false)
                 }
             };
+            // A map drawn before the account had ever flown out has no wreck
+            // on it. Put one there now rather than making them start over.
+            if game.veteran
+                && let Some(world) = game.world.as_mut()
+            {
+                let mut rng = rand::thread_rng();
+                if super::world::place_battleship(world, &mut rng) {
+                    tracing::info!(
+                        user_id = %user_id,
+                        "placed the ravaged battleship on an existing darkroom map"
+                    );
+                }
+            }
             let _ = tx.send(GameLoad::Ready(Box::new(game)));
         });
         rx
@@ -128,27 +151,61 @@ impl DarkroomService {
         tokio::spawn(commit_save(db, gate, seq, user_id, blob));
     }
 
-    /// The ending's reward, fire-and-forget (the Green Dragon dragon-kill
-    /// shape): a feed line for every escape, and — first escape only, deduped
-    /// by the lifetime reward template and the `NOT EXISTS` award insert — a
-    /// once-per-account chip payout plus the rankless ADE profile badge.
+    /// Everything the account keeps from a finished run, fire-and-forget (the
+    /// Green Dragon dragon-kill shape): a feed line every time, the veteran
+    /// row that unlocks the ravaged battleship on later maps, and — first
+    /// escape of this kind only, deduped by the lifetime reward template and
+    /// the `NOT EXISTS` award insert — a chip payout plus a rankless profile
+    /// badge.
     ///
-    /// The save is wiped on the way out, so every later run reaches the same
-    /// ending; the account only ever gets paid for the first one.
-    pub fn reward_escape(&self, user_id: Uuid) {
+    /// The two endings are separate claims: an account that has already flown
+    /// out plainly still gets paid the first time it flies out holding the
+    /// fleet beacon. Neither ever pays twice, and the save is wiped on the way
+    /// out, so every later run of the same kind reaches the same ending for
+    /// nothing.
+    pub fn reward_escape(&self, user_id: Uuid, escape: Escape) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
-            inner
-                .activity
-                .game_won_task(user_id, ActivityGame::Darkroom, None, None);
+            // Both endings post to the feed, and they say different things:
+            // "flew out of A Dark Room" is the whole story for one of them and
+            // only half of it for the other. Kept short, like Lateania's
+            // crowns: the chips and the badge are on the profile, not spelled
+            // out in the stream.
+            inner.activity.game_won_task(
+                user_id,
+                ActivityGame::Darkroom,
+                escape.feed_detail().map(str::to_string),
+                None,
+            );
 
+            // The veteran row goes first and on its own: it is the one thing
+            // here that changes what the game *is* next time, and it must not
+            // be lost to a failure in the payout path below.
+            match inner.db.get().await {
+                Ok(client) => {
+                    if let Err(error) = DarkroomVeteran::record(&client, user_id).await {
+                        tracing::error!(
+                            ?error,
+                            user_id = %user_id,
+                            "failed to record darkroom escape; the battleship stays locked"
+                        );
+                    }
+                }
+                Err(error) => tracing::error!(
+                    ?error,
+                    user_id = %user_id,
+                    "no db client to record darkroom escape"
+                ),
+            }
+
+            let (reward_key, chip_move) = match escape {
+                Escape::Plain => (DARKROOM_ESCAPE_REWARD_KEY, ChipMove::DarkroomEscape),
+                Escape::WithBeacon => (DARKROOM_BEACON_REWARD_KEY, ChipMove::DarkroomBeaconEscape),
+            };
+            let category = escape.award_category();
             let grant = match inner
                 .chips
-                .credit_lifetime_reward_template(
-                    user_id,
-                    DARKROOM_ESCAPE_REWARD_KEY,
-                    ChipMove::DarkroomEscape,
-                )
+                .credit_lifetime_reward_template(user_id, reward_key, chip_move)
                 .await
             {
                 Ok(grant) => grant,
@@ -172,16 +229,11 @@ impl DarkroomService {
                 );
             }
 
-            let badge = award_badge(DARKROOM_ESCAPE_AWARD_CATEGORY, 1);
+            let badge = award_badge(category, 1);
             match inner.db.get().await {
                 Ok(client) => {
-                    if let Err(error) = grant_unique_milestone_award(
-                        &client,
-                        user_id,
-                        DARKROOM_ESCAPE_AWARD_CATEGORY,
-                        grant.amount,
-                    )
-                    .await
+                    if let Err(error) =
+                        grant_unique_milestone_award(&client, user_id, category, grant.amount).await
                     {
                         tracing::error!(
                             ?error,
@@ -211,6 +263,23 @@ impl DarkroomService {
         let gate = self.inner.gate(user_id);
         let db = self.inner.db.clone();
         tokio::spawn(commit_delete(db, gate, seq, user_id));
+    }
+}
+
+/// Whether the account has finished before, treating a failed read as "no".
+/// A room has to be handed to the player either way, and the worst a wrong
+/// answer here can do is leave one landmark off one map until the next visit.
+async fn has_escaped(client: &tokio_postgres::Client, user_id: Uuid) -> bool {
+    match DarkroomVeteran::has_escaped(client, user_id).await {
+        Ok(escaped) => escaped,
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                user_id = %user_id,
+                "darkroom veteran lookup failed; starting the run without the battleship"
+            );
+            false
+        }
     }
 }
 

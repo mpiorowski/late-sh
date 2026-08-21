@@ -75,8 +75,6 @@ pub trait DoorGame {
         false
     }
 
-    fn leave_active(&self, app: &mut App) -> bool;
-
     fn activity_for_outcome(
         &self,
         user_id: Uuid,

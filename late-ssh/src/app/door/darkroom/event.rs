@@ -31,7 +31,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use super::data::{Building, Perk, Resource};
-use super::model::{Expedition, Game, PendingReward, Thieves, View};
+use super::model::{Deck, Expedition, Game, PendingReward, Thieves, View};
 use super::world_data::{self, Damage, Tile, Weapon, WeaponKind};
 
 /// Minutes between event rolls, uniform over upstream's `_EVENT_TIME_RANGE`.
@@ -154,6 +154,91 @@ pub struct Loot {
     pub max: i64,
 }
 
+/// A condition on one of the fighters. Upstream keeps a single free-form
+/// string per fighter (`fighter.data('status')`), so these are mutually
+/// exclusive: setting one clears whatever was there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Status {
+    /// The next hit taken is absorbed and healed back instead. Breaks on that
+    /// hit rather than on a clock.
+    Shield,
+    /// Swings at [`world_data::ENRAGE_ATTACK_DELAY`] whatever its own delay is.
+    Enraged,
+    /// Takes no damage and throws none, banking everything aimed at it, then
+    /// returns the whole pile in one swing.
+    Meditation,
+    /// Its hits bleed afterwards.
+    Venomous,
+    /// Hits for [`world_data::ENERGISE_MULTIPLIER`] times as much.
+    Energised,
+    /// The stim: attack cooldowns halved.
+    Boost,
+}
+
+impl Status {
+    /// How long it lasts on its own. The ones that return `None` last until
+    /// they are spent (the shield) or until the fight ends.
+    pub fn duration(self) -> Option<f64> {
+        match self {
+            Status::Enraged => Some(world_data::ENRAGE_DURATION),
+            Status::Meditation => Some(world_data::MEDITATE_DURATION),
+            Status::Boost => Some(world_data::BOOST_DURATION),
+            Status::Shield | Status::Venomous | Status::Energised => None,
+        }
+    }
+
+    /// What the fight panel calls it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Shield => "shield",
+            Status::Enraged => "enraged",
+            Status::Meditation => "meditation",
+            Status::Venomous => "venomous",
+            Status::Energised => "energised",
+            Status::Boost => "boost",
+        }
+    }
+}
+
+/// A status riding on a fighter, with the clock that takes it off again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affliction {
+    pub status: Status,
+    /// Seconds left, for the statuses that wear off on their own.
+    pub remaining: Option<f64>,
+}
+
+impl Affliction {
+    fn new(status: Status) -> Affliction {
+        Affliction {
+            status,
+            remaining: status.duration(),
+        }
+    }
+}
+
+/// Something the enemy does to itself on a timer, over and over. Upstream's
+/// `scene.specials`, one `setInterval` apiece.
+#[derive(Clone, Copy, Debug)]
+pub struct Special {
+    /// Seconds between firings.
+    pub delay: f64,
+    pub action: SpecialAction,
+}
+
+/// What a special does. Closed, so a fight cannot invent a new trick.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpecialAction {
+    /// Put this status on the enemy.
+    Take(Status),
+    /// The immortal wanderer: one of shield, enraged or meditation at random,
+    /// never the same one twice running.
+    RotateCommand,
+}
+
+/// The three the command deck's rotation draws from, in upstream's order.
+const COMMAND_ROTATION: [Status; 3] = [Status::Shield, Status::Enraged, Status::Meditation];
+
 /// A fight. Every number here is upstream's, straight off the scene.
 #[derive(Clone, Copy, Debug)]
 pub struct Combat {
@@ -170,6 +255,35 @@ pub struct Combat {
     pub loot: &'static [Loot],
     /// Where the leave button goes once the spoils are taken.
     pub next: Next,
+    /// Tricks the enemy pulls on a timer (upstream `specials`).
+    pub specials: &'static [Special],
+    /// Statuses the enemy takes the first time its health crosses a threshold
+    /// downwards (upstream `atHealth`).
+    pub at_health: &'static [(i64, Status)],
+    /// What the enemy does to the wanderer when it dies, if it goes off
+    /// instead of falling over (upstream `explosion`).
+    pub explosion: Option<i64>,
+}
+
+impl Combat {
+    /// A fight with no tricks: nothing on a timer, no threshold trigger, no
+    /// death blast. Every fight outside the ravaged battleship is one of
+    /// these, so they are built by struct update from here.
+    pub const PLAIN: Combat = Combat {
+        enemy: "",
+        chara: ' ',
+        health: 0,
+        damage: 0,
+        hit: 0.0,
+        attack_delay: 0.0,
+        ranged: false,
+        death_message: "",
+        loot: &[],
+        next: Next::End,
+        specials: &[],
+        at_health: &[],
+        explosion: None,
+    };
 }
 
 /// A condition on an event or a button, all of them matched exhaustively.
@@ -199,6 +313,11 @@ pub enum Condition {
     DistanceAtMost(i32),
     DistanceOver(i32),
     TerrainIs(Tile),
+    /// This deck of the battleship has not been picked clean yet, which is
+    /// what keeps its elevator button on the antechamber's wall.
+    DeckPending(Deck),
+    /// All three decks report clear, which unlocks the command deck.
+    DecksClear,
 }
 
 /// How many villagers a disaster takes.
@@ -255,6 +374,15 @@ pub enum Effect {
     UseOutpost,
     /// The city falls, and the soldiers come looking.
     ClearCity,
+    // ---- the ravaged battleship ----
+    /// The entrance turret is down and the strange device is taken: every
+    /// later visit opens on the antechamber, and the fabricator comes home on
+    /// a safe return.
+    EnterBattleship,
+    /// One of the three decks is picked clean; its elevator stops offering.
+    ClearDeck(Deck),
+    /// The battleship's regenerative machines: back to full health.
+    HealFull,
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +453,9 @@ impl Look<'_> {
 /// A live fight.
 #[derive(Clone, Debug)]
 pub struct Fight {
+    /// The stat line this fight is being run against. Held here so the fight
+    /// can answer for itself what its tricks and thresholds are.
+    pub combat: Combat,
     pub enemy_hp: i64,
     pub enemy_max: i64,
     /// Seconds until the enemy swings again.
@@ -334,15 +465,118 @@ pub struct Fight {
     pub weapon_cooldown: BTreeMap<Weapon, f64>,
     pub eat_cooldown: f64,
     pub meds_cooldown: f64,
+    pub hypo_cooldown: f64,
+    pub stim_cooldown: f64,
+    pub shield_cooldown: f64,
+    /// What the enemy is currently under, and what the wanderer is.
+    pub enemy_status: Option<Affliction>,
+    pub player_status: Option<Affliction>,
+    /// Seconds until each of the scene's specials fires again, one per entry
+    /// in `Combat::specials`.
+    pub special_timers: Vec<f64>,
+    /// The last status the command-deck rotation picked, so it never picks the
+    /// same one twice running (upstream `Events._lastSpecial`).
+    pub last_special: Option<Status>,
+    /// Damage a meditating enemy has banked and will throw back.
+    pub banked: i64,
+    /// A venom bleed on the wanderer: damage a tick, and the seconds until the
+    /// next one. Upstream's `_dotTimer` runs until the fight ends, so this
+    /// does too.
+    pub bleed: Option<(i64, f64)>,
+    /// Health thresholds this fight's `at_health` triggers have already fired
+    /// on, so each fires once.
+    pub triggered: Vec<i64>,
     /// The last thing that happened, shown beside the fighters.
     pub last_hit: Option<String>,
+}
+
+impl Fight {
+    /// A fight at its first frame.
+    fn start(combat: Combat, enemy_hp: i64) -> Fight {
+        Fight {
+            combat,
+            enemy_hp,
+            enemy_max: combat.health,
+            enemy_timer: combat.attack_delay,
+            stun: 0.0,
+            weapon_cooldown: BTreeMap::new(),
+            eat_cooldown: 0.0,
+            meds_cooldown: 0.0,
+            hypo_cooldown: 0.0,
+            stim_cooldown: 0.0,
+            shield_cooldown: 0.0,
+            enemy_status: None,
+            player_status: None,
+            special_timers: combat.specials.iter().map(|s| s.delay).collect(),
+            last_special: None,
+            banked: 0,
+            bleed: None,
+            triggered: Vec::new(),
+            last_hit: None,
+        }
+    }
+
+    fn has_enemy_status(&self, status: Status) -> bool {
+        self.enemy_status.is_some_and(|held| held.status == status)
+    }
+
+    fn has_player_status(&self, status: Status) -> bool {
+        self.player_status.is_some_and(|held| held.status == status)
+    }
+
+    /// Fire any `at_health` trigger this hit crossed downwards. Upstream
+    /// checks `hp <= threshold && hp + dmg > threshold`, so each fires once;
+    /// `triggered` is what keeps that true when a shielded heal walks the
+    /// enemy back up over the line.
+    fn check_thresholds(&mut self, before: i64) {
+        for (threshold, status) in self.pending_thresholds(before) {
+            self.triggered.push(threshold);
+            self.take_status(status);
+        }
+    }
+
+    /// Put a status on the enemy, with the two side effects upstream's
+    /// `setStatus` carries: going enraged restarts its swing clock on the
+    /// short delay rather than waiting out the current one, and starting to
+    /// meditate empties whatever it was already holding.
+    fn take_status(&mut self, status: Status) {
+        self.enemy_status = Some(Affliction::new(status));
+        match status {
+            Status::Enraged => self.enemy_timer = world_data::ENRAGE_ATTACK_DELAY,
+            Status::Meditation => self.banked = 0,
+            Status::Shield | Status::Venomous | Status::Energised | Status::Boost => {}
+        }
+        self.last_hit = Some(status.label().to_string());
+    }
+
+    fn pending_thresholds(&self, before: i64) -> Vec<(i64, Status)> {
+        self.combat
+            .at_health
+            .iter()
+            .filter(|(threshold, _)| {
+                self.enemy_hp <= *threshold
+                    && before > *threshold
+                    && !self.triggered.contains(threshold)
+            })
+            .copied()
+            .collect()
+    }
 }
 
 /// Which part of a scene is on screen.
 #[derive(Clone, Debug)]
 pub enum Phase {
     Story,
-    Fighting(Fight),
+    /// Boxed because a live fight carries far more than any other phase (a
+    /// stat line, three timer collections and two statuses), and an unboxed
+    /// variant would make every `Phase` that size.
+    Fighting(Box<Fight>),
+    /// The enemy is dead but has not finished dying: an unstable automaton
+    /// sits there for a few seconds and then goes off in the wanderer's face.
+    Exploding {
+        timer: f64,
+        damage: i64,
+    },
     /// The enemy is down: the loot rows and a way out.
     Spoils {
         leave_cooldown: f64,
@@ -360,6 +594,12 @@ pub enum Row {
     Attack(Weapon),
     Eat,
     Meds,
+    /// A hypo out of the fabricator: the same shape as medicine, more of it.
+    Hypo,
+    /// A stim: halves attack cooldowns for a few seconds, at a cost in blood.
+    Stim,
+    /// The kinetic armour's shield: absorb and heal the next hit taken.
+    Shield,
     /// Take one of the loot row at this index.
     Take(usize),
     /// Take everything that fits.
@@ -421,18 +661,8 @@ impl Active {
 
     /// Re-open a parked fight: the same scene, with the enemy where it was.
     pub fn resume(event: &'static Event, scene: &'static Scene, enemy_hp: i64) -> Active {
-        let combat = scene.combat;
-        let phase = match combat {
-            Some(combat) => Phase::Fighting(Fight {
-                enemy_hp,
-                enemy_max: combat.health,
-                enemy_timer: combat.attack_delay,
-                stun: 0.0,
-                weapon_cooldown: BTreeMap::new(),
-                eat_cooldown: 0.0,
-                meds_cooldown: 0.0,
-                last_hit: None,
-            }),
+        let phase = match scene.combat {
+            Some(combat) => Phase::Fighting(Box::new(Fight::start(combat, enemy_hp))),
             None => Phase::Story,
         };
         Active {
@@ -446,8 +676,14 @@ impl Active {
     /// The fight in progress, for the save.
     pub fn fight(&self) -> Option<&Fight> {
         match &self.phase {
-            Phase::Fighting(fight) => Some(fight),
-            Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => None,
+            Phase::Fighting(fight) => Some(fight.as_ref()),
+            // A blast already on its way is not worth parking: the enemy is
+            // dead, and resuming would mean either dodging damage that was
+            // earned or taking it twice.
+            Phase::Exploding { .. }
+            | Phase::Story
+            | Phase::Spoils { .. }
+            | Phase::DropFor { .. } => None,
         }
     }
 
@@ -471,16 +707,7 @@ impl Active {
         }
         match scene.combat {
             Some(combat) => {
-                self.phase = Phase::Fighting(Fight {
-                    enemy_hp: combat.health,
-                    enemy_max: combat.health,
-                    enemy_timer: combat.attack_delay,
-                    stun: 0.0,
-                    weapon_cooldown: BTreeMap::new(),
-                    eat_cooldown: 0.0,
-                    meds_cooldown: 0.0,
-                    last_hit: None,
-                });
+                self.phase = Phase::Fighting(Box::new(Fight::start(combat, combat.health)));
             }
             None => {
                 self.phase = Phase::Story;
@@ -503,7 +730,20 @@ impl Active {
                 if look.quantity(Resource::Medicine) > 0 {
                     rows.push(Row::Meds);
                 }
+                if look.quantity(Resource::Hypo) > 0 {
+                    rows.push(Row::Hypo);
+                }
+                if look.quantity(Resource::Stim) > 0 {
+                    rows.push(Row::Stim);
+                }
+                // The shield is the armour's, not the pack's: upstream reads
+                // the store room, so it works whether or not it was packed.
+                if look.game.store(Resource::KineticArmour) > 0 {
+                    rows.push(Row::Shield);
+                }
             }
+            // The blast is on its way and nothing can be done about it.
+            Phase::Exploding { .. } => {}
             Phase::DropFor { loot_index } => {
                 if let Some(target) = self.loot.get(*loot_index) {
                     let needed = world_data::weight(target.item) - look.free_space();
@@ -541,11 +781,13 @@ impl Active {
                         rows.push(Row::Button(index));
                     }
                 }
-                if matches!(self.phase, Phase::Story)
-                    && self.scene.buttons.is_empty()
-                    && self.loot.is_empty()
+                if !rows.contains(&Row::Leave) && !rows.iter().any(|row| self.row_ready(*row, look))
                 {
-                    // A scene with nothing on it is a dead end; always leavable.
+                    // A dead-end scene, or one whose every row is cost-gated
+                    // out of reach (the burning junction on an empty
+                    // canteen): always leavable. A browser player could
+                    // refresh the page out of that corner; over SSH this row
+                    // is the only door.
                     rows.push(Row::Leave);
                 }
             }
@@ -568,12 +810,16 @@ impl Active {
                     fight.weapon_cooldown.get(&weapon).copied().unwrap_or(0.0) <= 0.0
                         && weapon_loaded(weapon, look)
                 }
-                Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => false,
+                Phase::Story
+                | Phase::Exploding { .. }
+                | Phase::Spoils { .. }
+                | Phase::DropFor { .. } => false,
             },
             Row::Eat => match &self.phase {
                 Phase::Fighting(fight) => {
                     fight.eat_cooldown <= 0.0 && look.quantity(Resource::CuredMeat) > 0
                 }
+                Phase::Exploding { .. } => false,
                 Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => {
                     look.quantity(Resource::CuredMeat) > 0
                 }
@@ -582,9 +828,43 @@ impl Active {
                 Phase::Fighting(fight) => {
                     fight.meds_cooldown <= 0.0 && look.quantity(Resource::Medicine) > 0
                 }
+                Phase::Exploding { .. } => false,
                 Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => {
                     look.quantity(Resource::Medicine) > 0
                 }
+            },
+            Row::Hypo => match &self.phase {
+                Phase::Fighting(fight) => {
+                    fight.hypo_cooldown <= 0.0 && look.quantity(Resource::Hypo) > 0
+                }
+                Phase::Exploding { .. } => false,
+                Phase::Story | Phase::Spoils { .. } | Phase::DropFor { .. } => {
+                    look.quantity(Resource::Hypo) > 0
+                }
+            },
+            // The stim costs blood, so it refuses at the point where taking
+            // it would be what killed the wanderer.
+            Row::Stim => match &self.phase {
+                Phase::Fighting(fight) => {
+                    fight.stim_cooldown <= 0.0
+                        && look.quantity(Resource::Stim) > 0
+                        && look
+                            .trip
+                            .is_some_and(|trip| trip.hp > world_data::BOOST_DAMAGE)
+                }
+                Phase::Story
+                | Phase::Exploding { .. }
+                | Phase::Spoils { .. }
+                | Phase::DropFor { .. } => false,
+            },
+            Row::Shield => match &self.phase {
+                Phase::Fighting(fight) => {
+                    fight.shield_cooldown <= 0.0 && look.game.store(Resource::KineticArmour) > 0
+                }
+                Phase::Story
+                | Phase::Exploding { .. }
+                | Phase::Spoils { .. }
+                | Phase::DropFor { .. } => false,
             },
             Row::Take(index) => match self.loot.get(index) {
                 Some(row) => {
@@ -617,6 +897,9 @@ impl Active {
             Row::DropCancel => true,
             Row::Leave => match &self.phase {
                 Phase::Spoils { leave_cooldown } => *leave_cooldown <= 0.0,
+                // Walking out mid-blast would be a free escape from damage
+                // that has already been earned.
+                Phase::Exploding { .. } => false,
                 Phase::Story | Phase::Fighting(_) | Phase::DropFor { .. } => true,
             },
         }
@@ -661,6 +944,39 @@ impl Active {
             }
             Row::Meds => {
                 self.heal(Resource::Medicine, world_data::MEDS_HEAL, ctx);
+                Outcome::Continue
+            }
+            Row::Hypo => {
+                self.heal(Resource::Hypo, world_data::HYPO_HEAL, ctx);
+                Outcome::Continue
+            }
+            // Upstream's stim: the boost goes on and the wanderer pays for it
+            // in blood on the spot. `row_ready` refuses when that blood is all
+            // there is, so this can never be the thing that kills them.
+            Row::Stim => {
+                let Phase::Fighting(fight) = &mut self.phase else {
+                    return Outcome::Continue;
+                };
+                fight.stim_cooldown = world_data::STIM_COOLDOWN;
+                fight.player_status = Some(Affliction::new(Status::Boost));
+                fight.last_hit = Some(format!("-{}", world_data::BOOST_DAMAGE));
+                if let Some(trip) = &mut ctx.trip {
+                    trip.add(Resource::Stim, -1);
+                    trip.hp = (trip.hp - world_data::BOOST_DAMAGE).max(0);
+                    if trip.hp == 0 {
+                        return Outcome::Died;
+                    }
+                }
+                Outcome::Continue
+            }
+            // The kinetic armour's shield. It costs nothing but the cooldown:
+            // the armour is worn, not spent.
+            Row::Shield => {
+                if let Phase::Fighting(fight) = &mut self.phase {
+                    fight.shield_cooldown = world_data::SHIELD_COOLDOWN;
+                    fight.player_status = Some(Affliction::new(Status::Shield));
+                    fight.last_hit = Some(Status::Shield.label().to_string());
+                }
                 Outcome::Continue
             }
             Row::Take(index) => {
@@ -728,7 +1044,10 @@ impl Active {
                         .unwrap_or(Next::End);
                     self.follow(next, ctx, rng, out)
                 }
-                Phase::Story | Phase::Fighting(_) | Phase::DropFor { .. } => Outcome::Done,
+                Phase::Story
+                | Phase::Fighting(_)
+                | Phase::Exploding { .. }
+                | Phase::DropFor { .. } => Outcome::Done,
             },
         }
     }
@@ -764,7 +1083,9 @@ impl Active {
                     None => Outcome::Done,
                 }
             }
-            Next::Event(key) => match super::scenes_setpieces::by_key(key) {
+            Next::Event(key) => match super::scenes_setpieces::by_key(key)
+                .or_else(|| super::scenes_executioner::by_key(key))
+            {
                 Some(event) => {
                     self.event = event;
                     let scene = event.scene("start").unwrap_or(&Scene::EMPTY);
@@ -795,13 +1116,15 @@ impl Active {
             }
         }
         // The unarmed master punches twice as fast (upstream halves the
-        // button's cooldown in `createAttackButton`).
-        let cooldown =
-            if weapon.kind() == WeaponKind::Unarmed && ctx.game.has_perk(Perk::UnarmedMaster) {
-                weapon.cooldown() / 2.0
-            } else {
-                weapon.cooldown()
-            };
+        // button's cooldown in `createAttackButton`), and a stim halves it
+        // again for as long as it lasts.
+        let mut cooldown = weapon.cooldown();
+        if weapon.kind() == WeaponKind::Unarmed && ctx.game.has_perk(Perk::UnarmedMaster) {
+            cooldown /= 2.0;
+        }
+        if fight.has_player_status(Status::Boost) {
+            cooldown /= 2.0;
+        }
         fight.weapon_cooldown.insert(weapon, cooldown);
 
         let landed = rng.r#gen::<f64>() <= ctx.game.hit_chance();
@@ -813,8 +1136,7 @@ impl Active {
             }
             (true, Damage::Hits(base)) => {
                 let damage = perk_damage(base, weapon.kind(), ctx.game);
-                fight.enemy_hp = (fight.enemy_hp - damage).max(0);
-                fight.last_hit = Some(format!("-{damage}"));
+                strike_enemy(fight, damage);
             }
         }
         // Punching enough things teaches you to punch.
@@ -822,9 +1144,28 @@ impl Active {
             train_fists(ctx.game, out);
         }
         if fight.enemy_hp <= 0 {
-            self.win(ctx, rng, out);
+            self.kill(ctx, rng, out);
         }
         Outcome::Continue
+    }
+
+    /// The enemy is out of health. Most of them fall over; an unstable
+    /// automaton sits there for a moment and then goes off.
+    fn kill(&mut self, ctx: &mut Ctx<'_>, rng: &mut impl Rng, out: &mut Vec<String>) {
+        // Whatever happens next, the fight itself is over: a parked snapshot
+        // would put the enemy back on its feet.
+        if let Some(trip) = &mut ctx.trip {
+            trip.combat = None;
+        }
+        match self.scene.combat.and_then(|combat| combat.explosion) {
+            Some(damage) => {
+                self.phase = Phase::Exploding {
+                    timer: world_data::EXPLOSION_DELAY,
+                    damage,
+                };
+            }
+            None => self.win(ctx, rng, out),
+        }
     }
 
     fn win(&mut self, ctx: &mut Ctx<'_>, rng: &mut impl Rng, out: &mut Vec<String>) {
@@ -860,36 +1201,136 @@ impl Active {
                 *leave_cooldown = (*leave_cooldown - seconds).max(0.0);
                 Outcome::Continue
             }
+            // The enemy is dead and about to take the wanderer with it. The
+            // blast lands whether or not the session is still watching, which
+            // is why it is a phase and not a timeout.
+            Phase::Exploding { timer, damage } => {
+                *timer -= seconds;
+                if *timer > 0.0 {
+                    return Outcome::Continue;
+                }
+                let damage = *damage;
+                let mut died = false;
+                if let Some(trip) = &mut ctx.trip {
+                    trip.hp = (trip.hp - damage).max(0);
+                    died = trip.hp == 0;
+                }
+                if died {
+                    return Outcome::Died;
+                }
+                self.win(ctx, rng, out);
+                Outcome::Continue
+            }
             Phase::Fighting(fight) => {
                 for cooldown in fight.weapon_cooldown.values_mut() {
                     *cooldown = (*cooldown - seconds).max(0.0);
                 }
                 fight.eat_cooldown = (fight.eat_cooldown - seconds).max(0.0);
                 fight.meds_cooldown = (fight.meds_cooldown - seconds).max(0.0);
+                fight.hypo_cooldown = (fight.hypo_cooldown - seconds).max(0.0);
+                fight.stim_cooldown = (fight.stim_cooldown - seconds).max(0.0);
+                fight.shield_cooldown = (fight.shield_cooldown - seconds).max(0.0);
                 fight.stun = (fight.stun - seconds).max(0.0);
+                expire(&mut fight.enemy_status, seconds);
+                expire(&mut fight.player_status, seconds);
 
                 let Some(combat) = self.scene.combat else {
+                    return Outcome::Continue;
+                };
+
+                // The enemy's tricks, each on its own clock.
+                for index in 0..fight.special_timers.len() {
+                    let Some(special) = combat.specials.get(index) else {
+                        continue;
+                    };
+                    fight.special_timers[index] -= seconds;
+                    if fight.special_timers[index] > 0.0 {
+                        continue;
+                    }
+                    fight.special_timers[index] += special.delay;
+                    let status = match special.action {
+                        SpecialAction::Take(status) => status,
+                        SpecialAction::RotateCommand => rotate_command(fight.last_special, rng),
+                    };
+                    fight.last_special = Some(status);
+                    fight.take_status(status);
+                }
+
+                // A venom bite keeps bleeding for the rest of the fight.
+                if let Some((damage, timer)) = &mut fight.bleed {
+                    *timer -= seconds;
+                    if *timer <= 0.0 {
+                        *timer += world_data::DOT_TICK;
+                        let damage = *damage;
+                        fight.last_hit = Some(format!("-{damage}"));
+                        let mut died = false;
+                        if let Some(trip) = &mut ctx.trip {
+                            trip.hp = (trip.hp - damage).max(0);
+                            died = trip.hp == 0;
+                        }
+                        if died {
+                            return Outcome::Died;
+                        }
+                    }
+                }
+
+                let Phase::Fighting(fight) = &mut self.phase else {
                     return Outcome::Continue;
                 };
                 fight.enemy_timer -= seconds;
                 if fight.enemy_timer > 0.0 {
                     return Outcome::Continue;
                 }
-                fight.enemy_timer = combat.attack_delay;
-                if fight.stun > 0.0 {
-                    return Outcome::Continue;
-                }
-                // The evasive perk makes them miss more often.
-                let to_hit = match ctx.game.has_perk(Perk::Evasive) {
-                    true => combat.hit * 0.8,
-                    false => combat.hit,
+                // An enraged enemy swings on its own short clock rather than
+                // on the scene's.
+                fight.enemy_timer = match fight.has_enemy_status(Status::Enraged) {
+                    true => world_data::ENRAGE_ATTACK_DELAY,
+                    false => combat.attack_delay,
                 };
-                if rng.r#gen::<f64>() > to_hit {
-                    fight.last_hit = Some("miss".to_string());
+                // A tangled enemy does not swing, and neither does a
+                // meditating one: it is busy holding the damage it is owed.
+                if fight.stun > 0.0 || fight.has_enemy_status(Status::Meditation) {
                     return Outcome::Continue;
                 }
-                fight.last_hit = Some(format!("-{}", combat.damage));
-                let damage = combat.damage;
+
+                // Everything banked while meditating comes back in one swing,
+                // and it never misses (upstream skips the to-hit roll for it).
+                let mut damage = if fight.banked > 0 {
+                    std::mem::take(&mut fight.banked)
+                } else {
+                    // The evasive perk makes them miss more often.
+                    let to_hit = match ctx.game.has_perk(Perk::Evasive) {
+                        true => combat.hit * 0.8,
+                        false => combat.hit,
+                    };
+                    if rng.r#gen::<f64>() > to_hit {
+                        fight.last_hit = Some("miss".to_string());
+                        return Outcome::Continue;
+                    }
+                    combat.damage
+                };
+                if fight.has_enemy_status(Status::Energised) {
+                    damage *= world_data::ENERGISE_MULTIPLIER;
+                }
+
+                // A shield takes the hit and heals it back instead, then
+                // breaks. Upstream shields break in one hit, whatever it was.
+                if fight.has_player_status(Status::Shield) {
+                    fight.player_status = None;
+                    fight.last_hit = Some(format!("+{damage}"));
+                    let max = ctx.game.max_health();
+                    if let Some(trip) = &mut ctx.trip {
+                        trip.hp = (trip.hp + damage).min(max);
+                    }
+                    return Outcome::Continue;
+                }
+
+                // A venomous enemy's hits keep bleeding afterwards.
+                if fight.has_enemy_status(Status::Venomous) {
+                    fight.bleed = Some((damage / 2, world_data::DOT_TICK));
+                }
+
+                fight.last_hit = Some(format!("-{damage}"));
                 // Fights only ever happen out in the world; there is nothing
                 // at home for an enemy to hurt.
                 if let Some(trip) = &mut ctx.trip {
@@ -988,18 +1429,39 @@ pub fn holds(condition: Condition, look: &Look<'_>) -> bool {
         Condition::TerrainIs(tile) => look
             .trip
             .is_some_and(|trip| trip.map.tile(trip.x, trip.y) == tile),
+        Condition::DeckPending(deck) => look
+            .trip
+            .is_some_and(|trip| !trip.battleship.decks.contains(&deck)),
+        Condition::DecksClear => look.trip.is_some_and(|trip| trip.battleship.decks_clear()),
     }
 }
 
+/// Whether a cost is waived outright. The glow stone's light never goes out,
+/// so anything that would burn a torch is free while it is in the pack
+/// (upstream deletes `cost.torch` wherever a button's cost is read).
+fn waived(cost: Cost, look: &Look<'_>) -> bool {
+    matches!(cost, Cost::Store(Resource::Torch, _)) && look.quantity(Resource::Glowstone) > 0
+}
+
 fn affordable(cost: Cost, look: &Look<'_>) -> bool {
+    if waived(cost, look) {
+        return true;
+    }
     match cost {
         Cost::Store(item, amount) => look.quantity(item) >= amount,
         Cost::Water(amount) => look.trip.is_some_and(|trip| trip.water >= amount),
-        Cost::Hp(amount) => look.trip.is_some_and(|trip| trip.hp >= amount),
+        // Strictly more than the cost: upstream lets the payment land the
+        // wanderer on 0 hp, walking dead until the next hit. Same rule as the
+        // stim: over SSH a button that silently ends the run reads as a bug,
+        // so a cost may never be the killing blow.
+        Cost::Hp(amount) => look.trip.is_some_and(|trip| trip.hp > amount),
     }
 }
 
 fn spend(cost: Cost, ctx: &mut Ctx<'_>) {
+    if waived(cost, &ctx.look()) {
+        return;
+    }
     match cost {
         Cost::Store(item, amount) => ctx.add(item, -amount),
         Cost::Water(amount) => {
@@ -1013,6 +1475,62 @@ fn spend(cost: Cost, ctx: &mut Ctx<'_>) {
             }
         }
     }
+}
+
+/// The wanderer lands a hit. Upstream's `Events.damage` in the direction that
+/// actually happens in this port: the enemy is the one carrying the shield,
+/// the meditation and the health thresholds.
+fn strike_enemy(fight: &mut Fight, damage: i64) {
+    // Meditation banks the damage instead of taking it; the enemy throws the
+    // whole pile back on its next swing.
+    if fight.has_enemy_status(Status::Meditation) {
+        fight.banked += damage;
+        fight.last_hit = Some(damage.to_string());
+        return;
+    }
+    // A shield turns the hit into healing and then breaks.
+    if fight.has_enemy_status(Status::Shield) {
+        fight.enemy_status = None;
+        fight.enemy_hp = (fight.enemy_hp + damage).min(fight.enemy_max);
+        fight.last_hit = Some(format!("+{damage}"));
+        return;
+    }
+    let before = fight.enemy_hp;
+    fight.enemy_hp = (fight.enemy_hp - damage).max(0);
+    fight.last_hit = Some(format!("-{damage}"));
+    fight.check_thresholds(before);
+}
+
+/// Run a status's clock down, taking it off when it expires. The ones with no
+/// clock (the shield, venom, an energised enemy) stay until they are used up
+/// or the fight ends.
+fn expire(held: &mut Option<Affliction>, seconds: f64) {
+    let Some(affliction) = held else {
+        return;
+    };
+    let Some(remaining) = &mut affliction.remaining else {
+        return;
+    };
+    *remaining -= seconds;
+    if *remaining <= 0.0 {
+        *held = None;
+    }
+}
+
+/// The command deck's rotation: one of shield, enraged or meditation, never
+/// the one it picked last time.
+fn rotate_command(last: Option<Status>, rng: &mut impl Rng) -> Status {
+    let choices: Vec<Status> = COMMAND_ROTATION
+        .into_iter()
+        .filter(|status| Some(*status) != last)
+        .collect();
+    let index = (rng.r#gen::<f64>() * choices.len() as f64).floor() as usize;
+    choices
+        .get(index.min(choices.len() - 1))
+        .copied()
+        // `COMMAND_ROTATION` has three entries and the filter drops at most
+        // one, so the list is never empty.
+        .unwrap_or(Status::Shield)
 }
 
 /// Roll a loot table into rows.
@@ -1231,6 +1749,22 @@ pub fn apply(effect: Effect, ctx: &mut Ctx<'_>, rng: &mut impl Rng, out: &mut Ve
         }
         Effect::ClearCity => {
             ctx.game.city_cleared = true;
+        }
+        Effect::EnterBattleship => {
+            if let Some(trip) = &mut ctx.trip {
+                trip.battleship.entered = true;
+            }
+        }
+        Effect::ClearDeck(deck) => {
+            if let Some(trip) = &mut ctx.trip {
+                trip.battleship.decks.insert(deck);
+            }
+        }
+        Effect::HealFull => {
+            let max = ctx.game.max_health();
+            if let Some(trip) = &mut ctx.trip {
+                trip.hp = max;
+            }
         }
     }
 }

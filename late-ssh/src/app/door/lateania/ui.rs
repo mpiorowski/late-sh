@@ -1886,7 +1886,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
 fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: usize) {
     let cursor = cursor.min(Class::ALL.len() - 1);
     let chosen = Class::ALL[cursor];
-    let accent = class_accent(chosen.name());
+    let accent = class_accent(Some(chosen));
     let mut lines = vec![
         Line::from(Span::styled(
             "~ LATEANIA ~",
@@ -1912,7 +1912,7 @@ fn draw_class_select(frame: &mut Frame, area: Rect, view: &PlayerView, cursor: u
     ];
     // The rolled scores in the same rated rows as the character sheet, with the
     // highlighted class's primary score glowing in its accent.
-    lines.extend(attribute_lines(view, primary_label(chosen.name()), accent));
+    lines.extend(attribute_lines(view, primary_label(Some(chosen)), accent));
     lines.push(Line::raw(""));
     // One compact row per class; the highlighted one is expanded directly below
     // its row so cursor-following scroll keeps the choice and its details together.
@@ -3041,7 +3041,51 @@ fn leaderboard_panel(view: &PlayerView, usernames: &UsernameLookup<'_>) -> Vec<L
     lines
 }
 
-fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
+/// How the vitals block renders HP and the class resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VitalStyle {
+    /// Compact numbers, for the peaceful panels: nothing is swinging back, so
+    /// there is nothing to judge at a glance.
+    Numbers,
+    /// Wide meters sized to the given panel width, for the battle frame - the
+    /// same shape the foe's bar uses, so both sides of the fight read the same
+    /// way and "can I out-trade this" is a look, not arithmetic.
+    Meters(usize),
+}
+
+fn vitals(view: &PlayerView, style: VitalStyle) -> Vec<Line<'static>> {
+    let hp_fg = hp_color(view.hp, view.max_hp);
+    let (hp_line, resource_line) = match style {
+        VitalStyle::Numbers => (
+            Line::from(vec![
+                Span::styled(vital_label("HP"), Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(
+                    format!("{}/{}", view.hp, view.max_hp),
+                    Style::default().fg(hp_fg).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    vital_label(&short_res(&view.resource_name)),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(
+                    format!("{}/{}", view.resource, view.max_resource),
+                    Style::default().fg(theme::MENTION()),
+                ),
+            ]),
+        ),
+        VitalStyle::Meters(width) => (
+            panel_meter_line(&vital_label("HP"), view.hp, view.max_hp, hp_fg, width),
+            panel_meter_line(
+                &vital_label(&short_res(&view.resource_name)),
+                view.resource,
+                view.max_resource,
+                theme::MENTION(),
+                width,
+            ),
+        ),
+    };
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -3062,25 +3106,8 @@ fn vitals(view: &PlayerView) -> Vec<Line<'static>> {
                 Style::default().fg(theme::BADGE_GOLD()),
             ),
         ]),
-        Line::from(vec![
-            Span::styled(vital_label("HP"), Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!("{}/{}", view.hp, view.max_hp),
-                Style::default()
-                    .fg(hp_color(view.hp, view.max_hp))
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                vital_label(&short_res(&view.resource_name)),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-            Span::styled(
-                format!("{}/{}", view.resource, view.max_resource),
-                Style::default().fg(theme::MENTION()),
-            ),
-        ]),
+        hp_line,
+        resource_line,
         Line::from(vec![
             Span::styled(vital_label("gold"), Style::default().fg(theme::TEXT_DIM())),
             Span::styled(
@@ -3113,7 +3140,7 @@ fn room_panel(
 ) -> (Vec<Line<'static>>, Vec<(usize, u32)>, Vec<(usize, Uuid)>) {
     let mut foe_hits: Vec<(usize, u32)> = Vec::new();
     let mut player_hits: Vec<(usize, Uuid)> = Vec::new();
-    let mut lines = vitals(view);
+    let mut lines = vitals(view, VitalStyle::Numbers);
     lines.push(Line::raw(""));
     lines.push(section("Here"));
     // The zone plus its level band, so one glance answers "do I belong here".
@@ -3482,7 +3509,7 @@ fn battle_side_panel(
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<(usize, ClickAction)>) {
     let mut hits: Vec<(usize, ClickAction)> = Vec::new();
-    let mut lines = vitals(view);
+    let mut lines = vitals(view, VitalStyle::Meters(width));
     lines.push(Line::raw(""));
     lines.push(section("Battle"));
     let wrap_w = width.saturating_sub(4).max(6);
@@ -3491,17 +3518,7 @@ fn battle_side_panel(
     // fit: meters shrink to leave room for their numbers, prose goes through
     // `side_text_wrap`, ability detail truncates.
     let hp_meter_line = |label: &'static str, hp: i32, max_hp: i32| {
-        let nums = format!("{hp}/{max_hp}");
-        let meter_w = width
-            .saturating_sub(5 + UnicodeWidthStr::width(nums.as_str()) + 1)
-            .clamp(6, 22);
-        Line::from(vec![
-            Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
-            Span::styled(
-                format!("{} {nums}", meter(hp, max_hp, meter_w)),
-                Style::default().fg(hp_color(hp, max_hp)),
-            ),
-        ])
+        panel_meter_line(label, hp, max_hp, hp_color(hp, max_hp), width)
     };
     if let Some(mob) = view.mobs.iter().find(|m| m.targeted) {
         let name_style = Style::default()
@@ -3578,6 +3595,9 @@ fn battle_side_panel(
     }
     if view.empower > 0 {
         effects.push(format!("empowered +{}", view.empower));
+    }
+    if let Some(coat) = &view.coat {
+        effects.push(coat.clone());
     }
     if view.stunned {
         effects.push("stunned".to_string());
@@ -3749,7 +3769,7 @@ fn map_cell_span(cell: MapCell) -> Span<'static> {
 /// A class portrait and vitals bars on the left, ability scores as dot ratings
 /// in the middle, and combat/derived stats, trait, titles, and XP on the right.
 fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
-    let accent = class_accent(&view.class_name);
+    let accent = class_accent(Class::from_key(&view.class_key));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER()))
@@ -3780,12 +3800,7 @@ fn draw_character_sheet(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
 /// Left column: portrait, identity headline, and vitals as filled meters.
 fn sheet_identity(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = composed_portrait(
-        &view.class_key,
-        &view.class_name,
-        &view.appearance_idx,
-        accent,
-    );
+    let mut lines = composed_portrait(&view.class_key, &view.appearance_idx, accent);
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         format!("Lv {} {}", view.level, view.class_name),
@@ -3896,7 +3911,11 @@ fn attribute_lines(view: &PlayerView, primary: &str, accent: Color) -> Vec<Line<
 }
 
 fn sheet_attributes(view: &PlayerView, accent: Color) -> Vec<Line<'static>> {
-    let mut lines = attribute_lines(view, primary_label(&view.class_name), accent);
+    let mut lines = attribute_lines(
+        view,
+        primary_label(Class::from_key(&view.class_key)),
+        accent,
+    );
     lines.push(Line::raw(""));
     lines.push(section("Trait"));
     lines.push(Line::from(Span::styled(
@@ -4111,6 +4130,26 @@ fn meter(cur: i32, max: i32, width: usize) -> String {
         .collect()
 }
 
+/// One meter row in the field layout's side panel: a dim label in a fixed
+/// gutter, then the bar and its numbers in the row's own color. The bar shrinks
+/// to leave room for the numbers, since the panel draws without terminal
+/// wrapping and every row must stay a single line for click mapping. Both sides
+/// of a fight render through here, so your bar and the foe's are the same
+/// object at the same width.
+fn panel_meter_line(label: &str, cur: i32, max: i32, color: Color, width: usize) -> Line<'static> {
+    let nums = format!("{cur}/{max}");
+    let meter_w = width
+        .saturating_sub(UnicodeWidthStr::width(label) + UnicodeWidthStr::width(nums.as_str()) + 1)
+        .clamp(6, 22);
+    Line::from(vec![
+        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            format!("{} {nums}", meter(cur, max, meter_w)),
+            Style::default().fg(color),
+        ),
+    ])
+}
+
 /// Truncate (with an ellipsis) or right-pad `name` to exactly `w` display
 /// columns, so roster rows line up into clean columns regardless of name width.
 fn fit(name: &str, w: usize) -> String {
@@ -4166,22 +4205,15 @@ fn roster_row(
     Line::from(spans)
 }
 
-/// The short ability-score label of a class's primary score, for highlighting.
-fn primary_label(class_name: &str) -> &'static str {
-    match class_name {
-        "Warrior" => "STR",
-        "Mage" => "INT",
-        "Cleric" => "WIS",
-        "Rogue" | "Ranger" => "DEX",
-        _ => "",
+/// The attribute row a class's key ability lands on, so the sheet and the
+/// selection screen glow the score that actually feeds its attack bonus. Read
+/// off the class itself: a new class cannot silently render with no attribute
+/// highlighted. Empty for a player who has not picked a class yet.
+fn primary_label(class: Option<Class>) -> &'static str {
+    match class {
+        Some(class) => class.primary_score().label(),
+        None => "",
     }
-}
-
-/// The display name for a stable class key (empty string if unknown).
-fn class_name_of(class_key: &str) -> String {
-    Class::from_key(class_key)
-        .map(|c| c.name().to_string())
-        .unwrap_or_default()
 }
 
 /// A three-letter class abbreviation, for roster rows too narrow for the full
@@ -4210,37 +4242,59 @@ fn class_abbrev(class_key: &str) -> &'static str {
     }
 }
 
-/// The accent colour that tints a class's portrait and headline.
-fn class_accent(class_name: &str) -> Color {
-    match class_name {
-        "Warrior" => theme::AMBER(),
-        "Mage" => theme::MENTION(),
-        "Cleric" => theme::BADGE_GOLD(),
-        "Rogue" => theme::ERROR(),
-        "Ranger" => theme::SUCCESS(),
-        "Beastlord" => theme::SUCCESS(),
-        "Skald" => theme::AMBER_GLOW(),
-        "Runemaster" => theme::MENTION(),
-        "Valewalker" => theme::SUCCESS(),
-        "Spiritmaster" => theme::MENTION(),
-        _ => theme::TEXT_BRIGHT(),
+/// The colour a class is drawn in: its portrait tint, its key attribute, the
+/// stars on its rated rows. Every class names one, so no calling reads as a
+/// colourless "generic adventurer". Unclassed players get plain bright text.
+fn class_accent(class: Option<Class>) -> Color {
+    let Some(class) = class else {
+        return theme::TEXT_BRIGHT();
+    };
+    match class {
+        Class::Warrior => theme::AMBER(),
+        Class::Mage => theme::MENTION(),
+        Class::Cleric => theme::BADGE_GOLD(),
+        Class::Rogue => theme::ERROR(),
+        Class::Ranger => theme::SUCCESS(),
+        Class::Druid => theme::SUCCESS(),
+        Class::Necromancer => theme::MENTION(),
+        Class::Bard => theme::AMBER_GLOW(),
+        Class::Monk => theme::BADGE_GOLD(),
+        Class::Paladin => theme::BADGE_GOLD(),
+        Class::Warlock => theme::ERROR(),
+        Class::Berserker => theme::AMBER(),
+        Class::Beastlord => theme::SUCCESS(),
+        Class::Skald => theme::AMBER_GLOW(),
+        Class::Runemaster => theme::MENTION(),
+        Class::Valewalker => theme::SUCCESS(),
+        Class::Spiritmaster => theme::MENTION(),
     }
 }
 
-/// A single-glyph class emblem shown beneath the portrait bust.
-fn class_emblem(class_name: &str) -> &'static str {
-    match class_name {
-        "Warrior" => "⚔ Warrior",
-        "Mage" => "✦ Mage",
-        "Cleric" => "✚ Cleric",
-        "Rogue" => "† Rogue",
-        "Ranger" => "➹ Ranger",
-        "Beastlord" => "❦ Beastlord",
-        "Skald" => "♪ Skald",
-        "Runemaster" => "ᛟ Runemaster",
-        "Valewalker" => "⚑ Valewalker",
-        "Spiritmaster" => "✵ Spiritmaster",
-        _ => "Adventurer",
+/// The mark a class stands under: a single glyph and its name, shown beneath
+/// the portrait bust. Every calling names its own, and no two share a glyph, so
+/// a bust reads as that class at a glance. Unclassed players are Adventurers.
+fn class_emblem(class: Option<Class>) -> &'static str {
+    let Some(class) = class else {
+        return "Adventurer";
+    };
+    match class {
+        Class::Warrior => "⚔ Warrior",
+        Class::Mage => "✦ Mage",
+        Class::Cleric => "✚ Cleric",
+        Class::Rogue => "† Rogue",
+        Class::Ranger => "➹ Ranger",
+        Class::Druid => "☘ Druid",
+        Class::Necromancer => "☠ Necromancer",
+        Class::Bard => "♫ Bard",
+        Class::Monk => "☯ Monk",
+        Class::Paladin => "✠ Paladin",
+        Class::Warlock => "☾ Warlock",
+        Class::Berserker => "☄ Berserker",
+        Class::Beastlord => "❦ Beastlord",
+        Class::Skald => "♪ Skald",
+        Class::Runemaster => "ᛟ Runemaster",
+        Class::Valewalker => "⚑ Valewalker",
+        Class::Spiritmaster => "✵ Spiritmaster",
     }
 }
 
@@ -4271,12 +4325,7 @@ fn eye_tint(idx: u8) -> Color {
 /// (build/hair/eyes/bearing) plus a class-flavoured headpiece, tinted with the
 /// class accent and per-feature colours. Falls back cleanly when indices are
 /// missing (old/absent selections). The class emblem is shown below the bust.
-fn composed_portrait(
-    class_key: &str,
-    class_name: &str,
-    sel: &[u8],
-    accent: Color,
-) -> Vec<Line<'static>> {
+fn composed_portrait(class_key: &str, sel: &[u8], accent: Color) -> Vec<Line<'static>> {
     // Pad/clamp the selection to a full field set.
     let mut idx = [0u8; appearance::N_FIELDS];
     for (i, slot) in idx.iter_mut().enumerate() {
@@ -4304,7 +4353,7 @@ fn composed_portrait(
         })
         .collect();
     lines.push(Line::from(Span::styled(
-        format!(" {}", class_emblem(class_name)),
+        format!(" {}", class_emblem(Class::from_key(class_key))),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     )));
     lines
@@ -4313,7 +4362,7 @@ fn composed_portrait(
 // ---- The panel behind each key: pack, shop, craft, tame, atlas -----------
 
 fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
-    let mut lines = vitals(view);
+    let mut lines = vitals(view, VitalStyle::Numbers);
     lines.push(Line::raw(""));
     lines.push(section("Combat"));
     lines.push(stat("attack", view.attack.to_string()));
@@ -4321,8 +4370,8 @@ fn character_panel(view: &PlayerView) -> Vec<Line<'static>> {
     lines.push(Line::raw(""));
     lines.extend(attribute_lines(
         view,
-        primary_label(&view.class_name),
-        class_accent(&view.class_name),
+        primary_label(Class::from_key(&view.class_key)),
+        class_accent(Class::from_key(&view.class_key)),
     ));
     if view.resurrection_cap > 0 {
         lines.push(stat(
@@ -5322,10 +5371,9 @@ fn appearance_panel(view: &PlayerView, cursor: usize) -> Vec<Line<'static>> {
     // A live portrait of the current choices, so players can preview how each
     // change reshapes their character before committing.
     if view.classed {
-        let accent = class_accent(&view.class_name);
+        let accent = class_accent(Class::from_key(&view.class_key));
         lines.extend(composed_portrait(
             &view.class_key,
-            &view.class_name,
             &view.appearance_idx,
             accent,
         ));
@@ -5686,6 +5734,9 @@ fn battle_context(view: &PlayerView, width: usize) -> Option<Vec<Line<'static>>>
     }
     if view.empower > 0 {
         effects.push(format!("empowered +{}", view.empower));
+    }
+    if let Some(coat) = &view.coat {
+        effects.push(coat.clone());
     }
     if view.stunned {
         effects.push("stunned".to_string());
@@ -6077,10 +6128,9 @@ fn follow_panel(
                 .get(&occ.user_id)
                 .cloned()
                 .unwrap_or_else(|| "adventurer".to_string());
-            let accent = class_accent(&class_name_of(&occ.class_key));
+            let accent = class_accent(Class::from_key(&occ.class_key));
             lines.extend(composed_portrait(
                 &occ.class_key,
-                &class_name_of(&occ.class_key),
                 &occ.appearance_idx,
                 accent,
             ));

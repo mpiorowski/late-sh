@@ -41,9 +41,9 @@ fn every_craft_skill_has_recipes_and_indices_are_stable() {
             );
         }
     }
-    // 10 recipes per tier x 6 tiers (Wildbound added the sixth), plus two
-    // masterwork sinks.
-    assert_eq!(recipes().len(), 62);
+    // 14 recipes per tier x 6 tiers (Wildbound added the sixth tier, the
+    // world resist/weak pass the four weapon oils), plus two masterwork sinks.
+    assert_eq!(recipes().len(), 86);
 }
 
 #[test]

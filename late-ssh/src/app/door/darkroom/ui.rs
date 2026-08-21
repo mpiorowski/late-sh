@@ -9,9 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use late_core::models::profile_award::{
-    DARKROOM_ESCAPE_AWARD_CATEGORY, award_badge, award_category_label,
-};
+use late_core::models::profile_award::{award_badge, award_category_label};
 
 use crate::app::common::theme;
 use crate::app::door::landing;
@@ -25,6 +23,35 @@ use super::state::{Ending, EndingBeat, Row, State};
 /// ("trading post", "sulphur mine") plus a two-space gutter, so a count never
 /// butts up against the name it belongs to.
 pub const SIDEBAR_LABEL_PAD: usize = 14;
+
+/// The stores whose own name is too long for that column, and what the sidebar
+/// calls them instead. Ours, not upstream's: upstream has no fixed-width
+/// column to fit and abbreviates only where it feels like it (its own armours
+/// are already "l armour"/"i armour"/"s armour", which is the style followed
+/// here).
+///
+/// This is an exception list, not a second naming scheme: everything absent
+/// renders under its real name, and `ui_test` is what keeps the list complete
+/// as new stores arrive.
+pub static SIDEBAR_LABELS: [(Resource, &str); 8] = [
+    (Resource::KineticArmour, "k armour"),
+    (Resource::FluidRecycler, "recycler"),
+    (Resource::HypoBlueprint, "bp: hypo"),
+    (Resource::KineticArmourBlueprint, "bp: armour"),
+    (Resource::DisruptorBlueprint, "bp: disruptor"),
+    (Resource::PlasmaRifleBlueprint, "bp: plasma"),
+    (Resource::StimBlueprint, "bp: stim"),
+    (Resource::GlowstoneBlueprint, "bp: glowstone"),
+];
+
+/// What the sidebar calls a store.
+pub fn sidebar_label(resource: Resource) -> &'static str {
+    SIDEBAR_LABELS
+        .iter()
+        .find(|(listed, _)| *listed == resource)
+        .map(|(_, label)| *label)
+        .unwrap_or_else(|| resource.label())
+}
 
 /// Total width of the stores/pack sidebar column: the two-space indent, the
 /// label column, and room for the widest value a long run reaches
@@ -111,6 +138,7 @@ fn title_for(state: &State, game: &Game) -> String {
         View::Outside => game.outside_title().to_string(),
         View::Path => "A Dusty Path".to_string(),
         View::World => "A Barren World".to_string(),
+        View::Fabricator => data::FABRICATOR_TITLE.to_string(),
         View::Ship => "An Old Starship".to_string(),
     }
 }
@@ -132,7 +160,7 @@ fn pack_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
             continue;
         }
         lines.push(landing::stat(
-            item.label(),
+            sidebar_label(*item),
             &count.to_string(),
             SIDEBAR_LABEL_PAD,
         ));
@@ -168,6 +196,19 @@ fn status_line(state: &State, game: &Game) -> Line<'static> {
             game.capacity() as i64
         ),
         View::World => String::new(),
+        // The blueprints found so far, which is the whole of what the
+        // fabricator has to say about itself.
+        View::Fabricator => {
+            let known: Vec<&str> = data::Blueprint::ALL
+                .into_iter()
+                .filter(|blueprint| game.blueprints.contains(blueprint))
+                .map(data::Blueprint::label)
+                .collect();
+            match known.is_empty() {
+                true => format!("{}: none yet", data::SECTION_BLUEPRINTS),
+                false => format!("{}: {}", data::SECTION_BLUEPRINTS, known.join(", ")),
+            }
+        }
         View::Ship => match game.ship.as_ref() {
             Some(ship) => format!("hull: {}. engine: {}.", ship.hull, ship.thrusters),
             None => String::new(),
@@ -321,7 +362,11 @@ fn stores_lines(state: &State, game: &Game) -> Vec<Line<'static>> {
                 Some(rate) => format!("{} {}/{}s", game.store(resource), fmt_income(*rate), tick),
                 None => game.store(resource).to_string(),
             };
-            lines.push(landing::stat(resource.label(), &value, SIDEBAR_LABEL_PAD));
+            lines.push(landing::stat(
+                sidebar_label(resource),
+                &value,
+                SIDEBAR_LABEL_PAD,
+            ));
         }
     }
     let standing: Vec<&Building> = Building::ALL
@@ -512,16 +557,16 @@ fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
             format!("{label:>16}   {value:<22}"),
             Style::default().fg(theme::TEXT_DIM()),
         ))],
-        EndingBeat::Award => vec![
+        EndingBeat::Award(escape) => vec![
             Line::from(vec![
                 Span::styled(
-                    format!("[{}]  ", award_badge(DARKROOM_ESCAPE_AWARD_CATEGORY, 1)),
+                    format!("[{}]  ", award_badge(escape.award_category(), 1)),
                     Style::default()
                         .fg(theme::AMBER())
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    award_category_label(DARKROOM_ESCAPE_AWARD_CATEGORY).to_string(),
+                    award_category_label(escape.award_category()).to_string(),
                     Style::default().fg(theme::TEXT_BRIGHT()),
                 ),
             ]),

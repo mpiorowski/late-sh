@@ -13,6 +13,7 @@
 // generation lives in `world.rs` (`extend_villages` / `extend_archipelago`), and
 // the portal fast-travel action lives in `svc.rs`.
 
+use super::damage::ZoneTheme;
 use super::world::RoomId;
 
 /// First room id of the villages block. One room per village.
@@ -52,6 +53,33 @@ pub const ARCH_SEED: u64 = 0x15_1A9D_5EED_u64;
 
 /// The number of islands.
 pub const ISLAND_COUNT: usize = ISLANDS.len();
+
+/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// island, in `ISLANDS` order. Regulars inherit the theme's profile; the
+/// island boss wears the theme's weakness but never its resist (prep is a
+/// pure reward on the fight players provision for).
+pub const ISLAND_THEMES: [ZoneTheme; ISLAND_COUNT] = [
+    ZoneTheme::Crystal,   // Isle of Glass Sands
+    ZoneTheme::Tidal,     // Coral Crown Atoll
+    ZoneTheme::Ashen,     // Ashfall Cinderisle
+    ZoneTheme::Fae,       // Whispering Fenholm
+    ZoneTheme::Frozen,    // Frostspar Skerries
+    ZoneTheme::Verdant,   // Thornweald Isle
+    ZoneTheme::Haunted,   // Sunken Vault Isle
+    ZoneTheme::Storm,     // Stormglass Reach
+    ZoneTheme::Undead,    // Bonewhite Atoll
+    ZoneTheme::Verdant,   // Verdant Ruin Isle
+    ZoneTheme::Fae,       // Mirrorlake Isle
+    ZoneTheme::Crystal,   // Saltspire Pillars
+    ZoneTheme::Beastwild, // Duskmoth Grove
+    ZoneTheme::Crystal,   // Rustwrack Shoals
+    ZoneTheme::Resonant,  // Windsong Cliffs
+    ZoneTheme::Drowned,   // Gloomtide Trench
+    ZoneTheme::Beastwild, // Amberglow Isle
+    ZoneTheme::Fae,       // Starfall Crater
+    ZoneTheme::Storm,     // Tempest Eye Isle
+    ZoneTheme::Profane,   // Worldwound Isle
+];
 
 /// One island: (name, adjective, ground, landmark, creatures, three mob names,
 /// boss). Prose is composed by `world.rs`. Each has unique scenery.

@@ -22,12 +22,18 @@ pub fn to_json(game: &Game) -> Value {
 /// Deserialize a stored blob back into a game. A missing or corrupt blob falls
 /// back to a fresh game rather than failing the session: the worst case is a
 /// player who lost a save gets a dark room, which is where everyone starts.
+///
+/// That fallback room is never a veteran's, whatever the account has done: the
+/// only reader that knows an account's history is `svc::load_game`, and it
+/// only reaches for it when there was no row to read at all. A save that
+/// failed to parse is a fault, not a fresh start, and quietly handing it the
+/// battleship would hide that.
 pub fn from_json(blob: &Value) -> Game {
     match blob.get("game") {
         Some(game) => match serde_json::from_value::<Game>(game.clone()) {
             Ok(game) => game,
-            Err(_) => Game::new(),
+            Err(_) => Game::new(false),
         },
-        None => Game::new(),
+        None => Game::new(false),
     }
 }

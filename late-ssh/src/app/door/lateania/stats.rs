@@ -59,6 +59,21 @@ pub enum Score {
     Charisma,
 }
 
+impl Score {
+    /// The three-letter label every attribute row is written with, and the one
+    /// place a score's short name is spelled.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Strength => "STR",
+            Self::Dexterity => "DEX",
+            Self::Constitution => "CON",
+            Self::Intelligence => "INT",
+            Self::Wisdom => "WIS",
+            Self::Charisma => "CHA",
+        }
+    }
+}
+
 /// The D&D ability modifier for a score: floor((score - 10) / 2). div_euclid
 /// floors toward negative infinity, so a score of 7 correctly yields -2.
 pub fn modifier(score: i32) -> i32 {
@@ -116,16 +131,22 @@ impl AbilityScores {
         modifier(self.score(class.primary_score()))
     }
 
-    /// The six scores in display order: (short label, value, modifier).
+    /// The six scores in display order: (short label, value, modifier). Labels
+    /// come from `Score::label` so a row and a class's key ability can never
+    /// disagree about what a score is called.
     pub fn rows(&self) -> [(&'static str, i32, i32); 6] {
         [
-            ("STR", self.strength, modifier(self.strength)),
-            ("DEX", self.dexterity, modifier(self.dexterity)),
-            ("CON", self.constitution, modifier(self.constitution)),
-            ("INT", self.intelligence, modifier(self.intelligence)),
-            ("WIS", self.wisdom, modifier(self.wisdom)),
-            ("CHA", self.charisma, modifier(self.charisma)),
+            Score::Strength,
+            Score::Dexterity,
+            Score::Constitution,
+            Score::Intelligence,
+            Score::Wisdom,
+            Score::Charisma,
         ]
+        .map(|which| {
+            let value = self.score(which);
+            (which.label(), value, modifier(value))
+        })
     }
 }
 

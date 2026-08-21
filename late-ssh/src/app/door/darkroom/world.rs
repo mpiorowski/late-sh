@@ -71,7 +71,11 @@ pub enum Step {
 /// Generation works on a grid of `Option<Tile>` rather than on the saved map,
 /// because upstream's stickiness rule leans on the difference between a
 /// square that is barrens and one that has not been written yet.
-pub fn generate(rng: &mut impl Rng) -> WorldMap {
+/// `veteran` says whether this account has finished the game before. It is the
+/// only input generation takes beyond the dice: the ravaged battleship is
+/// dropped only for a wanderer whose account has already flown out once, so a
+/// first run never meets it.
+pub fn generate(veteran: bool, rng: &mut impl Rng) -> WorldMap {
     let radius = world_data::RADIUS;
     let size = GRID as usize;
     let mut grid: Vec<Vec<Option<Tile>>> = vec![vec![None; size]; size];
@@ -97,6 +101,9 @@ pub fn generate(rng: &mut impl Rng) -> WorldMap {
         let Some(landmark) = tile.landmark() else {
             continue;
         };
+        if tile == Tile::Battleship && !veteran {
+            continue;
+        }
         for _ in 0..landmark.num {
             place_landmark(
                 &mut grid,
@@ -284,6 +291,9 @@ pub fn embark(game: &mut Game) -> Expedition {
         water: game.max_water(),
         outfit: outfit.into_iter().collect(),
         map,
+        // The working copy of how far into the battleship this save has got,
+        // committed again by `go_home` exactly like the map.
+        battleship: game.battleship.clone(),
         ..Expedition::default()
     }
 }
@@ -307,10 +317,23 @@ pub fn go_home(game: &mut Game, trip: Expedition, out: &mut Vec<String>) {
     if trip.found_ship && game.ship.is_none() {
         game.ship = Some(super::model::ShipState::default());
     }
+    // Everything the battleship gave up this trip, and the strange device
+    // that comes with having got inside it at all.
+    game.battleship = trip.battleship;
+    if game.battleship.entered && !game.fabricator {
+        game.fabricator = true;
+        out.push(super::data::MSG_FABRICATOR_FOUND.to_string());
+    }
+    // Blueprints are read out of the pack and burned, before anything else
+    // gets put back on the shelf (upstream `redeemBlueprints`).
+    let mut outfit = trip.outfit;
+    if game.redeem_blueprints(&mut outfit) {
+        out.push(super::data::MSG_BLUEPRINTS_REDEEMED.to_string());
+    }
     // The pack goes back on the shelf; only what the wanderer always carries
     // stays packed for next time (upstream `leaveItAtHome`).
     let mut kept = std::collections::BTreeMap::new();
-    for (item, count) in &trip.outfit {
+    for (item, count) in &outfit {
         game.add_store(*item, *count);
         if !leave_it_at_home(*item) {
             kept.insert(*item, *count);
@@ -324,6 +347,63 @@ pub fn go_home(game: &mut Game, trip: Expedition, out: &mut Vec<String>) {
     game.expedition = None;
 }
 
+/// Drop the ravaged battleship into a map that was drawn without it, and say
+/// whether anything moved.
+///
+/// Upstream does the same thing for saves that predate the wreck. Here the
+/// reason is the gate rather than the version: a map generated before the
+/// account had ever flown out has no battleship on it, and the run that earned
+/// the unlock should not have to be thrown away to see it.
+pub fn place_battleship(map: &mut WorldMap, rng: &mut impl Rng) -> bool {
+    if find_tile(map, Tile::Battleship).is_some() {
+        return false;
+    }
+    let Some(landmark) = Tile::Battleship.landmark() else {
+        return false;
+    };
+    // `place_landmark` works on the generation grid, where an unwritten square
+    // and a barrens are different things; a committed map has no unwritten
+    // squares, so every one of them reads as written.
+    let size = GRID as usize;
+    let mut grid: Vec<Vec<Option<Tile>>> = vec![vec![None; size]; size];
+    for x in 0..GRID {
+        for y in 0..GRID {
+            grid[x as usize][y as usize] = Some(map.tile(x, y));
+        }
+    }
+    let (x, y) = place_landmark(
+        &mut grid,
+        landmark.min_radius,
+        landmark.max_radius,
+        Tile::Battleship,
+        rng,
+    );
+    if grid[x as usize][y as usize] != Some(Tile::Battleship) {
+        // The ring was full and `place_landmark` gave up rather than spin.
+        return false;
+    }
+    map.set_tile(x, y, Tile::Battleship);
+    true
+}
+
+/// Where a tile sits on a committed map, if it is on it at all.
+fn find_tile(map: &WorldMap, wanted: Tile) -> Option<(i32, i32)> {
+    (0..GRID).find_map(|x| (0..GRID).find_map(|y| (map.tile(x, y) == wanted).then_some((x, y))))
+}
+
+/// Which of the ravaged battleship's events a visit opens. The first arrival
+/// explores the wreck and powers it up; every arrival after that steps
+/// straight into the antechamber and its bank of elevators (upstream
+/// `World.doSpace`). Unlike every other landmark, the square is never marked
+/// visited, so it keeps offering until the command deck falls and
+/// `clear_dungeon` turns the wreck into an outpost.
+pub fn battleship_scene(trip: &Expedition) -> &'static str {
+    match trip.battleship.entered {
+        true => "executioner-antechamber",
+        false => "executioner-intro",
+    }
+}
+
 /// Whether an item is dropped off at home rather than kept in the pack.
 fn leave_it_at_home(item: Resource) -> bool {
     if matches!(
@@ -333,6 +413,8 @@ fn leave_it_at_home(item: Resource) -> bool {
             | Resource::EnergyCell
             | Resource::Charm
             | Resource::Medicine
+            | Resource::Stim
+            | Resource::Hypo
     ) {
         return false;
     }

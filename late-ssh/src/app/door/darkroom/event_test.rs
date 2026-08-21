@@ -8,7 +8,7 @@ use super::model::{Expedition, Game, Thieves, View};
 use super::world_data::Weapon;
 
 fn game() -> Game {
-    let mut game = Game::new();
+    let mut game = Game::new(false);
     game.last_settled = 1_800_000_000;
     game
 }
@@ -454,4 +454,331 @@ fn unusable_ranged_weapon_without_ammo_falls_back_to_fists() {
             .and_then(|fight| fight.weapon_cooldown.get(&Weapon::Fists).copied()),
         Some(2.0)
     );
+}
+
+// ---------------------------------------------------------------------------
+// The ravaged battleship's fights
+// ---------------------------------------------------------------------------
+
+/// One of the battleship's fight scenes, opened at full enemy health.
+fn battleship_fight(event_key: &str, scene_key: &str) -> Active {
+    let event = find(&super::scenes_executioner::EXECUTIONER, event_key);
+    let scene = event.scene(scene_key).expect("scene is in the event");
+    let enemy_hp = scene.combat.expect("scene is a fight").health;
+    Active::resume(event, scene, enemy_hp)
+}
+
+#[test]
+fn a_shielded_enemy_heals_the_hit_it_takes_and_the_shield_breaks() {
+    let mut game = game();
+    let mut trip = armed_trip(&mut game);
+    trip.add(Resource::SteelSword, 1);
+    trip.hp = 500;
+    let mut rng = StdRng::seed_from_u64(11);
+    let mut out = Vec::new();
+    // The unstable prototype throws a shield up every five seconds.
+    let mut active = battleship_fight("executioner-engineering", "7");
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+
+    // Swings miss one time in five, so rather than pinning a single hit this
+    // drives the fight and holds the invariant across all of it: while the
+    // shield is up, nothing the wanderer does can take the enemy's health
+    // down, and a landed hit puts it up and breaks the shield.
+    let mut shielded_seen = false;
+    let mut healed_through_a_shield = false;
+    let mut hurt_through_a_shield = false;
+    let mut broke_a_shield = false;
+    for _ in 0..60 {
+        let Some(before) = active.fight() else {
+            break;
+        };
+        let was_shielded =
+            before.enemy_status.map(|held| held.status) == Some(event::Status::Shield);
+        let hp_before = before.enemy_hp;
+        shielded_seen |= was_shielded;
+
+        active.press(
+            Row::Attack(Weapon::SteelSword),
+            &mut ctx,
+            &mut rng,
+            &mut out,
+        );
+
+        if let Some(after) = active.fight()
+            && was_shielded
+        {
+            healed_through_a_shield |= after.enemy_hp > hp_before;
+            hurt_through_a_shield |= after.enemy_hp < hp_before;
+            broke_a_shield |= after.enemy_status.is_none();
+        }
+        active.tick(2.0, &mut ctx, &mut rng, &mut out);
+    }
+
+    assert!(shielded_seen, "the prototype shields itself every 5s");
+    assert!(
+        !hurt_through_a_shield,
+        "a shielded enemy must never lose health to a hit"
+    );
+    assert!(
+        healed_through_a_shield,
+        "a shielded hit has to heal it instead"
+    );
+    assert!(broke_a_shield, "and the shield breaks on that one hit");
+}
+
+#[test]
+fn the_unstable_automaton_goes_off_before_it_gives_up_its_blueprint() {
+    let mut game = game();
+    let mut trip = armed_trip(&mut game);
+    trip.add(Resource::Grenade, 40);
+    trip.hp = 200;
+    let mut rng = StdRng::seed_from_u64(5);
+    let mut out = Vec::new();
+    let mut active = battleship_fight("executioner-medical", "8");
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+
+    // Check the phase straight after the swing that kills it: ticking on
+    // would run the blast's own clock out and hide the whole point.
+    for _ in 0..60 {
+        active.press(Row::Attack(Weapon::Grenade), &mut ctx, &mut rng, &mut out);
+        if !matches!(active.phase, Phase::Fighting(_)) {
+            break;
+        }
+        active.tick(5.0, &mut ctx, &mut rng, &mut out);
+    }
+    assert!(
+        matches!(active.phase, Phase::Exploding { .. }),
+        "it does not fall over, it winds up: {:?}",
+        active.phase
+    );
+
+    let hp_before = ctx.trip.as_ref().expect("on a trip").hp;
+    // The blast lands whether or not anyone is still watching.
+    active.tick(
+        super::world_data::EXPLOSION_DELAY,
+        &mut ctx,
+        &mut rng,
+        &mut out,
+    );
+    assert!(
+        matches!(active.phase, Phase::Spoils { .. }),
+        "and then the fight is over"
+    );
+    assert_eq!(
+        ctx.trip.as_ref().expect("on a trip").hp,
+        hp_before - 30,
+        "thirty damage, taken after the kill"
+    );
+    assert!(
+        active
+            .loot
+            .iter()
+            .any(|row| row.item == Resource::GlowstoneBlueprint),
+        "the blueprint is still on the floor afterwards"
+    );
+}
+
+#[test]
+fn the_medic_turns_venomous_once_and_its_bite_keeps_working() {
+    let mut game = game();
+    let mut trip = armed_trip(&mut game);
+    trip.add(Resource::SteelSword, 1);
+    trip.hp = 2_000;
+    let mut rng = StdRng::seed_from_u64(2);
+    let mut out = Vec::new();
+    let mut active = battleship_fight("executioner-medical", "5-1");
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+
+    // Eighty health, venomous at forty: swing until it crosses the line.
+    for _ in 0..20 {
+        if active
+            .fight()
+            .is_some_and(|fight| fight.enemy_hp <= 40 && fight.enemy_hp > 0)
+        {
+            break;
+        }
+        active.press(
+            Row::Attack(Weapon::SteelSword),
+            &mut ctx,
+            &mut rng,
+            &mut out,
+        );
+        active.tick(2.0, &mut ctx, &mut rng, &mut out);
+    }
+    assert_eq!(
+        active
+            .fight()
+            .expect("still fighting")
+            .enemy_status
+            .map(|held| held.status),
+        Some(event::Status::Venomous),
+        "half dead, it starts spitting"
+    );
+
+    // Sit through its swings until one lands, and check it leaves a bleed.
+    for _ in 0..60 {
+        if active.fight().is_some_and(|fight| fight.bleed.is_some()) {
+            break;
+        }
+        active.tick(1.0, &mut ctx, &mut rng, &mut out);
+    }
+    assert!(
+        active.fight().is_some_and(|fight| fight.bleed.is_some()),
+        "a venomous hit has to keep working after it lands"
+    );
+
+    let hp_before = ctx.trip.as_ref().expect("on a trip").hp;
+    active.tick(super::world_data::DOT_TICK, &mut ctx, &mut rng, &mut out);
+    assert!(
+        ctx.trip.as_ref().expect("on a trip").hp < hp_before,
+        "the bleed ticks on its own"
+    );
+}
+
+/// Walk the engineering wing's `start` scene until the weighted branch lands
+/// on the burning junction (`1-3`), whose two buttons are both cost-gated.
+fn reach_burning_junction(ctx: &mut Ctx<'_>, out: &mut Vec<String>) -> Active {
+    let engineering = find(
+        &super::scenes_executioner::EXECUTIONER,
+        "executioner-engineering",
+    );
+    for seed in 0..64u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut active = Active::start(engineering, ctx, &mut rng, out);
+        active.press(Row::Button(0), ctx, &mut rng, out);
+        if active.scene.key == "1-3" {
+            return active;
+        }
+    }
+    panic!("the weighted branch never landed on the burning junction");
+}
+
+/// The burning junction's buttons both cost (5 water / 10 hp) and the scene
+/// has no leave, faithfully to upstream. A browser player who can afford
+/// neither can refresh the page; over SSH the modal swallows Esc, so a modal
+/// with zero pressable rows would hold the session hostage until the
+/// connection dropped.
+#[test]
+fn the_burning_junction_always_leaves_a_way_out() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 4,
+        water: 0,
+        ..Expedition::default()
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut active = reach_burning_junction(&mut ctx, &mut out);
+
+    assert!(
+        !active.row_ready(Row::Button(0), &ctx.look()),
+        "no water to extinguish with"
+    );
+    assert!(
+        !active.row_ready(Row::Button(1), &ctx.look()),
+        "not enough blood to rush through with"
+    );
+    let rows = active.rows(&ctx.look());
+    assert!(
+        rows.contains(&Row::Leave),
+        "a modal with nothing pressable must offer leave, got {rows:?}"
+    );
+    assert!(active.row_ready(Row::Leave, &ctx.look()));
+    assert_eq!(
+        active.press(Row::Leave, &mut ctx, &mut rng, &mut out),
+        Outcome::Done
+    );
+}
+
+/// Upstream lets the hp cost land on exactly-enough health and leaves the
+/// wanderer standing at 0 hp, alive until something else hits them. Same rule
+/// as the stim: over SSH a button that silently ends the run reads as a bug,
+/// so the cost refuses when paying it would take the last of the health.
+#[test]
+fn rushing_through_the_flames_can_never_be_the_killing_blow() {
+    let mut game = game();
+    let mut trip = Expedition {
+        hp: 10,
+        water: 0,
+        ..Expedition::default()
+    };
+    let mut rng = StdRng::seed_from_u64(0);
+    let mut out = Vec::new();
+    let mut ctx = Ctx {
+        game: &mut game,
+        trip: Some(&mut trip),
+        view: View::World,
+        now: Utc.timestamp_opt(1_800_000_000, 0).unwrap(),
+    };
+    let mut active = reach_burning_junction(&mut ctx, &mut out);
+    assert!(
+        !active.row_ready(Row::Button(1), &ctx.look()),
+        "10 hp is exactly the cost, and the cost may not kill"
+    );
+
+    // One point more and the wanderer limps through alive.
+    ctx.trip.as_mut().expect("on a trip").hp = 11;
+    assert!(active.row_ready(Row::Button(1), &ctx.look()));
+    let rows = active.rows(&ctx.look());
+    assert!(
+        !rows.contains(&Row::Leave),
+        "a solvent wanderer gets no way out but through, got {rows:?}"
+    );
+    assert_eq!(
+        active.press(Row::Button(1), &mut ctx, &mut rng, &mut out),
+        Outcome::Continue
+    );
+    assert_eq!(ctx.trip.as_ref().expect("on a trip").hp, 1);
+}
+
+/// The elevator bank is the only way into the three wings, so a button that
+/// says one deck and opens another would be silent and unrecoverable. Both
+/// halves come off `Deck`; this is what pins that they still line up.
+#[test]
+fn every_elevator_button_opens_the_wing_it_is_labelled_with() {
+    let antechamber = find(
+        &super::scenes_executioner::EXECUTIONER,
+        "executioner-antechamber",
+    );
+    let start = antechamber.scene("start").expect("the bank of elevators");
+
+    for deck in super::model::Deck::ALL {
+        let button = start
+            .buttons
+            .iter()
+            .find(|button| button.text == deck.label())
+            .unwrap_or_else(|| panic!("no button for the {} deck", deck.label()));
+        assert_eq!(
+            button.next,
+            event::Next::Event(deck.scene()),
+            "the {} button opens the wrong wing",
+            deck.label()
+        );
+        assert!(
+            super::scenes_executioner::by_key(deck.scene()).is_some(),
+            "the {} deck names an event that does not exist",
+            deck.label()
+        );
+    }
 }

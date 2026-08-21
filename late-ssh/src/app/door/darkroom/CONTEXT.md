@@ -35,7 +35,7 @@ arrangement is:
 
 | Files | License | Why |
 |---|---|---|
-| `data.rs`, `model.rs`, `sim.rs`, `event.rs`, `world.rs`, `world_data.rs`, `space.rs`, `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL-2.0** (header + Exhibit B on each) | Carry upstream balance tables, timing constants, rules, scene graphs and prose. Text is copied verbatim, which the MPL permits precisely because these files stay MPL. |
+| `data.rs`, `model.rs`, `sim.rs`, `event.rs`, `world.rs`, `world_data.rs`, `space.rs`, `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs`, `scenes_executioner.rs` | **MPL-2.0** (header + Exhibit B on each) | Carry upstream balance tables, timing constants, rules, scene graphs and prose. Text is copied verbatim, which the MPL permits precisely because these files stay MPL. |
 | `pace.rs`, `persist.rs`, `svc.rs`, `state.rs`, `ui.rs`, `ui_event.rs`, `ui_world.rs`, `screen.rs` | FSL-1.1-MIT (repo default) | Our own work: the pacing design, persistence, the TUI. |
 
 MPL §3.3 is what lets the larger work ship under our terms. **If you move
@@ -123,11 +123,12 @@ between sessions contribute nothing without any bookkeeping.
 | `sim.rs` | **MPL.** `settle()` and the per-second steps: fire cooling (with the builder's auto-stoke *before* the cool, so a tended fire holds its level), temperature drift, the builder arc, the need-wood forest unlock, income payout, arrivals. Plus `roll_traps`. |
 | `persist.rs` | JSON save envelope (`schema_version` + `game`), tolerant of a missing/corrupt blob (falls back to a fresh dark room). |
 | `svc.rs` | `DarkroomService` (cheap `Clone`, `Arc`-backed): async load via a `watch` channel, fire-and-forget save/delete over `darkroom_saves`, per-user write gate so a burst of saves cannot land out of order, and `reward_escape` (the ending's feed line, chips and badge, the Green Dragon `reward_dragon_kill` shape). No shared world, no tick loop, no published snapshot. |
-| `event.rs` | **MPL.** The scene machine and the fight. Upstream's per-scene closures become a closed `Effect` enum and its `isAvailable` predicates a closed `Condition` enum; its `setInterval` fight timers become second countdowns stepped from `State::tick`. `Ctx` writes, `Look` reads (the renderer never clones a save to list rows). |
+| `event.rs` | **MPL.** The scene machine and the fight, including the battleship's status layer (`Status`/`Affliction`: shield, enraged, meditation, venomous, energised, and the player's stim boost), its `Special` timers, `at_health` triggers and the death blast (`Phase::Exploding`). Upstream's per-scene closures become a closed `Effect` enum and its `isAvailable` predicates a closed `Condition` enum; its `setInterval` fight timers become second countdowns stepped from `State::tick`. `Ctx` writes, `Look` reads (the renderer never clones a save to list rows). |
 | `scenes_village.rs`, `scenes_encounters.rs`, `scenes_setpieces.rs` | **MPL.** The three event pools, transcribed scene for scene. |
+| `scenes_executioner.rs` | **MPL.** The ravaged battleship: the intro, the antechamber's elevators, the three decks and the command deck, from `events/executioner.js`. The one landmark with more than one way in (`world::battleship_scene`), and the only one that is never marked visited. |
 | `world_data.rs`, `world.rs` | **MPL.** The wasteland: tiles, landmarks, weapons, weights and capacities; then generation, walking, supplies, danger, fights, clearing dungeons, going home and dying. Pure rules, tagged outcomes, no I/O. |
-| `space.rs` | **MPL.** The sixty-second ascent as a per-tick state machine, plus the ship's costs and the ending. |
-| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Ship), the cursor over `Row`s, the capped notification log, the live event modal, the live flight, and the `Ending` (the epitaph's beats and its reveal clock). `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
+| `space.rs` | **MPL.** The sixty-second ascent as a per-tick state machine, plus the ship's costs and both endings (`ENDING`, and `BEACON_ENDING` for a ship that leaves holding the fleet beacon). |
+| `state.rs` | Per-session `State`: the authoritative `Game`, the `View` (Room/Outside/Path/World/Fabricator/Ship), the cursor over `Row`s, the capped notification log, the live event modal, the live flight, and the `Ending` (the epitaph's beats and its reveal clock). `tick()` drains the load channel, settles village time, and steps live play against the wall clock. |
 | `ui_event.rs`, `ui_world.rs` | The event modal and fight panel; the masked map and the ascent. |
 | `ui.rs` | Rendering only: the live page (status line, action column, stores column, log, footer with the allowance), the ending screen, and the Games-hub landing card (which credits upstream). |
 | `screen.rs` | The `DoorGame` impl (`GAME`), launcher/active key+arrow handling, and `leave` (settle, save, return to the Games hub). |
@@ -138,6 +139,15 @@ between sessions contribute nothing without any bookkeeping.
 is one JSONB blob per user, exactly like `greendragon_characters`: the save
 shape evolves without new migrations. Every `Game` field carries a serde
 default.
+
+`darkroom_veterans` (migration `145`, model `darkroom_veteran.rs`) is the one
+thing that is **not** in the blob, and that is the point: winning deletes the
+blob, so the fact that an account has finished has to live where the wipe
+cannot reach it. One row per account that has got off the rock, existence is
+the answer, no counter and no score. It is read on every load (not only on a
+fresh save) so whoever earns the unlock mid-run sees it without starting over,
+and a failed read is treated as "not yet" rather than as a fault: the worst it
+can cost is one landmark on one map until the next visit.
 
 ## Integration points (mirror Green Dragon)
 
@@ -158,22 +168,12 @@ the worker/income economy, the trading post's buy menu, the workshop crafting
 tier, the random event pool (village events, the thief, the delayed
 Mysterious Wanderer payoffs), the compass and the path, the wasteland with its
 generated map, supplies, danger and encounters, every classic setpiece, the
-mines feeding the village their ore, the ship, the ascent, and the ending.
+mines feeding the village their ore, the ravaged battleship and the fabricator
+it hands over, the ship, the ascent, and both endings.
 
-**Deliberately cut in v1/v2:** the Executioner battleship (upstream calls it
-"A Ravaged Battleship"), the fabricator and everything it makes, prestige,
-scoring, the `cache` landmark, and upstream's marketing event. `laser rifle`
-and `energy cell` stayed, because the classic setpieces drop them regardless.
-
-**v3, planned (see "Planned: v3" below):** the battleship and the fabricator
-are being un-cut. Upstream's own `prestige.js`/`scoring.js` point-total stays
-cut, it doesn't fit a save that only ever grows, but a smaller, original
-"legacy" layer is going in its place: two lifetime counters (liftoffs, and
-liftoffs made while holding the fleet beacon) that live outside the save
-so a delete-and-replay doesn't erase them, small permanent bonuses a fresh
-save reads from them, and two boards on the shared Leaderboards page. The
-`cache` landmark and the marketing event stay cut, no reason found to want
-either.
+**Deliberately cut:** upstream's `prestige.js`/`scoring.js` (a per-resource
+point total that resets does not fit a save that only ever grows), the `cache`
+landmark, and upstream's marketing event. Nothing else.
 
 **The three clocks.** Village time is credited, capped and slowed (`pace`).
 Wall-clock cooldowns (stoke, gather, traps, embark, liftoff, delayed rewards)
@@ -206,27 +206,42 @@ in the door, so an absent player is never robbed of anything but time.
 `audioLibrary.js`, `notifications.js` and `Button.js` (DOM widgets), roughly
 1,100 lines that the terminal replaces rather than translates.
 
-## The ending: the one thing here that ends
+## The two endings: the only things here that end
 
 Winning the ascent (`Flight::Won`) is the only terminal state the door has,
-and it is deliberately loud about it:
+and it is deliberately loud about it. Which of the two endings runs is decided
+by one thing: whether the store room holds the `fleet beacon` taken off the
+immortal wanderer (`state::Escape`, `Plain` or `WithBeacon`).
 
-- **The epitaph takes the whole panel.** `state::Ending` holds the beats
-  (upstream's three closing lines from `space::ENDING`, the run's last figures,
-  the badge, the way out) and a reveal clock; `ui::draw_ending` lays out every
-  beat from the first frame and leaves the unrevealed ones blank, so the text
-  never crawls up the screen as it arrives. Any key skips the wait; the next
-  key leaves the door. There is nothing behind the ending to go back to, so
-  that is the screen's only exit (`screen::ending_took_key`, which owns Esc and
-  the arrows too).
-- **The account keeps the run: chips and a badge.** `svc::reward_escape` is the
-  Green Dragon `reward_dragon_kill` shape: a `#lounge` feed line every time,
-  and — first escape only, deduped by the lifetime reward template
-  (migration 143, 10k chips) and the `NOT EXISTS` award insert — the payout
-  plus the rankless `ADE` profile badge. A replay pays nothing more, and the
-  ending's copy says "once per account" so that never reads as a broken
-  payout. Badge codes are registered in `late-core/src/models/profile_award.rs`
-  and `user.rs`'s chat-label SQL; see `app/leaderboard/CONTEXT.md`.
+- **The epitaph takes the whole panel.** `state::Ending` holds the beats (the
+  closing lines from `space::ENDING` or `space::BEACON_ENDING`, the run's last
+  figures, the badge, the way out) and a reveal clock; `ui::draw_ending` lays
+  out every beat from the first frame and leaves the unrevealed ones blank, so
+  the text never crawls up the screen as it arrives. Any key skips the wait;
+  the next key leaves the door. There is nothing behind the ending to go back
+  to, so that is the screen's only exit (`screen::ending_took_key`, which owns
+  Esc and the arrows too).
+- **The account keeps the run: chips and a badge, one set per ending.**
+  `svc::reward_escape` is the Green Dragon `reward_dragon_kill` shape: a
+  `#lounge` feed line every time (the beacon run's says so:
+  `Escape::feed_detail` appends "followed the fleet beacon home"), and — first
+  escape *of that kind* only,
+  deduped by the lifetime reward template and the `NOT EXISTS` award insert —
+  the payout plus a rankless profile badge. Plain: `darkroom_escape`,
+  migration 143, `ADE`. Beacon: `darkroom_beacon_escape`, migration 145,
+  `ADB`. Both pay 10,000, both are separate claims, and an account can earn
+  both. A replay of either pays nothing more, and the ending's copy says "once
+  per account" so that never reads as a broken payout. Badge codes are
+  registered in `late-core/src/models/profile_award.rs` and `user.rs`'s
+  chat-label SQL; chat shows only the higher of the two (`BADGE_LADDERS`), the
+  profile page still lists both. See `app/leaderboard/CONTEXT.md`.
+- **The account also remembers that it happened.** The same task writes the
+  `darkroom_veterans` row, first and on its own, because it is the one thing
+  here that changes what the game *is* next time and must not be lost to a
+  failure in the payout path. It lives outside the save blob precisely so the
+  wipe below cannot erase it, and the only thing it buys is the battleship on
+  the next run's map. Which endings an account has reached is not recorded
+  there: the `ADE`/`ADB` badges already do that, permanently.
 - **The save does not survive.** The win deletes `darkroom_saves` for the user,
   so the next visit is a dead fire in a dark room and the whole arc is there to
   walk again. That makes `State::save` and `save_on_leave` load-bearing: both
@@ -237,6 +252,52 @@ and it is deliberately loud about it:
 - **A dropped connection during the ending loses nothing.** The wipe and the
   grant both fire the moment the ship gets through, not on dismissal. The
   player misses the words, never the reward.
+
+## The ravaged battleship: the one landmark you go back to
+
+The 10th-anniversary content, and the only part of the game gated on anything
+outside the save.
+
+- **It is not on a first run's map.** `world::generate` takes a `veteran` flag
+  and drops `Tile::Battleship` only when it is set; `Game::veteran` comes from
+  `darkroom_veterans` and means "this account has flown out before, either
+  way".
+  A save whose map was drawn before the account earned the unlock gets the
+  wreck retro-fitted on load (`world::place_battleship`), so nobody has to
+  throw a run away to see it. That is the whole of what finishing the game
+  buys: one landmark. It never touches stores, perks, or any pacing constant.
+- **Every other landmark is played once; this one is a place.** The square is
+  never marked visited. The first arrival runs `executioner-intro`, which ends
+  by power-cycling the ship, fighting the turret that wakes up, and taking the
+  strange device (`Effect::EnterBattleship`); every arrival after that runs
+  `executioner-antechamber`, whose elevator buttons fall away as their decks
+  are picked clean. The square only stops offering when the command deck falls
+  and `Effect::ClearDungeon` turns the wreck into an outpost.
+- **Progress is trip-scoped until you get home.** `Expedition::battleship` is
+  the working copy, started from `Game::battleship` on embark and committed by
+  `world::go_home`, exactly like the map. Dying in the wreck loses the decks
+  cleared that trip along with the pack. That is upstream's `World.state`.
+- **The fabricator is what the wreck is really for.** Getting inside once
+  brings the strange device home, which opens `View::Fabricator` (its own
+  panel, slotted in just before the ship's). It builds three things off alien
+  alloy alone; the other six need a blueprint, and blueprints are loot the
+  three decks drop, redeemed out of the pack by `Game::redeem_blueprints` on a
+  safe return and never shelved as stores.
+- **The fights needed a status layer the rest of the game has no use for.**
+  `event::Status` is six mutually exclusive conditions (upstream keeps one
+  free-form string per fighter, so they cannot stack): `Shield` turns the next
+  hit into healing and breaks, `Enraged` swings on a half-second clock,
+  `Meditation` banks everything thrown at it and gives the pile back in one
+  swing, `Venomous` leaves a bleed, `Energised` quadruples damage, and `Boost`
+  (the wanderer's, from a stim) halves attack cooldowns. They arrive from
+  `Combat::specials` (timers), `Combat::at_health` (a threshold crossed
+  downwards, once) and the three new fight rows. The immortal wanderer rotates
+  three of them at random, never the same one twice running.
+- **One enemy does not fall over.** `Combat::explosion` puts the fight into
+  `Phase::Exploding` instead of `Spoils`: the medical deck's unstable automaton
+  takes thirty off the wanderer three seconds after it dies. That phase is
+  deliberately unparkable and unleavable, so the blast cannot be dodged by
+  stepping out of the door.
 
 ## Gotchas
 
@@ -273,182 +334,61 @@ and it is deliberately loud about it:
   snapshots the fight before dropping the modal; clearing it instead would
   turn Esc into a free flee button, while a dropped connection still resumed
   the fight. The two exits must stay equivalent.
+- **The battleship square is never marked visited.** Every other setpiece ends
+  with `Effect::MarkVisited`; this one must not, or the antechamber becomes
+  unreachable and the decks can never be finished.
+- **The quadruped's loot table has a duplicate key upstream.**
+  `events/executioner.js` lists `alien alloy` twice in it, and a JavaScript
+  object literal keeps the last. The port transcribes what the game does (2-4
+  at one in five), not what the table reads. Do not "fix" it back.
+- **The stim costs blood, so its row refuses at low health.** Upstream lets you
+  kill yourself with it; `row_ready` does not, because over SSH a button that
+  ends the run with no warning reads as a bug rather than a risk. `Cost::Hp`
+  follows the same rule: `affordable` wants strictly more hp than the cost
+  (upstream allows exactly-enough and leaves the wanderer walking at 0), so a
+  button's cost can never be the killing blow.
+- **A modal with nothing pressable always grows a leave row.** The burning
+  junction (engineering `1-3`) is upstream-faithful: two cost-gated buttons,
+  no leave. A browser player who can pay neither refreshes the page; over SSH
+  the modal swallows Esc, so `Active::rows` appends `Row::Leave` whenever no
+  listed row passes `row_ready`. Any future all-cost-gated scene is covered by
+  the same fallback.
+- **A parked fight resumes with a clean status layer.** `CombatSnapshot`
+  persists only the event, the scene and `enemy_hp`; `Active::resume` rebuilds
+  through `Fight::start`, which zeroes statuses, special timers, the bleed and
+  the fired `at_health` thresholds. Deliberate: persisting the layer would
+  grow the save schema for two fights, and the cost of the reset is bounded
+  (the enemy's health is kept, and its specials simply start their clocks
+  over). It does hand a parked immortal-wanderer or robot fight a mild edge;
+  if that ever reads as an exploit, the fix is persisting the layer in
+  `CombatSnapshot`, not blocking the park.
+- **`Phase::Fighting` is boxed.** A live fight carries a stat line, three timer
+  collections and two statuses; unboxed it would set the size of every `Phase`.
+- **A press inside the modal keeps the cursor on the row it pressed.** Upstream
+  is a page of buttons that never move: using one greys it out and leaves it
+  where it was. `State::keep_cursor_on` reproduces that, tracking the row
+  rather than its index, and only resets to the top when the event, the scene
+  or the phase changed. The event key is part of that comparison on purpose:
+  nearly every event calls its opening scene `start`, so comparing scene keys
+  alone reads as "same screen" when a button has walked into a different event
+  entirely.
 - **The thief skim is not a starved trade.** Every other income source skips
   its whole payout when an input runs short; the skim drains to zero and books
   only what was actually there into `Game::stolen` (upstream `addStolen`),
   because that is the pile "hang him" gives back.
 
-## Planned: v3, the battleship, the fabricator, and a legacy across runs
+## Deliberately not built
 
-Execution plan for the next chunk of work, written for an LLM executor and
-reviewed phase by phase by another agent, same discipline v1 and v2 used.
-Everything above this section is shipped and load-bearing; everything below
-is not built yet. When a phase below ships, fold anything durable it
-establishes up into the relevant section above and cut the phase's
-description down to a line in "Deliberately cut in v1/v2" / "v3, planned"
-(whichever it becomes), the way v2's plan folded into this file. Don't leave
-two descriptions of the same shipped behavior around.
-
-### Ground rules for the executor
-
-Identical to what got v1 and v2 built:
-
-- **Source of truth is the local clone** at `upstream-adarkroom/` (repo root,
-  gitignored; `git clone --depth 1 https://github.com/doublespeakgames/adarkroom upstream-adarkroom`
-  if missing). Transcribe balance tables, timings and prose from upstream
-  files directly, never from memory. The clone may have moved on since v1/v2
-  were written; re-verify file paths before transcribing.
-- **Licensing is file-level and non-negotiable.** Any file carrying
-  upstream-derived tables, rules, or prose gets the MPL-2.0 header (copy it
-  verbatim from the top of `data.rs`, adjusting the "transcribed from" line).
-  Files that are purely late.sh's own work (the legacy record, leaderboard
-  wiring) stay FSL-1.1-MIT, no header. Update `NOTICE` and `LICENSING.md`
-  whenever the MPL file list changes.
-- Upstream prose is transcribed **verbatim**, including punctuation; the
-  repo's no-em-dash rule applies to our own code/comments/UI chrome, not to
-  upstream's sentences.
-- Tests live beside the file (`foo_test.rs` + `#[cfg(test)] mod foo_test;`),
-  written together with the code, run through the capped runner:
-  `ARGS="darkroom" make test-llm` (env var before `make`, never as a `make`
-  argument, or jemalloc's build dies).
-- Never `git commit`. Leave everything in the working tree.
-- No `#[allow(...)]` to silence lints; fix the structural cause.
-- Closed enums with exhaustive matching everywhere. A new variant must break
-  the build. No catch-all arms on enums we control.
-- Keep the module flat (files directly in `darkroom/`), consistent with v1/v2.
-- At the end of every phase: stop. The reviewer reads the diff before the
-  next phase starts.
-
-### Decisions
-
-1. **Un-cut: the Ravaged Battleship and the Fabricator.** Upstream sources:
-   `events/executioner.js` (the battleship landmark, its entrance turret
-   fight, the three decks, the Command Deck, the Immortal Wanderer) and
-   `fabricator.js` (the crafting station and its blueprint-gated recipes).
-   Un-cut items: hypo, stim, kinetic armour, plasma rifle, energy blade,
-   disruptor, glowstone, cargo drone, fluid recycler.
-2. **Still cut: upstream's own `prestige.js`/`scoring.js`.** A per-resource
-   point total that resets and carries a score forward doesn't fit a save
-   that only ever grows (see "In the village, almost nothing decays" above).
-   No per-resource point values are being ported. What replaces it is
-   narrower and original to late.sh, decision 4 below.
-3. **Still cut: the `cache` landmark and upstream's marketing event.** Purely
-   cosmetic/promotional in upstream, no gameplay content worth porting.
-4. **New: the legacy record.** A per-user row, `darkroom_legacy(user_id PK,
-   liftoffs int, beacon_liftoffs int, updated_at)`, added by a new migration
-   (next number after `133_create_door_rcs.sql` at plan time; the darkroom
-   save table itself was migration 127). It lives **outside** the JSONB save
-   blob in `darkroom_saves` specifically so the existing delete-and-replay
-   flow (the only way to start a new run today) does not erase it. Bumped
-   once, in `State::tick_flight`'s `Flight::Won` arm (`state.rs`, next to
-   where the ending is built and the save deleted today): `liftoffs` on every
-   win, `beacon_liftoffs` additionally when the run held the fleet beacon
-   before the ascent. This is the one place v2's "no auto-reset, no
-   prestige" decision gets a nuance: the *save itself* still never resets or
-   carries a score, replaying is still exactly "delete and start over"; what's
-   new is that the account remembers how many times that has happened. Note
-   the ending now performs that delete itself (see "The ending" above), so
-   v3's "delete and replay" is what winning already does.
-5. **New: permanent bonuses on a fresh save.** `Game::new()` reads the
-   account's `DarkroomLegacy` once, at creation, and applies a deterministic,
-   capped `LegacyBonus`, never touched again mid-run. First cut (numbers are
-   placeholders to tune during implementation and playtesting, not
-   contractual):
-   - Every prior liftoff (either ending) grants a modest starting stash on
-     the *next* fresh save, capped: e.g. `min(liftoffs, 5) * 20` wood and
-     `min(liftoffs, 5) * 10` fur. Rewards replaying without trivializing the
-     early game.
-   - The first fleet-beacon liftoff, and only the first, unlocks one
-     permanent starting `Perk` on every future fresh save (reuse the closed
-     `Perk` enum from `PLAN_V2`'s data model, e.g. `Scout`, otherwise only
-     earned deep into a run via The Scout's village event). Repeats past the
-     first don't stack more perks: one save-file-scoped economy, avoid
-     runaway power creep.
-   - A fresh save with a nonzero legacy says so plainly in the opening log
-     line, original prose (upstream never had this, nothing to transcribe).
-   - Guardrail: a legacy bonus may only ever pad starting stores or grant one
-     starting perk. It must never change `SLOWDOWN`, the daily cap, or any
-     other pacing constant, a legacy bonus is not a way to skip the pacing
-     model.
-6. **New: two Leaderboard boards.** `late-ssh/src/app/leaderboard/state.rs`
-   gets two more bespoke `Board` variants alongside `TopChips`/`ArcadeWins`:
-   `DarkroomLiftoffs` and `DarkroomBeaconLiftoffs`, ranked by the lifetime
-   counters in `darkroom_legacy` (fetch functions in
-   `late-core/src/models/leaderboard.rs`, same shape as
-   `fetch_monthly_chip_earners`/`fetch_arcade_champions`, new
-   `LeaderboardData` fields alongside `monthly_chip_earners`/
-   `arcade_champions`). Open wrinkle for the reviewer: existing bespoke
-   boards are monthly-only (`monthly()` always returns data, `all_time()` is
-   `Option`); a lifetime liftoff count is the opposite shape, all-time-only,
-   a monthly reset makes no sense for it. Either invert `Board`'s contract to
-   let `monthly()` return `Option` the same way `all_time()` already does, or
-   park the lifetime count under `monthly()` with a title/hint that says
-   plainly it isn't windowed. Pick whichever reads cleaner; don't guess,
-   check in with a reviewer before locking the shape.
-
-### Data model changes
-
-All in `model.rs`/`data.rs` (MPL) unless noted. Every new `Game` field
-carries a serde default so v1/v2 saves load unchanged; no `schema_version`
-bump needed.
-
-- `Resource` grows with the nine un-cut fabricator/executioner items above.
-- New `Game::fabricator: Option<FabricatorState>` (unlocked bool + a closed
-  `FabricatorBlueprint` bitset for what's been found in the three decks,
-  the same latch shape as `seen_buildings`/`seen_jobs`).
-- New `Game::battleship: BattleshipProgress`, a closed enum:
-  `Undiscovered, EntranceCleared, DecksCleared { engineering, medical,
-  martial: bool }, CommandCleared`. The battleship is multi-stage, unlike
-  the single-clear dungeons in `world_data.rs`'s landmark table, so it needs
-  its own progress type rather than reusing the generic dungeon-clear flag.
-- New `Game::fleet_beacon: bool`, held flag, checked at the top of the space
-  ascent to pick the ending.
-- New landmark table entry in `world_data.rs` (rare spawn, torch required to
-  enter, per upstream).
-- `late-core/src/models/darkroom_legacy.rs` (new, FSL, our own model, same
-  shape as other one-row-per-user tables like `tetris_high_scores`): the
-  migration, the row type, and read/bump functions.
-
-### Phases
-
-1. **Legacy + Leaderboard plumbing.** The migration, the model, the bump call
-   wired into `Flight::Won`, `LegacyBonus` computed and applied in
-   `Game::new`, the two new `Board` variants and their fetch functions. No
-   gameplay dependency on the battleship, ships and is reviewable on its own,
-   and gives a visible result immediately (a leaderboard showing "no runs
-   yet" for everyone). Tests: legacy bump on both ending types, bonus
-   capping, a fresh `Game::new` reads the account's real legacy row, board
-   fetch functions against seeded rows.
-2. **The battleship landmark and the entrance fight.** The landmark table
-   entry, a new `scenes_executioner.rs` (MPL) transcribing the entrance
-   sequence: power-cycling the ship wakes a defense turret, fought like any
-   other combat encounter. Clearing it sets `BattleshipProgress::
-   EntranceCleared` and grants the Fabricator. Tests: landmark spawn odds
-   and torch gating, entrance fight stats against upstream, state transition.
-3. **The Fabricator and the three decks.** Blueprint drops from Engineering,
-   Medical, and Martial (transcribed from `events/executioner.js`), the
-   fabricator craft list (alien alloy + blueprint-gated, same whole-refusal
-   shape as `Game::craft`), the nine new items' costs and stats from
-   `fabricator.js`. Tests: each deck's blueprint drop, craft gating per
-   blueprint, whole-refusal on short alloy.
-4. **The Command Deck, the Immortal Wanderer, and the fleet beacon.**
-   Unlocked once all three decks report cleared. The toughest fight in the
-   game, transcribed faithfully (upstream calls it the strongest enemy in
-   the game, no reason to soften it). Defeating it grants the fleet beacon
-   (`Game::fleet_beacon = true`). The space ascent (`space.rs`) branches on
-   the flag: held before liftoff swaps in the alternate ending text (the
-   Wanderer's fleet, wrecked, nobody left, air runs out) instead of the
-   standard one, and bumps `darkroom_legacy.beacon_liftoffs` instead of (or
-   alongside, decide during review) `liftoffs`. Tests: Command Deck gating,
-   Immortal Wanderer fight stats, ending branch selection, legacy bump
-   distinguishes the two endings.
-
-### Review protocol
-
-Same as v1/v2: after each phase the executor stops with the working tree
-dirty and reports what was transcribed from which upstream file, deviations
-(if any, with reasons), the test list, and anything suspicious left out of
-scope. The reviewer checks the diff against upstream and this section, with
-special attention to: licensing placement, verbatim prose, closed-enum
-discipline, the legacy record staying outside the save blob, and that the
-`LegacyBonus` guardrail (stores/perk only, never pacing) holds.
+- **No leaderboard boards, and no lifetime counters to feed them.** A Dark
+  Room pays badges, not standings. It is a game you finish twice at most, so a
+  liftoff tally would rank people on how many times they replayed a save that
+  gets deleted either way. `darkroom_veterans` holds one fact for one reason;
+  if a board ever seems wanted, that is a decision to reopen, not a column to
+  quietly add back.
+- **No legacy bonuses on a fresh save.** Finishing the game buys exactly one
+  landmark. It does not pad opening stores, grant a starting perk, or touch
+  `SLOWDOWN`, the daily cap, or any other pacing constant. The last of those
+  is the one that matters: a bonus that moves pacing is a way to buy out of
+  the pacing model, and the pacing model is the port's whole design.
+- **No `prestige.js`/`scoring.js`.** A per-resource point total that resets
+  does not fit a save that only ever grows (see "Scope").

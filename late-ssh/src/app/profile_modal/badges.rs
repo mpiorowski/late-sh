@@ -161,6 +161,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
             "A Dark Room Escape",
             "fly the starship off the rock, first escape only (10,000 chips)",
         ),
+        (
+            "ADB",
+            "A Dark Room Homefleet",
+            "fly out holding the fleet beacon, first time only (10,000 chips)",
+        ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
     }

@@ -77,7 +77,7 @@ fn body_lines(state: &State) -> Vec<Line<'static>> {
                 combat.enemy.to_string(),
                 Style::default().fg(theme::TEXT_BRIGHT()),
             )));
-            lines.push(Line::from(vec![
+            let mut enemy_row = vec![
                 Span::styled(
                     format!("{}  ", combat.chara),
                     Style::default().fg(theme::ERROR()),
@@ -86,18 +86,44 @@ fn body_lines(state: &State) -> Vec<Line<'static>> {
                     format!("{}/{}", fight.enemy_hp, fight.enemy_max),
                     Style::default().fg(theme::TEXT()),
                 ),
-            ]));
+            ];
+            if let Some(held) = fight.enemy_status {
+                enemy_row.push(Span::styled(
+                    format!("  ({})", held.status.label()),
+                    Style::default().fg(theme::AMBER()),
+                ));
+            }
+            lines.push(Line::from(enemy_row));
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
+            let mut player_row = vec![
                 Span::styled("@  ", Style::default().fg(theme::AMBER())),
                 Span::styled(format!("{hp}/{max}"), Style::default().fg(theme::TEXT())),
-            ]));
+            ];
+            if let Some(held) = fight.player_status {
+                player_row.push(Span::styled(
+                    format!("  ({})", held.status.label()),
+                    Style::default().fg(theme::AMBER()),
+                ));
+            }
+            if fight.bleed.is_some() {
+                player_row.push(Span::styled(
+                    "  (bleeding)",
+                    Style::default().fg(theme::ERROR()),
+                ));
+            }
+            lines.push(Line::from(player_row));
             if let Some(last) = &fight.last_hit {
                 lines.push(Line::from(Span::styled(
                     last.clone(),
                     Style::default().fg(theme::TEXT_DIM()),
                 )));
             }
+        }
+        Phase::Exploding { .. } => {
+            lines.push(Line::from(Span::styled(
+                "the wreck shudders, and something inside it starts to whine.",
+                Style::default().fg(theme::ERROR()),
+            )));
         }
         Phase::DropFor { .. } => {
             lines.push(Line::from(Span::styled(

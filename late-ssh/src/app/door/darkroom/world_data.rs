@@ -37,6 +37,7 @@ pub const MOVES_PER_FOOD: u32 = 2;
 pub const MOVES_PER_WATER: u32 = 1;
 pub const MEAT_HEAL: i64 = 8;
 pub const MEDS_HEAL: i64 = 20;
+pub const HYPO_HEAL: i64 = 30;
 /// At least three moves between fights.
 pub const FIGHT_DELAY: u32 = 3;
 pub const FIGHT_CHANCE: f64 = 0.20;
@@ -45,10 +46,36 @@ pub const DEATH_COOLDOWN: u32 = 120;
 /// Seconds of cooldown on the eat and medicine buttons in a fight.
 pub const EAT_COOLDOWN: f64 = 5.0;
 pub const MEDS_COOLDOWN: f64 = 7.0;
+pub const HYPO_COOLDOWN: f64 = 7.0;
 /// Seconds a bolas keeps an enemy tangled.
 pub const STUN_DURATION: f64 = 4.0;
 /// Seconds before the leave button is live after a fight.
 pub const LEAVE_COOLDOWN: f64 = 1.0;
+
+// ---------------------------------------------------------------------------
+// The status effects the battleship's fights are built on (upstream
+// `Events`'s constants). Every duration is in seconds; upstream states them in
+// milliseconds.
+// ---------------------------------------------------------------------------
+
+/// Cooldown on the kinetic armour's shield and on the stim, in seconds.
+pub const SHIELD_COOLDOWN: f64 = 10.0;
+pub const STIM_COOLDOWN: f64 = 10.0;
+/// How long an enraged enemy swings at double speed.
+pub const ENRAGE_DURATION: f64 = 4.0;
+/// The attack delay an enraged enemy swings on, whatever its own is.
+pub const ENRAGE_ATTACK_DELAY: f64 = 0.5;
+/// How long a meditating enemy banks damage instead of taking it.
+pub const MEDITATE_DURATION: f64 = 5.0;
+/// How long a stim keeps attack cooldowns halved, and what it costs to take.
+pub const BOOST_DURATION: f64 = 3.0;
+pub const BOOST_DAMAGE: i64 = 10;
+/// Seconds between ticks of a venom bite's bleed.
+pub const DOT_TICK: f64 = 1.0;
+/// What an energised fighter multiplies its damage by.
+pub const ENERGISE_MULTIPLIER: i64 = 4;
+/// How long a dying automaton sits there before it goes off.
+pub const EXPLOSION_DELAY: f64 = 3.0;
 
 /// Terrain probabilities. These three must sum to one.
 pub const FOREST_PROB: f64 = 0.15;
@@ -78,10 +105,12 @@ pub enum Tile {
     Borehole,
     Battlefield,
     Swamp,
+    /// The ravaged battleship. Upstream's `EXECUTIONER`.
+    Battleship,
 }
 
 impl Tile {
-    pub const ALL: [Tile; 17] = [
+    pub const ALL: [Tile; 18] = [
         Tile::Village,
         Tile::IronMine,
         Tile::CoalMine,
@@ -99,6 +128,7 @@ impl Tile {
         Tile::Borehole,
         Tile::Battlefield,
         Tile::Swamp,
+        Tile::Battleship,
     ];
 
     pub fn glyph(self) -> char {
@@ -120,6 +150,7 @@ impl Tile {
             Tile::Borehole => 'B',
             Tile::Battlefield => 'F',
             Tile::Swamp => 'M',
+            Tile::Battleship => 'X',
         }
     }
 
@@ -234,6 +265,13 @@ impl Tile {
                 scene: "swamp",
                 label: "A Murky Swamp",
             }),
+            Tile::Battleship => Some(Landmark {
+                num: 1,
+                min_radius: 28,
+                max_radius: 28,
+                scene: "executioner",
+                label: "A Ravaged Battleship",
+            }),
             Tile::Village | Tile::Forest | Tile::Field | Tile::Barrens | Tile::Road => None,
         }
     }
@@ -281,10 +319,13 @@ pub enum Weapon {
     LaserRifle,
     Grenade,
     Bolas,
+    PlasmaRifle,
+    EnergyBlade,
+    Disruptor,
 }
 
 impl Weapon {
-    pub const ALL: [Weapon; 9] = [
+    pub const ALL: [Weapon; 12] = [
         Weapon::Fists,
         Weapon::BoneSpear,
         Weapon::IronSword,
@@ -294,6 +335,9 @@ impl Weapon {
         Weapon::LaserRifle,
         Weapon::Grenade,
         Weapon::Bolas,
+        Weapon::PlasmaRifle,
+        Weapon::EnergyBlade,
+        Weapon::Disruptor,
     ];
 
     /// What the attack row says you are doing.
@@ -308,18 +352,26 @@ impl Weapon {
             Weapon::LaserRifle => "blast",
             Weapon::Grenade => "lob",
             Weapon::Bolas => "tangle",
+            Weapon::PlasmaRifle => "disintegrate",
+            Weapon::EnergyBlade => "slice",
+            Weapon::Disruptor => "stun",
         }
     }
 
     pub fn kind(self) -> WeaponKind {
         match self {
             Weapon::Fists => WeaponKind::Unarmed,
-            Weapon::BoneSpear | Weapon::IronSword | Weapon::SteelSword | Weapon::Bayonet => {
-                WeaponKind::Melee
-            }
-            Weapon::Rifle | Weapon::LaserRifle | Weapon::Grenade | Weapon::Bolas => {
-                WeaponKind::Ranged
-            }
+            Weapon::BoneSpear
+            | Weapon::IronSword
+            | Weapon::SteelSword
+            | Weapon::Bayonet
+            | Weapon::EnergyBlade => WeaponKind::Melee,
+            Weapon::Rifle
+            | Weapon::LaserRifle
+            | Weapon::Grenade
+            | Weapon::Bolas
+            | Weapon::PlasmaRifle
+            | Weapon::Disruptor => WeaponKind::Ranged,
         }
     }
 
@@ -334,6 +386,9 @@ impl Weapon {
             Weapon::LaserRifle => Damage::Hits(8),
             Weapon::Grenade => Damage::Hits(15),
             Weapon::Bolas => Damage::Stun,
+            Weapon::PlasmaRifle => Damage::Hits(12),
+            Weapon::EnergyBlade => Damage::Hits(10),
+            Weapon::Disruptor => Damage::Stun,
         }
     }
 
@@ -344,10 +399,11 @@ impl Weapon {
             | Weapon::BoneSpear
             | Weapon::IronSword
             | Weapon::SteelSword
-            | Weapon::Bayonet => 2.0,
-            Weapon::Rifle | Weapon::LaserRifle => 1.0,
+            | Weapon::Bayonet
+            | Weapon::EnergyBlade => 2.0,
+            Weapon::Rifle | Weapon::LaserRifle | Weapon::PlasmaRifle => 1.0,
             Weapon::Grenade => 5.0,
-            Weapon::Bolas => 15.0,
+            Weapon::Bolas | Weapon::Disruptor => 15.0,
         }
     }
 
@@ -358,11 +414,16 @@ impl Weapon {
             Weapon::LaserRifle => Some((Resource::EnergyCell, 1)),
             Weapon::Grenade => Some((Resource::Grenade, 1)),
             Weapon::Bolas => Some((Resource::Bolas, 1)),
+            Weapon::PlasmaRifle => Some((Resource::EnergyCell, 1)),
+            // The energy blade and the disruptor cost nothing to swing:
+            // upstream gives neither a `cost`.
             Weapon::Fists
             | Weapon::BoneSpear
             | Weapon::IronSword
             | Weapon::SteelSword
-            | Weapon::Bayonet => None,
+            | Weapon::Bayonet
+            | Weapon::EnergyBlade
+            | Weapon::Disruptor => None,
         }
     }
 
@@ -378,6 +439,9 @@ impl Weapon {
             Weapon::LaserRifle => Some(Resource::LaserRifle),
             Weapon::Grenade => Some(Resource::Grenade),
             Weapon::Bolas => Some(Resource::Bolas),
+            Weapon::PlasmaRifle => Some(Resource::PlasmaRifle),
+            Weapon::EnergyBlade => Some(Resource::EnergyBlade),
+            Weapon::Disruptor => Some(Resource::Disruptor),
         }
     }
 
@@ -395,7 +459,10 @@ pub fn weight(item: Resource) -> f64 {
     match item {
         Resource::BoneSpear => 2.0,
         Resource::IronSword => 3.0,
-        Resource::SteelSword | Resource::Rifle | Resource::LaserRifle => 5.0,
+        Resource::SteelSword | Resource::Rifle | Resource::LaserRifle | Resource::PlasmaRifle => {
+            5.0
+        }
+        Resource::EnergyBlade => 3.0,
         Resource::Bullets => 0.1,
         Resource::EnergyCell => 0.2,
         Resource::Bolas => 0.5,
@@ -406,14 +473,17 @@ pub fn weight(item: Resource) -> f64 {
 /// Everything that can go in the pack, in the order the path screen lists it:
 /// upstream's craftables and weapons, plus the handful of extras `path.js`
 /// merges in.
-pub static CARRYABLE: [Resource; 15] = [
+pub static CARRYABLE: [Resource; 21] = [
     Resource::CuredMeat,
     Resource::Bullets,
     Resource::Medicine,
+    Resource::Hypo,
+    Resource::Stim,
     Resource::EnergyCell,
     Resource::Charm,
     Resource::AlienAlloy,
     Resource::Torch,
+    Resource::Glowstone,
     Resource::BoneSpear,
     Resource::IronSword,
     Resource::SteelSword,
@@ -422,24 +492,30 @@ pub static CARRYABLE: [Resource; 15] = [
     Resource::Bolas,
     Resource::Grenade,
     Resource::Bayonet,
+    Resource::PlasmaRifle,
+    Resource::EnergyBlade,
+    Resource::Disruptor,
 ];
 
 /// The armour tiers, best first, with the health they add.
-pub static ARMOUR: [(Resource, i64, &str); 3] = [
+pub static ARMOUR: [(Resource, i64, &str); 4] = [
+    (Resource::KineticArmour, 75, "kinetic"),
     (Resource::SteelArmour, 35, "steel"),
     (Resource::IronArmour, 15, "iron"),
     (Resource::LeatherArmour, 5, "leather"),
 ];
 
 /// The water tiers, best first, with the water they add.
-pub static WATERSKINS: [(Resource, i64); 3] = [
+pub static WATERSKINS: [(Resource, i64); 4] = [
+    (Resource::FluidRecycler, 100),
     (Resource::WaterTank, 50),
     (Resource::Cask, 20),
     (Resource::Waterskin, 10),
 ];
 
 /// The pack tiers, best first, with the space they add over the base ten.
-pub static PACKS: [(Resource, f64); 3] = [
+pub static PACKS: [(Resource, f64); 4] = [
+    (Resource::CargoDrone, 100.0),
     (Resource::Convoy, 60.0),
     (Resource::Wagon, 30.0),
     (Resource::Rucksack, 10.0),

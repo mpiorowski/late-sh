@@ -76,6 +76,7 @@ static SNARLING_BEAST: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -121,6 +122,7 @@ static GAUNT_MAN: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -166,6 +168,7 @@ static STRANGE_BIRD: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -211,6 +214,7 @@ static TWO_HEADED_CREATURE: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -267,6 +271,7 @@ static SHIVERING_MAN: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -313,6 +318,7 @@ static MAN_EATER: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -365,6 +371,7 @@ static SCAVENGER: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -411,6 +418,7 @@ static HUGE_LIZARD: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -460,6 +468,7 @@ static FERAL_TERROR: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -511,6 +520,7 @@ static SOLDIER: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],
@@ -562,6 +572,7 @@ static SNIPER: Event = Event {
                 },
             ],
             next: Next::End,
+            ..Combat::PLAIN
         }),
         ..Scene::EMPTY
     }],

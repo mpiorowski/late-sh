@@ -67,6 +67,118 @@ impl Defense {
     }
 }
 
+/// The themed vocabulary of the world resist/weak pass (THUNDERSMITH.md
+/// section 13). Every generated zone names one theme, and the zone's regular
+/// mobs inherit the theme's profile; bosses keep their own. The set is closed
+/// and the mapping exhaustive, so the whole pass is auditable as data: a theme
+/// can never place Physical in either slot (a zone-wide Physical resist would
+/// tax the seven Physical-locked classes with no counterplay, and nothing is
+/// ever weak to Physical), it always carries a weakness (weak-forward: the
+/// right school is a reward, walls are events), and resists exist on a
+/// minority of themes only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneTheme {
+    /// Burnt, magma-born country: shrugs off Fire, fears Frost.
+    Ashen,
+    /// Sun-cracked heat without the fire-born flesh: fears Frost.
+    Sunscorched,
+    /// Ice-locked country: shrugs off Frost, fears Fire.
+    Frozen,
+    /// Green, growing, burnable country: fears Fire.
+    Verdant,
+    /// Open water and wet ground, a conductor: fears Lightning.
+    Tidal,
+    /// The cold drowned deep: shrugs off Frost, fears Lightning.
+    Drowned,
+    /// Storm-born country: shrugs off Lightning, unravels to Arcane.
+    Storm,
+    /// Song, echo, and standing wards: unravels to Arcane.
+    Resonant,
+    /// The walking dead: shrug off Shadow, wither under Holy.
+    Undead,
+    /// Ghosts and hauntings without barrow-flesh: wither under Holy.
+    Haunted,
+    /// God-cults and the profaned divine: shrug off Holy, fear Shadow.
+    Profane,
+    /// Glamour and fae light: the dark undoes it, fears Shadow.
+    Fae,
+    /// Living beasts and vermin: flesh that poison kills, fears Poison.
+    Beastwild,
+    /// Spore, rot, and venom: shrugs off Poison, burns well, fears Fire.
+    Fungal,
+    /// Bloodless made things: shrug off Poison, overload under Lightning.
+    Construct,
+    /// Glass, shard, and crystal: shatters under Lightning.
+    Crystal,
+}
+
+impl ZoneTheme {
+    /// The school this theme's regulars resist, if any. Never Physical.
+    pub const fn resist(self) -> Option<DamageType> {
+        match self {
+            Self::Ashen => Some(DamageType::Fire),
+            Self::Sunscorched => None,
+            Self::Frozen => Some(DamageType::Frost),
+            Self::Verdant => None,
+            Self::Tidal => None,
+            Self::Drowned => Some(DamageType::Frost),
+            Self::Storm => Some(DamageType::Lightning),
+            Self::Resonant => None,
+            Self::Undead => Some(DamageType::Shadow),
+            Self::Haunted => None,
+            Self::Profane => Some(DamageType::Holy),
+            Self::Fae => None,
+            Self::Beastwild => None,
+            Self::Fungal => Some(DamageType::Poison),
+            Self::Construct => Some(DamageType::Poison),
+            Self::Crystal => None,
+        }
+    }
+
+    /// The school this theme's regulars are weak to. Always present
+    /// (weak-forward), never Physical.
+    pub const fn weak(self) -> Option<DamageType> {
+        match self {
+            Self::Ashen => Some(DamageType::Frost),
+            Self::Sunscorched => Some(DamageType::Frost),
+            Self::Frozen => Some(DamageType::Fire),
+            Self::Verdant => Some(DamageType::Fire),
+            Self::Tidal => Some(DamageType::Lightning),
+            Self::Drowned => Some(DamageType::Lightning),
+            Self::Storm => Some(DamageType::Arcane),
+            Self::Resonant => Some(DamageType::Arcane),
+            Self::Undead => Some(DamageType::Holy),
+            Self::Haunted => Some(DamageType::Holy),
+            Self::Profane => Some(DamageType::Shadow),
+            Self::Fae => Some(DamageType::Shadow),
+            Self::Beastwild => Some(DamageType::Poison),
+            Self::Fungal => Some(DamageType::Fire),
+            Self::Construct => Some(DamageType::Lightning),
+            Self::Crystal => Some(DamageType::Lightning),
+        }
+    }
+
+    /// Every theme, for census tests over the vocabulary itself.
+    pub const ALL: [ZoneTheme; 16] = [
+        Self::Ashen,
+        Self::Sunscorched,
+        Self::Frozen,
+        Self::Verdant,
+        Self::Tidal,
+        Self::Drowned,
+        Self::Storm,
+        Self::Resonant,
+        Self::Undead,
+        Self::Haunted,
+        Self::Profane,
+        Self::Fae,
+        Self::Beastwild,
+        Self::Fungal,
+        Self::Construct,
+        Self::Crystal,
+    ];
+}
+
 /// A mob's full damage profile: the type it deals, plus up to one resisted and
 /// one weak school. Built as data on each MobSpawn.
 #[derive(Clone, Copy, Debug)]
