@@ -49,7 +49,6 @@ pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
     LazyLock::force(&LAND_LINKS);
-    LazyLock::force(&ZONE_LINKS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -290,111 +289,65 @@ fn resolve_collision(
     current.min(candidate)
 }
 
-/// Zone name -> the zones a single exit crosses into. Read off the room
-/// graph, never listed by hand, so a zone that grows an exit links itself.
-/// Symmetric: a one-way exit still makes the two zones neighbours, since a
-/// player who walked it is standing in one and looking back at the other.
-static ZONE_LINKS: LazyLock<HashMap<&'static str, HashSet<&'static str>>> =
-    LazyLock::new(|| derive_zone_links(world()));
-
-fn derive_zone_links(world: &World) -> HashMap<&'static str, HashSet<&'static str>> {
-    let mut links: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
-    for room in world.rooms.values() {
-        for dest in room.exits.values() {
-            let Some(there) = world.room(*dest) else {
-                continue;
-            };
-            if there.zone != room.zone {
-                links.entry(room.zone).or_default().insert(there.zone);
-                links.entry(there.zone).or_default().insert(room.zone);
-            }
-        }
-    }
-    links
-}
-
-/// A room's zone, or `None` for an id the world graph doesn't hold. Nothing
-/// outside the graph is ever hidden, so an unknown id reads as "show it".
-fn zone_of(id: RoomId) -> Option<&'static str> {
-    world().room(id).map(|r| r.zone)
-}
-
-/// Whether `id` sits in `zone` itself or in a zone one exit away.
-fn zone_near(zone: &'static str, id: RoomId) -> bool {
-    let Some(there) = zone_of(id) else {
-        return true;
-    };
-    there == zone || ZONE_LINKS.get(zone).is_some_and(|ns| ns.contains(there))
-}
-
-/// Whether `id` is in the player's own zone or one a single exit away.
-///
-/// The single definition of "near me", read by the live map filter
-/// (`in_viewed_zone`) and by the service's live foe/adventurer windows
-/// (`svc`'s snapshot pass) alike, so the field never marks a room the map
-/// won't draw. It has to be graph adjacency and not coordinate proximity:
-/// the whole hand-authored core embeds into a box 41 rows tall, with
-/// Matlatesh 12 columns from Embergate's south gate, so a window measured in
-/// cells around one capital physically contains four others. This is the
-/// same reasoning `poi_arrows` already applies at `PAN_LIMIT`.
-pub fn in_zone_neighbourhood(player_room: RoomId, id: RoomId) -> bool {
-    match zone_of(player_room) {
-        Some(zone) => zone_near(zone, id),
-        None => true,
-    }
-}
-
-/// The zone to hard-filter the view to, or `None` to skip that filter
-/// entirely. Only kicks in when the viewport is actually centred on the
-/// player's own position (`center == coords[player_room]`) - a live,
+/// The atlas region to hard-filter the view to, or `None` to skip that
+/// filter entirely. Only kicks in when the viewport is actually centred on
+/// the player's own position (`center == coords[player_room]`) - a live,
 /// player-following view. The camera can also pan away to review
 /// already-explored history elsewhere (see `the_camera_pans_and_clamps_to_
-/// the_field`), and "which single place is being viewed" isn't well-defined
-/// at an intentional cross-zone collision cell (the Mistfen under
-/// Whisperwood and the like: several *different* zones deliberately share
+/// the_field`), and "which single region is being viewed" isn't well-defined
+/// at an intentional cross-region collision cell (the Mistfen under
+/// Whisperwood and the like: several *different* regions deliberately share
 /// one coordinate there), so a panned view keeps today's plain
 /// `resolve_collision` behaviour instead of this harder cut - its
 /// player-room and lowest-id tie-breaks already handle that case correctly
 /// on their own.
-fn live_filter_zone(
+fn live_filter_region(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
     player_room: RoomId,
+    player_region: Option<&'static str>,
 ) -> Option<&'static str> {
     if coords.get(&player_room) == Some(&center) {
-        zone_of(player_room)
+        player_region
     } else {
         None
     }
 }
 
 /// Whether `id` belongs on-screen at all for a viewport whose live-view
-/// filter resolved to `filter_zone` (see `live_filter_zone`). An atlas
-/// landmark (a boss or tameable room) always counts, since its marker is an
-/// atlas annotation, not zone scenery, and `poi_arrows`/`quest_arrows` skip
-/// anything inside the viewport on the promise that the canvas (or fog)
-/// handles it - filtering a landmark's cell would silently drop it from the
-/// map with no marker, no border arrow, and no count; a room the world graph
-/// doesn't hold always counts as well, so nothing structural goes silently
-/// invisible; everything else only counts if it's in the zone neighbourhood
-/// actually being viewed. The player's own room needs no special case:
-/// `filter_zone` is only ever `None` or the player's own zone.
+/// region filter resolved to `filter_region` (see `live_filter_region`). An
+/// atlas landmark (a boss or tameable room) always counts, since its marker
+/// is an atlas annotation, not region scenery, and `poi_arrows`/
+/// `quest_arrows` skip anything inside the viewport on the promise that the
+/// canvas (or fog) handles it - filtering a landmark's cell would silently
+/// drop it from the map with no marker, no border arrow, and no count; a
+/// room with no atlas entry (an id outside every `REGIONS` range -
+/// hand-authored connective rooms the atlas simply doesn't list) always
+/// counts as well, so nothing structural goes silently invisible; everything
+/// else only counts if it's in the region actually being viewed. The
+/// player's own room needs no special case: `filter_region` is only ever
+/// `None` or the player's own region, which their room passes by
+/// construction.
 ///
-/// The cut is at the zone, not the atlas region, because a region is an id
-/// range and not a place: `"Embergate & the King's Road"` is ids 1..600 and
-/// `"The Overworld & Capitals"` is 600..2000, so a region-wide filter still
-/// let ten unrelated zones (Matlatesh, Tasmania, Melvanala, the Sapphire
-/// Coast, the Skyreach Mesas and more) share one screen while cutting the
-/// road the player had just walked in on. Zone plus its exit-neighbours is
-/// the granularity a player actually perceives as "where I am".
-fn in_viewed_zone(id: RoomId, filter_zone: Option<&'static str>) -> bool {
-    let Some(zone) = filter_zone else {
+/// This is a harder cut than `resolve_collision`'s same-region *preference*:
+/// that only ever picks a winner for a single contested cell, so two regions
+/// that don't literally collide (adjacent or interleaved in the flat
+/// embedding without sharing a cell) still both rendered at once, reading as
+/// "overlapping" even when every actual collision was already resolved
+/// correctly. Filtering candidates down to one region *before* they ever
+/// reach `resolve_collision` removes that case entirely: a foreign region
+/// never appears on screen while viewing a different one, full stop.
+fn in_viewed_region(id: RoomId, filter_region: Option<&'static str>) -> bool {
+    let Some(region) = filter_region else {
         return true;
     };
     if poi(id).is_some_and(|p| p.boss.is_some() || p.tameable.is_some()) {
         return true;
     }
-    zone_near(zone, id)
+    match super::world::region_atlas_entry(id) {
+        Some((name, _)) => name == region,
+        None => true,
+    }
 }
 
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
@@ -415,13 +368,13 @@ pub fn viewport_explored(
     let rx = cols / 2;
     let ry = rows / 2;
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_zone = live_filter_zone(coords, center, player_room);
+    let filter_region = live_filter_region(coords, center, player_room, player_region);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
             continue;
         }
-        if !in_viewed_zone(id, filter_zone) {
+        if !in_viewed_region(id, filter_region) {
             continue;
         }
         at.entry((c.x, c.y))
@@ -654,11 +607,11 @@ pub fn room_at(
     player_room: RoomId,
 ) -> Option<RoomId> {
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_zone = live_filter_zone(coords, at, player_room);
+    let filter_region = live_filter_region(coords, at, player_room, player_region);
     visible(coords, at, 0, 0)
         .into_iter()
         .filter(|(id, _)| *id == player_room || visited.contains(id))
-        .filter(|(id, _)| in_viewed_zone(*id, filter_zone))
+        .filter(|(id, _)| in_viewed_region(*id, filter_region))
         .map(|(id, _)| id)
         .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
 }
@@ -790,12 +743,12 @@ fn stair_glyph(down: bool, up: bool) -> Option<char> {
 /// player's room wins any cell collision so `@` never vanishes under a stacked
 /// hand-authored room.
 ///
-/// `exempt` is the caller's set of rooms that bypass the live zone filter
+/// `exempt` is the caller's set of rooms that bypass the live region filter
 /// (never the fog): the overhead map passes the marked destination and
 /// active-quest targets so a player's own marks can't vanish behind the cut,
 /// and the live field passes rooms holding live foes or other adventurers so
-/// danger and company stay visible at a zone seam. Pass an empty set to
-/// exempt nothing beyond what `in_viewed_zone` always keeps.
+/// danger and company stay visible at a region seam. Pass an empty set to
+/// exempt nothing beyond what `in_viewed_region` always keeps.
 pub fn map_canvas(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -838,8 +791,8 @@ pub fn map_canvas(
     // is (see `resolve_collision`) instead of whichever happened to be last
     // out of a hash-ordered iterator.
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_zone = live_filter_zone(coords, center, player_room);
-    let viewed = |id: RoomId| in_viewed_zone(id, filter_zone) || exempt.contains(&id);
+    let filter_region = live_filter_region(coords, center, player_room, player_region);
+    let viewed = |id: RoomId| in_viewed_region(id, filter_region) || exempt.contains(&id);
     let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {

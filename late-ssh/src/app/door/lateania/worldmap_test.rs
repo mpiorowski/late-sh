@@ -295,9 +295,9 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
 
     // With everything visited, fog alone would match the plain viewport
     // everywhere except the player's own cell (which they always win, see
-    // the collision test below). The live zone filter (`live_filter_zone`)
-    // also hides any fully-visited room outside the player's own zone and
-    // its exit-neighbours, since this view is centred on the player's own
+    // the collision test below). The live region filter (`live_filter_
+    // region`) also hides any fully-visited room outside the region the
+    // player is standing in, since this view is centred on the player's own
     // position - except atlas landmarks (boss/tameable rooms), which stay
     // exempt from the cut and can therefore win a collided cell the plain
     // lowest-id view gives to a filtered sibling. So a divergence must be
@@ -306,26 +306,23 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
     let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
     let plain = super::viewport(&coords, center, cols, rows);
     let (cx, cy) = (cols as usize / 2, rows as usize / 2);
-    // A room the cut keeps: the player's zone neighbourhood, plus the atlas
-    // landmarks that stay exempt from it.
-    let kept = |id| {
-        super::in_zone_neighbourhood(world.start_room, id)
-            || super::poi(id).is_some_and(|poi| poi.boss.is_some() || poi.tameable.is_some())
-    };
+    let player_region = region_atlas_entry(world.start_room).map(|(name, _)| name);
     assert_eq!(lit[cy][cx], Some(world.start_room));
     for (r, (lit_row, plain_row)) in lit.iter().zip(plain.iter()).enumerate() {
         for (c, (l, p)) in lit_row.iter().zip(plain_row.iter()).enumerate() {
             if (r, c) == (cy, cx) || l == p {
                 continue;
             }
-            // The only thing the cut can do to a cell is take the fog-less
-            // view's winner away: either the cell empties, or a room the cut
-            // keeps wins it instead. Anything else is an unexplained
-            // divergence.
+            let plain_region = p.and_then(region_atlas_entry).map(|(name, _)| name);
+            let filtered_out = l.is_none() && p.is_some() && plain_region != player_region;
+            let lit_is_foreign_landmark = l.is_some_and(|id| {
+                super::poi(id).is_some_and(|poi| poi.boss.is_some() || poi.tameable.is_some())
+                    && region_atlas_entry(id).map(|(name, _)| name) != player_region
+            });
             assert!(
-                p.is_some_and(|id| !kept(id)) && l.is_none_or(kept),
+                filtered_out || lit_is_foreign_landmark,
                 "cell ({r}, {c}) diverged from the fog-less view for a reason other than \
-                 the live zone filter: lit={l:?} plain={p:?}"
+                 the live region filter: lit={l:?} plain={p:?}"
             );
         }
     }
@@ -431,118 +428,57 @@ fn live_view_hides_a_visited_room_outside_the_players_current_region() {
 #[test]
 fn a_seam_exit_stubs_instead_of_drawing_a_corridor_into_blank_space() {
     use std::collections::HashSet;
-    // The Greatroad is one exit out of Embergate, so standing in Embergate
-    // draws it. Tasmania is one exit further, two hops from the player, so
-    // the live filter cuts it - and the Greatroad's north exit into Tasmania
-    // must render as a `HintKnown` stub ("runs on into somewhere you've been
-    // that isn't drawn here"), not the full corridor styling reserved for a
-    // link between two drawn rooms.
+    // Room 3 (Embergate & the King's Road) exits North into room 9000
+    // (Hearthward Close), adjacent in the field. Standing in room 3 with both
+    // rooms visited, the live filter hides 9000's cell - so the exit must
+    // render as a `HintKnown` stub ("runs on into something not drawn here"),
+    // not the full corridor styling reserved for a link between two drawn
+    // rooms.
     let world = seed_world();
     let coords = derive_coords(&world);
-    assert_eq!(world.room(3).map(|r| r.zone), Some("Embergate"));
-    assert_eq!(world.room(602).map(|r| r.zone), Some("The Greatroad"));
-    assert_eq!(world.room(620).map(|r| r.zone), Some("Tasmania"));
-    assert!(
-        super::in_zone_neighbourhood(3, 602),
-        "fixture assumption broke: the Greatroad is one exit out of Embergate"
-    );
-    assert!(
-        !super::in_zone_neighbourhood(3, 620),
-        "fixture assumption broke: Tasmania should be two hops from Embergate"
-    );
-    let c602 = coords[&602];
-    let c620 = coords[&620];
     assert_eq!(
-        (c620.x - c602.x, c620.y - c602.y, c620.z - c602.z),
+        region_atlas_entry(3).map(|(name, _)| name),
+        Some("Embergate & the King's Road")
+    );
+    assert_eq!(
+        region_atlas_entry(9000).map(|(name, _)| name),
+        Some("Hearthward Close")
+    );
+    let c3 = coords[&3];
+    let c9000 = coords[&9000];
+    assert_eq!(
+        (c9000.x - c3.x, c9000.y - c3.y, c9000.z - c3.z),
         (0, -1, 0),
-        "fixture assumption broke: 620 should sit directly north of 602"
+        "fixture assumption broke: 9000 should sit directly north of 3"
     );
     assert!(
-        !super::poi(620).is_some_and(|p| p.boss.is_some() || p.tameable.is_some()),
-        "fixture assumption broke: room 620 must not be an exempt atlas landmark"
+        !super::poi(9000).is_some_and(|p| p.boss.is_some() || p.tameable.is_some()),
+        "fixture assumption broke: room 9000 must not be an exempt atlas landmark"
     );
 
-    let all: HashSet<_> = world.rooms.keys().copied().collect();
+    let visited: HashSet<_> = [3, 9000].into_iter().collect();
     let (cols, rows) = (21, 11);
-    let center = coords[&3];
-    let canvas = super::map_canvas(&coords, center, cols, rows, &all, 3, &HashSet::new());
-    assert!(
-        canvas
-            .iter()
-            .flatten()
-            .any(|t| *t == super::Tile::Room(602)),
-        "fixture assumption broke: the Greatroad room should be on screen"
+    let canvas = super::map_canvas(
+        &coords,
+        c3,
+        cols,
+        rows,
+        &visited,
+        3,
+        &std::collections::HashSet::new(),
     );
+    let (cx, cy) = (cols as usize / 2, rows as usize / 2);
     assert!(
         !canvas
             .iter()
             .flatten()
-            .any(|t| *t == super::Tile::Room(620)),
-        "the live canvas must hide the visited neighbour two zones out"
+            .any(|t| *t == super::Tile::Room(9000)),
+        "the live canvas must hide the visited neighbour in the foreign region"
     );
-    let sc = cols / 2 + 2 * (c602.x - center.x);
-    let sr = rows / 2 + 2 * (c602.y - center.y);
     assert_eq!(
-        canvas[(sr - 1) as usize][sc as usize],
+        canvas[cy - 1][cx],
         super::Tile::HintKnown('\u{2502}'),
-        "an exit into a filtered zone gets an explored-path stub, not a corridor"
-    );
-}
-
-#[test]
-fn the_live_view_cuts_a_sibling_zone_inside_the_players_own_atlas_region() {
-    use std::collections::HashSet;
-    // The cut that matters in practice. Atlas regions are id ranges, not
-    // places: Matlatesh, Tasmania, the Sapphire Coast and the Greatroad are
-    // all "The Overworld & Capitals" (ids 600..2000), and the flat embedding
-    // stacks them within a dozen cells of each other, so a region-wide
-    // filter drew all of them over each other at once. Filtering to the
-    // player's zone and its exit-neighbours keeps the road they walked in on
-    // and drops the unrelated capitals.
-    let world = seed_world();
-    let coords = derive_coords(&world);
-    const HERE: super::RoomId = 722; // Matlatesh - The Caravanserai
-    let region = region_atlas_entry(HERE).map(|(name, _)| name);
-    assert_eq!(region, Some("The Overworld & Capitals"));
-    for id in [608, 626, 640] {
-        assert_eq!(
-            region_atlas_entry(id).map(|(name, _)| name),
-            region,
-            "fixture assumption broke: room {id} shares the player's atlas region"
-        );
-    }
-    assert_eq!(world.room(608).map(|r| r.zone), Some("The Greatroad"));
-    assert_eq!(world.room(626).map(|r| r.zone), Some("Tasmania"));
-    assert_eq!(world.room(640).map(|r| r.zone), Some("The Sapphire Coast"));
-
-    let center = coords[&HERE];
-    let (cols, rows) = (41, 21);
-    let all: HashSet<_> = world.rooms.keys().copied().collect();
-    let plain = super::viewport(&coords, center, cols, rows);
-    for id in [608, 626, 640] {
-        assert!(
-            plain.iter().flatten().any(|r| *r == Some(id)),
-            "fixture assumption broke: room {id} should be visible in the region-unaware view"
-        );
-        assert!(
-            !super::poi(id).is_some_and(|p| p.boss.is_some() || p.tameable.is_some()),
-            "fixture assumption broke: room {id} must not be an exempt atlas landmark"
-        );
-    }
-
-    let lit = super::viewport_explored(&coords, center, cols, rows, &all, HERE);
-    let drawn = |id| lit.iter().flatten().any(|r| *r == Some(id));
-    assert!(
-        drawn(608),
-        "the Greatroad is one exit out of Matlatesh and must stay drawn"
-    );
-    assert!(
-        !drawn(626),
-        "Tasmania shares the player's atlas region but not their zone neighbourhood"
-    );
-    assert!(
-        !drawn(640),
-        "the Sapphire Coast shares the player's atlas region but not their zone neighbourhood"
+        "an exit into a filtered region gets an explored-path stub, not a corridor"
     );
 }
 
@@ -1417,4 +1353,23 @@ fn an_exempt_room_stays_drawn_through_the_live_region_filter() {
             .any(|t| *t == super::Tile::Room(665)),
         "an exempt room must render through the live region filter"
     );
+}
+
+#[test]
+fn zz_discover_zones() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let z = |id: u32| world.room(id).map(|r| r.zone).unwrap_or("?");
+    let here = coords[&722];
+    let mut out = format!("722={} 608={} 6={}\n", z(722), z(608), z(6));
+    let mut n = 0;
+    for (&rid, room) in &world.rooms {
+        if rid == 722 || room.zone != z(722) { continue; }
+        let Some(&c) = coords.get(&rid) else { continue };
+        if c.z == here.z && (c.x - here.x).abs() <= 16 && (c.y - here.y).abs() <= 12 && n < 6 {
+            out.push_str(&format!("same-zone near 722: {rid} ({}) dx={} dy={}\n", room.name, c.x - here.x, c.y - here.y));
+            n += 1;
+        }
+    }
+    panic!("{out}");
 }

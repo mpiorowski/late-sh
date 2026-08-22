@@ -9230,18 +9230,20 @@ impl WorldState {
             // +/-12 window around one capital physically contains four
             // others and the King's Road besides. The field passes these
             // rooms to `map_canvas` as `exempt`, which bypasses the live
-            // zone filter outright, so an unscoped window painted every live
-            // mob in the core onto whichever city you were standing in.
-            // `in_zone_neighbourhood` is the same "near me" the map draws
-            // with, so the field can never mark a room the map won't show.
+            // region filter outright, so an unscoped window painted every
+            // live mob in the core onto whichever city you were standing in.
+            // The lists are therefore scoped to the player's own zone: a foe
+            // or adventurer in any other zone stays off the field, however
+            // close the embedding happens to place it.
             let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
+                        let player_zone = self.world.room(player.room).map(|r| r.zone);
                         let near = |r: &RoomId, c: &super::worldmap::Coord| {
                             c.z == pc.z
                                 && (c.x - pc.x).abs() <= 16
                                 && (c.y - pc.y).abs() <= 12
-                                && super::worldmap::in_zone_neighbourhood(player.room, *r)
+                                && self.world.room(*r).map(|room| room.zone) == player_zone
                         };
                         (
                             foe_rooms
