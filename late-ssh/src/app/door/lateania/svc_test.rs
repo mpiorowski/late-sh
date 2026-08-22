@@ -3103,6 +3103,53 @@ fn nearby_foes_lists_foes_in_neighbouring_rooms() {
 }
 
 #[test]
+fn a_foe_a_dozen_cells_away_in_another_zone_stays_off_the_field() {
+    const HERE: RoomId = 722; // Matlatesh - The Caravanserai
+    const NEAR: RoomId = 608; // The Greatroad, one exit out of Matlatesh
+    const FAR: RoomId = 6; // The King's Road - Open Country
+    // The flat map embedding squeezes the whole hand-authored core into a
+    // box 41 rows tall, so the King's Road sits a dozen cells from Matlatesh
+    // and lands well inside the field's cell window. It is nowhere near it in
+    // the world, and the live map won't draw it, so a foe lairing there must
+    // not be marked on the field either.
+    let coords = crate::app::door::lateania::worldmap::world_coords();
+    let (here, far, near) = (coords[&HERE], coords[&FAR], coords[&NEAR]);
+    for (id, c) in [(FAR, far), (NEAR, near)] {
+        assert!(
+            c.z == here.z && (c.x - here.x).abs() <= 16 && (c.y - here.y).abs() <= 12,
+            "fixture assumption broke: room {id} should sit inside the field's cell window"
+        );
+    }
+
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // Clear the field so the only foe anywhere is the one we place.
+    for m in s.mobs.values_mut() {
+        m.alive = false;
+    }
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = FAR;
+    }
+    assert!(
+        !s.snapshot().players[&uid(1)].nearby_foes.contains(&FAR),
+        "a foe two zones away must not be marked just for landing near in the embedding"
+    );
+
+    // One exit out is genuinely near, and still shows.
+    s.mobs.get_mut(&mob_id).unwrap().current_room = NEAR;
+    assert!(
+        s.snapshot().players[&uid(1)].nearby_foes.contains(&NEAR),
+        "a foe in the zone next door still shows on the field"
+    );
+}
+
+#[test]
 fn rpg_mode_off_skips_the_field_hint_lists() {
     const HERE: RoomId = 2001;
     let mut s = world();

@@ -11,15 +11,17 @@ use crate::{
             USERNAME_EFFECT_ITEM_KIND, UserPurchase, WONDERLAND_ULTIMATE_SKU,
             adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
             equip_owned_item_by_sku, purchase_durable_item_by_sku,
-            purchase_item_by_sku_with_username_effect, unequip_slot,
+            purchase_item_by_sku_with_username_effect, unequip_slot, username_effect_duration_secs,
         },
         pet::PetCompanion,
         shop_consumable_effect::ShopConsumableEffect,
         ultimate_cooldown::UltimateCastCooldown,
         user::User,
         username_effect::{
-            GlowColor, GradientPair, USERNAME_EFFECT_KIND, USERNAME_GLOW_SKU,
-            USERNAME_GRADIENT_SKU, USERNAME_SHIMMER_SKU, UsernameEffect,
+            GlowColor, GradientPair, USERNAME_EFFECT_KIND, USERNAME_EFFECT_MONTH_DURATION_SECS,
+            USERNAME_GLOW_MONTH_SKU, USERNAME_GLOW_SKU, USERNAME_GRADIENT_MONTH_SKU,
+            USERNAME_GRADIENT_SKU, USERNAME_SHIMMER_MONTH_SKU, USERNAME_SHIMMER_SKU,
+            UsernameEffect,
         },
     },
     test_utils::{create_test_user, test_db},
@@ -918,6 +920,8 @@ async fn durable_purchase_is_idempotent_for_owned_item() {
 const USERNAME_GLOW_PRICE: i64 = 200;
 const USERNAME_GRADIENT_PRICE: i64 = 500;
 const USERNAME_SHIMMER_PRICE: i64 = 1_000;
+/// The month tier is the day tier's price times thirty, one chip per day.
+const USERNAME_MONTH_PRICE_MULTIPLIER: i64 = 30;
 
 #[tokio::test]
 async fn seeded_catalog_contains_username_effects() {
@@ -952,7 +956,65 @@ async fn seeded_catalog_contains_username_effects() {
         assert_eq!(item.price_chips, price);
         assert_eq!(item.payload["variant"], variant);
         assert_eq!(item.payload["duration_secs"], 86_400);
+        assert_eq!(username_effect_duration_secs(item), 86_400);
         assert!(item.active);
+    }
+}
+
+#[tokio::test]
+async fn seeded_catalog_contains_monthly_username_effects() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let expectations = [
+        (
+            USERNAME_GLOW_MONTH_SKU,
+            USERNAME_GLOW_SKU,
+            "Name Glow Monthly",
+            USERNAME_GLOW_PRICE,
+            "glow",
+        ),
+        (
+            USERNAME_GRADIENT_MONTH_SKU,
+            USERNAME_GRADIENT_SKU,
+            "Name Gradient Monthly",
+            USERNAME_GRADIENT_PRICE,
+            "gradient",
+        ),
+        (
+            USERNAME_SHIMMER_MONTH_SKU,
+            USERNAME_SHIMMER_SKU,
+            "Name Shimmer Monthly",
+            USERNAME_SHIMMER_PRICE,
+            "shimmer",
+        ),
+    ];
+    for (sku, day_sku, name, day_price, variant) in expectations {
+        let item = items
+            .iter()
+            .find(|item| item.sku == sku)
+            .unwrap_or_else(|| panic!("missing {sku}"));
+        let day_item = items
+            .iter()
+            .find(|item| item.sku == day_sku)
+            .unwrap_or_else(|| panic!("missing {day_sku}"));
+        assert_eq!(item.item_kind, USERNAME_EFFECT_ITEM_KIND);
+        assert_eq!(item.name, name);
+        assert_eq!(
+            item.price_chips,
+            day_price * USERNAME_MONTH_PRICE_MULTIPLIER
+        );
+        assert_eq!(item.payload["variant"], variant);
+        assert_eq!(
+            username_effect_duration_secs(item),
+            USERNAME_EFFECT_MONTH_DURATION_SECS
+        );
+        assert!(item.active);
+        // The month item lists directly under its day twin.
+        assert_eq!(item.sort_order, day_item.sort_order + 5);
     }
 }
 
@@ -1012,6 +1074,58 @@ async fn username_effect_purchase_debits_and_activates_one_row() {
             .expect("query")
             .expect("live effect");
     assert_eq!(for_user.id, row.id);
+}
+
+#[tokio::test]
+async fn monthly_username_effect_purchase_runs_for_thirty_days() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "username-effect-month").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        // The month price plus the day buy that precedes it.
+        USERNAME_GLOW_PRICE * (USERNAME_MONTH_PRICE_MULTIPLIER + 1),
+        None,
+    )
+    .await
+    .expect("fund chips");
+
+    // A live day effect first: the month buy has to replace it, not stack.
+    purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_SKU,
+        UsernameEffect::Glow(GlowColor::Ember),
+    )
+    .await
+    .expect("day buy");
+
+    let before = chrono::Utc::now();
+    let row = purchase_item_by_sku_with_username_effect(
+        &mut client,
+        user.id,
+        USERNAME_GLOW_MONTH_SKU,
+        UsernameEffect::Glow(GlowColor::Sky),
+    )
+    .await
+    .expect("month buy")
+    .username_effect
+    .expect("activated effect row");
+
+    assert_eq!(row.source_sku, USERNAME_GLOW_MONTH_SKU);
+    assert_eq!(
+        UsernameEffect::from_payload(&row.payload),
+        Some(UsernameEffect::Glow(GlowColor::Sky))
+    );
+    let expected_end = before + chrono::Duration::seconds(USERNAME_EFFECT_MONTH_DURATION_SECS);
+    assert!(row.ends_at >= expected_end - chrono::Duration::seconds(60));
+    assert!(row.ends_at <= expected_end + chrono::Duration::seconds(60));
+
+    let rows = active_username_effect_rows(&client, user.id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, row.id);
 }
 
 #[tokio::test]

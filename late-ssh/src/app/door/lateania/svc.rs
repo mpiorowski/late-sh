@@ -9223,21 +9223,35 @@ impl WorldState {
             // company sit. Bounded to a window around the player on the same
             // level; the field's own fog still hides rooms never seen. Only the
             // field draws these, so a session without it pays nothing.
+            //
+            // The cell window alone is not enough. The hand-authored core
+            // embeds into a box 41 rows tall, and Matlatesh's caravanserai
+            // sits 12 columns from Embergate's south gate, so a +/-16 by
+            // +/-12 window around one capital physically contains four
+            // others and the King's Road besides. The field passes these
+            // rooms to `map_canvas` as `exempt`, which bypasses the live
+            // zone filter outright, so an unscoped window painted every live
+            // mob in the core onto whichever city you were standing in.
+            // `in_zone_neighbourhood` is the same "near me" the map draws
+            // with, so the field can never mark a room the map won't show.
             let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
-                        let in_window = |c: &super::worldmap::Coord| {
-                            c.z == pc.z && (c.x - pc.x).abs() <= 16 && (c.y - pc.y).abs() <= 12
+                        let near = |r: &RoomId, c: &super::worldmap::Coord| {
+                            c.z == pc.z
+                                && (c.x - pc.x).abs() <= 16
+                                && (c.y - pc.y).abs() <= 12
+                                && super::worldmap::in_zone_neighbourhood(player.room, *r)
                         };
                         (
                             foe_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .filter(|(r, c)| *r != player.room && near(r, c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                             occupied_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .filter(|(r, c)| *r != player.room && near(r, c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                         )
