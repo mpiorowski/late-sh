@@ -49,6 +49,7 @@ pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
     LazyLock::force(&LAND_LINKS);
+    LazyLock::force(&ZONE_LINKS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -287,6 +288,58 @@ fn resolve_collision(
         }
     }
     current.min(candidate)
+}
+
+/// Zone name -> the zones a single exit crosses into. Read off the room
+/// graph, never listed by hand, so a zone that grows an exit links itself.
+/// Symmetric: a one-way exit still makes the two zones neighbours, since a
+/// player who walked it is standing in one and looking back at the other.
+static ZONE_LINKS: LazyLock<HashMap<&'static str, HashSet<&'static str>>> =
+    LazyLock::new(|| derive_zone_links(world()));
+
+fn derive_zone_links(world: &World) -> HashMap<&'static str, HashSet<&'static str>> {
+    let mut links: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
+    for room in world.rooms.values() {
+        for dest in room.exits.values() {
+            let Some(there) = world.room(*dest) else {
+                continue;
+            };
+            if there.zone != room.zone {
+                links.entry(room.zone).or_default().insert(there.zone);
+                links.entry(there.zone).or_default().insert(room.zone);
+            }
+        }
+    }
+    links
+}
+
+/// Whether `id` is in the player's own zone or in a zone one exit away.
+///
+/// The "near me" for the snapshot's live foe/adventurer lists (`svc`'s
+/// snapshot pass), which the field draws as `†`/`☺`. It has to be graph
+/// adjacency and not coordinate proximity: the whole hand-authored core
+/// embeds into a box 41 rows tall, with Matlatesh 12 columns from
+/// Embergate's south gate, so a window measured in cells around one capital
+/// physically contains four others - and the atlas region is no better a
+/// scope, since a `REGIONS` entry is an id range that lumps those same
+/// unrelated cities together. Zone plus its exit-neighbours is what a player
+/// actually perceives as "around me": it keeps a foe one real gate away
+/// (even across a region border, where the field's `exempt` set draws its
+/// room through the live cut) and drops everything that is only near by an
+/// accident of the embedding.
+///
+/// Deliberately NOT used by the map's own scenery filter, which stays at the
+/// atlas region (`live_filter_region`): the map is a picture of the land,
+/// the daggers are live danger, and "what the land looks like" and "what can
+/// reach me" are different questions.
+pub fn in_zone_neighbourhood(player_room: RoomId, id: RoomId) -> bool {
+    let Some(zone) = world().room(player_room).map(|r| r.zone) else {
+        return true;
+    };
+    let Some(there) = world().room(id).map(|r| r.zone) else {
+        return true;
+    };
+    there == zone || ZONE_LINKS.get(zone).is_some_and(|ns| ns.contains(there))
 }
 
 /// The atlas region to hard-filter the view to, or `None` to skip that

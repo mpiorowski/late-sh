@@ -1355,21 +1355,29 @@ fn an_exempt_room_stays_drawn_through_the_live_region_filter() {
     );
 }
 
+
 #[test]
-fn zz_discover_zones() {
+fn zone_neighbourhood_is_the_zone_and_its_exit_linked_zones() {
+    // `in_zone_neighbourhood` scopes the snapshot's live foe/adventurer
+    // lists (see `svc`'s snapshot pass): a foe one real exit away is near, a
+    // foe two zones over is not, however close the embedding places it. Room
+    // 3 is Embergate, 602 the Greatroad one exit out, 620 Tasmania one exit
+    // further.
     let world = seed_world();
-    let coords = derive_coords(&world);
-    let z = |id: u32| world.room(id).map(|r| r.zone).unwrap_or("?");
-    let here = coords[&722];
-    let mut out = format!("722={} 608={} 6={}\n", z(722), z(608), z(6));
-    let mut n = 0;
-    for (&rid, room) in &world.rooms {
-        if rid == 722 || room.zone != z(722) { continue; }
-        let Some(&c) = coords.get(&rid) else { continue };
-        if c.z == here.z && (c.x - here.x).abs() <= 16 && (c.y - here.y).abs() <= 12 && n < 6 {
-            out.push_str(&format!("same-zone near 722: {rid} ({}) dx={} dy={}\n", room.name, c.x - here.x, c.y - here.y));
-            n += 1;
-        }
-    }
-    panic!("{out}");
+    assert_eq!(world.room(3).map(|r| r.zone), Some("Embergate"));
+    assert_eq!(world.room(602).map(|r| r.zone), Some("The Greatroad"));
+    assert_eq!(world.room(620).map(|r| r.zone), Some("Tasmania"));
+
+    assert!(
+        super::in_zone_neighbourhood(3, 2),
+        "a room in the player's own zone is near"
+    );
+    assert!(
+        super::in_zone_neighbourhood(3, 602),
+        "the Greatroad is one exit out of Embergate, so it is near"
+    );
+    assert!(
+        !super::in_zone_neighbourhood(3, 620),
+        "Tasmania is two hops from Embergate, so it is not near"
+    );
 }

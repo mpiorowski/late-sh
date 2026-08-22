@@ -9232,18 +9232,18 @@ impl WorldState {
             // rooms to `map_canvas` as `exempt`, which bypasses the live
             // region filter outright, so an unscoped window painted every
             // live mob in the core onto whichever city you were standing in.
-            // The lists are therefore scoped to the player's own zone: a foe
-            // or adventurer in any other zone stays off the field, however
-            // close the embedding happens to place it.
+            // `in_zone_neighbourhood` (the player's zone plus zones one exit
+            // away) is the "near me" these lists are scoped by: it keeps a
+            // foe one real gate away, even across a region border, and drops
+            // everything that is only near by accident of the embedding.
             let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
-                        let player_zone = self.world.room(player.room).map(|r| r.zone);
                         let near = |r: &RoomId, c: &super::worldmap::Coord| {
                             c.z == pc.z
                                 && (c.x - pc.x).abs() <= 16
                                 && (c.y - pc.y).abs() <= 12
-                                && self.world.room(*r).map(|room| room.zone) == player_zone
+                                && super::worldmap::in_zone_neighbourhood(player.room, *r)
                         };
                         (
                             foe_rooms
