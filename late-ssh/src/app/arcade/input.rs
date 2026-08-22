@@ -41,6 +41,9 @@ fn prev_lobby_selection(selection: usize) -> usize {
 
 pub fn handle_key(app: &mut App, byte: u8) -> bool {
     if app.is_playing_game {
+        if app.game_selection == GAME_SELECTION_LE_WORD && byte != b'0' {
+            app.le_word_state.clear_reset_pending();
+        }
         // Backtick hops the workspace cycle out of daily puzzles. Real-time
         // games (Lateris, Snake, Traffic) and personal (non-daily) boards
         // are not stops and keep the byte for themselves.

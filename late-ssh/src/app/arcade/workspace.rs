@@ -51,12 +51,12 @@ impl ArcadeStop {
 /// The stop for the active Arcade board, but only when that board is a daily
 /// in progress. Personal/practice boards return `None` so backtick never
 /// treats them as their game's daily stop (personal boards never join the
-/// cycle). LeWord and Rubik's Cube are daily-only, so a matching selection is
-/// always a daily board there.
+/// cycle). Rubik's Cube is daily-only; Le Word may be daily or replay.
 pub(crate) fn active_daily_stop(app: &App) -> Option<ArcadeStop> {
     let stop = ArcadeStop::for_selection(app.game_selection)?;
     let is_daily = match stop {
-        ArcadeStop::LeWord | ArcadeStop::RubiksCube => true,
+        ArcadeStop::LeWord => app.le_word_state.is_daily_active(),
+        ArcadeStop::RubiksCube => true,
         ArcadeStop::Sudoku => app.sudoku_state.is_daily_active(),
         ArcadeStop::Nonogram => app.nonogram_state.is_daily_active(),
         ArcadeStop::Minesweeper => app.minesweeper_state.is_daily_active(),
@@ -84,7 +84,7 @@ pub(crate) fn unfinished_daily_stops(app: &App) -> Vec<ArcadeStop> {
 /// switches the screen; this only points the Arcade at the right board.
 pub(crate) fn open_stop(app: &mut App, stop: ArcadeStop) {
     match stop {
-        ArcadeStop::LeWord => {}
+        ArcadeStop::LeWord => app.le_word_state.show_daily(),
         ArcadeStop::RubiksCube => app.rubiks_cube_state.ensure_current_daily(),
         ArcadeStop::Sudoku => {
             let index = app.sudoku_state.first_unfinished_daily().unwrap_or(0);

@@ -15,6 +15,20 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 
     match byte {
+        b'1' => {
+            state.show_daily();
+            true
+        }
+        b'2' => {
+            state.show_replay();
+            true
+        }
+        b'0' => {
+            if state.request_replay_reset() {
+                state.new_replay();
+            }
+            true
+        }
         b'!' => {
             state.open_rules();
             true
@@ -26,7 +40,8 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
     }
 }
 
-pub fn handle_arrow(_state: &mut State, key: u8) -> bool {
+pub fn handle_arrow(state: &mut State, key: u8) -> bool {
+    state.clear_reset_pending();
     matches!(key, b'A' | b'B' | b'C' | b'D')
 }
 

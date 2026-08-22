@@ -215,6 +215,7 @@ pub struct SessionConfig {
     pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
     pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
     pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_le_word_replay_game: Option<late_core::models::le_word::ReplayGame>,
     pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
@@ -1086,6 +1087,7 @@ impl App {
             config.le_word_service.clone(),
             config.initial_le_word_daily_word,
             config.initial_le_word_game,
+            config.initial_le_word_replay_game,
         );
         let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,

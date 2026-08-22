@@ -1,16 +1,23 @@
 use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, ensure};
 use chrono::NaiveDate;
 use late_core::db::Db;
-use late_core::models::le_word::{DailyWin, DailyWord, Game, GameParams};
+use late_core::models::le_word::{
+    DailyWin, DailyWord, Game, GameParams, ReplayGame, ReplayGameParams,
+};
 use late_core::models::profile::fetch_username;
 use rand_core::{OsRng, RngCore};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
 use crate::app::activity::event::{ActivityEvent, ActivityGame};
+
+#[cfg(test)]
+use anyhow::anyhow;
+#[cfg(test)]
+use tokio::sync::oneshot;
 
 const ANSWER_POOL: &str = include_str!("../../../../assets/le_word/answer_pool.txt");
 const VALID_EXTRA: &str = include_str!("../../../../assets/le_word/valid_extra.txt");
@@ -22,11 +29,23 @@ static VALID_GUESSES: OnceLock<HashSet<&'static str>> = OnceLock::new();
 pub struct LeWordService {
     db: Db,
     activity_feed: broadcast::Sender<ActivityEvent>,
+    game_save_tx: Arc<OnceLock<mpsc::UnboundedSender<GameSaveCommand>>>,
+}
+
+enum GameSaveCommand {
+    SaveDaily(GameParams),
+    SaveReplay(ReplayGameParams),
+    #[cfg(test)]
+    Flush(oneshot::Sender<()>),
 }
 
 impl LeWordService {
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
-        Self { db, activity_feed }
+        Self {
+            db,
+            activity_feed,
+            game_save_tx: Arc::new(OnceLock::new()),
+        }
     }
 
     pub fn today(&self) -> NaiveDate {
@@ -62,9 +81,22 @@ impl LeWordService {
         Ok(word)
     }
 
-    pub async fn load_game(&self, user_id: Uuid, puzzle_date: NaiveDate) -> Result<Option<Game>> {
+    pub async fn load_daily_game(
+        &self,
+        user_id: Uuid,
+        puzzle_date: NaiveDate,
+    ) -> Result<Option<Game>> {
         let client = self.db.get().await?;
         Game::find_by_user_id_for_date(&client, user_id, puzzle_date).await
+    }
+
+    pub async fn load_replay_game(&self, user_id: Uuid) -> Result<Option<ReplayGame>> {
+        let client = self.db.get().await?;
+        ReplayGame::find_by_user_id(&client, user_id).await
+    }
+
+    pub fn replay_answer(&self, current_answer: &str, daily_answer: Option<&str>) -> &'static str {
+        choose_replay_answer(current_answer, daily_answer)
     }
 
     pub async fn has_won_today(&self, user_id: Uuid) -> Result<bool> {
@@ -72,19 +104,44 @@ impl LeWordService {
         DailyWin::has_won_today(&client, user_id, self.today()).await
     }
 
-    pub fn save_game_task(&self, params: GameParams) {
-        let svc = self.clone();
-        tokio::spawn(async move {
-            if let Err(error) = svc.save_game(params).await {
-                tracing::error!(error = ?error, "failed to save Le Word game state");
-            }
-        });
+    pub fn save_daily_game_task(&self, params: GameParams) {
+        if self
+            .game_save_sender()
+            .send(GameSaveCommand::SaveDaily(params))
+            .is_err()
+        {
+            tracing::error!("failed to enqueue Le Word daily game state save");
+        }
     }
 
-    async fn save_game(&self, params: GameParams) -> Result<()> {
-        let client = self.db.get().await?;
-        Game::upsert(&client, params).await?;
+    pub fn save_replay_game_task(&self, params: ReplayGameParams) {
+        if self
+            .game_save_sender()
+            .send(GameSaveCommand::SaveReplay(params))
+            .is_err()
+        {
+            tracing::error!("failed to enqueue Le Word replay game state save");
+        }
+    }
+
+    #[cfg(test)]
+    async fn flush_game_saves(&self) -> Result<()> {
+        let (done_tx, done_rx) = oneshot::channel();
+        self.game_save_sender()
+            .send(GameSaveCommand::Flush(done_tx))
+            .map_err(|_| anyhow!("Le Word game save queue is closed"))?;
+        done_rx
+            .await
+            .context("Le Word game save worker stopped before flush")?;
         Ok(())
+    }
+
+    fn game_save_sender(&self) -> &mpsc::UnboundedSender<GameSaveCommand> {
+        self.game_save_tx.get_or_init(|| {
+            let (save_tx, save_rx) = mpsc::unbounded_channel();
+            tokio::spawn(run_game_save_worker(self.db.clone(), save_rx));
+            save_tx
+        })
     }
 
     pub fn record_win_task(&self, user_id: Uuid, puzzle_date: NaiveDate, guesses_used: usize) {
@@ -118,6 +175,39 @@ impl LeWordService {
             ActivityEvent::occurred_on_utc_date(puzzle_date),
         ));
         Ok(())
+    }
+}
+
+async fn run_game_save_worker(db: Db, mut save_rx: mpsc::UnboundedReceiver<GameSaveCommand>) {
+    while let Some(command) = save_rx.recv().await {
+        match command {
+            GameSaveCommand::SaveDaily(params) => {
+                let result = async {
+                    let client = db.get().await?;
+                    Game::upsert(&client, params).await?;
+                    Result::<()>::Ok(())
+                }
+                .await;
+                if let Err(error) = result {
+                    tracing::error!(error = ?error, "failed to save Le Word daily game state");
+                }
+            }
+            GameSaveCommand::SaveReplay(params) => {
+                let result = async {
+                    let client = db.get().await?;
+                    ReplayGame::upsert(&client, params).await?;
+                    Result::<()>::Ok(())
+                }
+                .await;
+                if let Err(error) = result {
+                    tracing::error!(error = ?error, "failed to save Le Word replay game state");
+                }
+            }
+            #[cfg(test)]
+            GameSaveCommand::Flush(done_tx) => {
+                let _ = done_tx.send(());
+            }
+        }
     }
 }
 
@@ -158,6 +248,23 @@ where
         let answer = answers[idx];
         if !used.contains(answer) {
             return Ok(answer);
+        }
+    }
+}
+
+fn choose_replay_answer(current_answer: &str, daily_answer: Option<&str>) -> &'static str {
+    choose_replay_answer_from(answer_words(), current_answer, daily_answer)
+}
+
+fn choose_replay_answer_from<'a>(
+    answers: &'a [&'a str],
+    current_answer: &str,
+    daily_answer: Option<&str>,
+) -> &'a str {
+    loop {
+        let answer = answers[(OsRng.next_u64() as usize) % answers.len()];
+        if answer != current_answer && Some(answer) != daily_answer {
+            return answer;
         }
     }
 }

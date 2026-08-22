@@ -499,6 +499,7 @@ fn make_app_with_chat_service_and_permissions(
         initial_rubiks_cube_game: None,
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
+        initial_le_word_replay_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
@@ -713,6 +714,7 @@ pub fn make_app_with_paired_client(
         initial_rubiks_cube_game: None,
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
+        initial_le_word_replay_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(

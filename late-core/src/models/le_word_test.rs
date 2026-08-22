@@ -1,5 +1,5 @@
 use crate::{
-    models::le_word::{DailyWin, DailyWord, Game, GameParams},
+    models::le_word::{DailyWin, DailyWord, Game, GameParams, ReplayGame, ReplayGameParams},
     test_utils::{create_test_user, test_db},
 };
 use chrono::NaiveDate;
@@ -76,4 +76,65 @@ async fn game_progress_and_daily_win_persist() {
             .await
             .expect("win check")
     );
+}
+
+#[tokio::test]
+async fn daily_and_replay_progress_use_separate_slots() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    let user = create_test_user(&test_db.db, "le-word-replay-player").await;
+    let today = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
+
+    Game::upsert(
+        &client,
+        GameParams {
+            user_id: user.id,
+            puzzle_date: today,
+            answer_word: "hunch".to_string(),
+            guesses: serde_json::json!(["glass"]),
+            current_guess: String::new(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("save daily game");
+    ReplayGame::upsert(
+        &client,
+        ReplayGameParams {
+            user_id: user.id,
+            answer_word: "apple".to_string(),
+            guesses: serde_json::json!([]),
+            current_guess: "sh".to_string(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("save replay game");
+    ReplayGame::upsert(
+        &client,
+        ReplayGameParams {
+            user_id: user.id,
+            answer_word: "shade".to_string(),
+            guesses: serde_json::json!(["apple"]),
+            current_guess: String::new(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("replace replay game");
+
+    let daily = Game::find_by_user_id_for_date(&client, user.id, today)
+        .await
+        .expect("load daily game")
+        .expect("saved daily game");
+    let replay = ReplayGame::find_by_user_id(&client, user.id)
+        .await
+        .expect("load replay game")
+        .expect("saved replay game");
+    assert_eq!(daily.puzzle_date, today);
+    assert_eq!(daily.answer_word, "hunch");
+    assert_eq!(replay.answer_word, "shade");
 }
