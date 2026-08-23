@@ -60,10 +60,13 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             .map(|s| format!("#{s}"))
             .unwrap_or_else(|| "DM".to_string());
 
+        // Either clears the dot: the feed watermark frozen on entry (so the
+        // dots survive the visit that read them) or the mention's own read
+        // stamp, set when its message was rendered in its room.
         let is_unread = view
             .marker_read_at
-            .map(|last_read_at| item.created > last_read_at)
-            .unwrap_or(true);
+            .is_none_or(|last_read_at| item.created > last_read_at)
+            && item.read_at.is_none();
         let read_indicator = if is_unread {
             Span::styled("● ", Style::default().fg(theme::MENTION()))
         } else {

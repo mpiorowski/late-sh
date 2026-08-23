@@ -106,6 +106,25 @@ fn renders_inline_code_without_mention_highlight() {
     assert_eq!(code_span.style.bg, Some(theme::BG_HIGHLIGHT()));
 }
 
+/// Shortcodes expand in prose but never inside code: someone pasting a YAML
+/// snippet or a ratio must get the characters they typed back.
+#[test]
+fn shortcodes_expand_in_prose_but_not_in_code() {
+    let lines = render_body_to_lines(
+        "ship it :fire: but `:fire:` stays",
+        80,
+        Span::raw(""),
+        Style::default(),
+    );
+    let rendered = lines_to_strings(&lines).join("");
+
+    assert!(rendered.contains("ship it 🔥 but"), "{rendered}");
+    assert!(
+        rendered.contains(":fire:"),
+        "code span kept as typed: {rendered}"
+    );
+}
+
 #[test]
 fn renders_inline_code_with_embedded_backtick() {
     let lines = render_body_to_lines("``(╯`Д´)╯︵ ┻━┻``", 80, Span::raw(""), Style::default());

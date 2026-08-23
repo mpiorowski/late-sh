@@ -1,3 +1,4 @@
+use crate::app::chat::discover::state::SortMode;
 use crate::app::chat::discover::ui::*;
 use crate::app::chat::svc::DiscoverRoomItem;
 use crate::app::chat::svc::PreviewMessage;
@@ -62,6 +63,7 @@ fn loading_state_does_not_claim_there_are_no_rooms() {
         loading: true,
         filtering: false,
         query: "",
+        sort: SortMode::default(),
     });
 
     assert!(rendered.contains("Loading rooms..."));
@@ -76,6 +78,7 @@ fn loaded_empty_state_explains_no_discoverable_rooms() {
         loading: false,
         filtering: false,
         query: "",
+        sort: SortMode::default(),
     });
 
     assert!(rendered.contains("No public rooms to discover right now."));
@@ -89,6 +92,7 @@ fn empty_filter_result_names_the_query() {
         loading: false,
         filtering: true,
         query: "zzz",
+        sort: SortMode::default(),
     });
 
     assert!(rendered.contains("No rooms match \"zzz\"."));
@@ -105,6 +109,7 @@ fn each_room_renders_name_then_stats_on_two_rows() {
             loading: false,
             filtering: false,
             query: "",
+            sort: SortMode::default(),
         },
         70,
     );
@@ -135,6 +140,7 @@ fn preview_shows_recent_messages_of_selected_room() {
             loading: false,
             filtering: false,
             query: "",
+            sort: SortMode::default(),
         },
         96,
     );
@@ -162,6 +168,7 @@ fn preview_follows_selection() {
             loading: false,
             filtering: false,
             query: "",
+            sort: SortMode::default(),
         },
         96,
     );
@@ -183,6 +190,7 @@ fn preview_hidden_when_too_narrow() {
             loading: false,
             filtering: false,
             query: "",
+            sort: SortMode::default(),
         },
         60,
     );
@@ -202,6 +210,7 @@ fn preview_handles_room_with_no_messages() {
             loading: false,
             filtering: false,
             query: "",
+            sort: SortMode::default(),
         },
         96,
     );
@@ -219,6 +228,7 @@ fn discover_row_shows_the_topic_next_to_the_room_name() {
         query: "",
         filtering: false,
         loading: false,
+        sort: SortMode::default(),
     });
     assert!(rendered.contains("#books"));
     assert!(
@@ -236,6 +246,7 @@ fn discover_row_without_a_topic_is_unchanged() {
         query: "",
         filtering: false,
         loading: false,
+        sort: SortMode::default(),
     });
     // Only the name row matters here: the stats row carries its own separators.
     let name_row = rendered.lines().next().unwrap_or_default();
@@ -256,6 +267,7 @@ fn discover_preview_shows_what_the_room_is_about() {
         query: "",
         filtering: false,
         loading: false,
+        sort: SortMode::default(),
     });
     // The row has space only for a clipped version, so the preview pane is where
     // the whole description is legible.

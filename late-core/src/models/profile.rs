@@ -9,9 +9,9 @@ use super::message_translation::TranslateLang;
 use super::user::{
     RightSidebarComponentSetting, RightSidebarMode, RoomListMode, User, extract_auto_translate,
     extract_bio, extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_ide, extract_keep_composer_focused, extract_land_on_home, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
+    extract_favorite_theme_ids, extract_ide, extract_keep_composer_focused, extract_land_on_home,
+    extract_langs, extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format,
+    extract_notify_kinds, extract_os, extract_right_sidebar_components, extract_right_sidebar_mode,
     extract_room_list_mode, extract_show_flag_fallback, extract_show_pet_strip,
     extract_show_right_sidebar, extract_show_room_list_sidebar, extract_start_with_music_muted,
     extract_terminal, extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
@@ -69,6 +69,8 @@ pub struct Profile {
     pub translate_mine_to_en: bool,
     /// Ordered list of room ids pinned to the dashboard quick-switch strip.
     pub favorite_room_ids: Vec<Uuid>,
+    /// Theme ids starred in the theme browser, newest last.
+    pub favorite_theme_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +112,7 @@ impl Default for Profile {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         }
     }
 }
@@ -145,6 +148,7 @@ pub struct ProfileParams {
     pub auto_translate: bool,
     pub translate_mine_to_en: bool,
     pub favorite_room_ids: Vec<Uuid>,
+    pub favorite_theme_ids: Vec<String>,
 }
 
 impl Profile {
@@ -214,6 +218,7 @@ impl Profile {
                 .map(Uuid::to_string)
                 .collect::<Vec<_>>(),
         )?;
+        let favorite_theme_ids_json = serde_json::to_value(&params.favorite_theme_ids)?;
         let right_sidebar_components_json = serde_json::to_value(
             normalize_right_sidebar_components(&params.right_sidebar_components)
                 .into_iter()
@@ -296,10 +301,11 @@ impl Profile {
                          'show_pet_strip', $26::bool,
                          'translate_to', $27::text,
                          'auto_translate', $28::bool,
-                         'translate_mine_to_en', $29::bool
+                         'translate_mine_to_en', $29::bool,
+                         'favorite_theme_ids', $30::jsonb
                      ),
                      updated = current_timestamp
-                 WHERE id = $30
+                 WHERE id = $31
                  RETURNING *",
                 &[
                     &params.username,
@@ -331,6 +337,7 @@ impl Profile {
                     &params.translate_to.as_str(),
                     &params.auto_translate,
                     &params.translate_mine_to_en,
+                    &favorite_theme_ids_json,
                     &user_id,
                 ],
             )
@@ -371,6 +378,7 @@ impl Profile {
             auto_translate: extract_auto_translate(&user.settings),
             translate_mine_to_en: extract_translate_mine_to_en(&user.settings),
             favorite_room_ids: extract_favorite_room_ids(&user.settings),
+            favorite_theme_ids: extract_favorite_theme_ids(&user.settings),
         }
     }
 }

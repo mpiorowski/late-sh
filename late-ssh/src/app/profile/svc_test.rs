@@ -144,6 +144,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         },
     );
 
@@ -219,6 +220,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         },
     );
 
@@ -289,6 +291,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         },
     );
 
@@ -570,6 +573,7 @@ async fn edit_profile_snapshots_stay_per_user() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         },
     );
 

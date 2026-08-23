@@ -206,11 +206,44 @@ fn draw_footer(frame: &mut Frame, area: Rect, tab: Tab, editing_bio: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// The row above the tree: the live search when it is open, otherwise the hint
+/// that says the search exists at all. It occupies the same row either way, so
+/// opening the search never reflows the list underneath it.
+fn theme_search_line(state: &SettingsModalState) -> Line<'static> {
+    if !state.theme_searching() {
+        return Line::from(Span::styled(
+            "  / search themes · f star the selected one",
+            Style::default().fg(theme::TEXT_FAINT()),
+        ));
+    }
+
+    // With a query the rows are all matches; without one they are still the
+    // full tree (headers, favorites copies), so a count there would lie.
+    let tail = match state.theme_query().trim().is_empty() {
+        true => "   type to search · Esc back".to_string(),
+        false => match state.theme_tree_rows().len() {
+            0 => "   no matches · Esc back".to_string(),
+            1 => "   1 match · ↑↓ preview · Esc back".to_string(),
+            n => format!("   {n} matches · ↑↓ preview · Esc back"),
+        },
+    };
+    Line::from(vec![
+        Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled("› ", Style::default().fg(theme::AMBER_GLOW())),
+        Span::styled(
+            state.theme_query().to_string(),
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ),
+        Span::styled("_", Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(tail, Style::default().fg(theme::TEXT_DIM())),
+    ])
+}
+
 fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let sections = Layout::vertical([
         Constraint::Length(1), // heading
         Constraint::Length(1), // summary
-        Constraint::Length(1), // breathing
+        Constraint::Length(1), // search / hint
         Constraint::Min(4),    // tree
     ])
     .split(area);
@@ -249,6 +282,7 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
         ),
     ]);
     frame.render_widget(Paragraph::new(summary), sections[1]);
+    frame.render_widget(Paragraph::new(theme_search_line(state)), sections[2]);
 
     let tree_area = sections[3];
     let width = tree_area.width as usize;
@@ -271,6 +305,14 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
             ThemeTreeRow::Group { group, collapsed } => {
                 lines.push(theme_group_line(group, collapsed, selected, width));
             }
+            ThemeTreeRow::FavoritesHeader { collapsed } => {
+                lines.push(theme_pseudo_group_line(
+                    "★ Favorites",
+                    collapsed,
+                    selected,
+                    width,
+                ));
+            }
             ThemeTreeRow::Theme {
                 option_index,
                 last_in_group,
@@ -279,6 +321,7 @@ fn draw_themes_tab(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
                     theme::OPTIONS[option_index],
                     selected,
                     last_in_group,
+                    state.theme_is_favorite(option_index),
                     width,
                 ));
             }
@@ -294,9 +337,20 @@ fn theme_group_line(
     selected: bool,
     width: usize,
 ) -> Line<'static> {
+    theme_pseudo_group_line(group.label(), collapsed, selected, width)
+}
+
+/// A collapsible header row. Real groups and the Favorites block share it so
+/// the two read identically in the tree.
+fn theme_pseudo_group_line(
+    label: &str,
+    collapsed: bool,
+    selected: bool,
+    width: usize,
+) -> Line<'static> {
     let marker = if selected { "›" } else { " " };
     let symbol = if collapsed { "▸" } else { "▾" };
-    let text = format!(" {marker} {symbol} {}", group.label());
+    let text = format!(" {marker} {symbol} {label}");
     let padding = width.saturating_sub(text.chars().count());
     let style = if selected {
         Style::default()
@@ -323,6 +377,7 @@ fn theme_option_line(
     option: theme::ThemeOption,
     selected: bool,
     last_in_group: bool,
+    favorite: bool,
     width: usize,
 ) -> Line<'static> {
     let preview = theme::preview_for_option(option);
@@ -367,8 +422,12 @@ fn theme_option_line(
         preview.chat_author,
         preview.mention,
     ];
+    // The star reads the same inside the Favorites block and out in the theme's
+    // own group, so it is always obvious which themes are starred.
+    let star = if favorite { "★ " } else { "" };
     let id_text = format!("  {}", option.id);
     let used = prefix.chars().count()
+        + star.chars().count()
         + option.label.chars().count()
         + id_text.chars().count()
         + 2
@@ -376,6 +435,15 @@ fn theme_option_line(
     let padding = width.saturating_sub(used);
     let mut spans = vec![
         Span::styled(prefix, prefix_style),
+        Span::styled(
+            star.to_string(),
+            match selected {
+                true => Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .patch(theme::selection_style()),
+                false => Style::default().fg(theme::AMBER()),
+            },
+        ),
         Span::styled(option.label.to_string(), label_style),
         Span::styled(id_text, id_style),
         Span::styled(" ".repeat(padding + 2), trailing_style),

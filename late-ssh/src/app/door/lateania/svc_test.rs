@@ -3103,6 +3103,55 @@ fn nearby_foes_lists_foes_in_neighbouring_rooms() {
 }
 
 #[test]
+fn a_foe_beyond_the_cell_window_stays_off_the_field() {
+    const HERE: RoomId = 722; // Matlatesh - The Caravanserai
+    const NEAR: RoomId = 608; // The Greatroad, one exit out of Matlatesh
+    const FAR: RoomId = 30055; // Duskmire Wood, its own reserved block
+    // The field's hint lists are scoped by the cell window alone: since the
+    // unfold (worldmap's `zone_interleaves` pin keeps it that way), what sits
+    // within a few cells really is a few moves away, and whole other lands
+    // sit in reserved blocks hundreds of columns off, so a foe in one can
+    // never land "near" by accident of the embedding.
+    let coords = crate::app::door::lateania::worldmap::world_coords();
+    let (here, far, near) = (coords[&HERE], coords[&FAR], coords[&NEAR]);
+    assert!(
+        near.z == here.z && (near.x - here.x).abs() <= 16 && (near.y - here.y).abs() <= 12,
+        "fixture assumption broke: room {NEAR} should sit inside the field's cell window"
+    );
+    assert!(
+        far.z != here.z || (far.x - here.x).abs() > 16 || (far.y - here.y).abs() > 12,
+        "fixture assumption broke: room {FAR} should sit outside the field's cell window"
+    );
+
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    s.players.get_mut(&uid(1)).unwrap().room = HERE;
+    // Clear the field so the only foe anywhere is the one we place.
+    for m in s.mobs.values_mut() {
+        m.alive = false;
+    }
+    let mob_id = *s.mobs.keys().next().unwrap();
+    {
+        let m = s.mobs.get_mut(&mob_id).unwrap();
+        m.alive = true;
+        m.revealed = true;
+        m.current_room = FAR;
+    }
+    assert!(
+        !s.snapshot().players[&uid(1)].nearby_foes.contains(&FAR),
+        "a foe in another land, outside the cell window, must not be marked"
+    );
+
+    // One exit out is genuinely near, and still shows.
+    s.mobs.get_mut(&mob_id).unwrap().current_room = NEAR;
+    assert!(
+        s.snapshot().players[&uid(1)].nearby_foes.contains(&NEAR),
+        "a foe in the zone next door still shows on the field"
+    );
+}
+
+#[test]
 fn rpg_mode_off_skips_the_field_hint_lists() {
     const HERE: RoomId = 2001;
     let mut s = world();

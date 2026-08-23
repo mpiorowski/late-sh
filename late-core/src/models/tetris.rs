@@ -19,6 +19,8 @@ crate::user_scoped_model! {
         pub current_row: i32,
         pub current_col: i32,
         pub next_kind: String,
+        pub hold_kind: Option<String>,
+        pub hold_used: bool,
         pub is_game_over: bool,
     }
 }
@@ -38,8 +40,8 @@ impl Game {
     pub async fn upsert(client: &Client, params: GameParams) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO tetris_games (user_id, score, lines, level, board, current_kind, current_rotation, current_row, current_col, next_kind, is_game_over)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                "INSERT INTO tetris_games (user_id, score, lines, level, board, current_kind, current_rotation, current_row, current_col, next_kind, hold_kind, hold_used, is_game_over)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                  ON CONFLICT (user_id) DO UPDATE SET
                     score = $2,
                     lines = $3,
@@ -50,7 +52,9 @@ impl Game {
                     current_row = $8,
                     current_col = $9,
                     next_kind = $10,
-                    is_game_over = $11,
+                    hold_kind = $11,
+                    hold_used = $12,
+                    is_game_over = $13,
                     updated = current_timestamp
                  RETURNING *",
                 &[
@@ -64,6 +68,8 @@ impl Game {
                     &params.current_row,
                     &params.current_col,
                     &params.next_kind,
+                    &params.hold_kind,
+                    &params.hold_used,
                     &params.is_game_over,
                 ],
             )

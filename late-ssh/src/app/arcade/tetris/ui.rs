@@ -12,6 +12,23 @@ use crate::app::arcade::ui::{
 };
 use crate::app::common::theme;
 
+/// What the hold slot holds: the parked piece, or a dash while it is empty.
+fn hold_text(state: &State) -> String {
+    state
+        .hold
+        .map(|kind| kind.name().to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Dimmed once this piece has spent its hold, so the slot shows at a glance
+/// whether pressing `c` will do anything.
+fn hold_color(state: &State) -> Color {
+    match state.hold_used {
+        true => theme::TEXT_FAINT(),
+        false => theme::AMBER_DIM(),
+    }
+}
+
 pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
     let bottom = GameBottomBar {
         status: status_line(vec![
@@ -20,12 +37,14 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("lines", state.lines.to_string(), theme::TEXT_BRIGHT()),
             ("level", state.level.to_string(), theme::TEXT_BRIGHT()),
             ("next", state.next.name().to_string(), theme::AMBER_DIM()),
+            ("hold", hold_text(state), hold_color(state)),
         ]),
         keys: keys_line(vec![
             ("h/l", "move"),
             ("k", "rotate"),
             ("j", "soft"),
             ("Space", "hard drop"),
+            ("c", "hold"),
             ("p", "pause"),
             ("r", "restart"),
             ("`", "dashboard"),

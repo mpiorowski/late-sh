@@ -1142,22 +1142,26 @@ async fn activate_username_effect_in_tx(
             choice.slug()
         );
     }
-    let duration_secs = item
-        .payload
-        .get("duration_secs")
-        .and_then(|value| value.as_i64())
-        .unwrap_or(USERNAME_EFFECT_DURATION_SECS);
-
     let effect = ShopConsumableEffect::activate_user_effect_in_tx(
         tx,
         user_id,
         USERNAME_EFFECT_KIND,
         &item.sku,
-        duration_secs,
+        username_effect_duration_secs(item),
         choice.to_payload(),
     )
     .await?;
     Ok(Some(effect))
+}
+
+/// How long the username effect this item sells runs. The day tier carries
+/// 86400 and the month tier 2592000 in its payload; an item that carries
+/// neither falls back to the day duration rather than activating forever.
+pub fn username_effect_duration_secs(item: &MarketplaceItem) -> i64 {
+    item.payload
+        .get("duration_secs")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(USERNAME_EFFECT_DURATION_SECS)
 }
 
 /// Activates the Bonsai Decay Shield bought in this transaction. Unlike the

@@ -38,7 +38,7 @@ use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, Translatio
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::common::{composer, mentions, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -157,18 +157,26 @@ pub(crate) struct ModCommandOutput {
 pub(crate) struct PendingUrlUpload {
     pub url: String,
     pub room_id: Option<Uuid>,
+    /// The reply the composer was aiming at when the upload was asked for.
+    /// Submitting `/upload` clears the composer, so the target has to travel
+    /// with the request or the finished upload comes back as a plain message.
+    pub reply_target: Option<ReplyTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingClipboardImageUpload {
     pub room_id: Option<Uuid>,
+    /// See [`PendingUrlUpload::reply_target`]; `/paste-image` clears the
+    /// composer the same way.
+    pub reply_target: Option<ReplyTarget>,
     requested_at: Instant,
 }
 
 impl PendingClipboardImageUpload {
-    fn new(room_id: Option<Uuid>) -> Self {
+    fn new(room_id: Option<Uuid>, reply_target: Option<ReplyTarget>) -> Self {
         Self {
             room_id,
+            reply_target,
             requested_at: Instant::now(),
         }
     }
@@ -646,6 +654,10 @@ pub struct ChatState {
     pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
+    /// Message ids whose mentions of this user were already reported as
+    /// rendered, so a room that stays visible does not resend the same stamp
+    /// on every cursor flush. Session-local; the DB update is idempotent.
+    mention_reads_sent: HashSet<Uuid>,
     /// The DM currently held in the promoted unread-DMs group even though its
     /// unread count is already zero. See `note_sticky_unread_dm`.
     pub(crate) sticky_unread_dm: Option<Uuid>,
@@ -839,6 +851,9 @@ pub struct ChatState {
     pub(crate) image_upload_rx: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     pub(crate) image_upload_pending: bool,
     pub(crate) image_upload_target_room_id: Option<Uuid>,
+    /// The reply the in-flight upload was composed against, handed back to the
+    /// composer when the URL lands.
+    image_upload_reply_target: Option<ReplyTarget>,
     pub(crate) requested_url_upload: Option<PendingUrlUpload>,
     requested_clipboard_image_upload: Option<PendingClipboardImageUpload>,
     pending_clipboard_image_upload: Option<PendingClipboardImageUpload>,
@@ -916,6 +931,14 @@ pub enum TranslationDisplay {
     Failed,
 }
 
+/// The session identity a `ChatState` is built for: who is connected, under
+/// what name, with what rights.
+pub(crate) struct ChatSession {
+    pub user_id: Uuid,
+    pub username: String,
+    pub permissions: Permissions,
+}
+
 pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub translation: crate::app::ai::translate::TranslationService,
@@ -937,13 +960,17 @@ impl Drop for ChatState {
 impl ChatState {
     pub(crate) fn new(
         services: ChatServices,
-        user_id: Uuid,
-        permissions: Permissions,
+        session: ChatSession,
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
         mention_ladders: MentionLadders,
         files: Option<crate::config::FilesConfig>,
     ) -> Self {
+        let ChatSession {
+            user_id,
+            username,
+            permissions,
+        } = session;
         let ChatServices {
             chat: service,
             translation: translation_service,
@@ -983,7 +1010,10 @@ impl ChatState {
             active_polls: HashMap::new(),
             lounge_room_id: None,
             activity_ticker: Vec::new(),
-            usernames: HashMap::new(),
+            // Seeded with the session's own name so self-referential features
+            // (the mention highlight, rendered-mention read stamps) work
+            // before the user has authored anything a payload would carry.
+            usernames: HashMap::from([(user_id, username)]),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
@@ -999,6 +1029,7 @@ impl ChatState {
             room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
+            mention_reads_sent: HashSet::new(),
             sticky_unread_dm: None,
             visible_room_id: None,
             room_tx,
@@ -1103,6 +1134,7 @@ impl ChatState {
             image_upload_rx: None,
             image_upload_pending: false,
             image_upload_target_room_id: None,
+            image_upload_reply_target: None,
             requested_url_upload: None,
             requested_clipboard_image_upload: None,
             pending_clipboard_image_upload: None,
@@ -1533,10 +1565,50 @@ impl ChatState {
         self.flush_read_cursors(room_ids);
     }
 
-    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
-        for room_id in room_ids {
-            self.service.mark_room_read_task(self.user_id, room_id);
+    fn flush_read_cursors(&mut self, room_ids: Vec<Uuid>) {
+        for room_id in &room_ids {
+            self.service.mark_room_read_task(self.user_id, *room_id);
         }
+        self.flush_rendered_mention_reads(&room_ids);
+    }
+
+    /// Report mentions of this user whose messages are actually loaded in the
+    /// rooms being marked read, so their rail-badge entries clear. This is
+    /// deliberately narrower than the room's own read cursor: a mention
+    /// sitting above the loaded tail was never on screen and stays unread.
+    /// Runs on the same debounced flush as the cursors; every event that can
+    /// surface a mention (tail landing, a live message, the room becoming
+    /// visible) re-queues the room, so nothing is missed by collecting here.
+    fn flush_rendered_mention_reads(&mut self, room_ids: &[Uuid]) {
+        let username_lower = self
+            .usernames
+            .get(&self.user_id)
+            .map(|username| username.to_ascii_lowercase());
+        let Some(username_lower) = username_lower else {
+            return;
+        };
+        let mut rendered: Vec<Uuid> = Vec::new();
+        for room_id in room_ids {
+            let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == *room_id)
+            else {
+                continue;
+            };
+            rendered.extend(
+                messages
+                    .iter()
+                    .filter(|message| {
+                        message.user_id != self.user_id
+                            && !self.mention_reads_sent.contains(&message.id)
+                            && mentions::mentions_user(&message.body, Some(&username_lower))
+                    })
+                    .map(|message| message.id),
+            );
+        }
+        if rendered.is_empty() {
+            return;
+        }
+        self.mention_reads_sent.extend(rendered.iter().copied());
+        self.notifications.mark_read_for_messages(rendered);
     }
 
     /// Returns visible messages for the given room.
@@ -3308,8 +3380,13 @@ impl ChatState {
                 return Some(Banner::error("File uploads are disabled"));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_url_upload = Some(PendingUrlUpload { url, room_id });
+            self.requested_url_upload = Some(PendingUrlUpload {
+                url,
+                room_id,
+                reply_target,
+            });
             return None;
         }
 
@@ -3326,8 +3403,10 @@ impl ChatState {
                 ));
             }
             let room_id = self.upload_target_room_id();
+            let reply_target = self.reply_target.clone();
             self.clear_composer_after_submit();
-            self.requested_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+            self.requested_clipboard_image_upload =
+                Some(PendingClipboardImageUpload::new(room_id, reply_target));
             return None;
         }
 
@@ -4002,14 +4081,21 @@ impl ChatState {
         self.composer.input(input);
     }
 
+    /// Upload bytes that arrived while the composer is still open (a terminal
+    /// image paste), so whatever reply it was aiming at is still live here.
     pub fn start_image_upload(&mut self, bytes: Vec<u8>) -> Option<Banner> {
-        self.start_image_upload_in_room(bytes, self.upload_target_room_id())
+        self.start_image_upload_in_room(
+            bytes,
+            self.upload_target_room_id(),
+            self.reply_target.clone(),
+        )
     }
 
     pub(crate) fn start_image_upload_in_room(
         &mut self,
         bytes: Vec<u8>,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
     ) -> Option<Banner> {
         let Some(mime) = crate::app::files::image_upload::detect_image_mime(&bytes) else {
             return Some(Banner::error("Unsupported image type"));
@@ -4019,7 +4105,7 @@ impl ChatState {
         };
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Some(banner) = self.begin_image_upload(room_id, rx) {
+        if let Some(banner) = self.begin_image_upload(room_id, reply_target, rx) {
             return Some(banner);
         }
         let mime = mime.to_string();
@@ -4049,6 +4135,7 @@ impl ChatState {
     pub(crate) fn begin_image_upload(
         &mut self,
         room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
         rx: tokio::sync::oneshot::Receiver<Result<String, String>>,
     ) -> Option<Banner> {
         if self.image_upload_pending {
@@ -4069,12 +4156,24 @@ impl ChatState {
         self.image_upload_rx = Some(rx);
         self.image_upload_pending = true;
         self.image_upload_target_room_id = room_id;
+        self.image_upload_reply_target = reply_target;
         self.last_image_upload_at = Some(std::time::Instant::now());
         None
     }
 
     pub(crate) fn take_image_upload_target_room_id(&mut self) -> Option<Uuid> {
         self.image_upload_target_room_id.take()
+    }
+
+    /// Put the finished upload's reply back on the composer. Reopening the
+    /// composer with the URL goes through `start_composing_in_room`, which
+    /// drops the reply target, so this runs after it.
+    pub(crate) fn restore_image_upload_reply_target(&mut self) {
+        self.reply_target = self.image_upload_reply_target.take();
+    }
+
+    pub(crate) fn clear_image_upload_reply_target(&mut self) {
+        self.image_upload_reply_target = None;
     }
 
     pub(crate) fn take_requested_url_upload(&mut self) -> Option<PendingUrlUpload> {
@@ -4087,8 +4186,13 @@ impl ChatState {
         self.requested_clipboard_image_upload.take()
     }
 
-    pub(crate) fn begin_pending_clipboard_image_upload(&mut self, room_id: Option<Uuid>) {
-        self.pending_clipboard_image_upload = Some(PendingClipboardImageUpload::new(room_id));
+    pub(crate) fn begin_pending_clipboard_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        reply_target: Option<ReplyTarget>,
+    ) {
+        self.pending_clipboard_image_upload =
+            Some(PendingClipboardImageUpload::new(room_id, reply_target));
     }
 
     pub(crate) fn take_pending_clipboard_image_upload(

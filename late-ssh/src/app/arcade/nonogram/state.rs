@@ -89,16 +89,38 @@ const CELL_EMPTY: u8 = 0;
 const CELL_FILLED: u8 = 1;
 const CELL_MARKED_EMPTY: u8 = 2;
 
+/// The two keys that throw away a board in progress. Both ask first, the way
+/// every other Arcade game does: a 20x20 grid is half an hour of work and `r`
+/// sits one key from the movement row (user feedback).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    NewBoard,
+    Reset,
+}
+
+impl ResetKind {
+    pub fn confirm_tip(self) -> &'static str {
+        match self {
+            ResetKind::NewBoard => "Press again for a new board",
+            ResetKind::Reset => "Press again to clear the board",
+        }
+    }
+}
+
 pub struct State {
     pub user_id: Uuid,
     pub mode: Mode,
     pub cursor: (usize, usize),
+    pub reset_pending: Option<ResetKind>,
     library: Library,
     selected_difficulty: usize,
     current_puzzle_id: String,
     player_grid: Vec<Vec<u8>>,
     is_game_over: bool,
     daily_snapshots: HashMap<String, PuzzleSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, PuzzleSnapshot>,
     pub svc: NonogramService,
 }
@@ -146,17 +168,46 @@ impl State {
             user_id,
             mode: Mode::Daily,
             cursor: (0, 0),
+            reset_pending: None,
             library,
             selected_difficulty,
             current_puzzle_id: String::new(),
             player_grid: Vec::new(),
             is_game_over: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_pack();
         state
+    }
+
+    /// Roll the daily puzzles forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Returns true when they moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for difficulty in DIFFICULTIES {
+            let Some(pack) = self.library.pack_by_size_key(difficulty.size_key) else {
+                continue;
+            };
+            // Same contract as `new`: a pack always yields a daily puzzle.
+            // Degrading silently here would leave yesterday's board behind an
+            // advanced `daily_date`, the exact bug this rollover fixes.
+            let snapshot = generate_snapshot(pack, Mode::Daily, &self.svc, today)
+                .expect("daily nonogram pack should always have a puzzle");
+            self.daily_snapshots
+                .insert(difficulty.key.to_string(), snapshot);
+        }
+        if self.mode == Mode::Daily {
+            self.load_mode_snapshot_for_selected_pack();
+        }
+        true
     }
 
     pub fn has_puzzles(&self) -> bool {
@@ -255,8 +306,27 @@ impl State {
         self.mode == Mode::Daily
     }
 
+    /// Arm or confirm a destructive reset. Returns `true` only when the same
+    /// `kind` was already armed (the confirming second press); a press for a
+    /// different kind re-arms for that kind instead of firing.
+    pub fn request_reset(&mut self, kind: ResetKind) -> bool {
+        if self.reset_pending == Some(kind) {
+            self.reset_pending = None;
+            return true;
+        }
+        self.reset_pending = Some(kind);
+        false
+    }
+
+    /// Disarm. Called by every other action, so an `r` pressed minutes ago can
+    /// never combine with an unrelated later keystroke into a wiped board.
+    pub fn clear_reset_pending(&mut self) {
+        self.reset_pending = None;
+    }
+
     /// Jump straight to a daily board: the backtick workspace entry path.
     pub fn open_daily(&mut self, difficulty_index: usize) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.selected_difficulty = difficulty_index.min(DIFFICULTIES.len() - 1);
@@ -264,18 +334,21 @@ impl State {
     }
 
     pub fn show_personal(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Personal;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn show_daily(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         self.mode = Mode::Daily;
         self.load_mode_snapshot_for_selected_pack();
     }
 
     pub fn new_personal_board(&mut self) {
+        self.clear_reset_pending();
         self.store_active_snapshot();
         let Some(pack) = self.selected_pack().cloned() else {
             return;
@@ -294,6 +367,7 @@ impl State {
     }
 
     pub fn reset_board(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -306,6 +380,7 @@ impl State {
     }
 
     pub fn move_cursor(&mut self, dr: isize, dc: isize) {
+        self.clear_reset_pending();
         let Some(puzzle) = self.puzzle() else {
             return;
         };
@@ -319,6 +394,7 @@ impl State {
     }
 
     pub fn toggle_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -341,6 +417,7 @@ impl State {
     }
 
     pub fn toggle_mark(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -362,6 +439,7 @@ impl State {
     }
 
     pub fn clear_cell(&mut self) {
+        self.clear_reset_pending();
         if self.is_game_over {
             return;
         }
@@ -380,6 +458,7 @@ impl State {
     }
 
     pub fn next_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }
@@ -389,6 +468,7 @@ impl State {
     }
 
     pub fn prev_difficulty(&mut self) {
+        self.clear_reset_pending();
         if !self.has_puzzles() {
             return;
         }
@@ -417,8 +497,11 @@ impl State {
         if solved {
             self.is_game_over = true;
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string());
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                );
             }
         }
     }
@@ -499,7 +582,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
             is_game_over: self.is_game_over,

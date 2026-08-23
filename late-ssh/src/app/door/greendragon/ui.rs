@@ -18,6 +18,10 @@ use super::data;
 use super::model::{self, Character, Specialty};
 use super::state::{BankOp, FoeKind, Mode, PvpVenue, State};
 
+/// Smallest inner area the village/forest pages still fit in.
+const MIN_WIDTH: u16 = 30;
+const MIN_HEIGHT: u16 = 10;
+
 /// Draw the live Green Dragon game (called when a character is loaded).
 pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     let block = Block::default()
@@ -32,10 +36,13 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.width < 30 || inner.height < 10 {
-        frame.render_widget(
-            Paragraph::new("Terminal too small for Legend of the Green Dragon"),
+    if inner.width < MIN_WIDTH || inner.height < MIN_HEIGHT {
+        crate::app::common::primitives::draw_too_small(
+            frame,
             inner,
+            "Legend of the Green Dragon",
+            MIN_WIDTH,
+            MIN_HEIGHT,
         );
         return;
     }

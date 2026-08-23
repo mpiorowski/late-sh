@@ -1,5 +1,9 @@
 use super::*;
 
+use late_core::models::username_effect::{
+    USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_MONTH_DURATION_SECS,
+};
+
 fn make_state() -> ShopState {
     let snapshot = ShopSnapshot {
         user_id: None,
@@ -112,6 +116,7 @@ fn glow_item() -> ShopCatalogItem {
         requires_room: false,
         daily_limited: false,
         username_effect_variant: Some("glow".to_string()),
+        username_effect_duration_secs: Some(USERNAME_EFFECT_DURATION_SECS),
     }
 }
 
@@ -169,6 +174,7 @@ fn visible_items_lead_with_username_effects() {
         sku: "chat_confetti".to_string(),
         item_kind: "chat_consumable".to_string(),
         username_effect_variant: None,
+        username_effect_duration_secs: None,
         ..glow_item()
     };
     let snapshot = ShopSnapshot {
@@ -188,6 +194,35 @@ fn visible_items_lead_with_username_effects() {
         .map(|item| item.sku.as_str())
         .collect();
     assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
+}
+
+#[test]
+fn username_effect_picker_carries_the_bought_tier_duration() {
+    let month = ShopCatalogItem {
+        sku: "username_glow_month".to_string(),
+        name: "Name Glow Monthly".to_string(),
+        price_chips: 6_000,
+        username_effect_duration_secs: Some(USERNAME_EFFECT_MONTH_DURATION_SECS),
+        ..glow_item()
+    };
+    let snapshot = ShopSnapshot {
+        user_id: None,
+        balance: 10_000,
+        items: vec![month],
+        entitlements: ShopEntitlements::default(),
+        active_room_effects: HashMap::new(),
+        aquarium_hungry: false,
+        active_username_effect: None,
+        active_bonsai_decay_protection: None,
+    };
+    let mut state = ShopState::for_test_snapshot(snapshot);
+    state.activate_selected(None);
+
+    let pending = state.pending_username_effect().expect("picker armed");
+    assert_eq!(pending.sku, "username_glow_month");
+    assert_eq!(pending.duration_secs, USERNAME_EFFECT_MONTH_DURATION_SECS);
+    // Same styles as the day tier: only the window and the price move.
+    assert_eq!(pending.options.len(), 6);
 }
 
 #[test]

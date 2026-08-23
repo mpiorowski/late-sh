@@ -144,6 +144,18 @@ const CURSOR_SHAPE_STEADY_BLOCK: &[u8] = b"\x1b[2 q";
 const CURSOR_SHAPE_DEFAULT: &[u8] = b"\x1b[0 q";
 const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 
+/// Name the window we're borrowing. `CSI 22;2t` pushes the title the user
+/// already had onto the terminal's own stack first, so [`POP_WINDOW_TITLE`]
+/// can hand it back on the way out: an `ssh late.sh` in one tab of ten should
+/// be findable by name without permanently renaming that tab. Terminals that
+/// implement neither leave the title alone, which is the behaviour we had.
+/// The known tradeoff: a terminal that sets titles (OSC 2) but lacks the
+/// title stack (tmux panes, for one) keeps "late.sh" after exit, since the
+/// old title cannot be read back. Every title-setting program shares it.
+const SET_WINDOW_TITLE: &[u8] = b"\x1b[22;2t\x1b]2;late.sh\x1b\\";
+/// `CSI 23;2t`: restore the pushed title on the way out.
+const POP_WINDOW_TITLE: &[u8] = b"\x1b[23;2t";
+
 #[derive(Clone, Default)]
 pub(super) struct SharedBuffer {
     inner: Arc<Mutex<Vec<u8>>>,
@@ -1366,8 +1378,11 @@ impl App {
                     work: config.work_service.clone(),
                     cyberspace: config.cyberspace_service.clone(),
                 },
-                config.user_id,
-                config.permissions,
+                chat::state::ChatSession {
+                    user_id: config.user_id,
+                    username: config.username.clone(),
+                    permissions: config.permissions,
+                },
                 active_users.clone(),
                 notifier.clone(),
                 config.mention_ladders.clone(),
@@ -1990,13 +2005,11 @@ impl App {
         if self.screen == Screen::Artboard {
             self.deactivate_artboard_interaction();
             self.leave_dartboard();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Lateania {
             self.leave_lateania();
             self.door_delete_confirm = false;
-            self.force_full_repaint();
         }
 
         // Leaving the Games hub drops its transient prompts. Esc handles the
@@ -2010,7 +2023,6 @@ impl App {
 
         if self.screen == Screen::Rebels {
             self.leave_rebels();
-            self.force_full_repaint();
         }
 
         // The three roguelike doors detach instead of tearing down: a running
@@ -2027,10 +2039,6 @@ impl App {
         {
             self.leave_nethack();
         }
-        if self.screen == Screen::Nethack {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Dcss
             && !self
                 .dcss_state
@@ -2039,10 +2047,6 @@ impl App {
         {
             self.leave_dcss();
         }
-        if self.screen == Screen::Dcss {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Brogue
             && !self
                 .brogue_state
@@ -2051,38 +2055,28 @@ impl App {
         {
             self.leave_brogue();
         }
-        if self.screen == Screen::Brogue {
-            self.force_full_repaint();
-        }
-
         if self.screen == Screen::Usurper {
             self.leave_usurper();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Dopewars {
             self.leave_dopewars();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Bashquest {
             self.leave_bashquest();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Codekeep {
             self.leave_codekeep();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::DailyMatch && screen != Screen::DailyMatch {
             self.daily.close_board();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::HouseTable && screen != Screen::HouseTable {
             self.house.close();
-            self.force_full_repaint();
         }
 
         if self.screen == Screen::Scratchpad && screen != Screen::Scratchpad {
@@ -2092,10 +2086,23 @@ impl App {
             // "left the pairing" on their next sync, the same RAII
             // teardown Artboard uses for its color slot.
             self.scratchpad = None;
-            self.force_full_repaint();
         }
 
+        let screen_changed = self.screen != screen;
         self.screen = screen;
+
+        // Every top-level move repaints from scratch. ratatui only re-emits
+        // cells whose contents changed, and the two layouts rarely disagree
+        // on every cell: leaving Home for the Arcade used to strand the
+        // sidebar's bonsai emoji on screen, because a wide glyph the new
+        // layout writes a space over occupies two columns and only one of
+        // them differs. Clearing costs one full frame per page switch, which
+        // every door and the Artboard already paid for the same reason. A
+        // same-screen call (the nav key for the page already open) changes no
+        // layout and skips the clear.
+        if screen_changed {
+            self.force_full_repaint();
+        }
 
         if matches!(self.screen, Screen::Dashboard) {
             self.chat.request_list();
@@ -2639,12 +2646,17 @@ impl App {
         self.audio.persist_radio_station(station);
     }
 
-    pub fn request_paired_clipboard_image_upload(&mut self, room_id: Option<Uuid>) -> bool {
+    pub(crate) fn request_paired_clipboard_image_upload(
+        &mut self,
+        room_id: Option<Uuid>,
+        reply_target: Option<crate::app::chat::state::ReplyTarget>,
+    ) -> bool {
         let Some(registry) = &self.paired_client_registry else {
             return false;
         };
         if registry.request_clipboard_image(&self.session_token) {
-            self.chat.begin_pending_clipboard_image_upload(room_id);
+            self.chat
+                .begin_pending_clipboard_image_upload(room_id, reply_target);
             return true;
         }
         false
@@ -3170,6 +3182,7 @@ impl App {
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
         }
+        buf.extend_from_slice(SET_WINDOW_TITLE);
         // 1000h = basic mouse tracking (button press/release + scroll wheel)
         // 1003h = any-event mouse tracking (motion reports with or without a
         // button held). Dartboard needs drag + hover parity with standalone.
@@ -3197,6 +3210,7 @@ impl App {
         // 1000l = disable basic mouse tracking
         // OSC 111 = reset terminal background color
         buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(POP_WINDOW_TITLE);
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
         }

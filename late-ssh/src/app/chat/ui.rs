@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
@@ -48,6 +49,9 @@ const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// ticker doesn't read as one more chat line, then the ticker row itself
 /// hugging the composer. Two rows, always present, so the chrome never moves.
 const CHAT_COMPOSER_GAP_HEIGHT: u16 = 2;
+/// Below this the poll question is unreadable, so the author byline goes
+/// instead: the question is what people need to answer.
+const MIN_POLL_QUESTION_CELLS: usize = 12;
 const AUTHOR_BADGE_SEPARATOR: &str = " ";
 const FRIEND_BADGE: &str = "★";
 const AFK_BADGE: &str = "🌙";
@@ -791,17 +795,27 @@ fn draw_poll_strip(frame: &mut Frame, area: Rect, poll: &ActiveChatPoll) {
         .iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum();
-    // Reserve the meta title, the " Poll · " + trailing-space chrome (9
-    // cells), and a 1-cell gap so a long question never collides with the
-    // right-aligned countdown.
-    let question_budget = inner_width.saturating_sub(meta_width + 10).max(4);
-    let question = truncate_cells(poll.poll.question.as_str(), question_budget);
-    let title_left = Line::from(vec![Span::styled(
-        format!(" Poll · {question} "),
-        Style::default()
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD),
-    )]);
+    let (question, byline) = poll_title_parts(
+        poll.poll.question.as_str(),
+        poll.author_username.as_deref(),
+        meta_width,
+        inner_width,
+    );
+    let title_left = Line::from(vec![
+        Span::styled(
+            format!(" Poll · {question}"),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(byline, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(
+            " ",
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -899,6 +913,35 @@ fn format_poll_remaining(secs: i64) -> String {
     } else {
         format!("{}h", (secs + 3599) / 3600)
     }
+}
+
+/// Split the poll strip's left title into the (possibly truncated) question and
+/// the author byline, given the width the right-aligned countdown already took.
+///
+/// The byline says who started the poll, so it is answerable to someone rather
+/// than arriving out of nowhere (user feedback). It is the half that gets
+/// dropped when the strip cannot carry both: the question is what people have
+/// to read in order to vote.
+fn poll_title_parts(
+    question: &str,
+    author: Option<&str>,
+    meta_width: usize,
+    inner_width: usize,
+) -> (String, String) {
+    // Reserve the meta title, the " Poll · " + trailing-space chrome (9
+    // cells), and a 1-cell gap so a long question never collides with the
+    // right-aligned countdown.
+    let chrome_width = meta_width + 10;
+    let byline = author
+        .map(|author| format!(" · @{author}"))
+        .unwrap_or_default();
+    let with_byline =
+        inner_width.saturating_sub(chrome_width + UnicodeWidthStr::width(byline.as_str()));
+    if !byline.is_empty() && with_byline >= MIN_POLL_QUESTION_CELLS {
+        return (truncate_cells(question, with_byline), byline);
+    }
+    let budget = inner_width.saturating_sub(chrome_width).max(4);
+    (truncate_cells(question, budget), String::new())
 }
 
 fn poll_stat_text(count: i64, total: i64) -> String {
@@ -1416,11 +1459,14 @@ fn push_new_messages_divider(
     let rule_width = width.saturating_sub(label.len()).max(2);
     let left = rule_width / 2;
     let right = rule_width.saturating_sub(left);
-    let style = Style::default().fg(theme::TEXT_DIM());
+    // Heavy rule in the accent colour, not a dim light one: in a busy room the
+    // unread boundary is the row people scan for, and the old faint `─` lost
+    // itself among the message bodies (user feedback).
+    let style = Style::default().fg(theme::AMBER());
     rows.push(Line::from(vec![
-        Span::styled("─".repeat(left), style),
+        Span::styled("━".repeat(left), style),
         Span::styled(label, style.add_modifier(Modifier::BOLD)),
-        Span::styled("─".repeat(right), style),
+        Span::styled("━".repeat(right), style),
     ]));
     row_message.push(None);
     row_kind.push(RowKindLite::Blank);
@@ -1432,18 +1478,6 @@ fn is_unread_boundary_message(
     current_user_id: Uuid,
 ) -> bool {
     marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
-}
-
-/// Whether `body` mentions `username_lower`. Uses the same mention parser as
-/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
-/// does not, and a mention inside a code span does not count.
-fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
-    let Some(username_lower) = username_lower else {
-        return false;
-    };
-    crate::app::common::mentions::extract_mentions(body)
-        .iter()
-        .any(|mentioned| mentioned == username_lower)
 }
 
 /// Whether `message` is a reply to a message written by `user_id`. Human
@@ -1500,15 +1534,20 @@ fn ensure_chat_rows_cache(
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
+        // A bumped `updated` marks a message that's been edited; there is no
+        // dedicated edited flag.
+        let is_edited = msg.updated > msg.created;
+        // An edit always breaks the run. "(edited)" rides in the author
+        // header's stamp and a continuation has no header, so grouping an
+        // edited message under the one above it hid the marker completely.
         let is_continuation = prev_user_id == Some(msg.user_id)
+            && !is_edited
             && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
         let mut stamp = format!(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
-        // A bumped `updated` marks a message that's been edited; there is no
-        // dedicated edited flag.
-        if msg.updated > msg.created {
+        if is_edited {
             stamp.push_str(" (edited)");
         }
         let raw_author = ctx
@@ -4941,10 +4980,16 @@ fn draw_selected_content(
                 .title(" Discover ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
-            let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter join room · / filter",
-                Style::default().fg(theme::TEXT_DIM()),
-            )))
+            let hint_text = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    " j/k navigate · Enter join room · / filter · s sort by ",
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(
+                    view.discover_view.sort.label(),
+                    Style::default().fg(theme::AMBER()),
+                ),
+            ]))
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         }

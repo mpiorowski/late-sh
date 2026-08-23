@@ -1,5 +1,32 @@
 use crate::app::chat::svc::DiscoverRoomItem;
 
+/// How the room list is ordered. Activity is what the query already returns and
+/// stays the default: it surfaces rooms worth walking into today. Members
+/// answers the other question people ask of a directory, which is where
+/// everyone actually is (user feedback).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortMode {
+    #[default]
+    Activity,
+    Members,
+}
+
+impl SortMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            SortMode::Activity => "activity",
+            SortMode::Members => "members",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            SortMode::Activity => SortMode::Members,
+            SortMode::Members => SortMode::Activity,
+        }
+    }
+}
+
 pub struct State {
     items: Vec<DiscoverRoomItem>,
     /// Index into the *filtered* (visible) list, not the full `items`.
@@ -9,6 +36,7 @@ pub struct State {
     query: String,
     /// Whether the footer filter input is capturing keystrokes.
     filtering: bool,
+    sort: SortMode,
 }
 
 impl Default for State {
@@ -25,6 +53,7 @@ impl State {
             loading: false,
             query: String::new(),
             filtering: false,
+            sort: SortMode::default(),
         }
     }
 
@@ -44,17 +73,41 @@ impl State {
         self.loading = false;
     }
 
-    /// Rooms matching the current filter, in list order. When the query is
-    /// empty this is every room.
+    /// Rooms matching the current filter, in the current sort order. When the
+    /// query is empty this is every room.
     pub fn visible_items(&self) -> Vec<&DiscoverRoomItem> {
         let query = self.query.trim().to_lowercase();
-        if query.is_empty() {
-            return self.items.iter().collect();
+        let mut items: Vec<&DiscoverRoomItem> = match query.is_empty() {
+            true => self.items.iter().collect(),
+            false => self
+                .items
+                .iter()
+                .filter(|item| item.slug.to_lowercase().contains(&query))
+                .collect(),
+        };
+        // Activity order is the query's own, so only the members sort reorders
+        // anything here. Slug breaks ties so equal-sized rooms hold a stable
+        // position instead of shuffling between frames.
+        if self.sort == SortMode::Members {
+            items.sort_by(|a, b| {
+                b.member_count
+                    .cmp(&a.member_count)
+                    .then_with(|| a.slug.cmp(&b.slug))
+            });
         }
-        self.items
-            .iter()
-            .filter(|item| item.slug.to_lowercase().contains(&query))
-            .collect()
+        items
+    }
+
+    pub fn sort(&self) -> SortMode {
+        self.sort
+    }
+
+    /// Flip the ordering. The selection resets to the top: after a re-sort the
+    /// old index points at an unrelated room, and silently landing the cursor
+    /// somewhere new is worse than starting from the front.
+    pub fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        self.selected = 0;
     }
 
     fn visible_len(&self) -> usize {

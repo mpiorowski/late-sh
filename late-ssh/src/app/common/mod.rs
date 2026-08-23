@@ -1,4 +1,5 @@
 pub mod composer;
+pub(crate) mod emoji;
 pub mod markdown;
 pub(crate) mod marquee;
 pub(crate) mod mentions;
@@ -16,6 +17,9 @@ pub mod username_effect;
 
 #[cfg(test)]
 mod composer_test;
+
+#[cfg(test)]
+mod emoji_test;
 
 #[cfg(test)]
 mod markdown_test;

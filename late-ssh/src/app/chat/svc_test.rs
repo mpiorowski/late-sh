@@ -124,6 +124,7 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             auto_translate: false,
             translate_mine_to_en: true,
             favorite_room_ids: Vec::new(),
+            favorite_theme_ids: Vec::new(),
         },
     )
     .await
@@ -740,6 +741,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             auto_translate: false,
             translate_mine_to_en: false,
             favorite_room_ids: vec![favorite_room.id],
+            favorite_theme_ids: Vec::new(),
         },
     )
     .await

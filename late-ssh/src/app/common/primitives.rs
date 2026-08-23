@@ -2,10 +2,10 @@ use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -226,6 +226,31 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
     ]));
 
     frame.render_widget(content, area);
+}
+
+/// The one "your terminal is too small" line, for every screen that has a
+/// minimum size. Always names what needs the room, the size it needs, and the
+/// size you currently have: a bare "too small" leaves people resizing blind
+/// with no idea how far they have to go (user feedback). It says "space", not
+/// "terminal": callers pass their constrained inner area, which is smaller
+/// than the terminal by whatever chrome surrounds it.
+pub fn too_small_text(what: &str, min_width: u16, min_height: u16, area: Rect) -> String {
+    format!(
+        "{what} needs at least {min_width}×{min_height}, this space is {}×{}",
+        area.width, area.height
+    )
+}
+
+/// Render [`too_small_text`] centred in `area`, wrapped so the line survives a
+/// terminal narrower than the message itself.
+pub fn draw_too_small(frame: &mut Frame, area: Rect, what: &str, min_width: u16, min_height: u16) {
+    frame.render_widget(
+        Paragraph::new(too_small_text(what, min_width, min_height, area))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(theme::ERROR())),
+        area,
+    );
 }
 
 pub fn format_relative_time(dt: chrono::DateTime<chrono::Utc>) -> String {

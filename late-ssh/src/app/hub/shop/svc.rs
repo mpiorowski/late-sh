@@ -22,10 +22,12 @@ use late_core::{
             USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_fish_active_by_sku,
             aquarium_is_hungry, consume_aquarium_food_pinch, equip_owned_item_by_sku,
             listen_for_shop_changes, purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_username_effect, unequip_slot,
+            purchase_item_by_sku_with_username_effect, unequip_slot, username_effect_duration_secs,
         },
         shop_consumable_effect::ShopConsumableEffect,
-        username_effect::{USERNAME_EFFECT_KIND, UsernameEffect},
+        username_effect::{
+            USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_KIND, UsernameEffect, duration_tag,
+        },
     },
 };
 use tokio::sync::{broadcast, watch};
@@ -44,8 +46,8 @@ pub struct ShopSnapshot {
     pub entitlements: ShopEntitlements,
     pub active_room_effects: HashMap<Uuid, Vec<ActiveChatRoomEffect>>,
     pub aquarium_hungry: bool,
-    /// The user's live 24h username effect, if any (detail pane shows the
-    /// style and remaining time).
+    /// The user's live username effect, if any (detail pane shows the style
+    /// and remaining time).
     pub active_username_effect: Option<ActiveUsernameEffect>,
     /// The user's live Bonsai Decay Shield window, if any (detail pane shows
     /// the remaining time).
@@ -94,6 +96,10 @@ pub struct ShopCatalogItem {
     /// For `username_effect` items: which style family the item sells
     /// ("glow" | "gradient" | "shimmer"), from the item payload.
     pub username_effect_variant: Option<String>,
+    /// For `username_effect` items: how long the bought style runs, read the
+    /// same way the purchase transaction reads it, so the shop never quotes a
+    /// window the activation would not honour.
+    pub username_effect_duration_secs: Option<i64>,
 }
 
 impl ShopCatalogItem {
@@ -140,6 +146,15 @@ impl ShopCatalogItem {
 
     pub fn is_username_effect(&self) -> bool {
         self.item_kind == USERNAME_EFFECT_ITEM_KIND
+    }
+
+    /// How long this item's style runs, for callers that already know the item
+    /// is a username effect. The catalog fills the duration for every such
+    /// item, so the day-tier fallback here is only a floor for a malformed
+    /// payload, never a second policy.
+    pub fn username_effect_duration(&self) -> i64 {
+        self.username_effect_duration_secs
+            .unwrap_or(USERNAME_EFFECT_DURATION_SECS)
     }
 }
 
@@ -442,8 +457,12 @@ impl ShopService {
                     }),
                 );
             }
-            if let Some(activity) = &self.activity {
-                activity.username_effect_task(user_id, effect);
+            if let (Some(activity), Some(result)) = (&self.activity, &purchase.purchase) {
+                activity.username_effect_task(
+                    user_id,
+                    effect,
+                    username_effect_duration_secs(&result.item),
+                );
             }
         }
 
@@ -453,7 +472,11 @@ impl ShopService {
                 PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
                     if result.item.item_kind == USERNAME_EFFECT_ITEM_KIND =>
                 {
-                    format!("Activated {} (24h)", result.item.name)
+                    format!(
+                        "Activated {} ({})",
+                        result.item.name,
+                        duration_tag(username_effect_duration_secs(&result.item))
+                    )
                 }
                 PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
                     if result.item.item_kind == BONSAI_CONSUMABLE_ITEM_KIND =>
@@ -722,6 +745,8 @@ impl ShopService {
                             .map(ToOwned::to_owned)
                     })
                     .flatten();
+                let username_effect_duration_secs = (item_kind == USERNAME_EFFECT_ITEM_KIND)
+                    .then(|| username_effect_duration_secs(&item));
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind,
@@ -745,6 +770,7 @@ impl ShopService {
                     requires_room,
                     daily_limited,
                     username_effect_variant,
+                    username_effect_duration_secs,
                 }
             })
             .collect();

@@ -1,4 +1,5 @@
 use crate::app::common::primitives::*;
+use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -74,4 +75,12 @@ fn thousands_groups_digits() {
     assert_eq!(thousands(10_000), "10,000");
     assert_eq!(thousands(1_234_567), "1,234,567");
     assert_eq!(thousands(-10_000), "-10,000");
+}
+
+#[test]
+fn too_small_text_names_the_screen_the_requirement_and_the_current_size() {
+    assert_eq!(
+        too_small_text("Rubik's Cube", 42, 18, Rect::new(0, 0, 30, 12)),
+        "Rubik's Cube needs at least 42×18, this space is 30×12"
+    );
 }

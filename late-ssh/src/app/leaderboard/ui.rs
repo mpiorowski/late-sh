@@ -21,6 +21,9 @@ use super::state::{Board, LeaderboardPageState, Standings};
 
 const RAIL_WIDTH: u16 = 24;
 const WINDOW_GAP_MAX: u16 = 3;
+/// Smallest area the rail-plus-detail layout still fits in.
+const MIN_WIDTH: u16 = 48;
+const MIN_HEIGHT: u16 = 8;
 
 pub(crate) struct LeaderboardPageView<'a> {
     pub state: &'a LeaderboardPageState,
@@ -29,8 +32,14 @@ pub(crate) struct LeaderboardPageView<'a> {
 }
 
 pub(crate) fn draw(frame: &mut Frame, area: Rect, view: &LeaderboardPageView<'_>) {
-    if area.height < 8 || area.width < 48 {
-        frame.render_widget(Paragraph::new("Terminal too small for Leaderboards"), area);
+    if area.height < MIN_HEIGHT || area.width < MIN_WIDTH {
+        crate::app::common::primitives::draw_too_small(
+            frame,
+            area,
+            "Leaderboards",
+            MIN_WIDTH,
+            MIN_HEIGHT,
+        );
         return;
     }
 

@@ -30,6 +30,47 @@ fn sample_library() -> Library {
     }
 }
 
+fn test_state() -> State {
+    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+    State::new(
+        Uuid::nil(),
+        NonogramService::new(db, tokio::sync::broadcast::channel(4).0),
+        sample_library(),
+        Vec::new(),
+    )
+}
+
+#[test]
+fn reset_confirmation_is_per_action_kind() {
+    let mut state = test_state();
+
+    // Two presses of the same key confirm and fire.
+    assert!(!state.request_reset(ResetKind::Reset));
+    assert!(state.request_reset(ResetKind::Reset));
+    assert_eq!(state.reset_pending, None);
+
+    // A press for a different kind re-arms for that kind instead of firing
+    // the originally-armed action.
+    assert!(!state.request_reset(ResetKind::NewBoard));
+    assert!(!state.request_reset(ResetKind::Reset));
+    assert_eq!(state.reset_pending, Some(ResetKind::Reset));
+}
+
+/// The hazard this guard exists for: `r` pressed by accident, play continues,
+/// and a later unrelated key must not become the confirming second press.
+#[test]
+fn playing_on_disarms_a_pending_reset() {
+    let mut state = test_state();
+
+    assert!(!state.request_reset(ResetKind::Reset));
+    state.move_cursor(0, 1);
+    assert_eq!(state.reset_pending, None);
+
+    assert!(!state.request_reset(ResetKind::Reset));
+    state.toggle_cell();
+    assert_eq!(state.reset_pending, None);
+}
+
 #[test]
 fn puzzle_date_only_exists_for_daily() {
     let today = NaiveDate::from_ymd_opt(2026, 3, 29).expect("date");

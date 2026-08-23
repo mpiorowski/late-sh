@@ -304,6 +304,48 @@ fn current_daily_game_must_match_today() {
     assert!(!is_current_daily_game(None, today));
 }
 
+// ── Daily rollover ──
+
+fn daily_state() -> State {
+    use late_core::db::{Db, DbConfig};
+    let (activity_feed, _) = tokio::sync::broadcast::channel(1);
+    let svc = MinesweeperService::new(
+        Db::new(&DbConfig::default()).expect("test db pool"),
+        activity_feed,
+    );
+    State::new(Uuid::now_v7(), svc, Vec::new())
+}
+
+/// A session that stays connected across UTC midnight kept yesterday's daily
+/// boards until it reconnected, while the quest strip beside them had already
+/// rolled over.
+#[test]
+fn daily_boards_roll_over_when_the_utc_date_changes() {
+    let mut state = daily_state();
+    // Stand in for a played board without going through `reveal`, whose
+    // fire-and-forget save wants a runtime this pure test does not have.
+    state.player_grid[0][0] = CELL_REVEALED;
+    state.is_game_over = true;
+
+    // Same day: the board in front of the player is left alone.
+    assert!(!state.ensure_current_daily());
+    assert_eq!(state.revealed_count(), 1);
+
+    // Pretend the boards were built yesterday.
+    state.daily_date = state.daily_date.pred_opt().expect("yesterday");
+
+    assert!(
+        state.ensure_current_daily(),
+        "the date change should roll the boards"
+    );
+    assert_eq!(
+        state.revealed_count(),
+        0,
+        "yesterday's board was still on screen"
+    );
+    assert!(!state.is_game_over);
+}
+
 #[test]
 fn accounted_mines_include_hit_mines() {
     let mut player_grid = vec![vec![CELL_HIDDEN; 13]; 13];

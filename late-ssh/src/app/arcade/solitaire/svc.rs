@@ -61,11 +61,23 @@ impl SolitaireService {
         Ok(())
     }
 
-    pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String, score: i32) {
+    /// `puzzle_date` is the date of the deal that was actually finished, not
+    /// the wall clock: a session that crosses UTC midnight mid-deal must
+    /// bank the win under the deal's own day, never as today's daily.
+    pub fn record_win_task(
+        &self,
+        user_id: Uuid,
+        difficulty_key: String,
+        puzzle_date: NaiveDate,
+        score: i32,
+    ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let puzzle_date = match svc.record_win(user_id, difficulty_key.clone(), score).await {
-                Ok(puzzle_date) => puzzle_date,
+            match svc
+                .record_win(user_id, difficulty_key.clone(), puzzle_date, score)
+                .await
+            {
+                Ok(()) => {}
                 Err(error) => {
                     tracing::error!(error = ?error, "failed to record solitaire daily win");
                     return;
@@ -93,11 +105,11 @@ impl SolitaireService {
         &self,
         user_id: Uuid,
         difficulty_key: String,
+        puzzle_date: NaiveDate,
         score: i32,
-    ) -> Result<NaiveDate> {
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        let puzzle_date = self.today();
         DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date, score).await?;
-        Ok(puzzle_date)
+        Ok(())
     }
 }

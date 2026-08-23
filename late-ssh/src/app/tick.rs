@@ -118,6 +118,13 @@ impl App {
             }
             changed = true;
         }
+        // UTC midnight rolls the Arcade dailies over. This rides the 1Hz edge
+        // rather than an input path so a session parked in chat overnight is
+        // already on today's boards when it looks at the Arcade again; the
+        // check is a date comparison per game until the day actually changes.
+        if one_hz && crate::app::arcade::workspace::refresh_daily_games(self) {
+            changed = true;
+        }
         if self.screen == Screen::Clubhouse && anim_half {
             // Only cosmetic ambience animates on the tick counter (jukebox
             // EQ, emote arms, fire/candles/stars); walker positions are
@@ -162,6 +169,8 @@ impl App {
                 Ok(url) => {
                     if let Some(room_id) = target_room_id.or(self.chat.selected_room_id) {
                         self.chat.start_composing_in_room(room_id);
+                        // After `start_composing_in_room`, which clears it.
+                        self.chat.restore_image_upload_reply_target();
                         self.chat.composer_push_str(&url);
                     }
                     self.banner = Some(crate::app::common::primitives::Banner::success(
@@ -169,6 +178,9 @@ impl App {
                     ));
                 }
                 Err(msg) => {
+                    // Nothing reopens the composer on failure, so the stashed
+                    // reply would otherwise surface on the next upload.
+                    self.chat.clear_image_upload_reply_target();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&msg));
                 }
             }
@@ -237,6 +249,7 @@ impl App {
             .chat
             .set_translate_settings(translate_to, auto_translate);
         changed |= self.sudoku_state.poll_daily_generation();
+        changed |= self.le_word_state.poll_word_reload();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
         if let Some(b) = settings_tick.banner {
@@ -264,8 +277,11 @@ impl App {
                         tracing::warn!("ignoring unsolicited paired clipboard image");
                         continue;
                     };
-                    if let Some(banner) = self.chat.start_image_upload_in_room(data, upload.room_id)
-                    {
+                    if let Some(banner) = self.chat.start_image_upload_in_room(
+                        data,
+                        upload.room_id,
+                        upload.reply_target,
+                    ) {
                         self.banner = Some(banner);
                     } else {
                         self.banner = Some(crate::app::common::primitives::Banner::success(

@@ -275,10 +275,15 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         app.banner = Some(apply_petname_request(app, request));
     }
     if let Some(upload) = app.chat.take_requested_url_upload() {
-        crate::app::input::trigger_url_image_upload(app, upload.url, upload.room_id);
+        crate::app::input::trigger_url_image_upload(
+            app,
+            upload.url,
+            upload.room_id,
+            upload.reply_target,
+        );
     }
     if let Some(upload) = app.chat.take_requested_clipboard_image_upload() {
-        if app.request_paired_clipboard_image_upload(upload.room_id) {
+        if app.request_paired_clipboard_image_upload(upload.room_id, upload.reply_target) {
             app.banner = Some(Banner::success(
                 "Reading image from paired CLI clipboard...",
             ));

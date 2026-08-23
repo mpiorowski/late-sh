@@ -216,5 +216,6 @@ fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         auto_translate: profile.auto_translate,
         translate_mine_to_en: profile.translate_mine_to_en,
         favorite_room_ids: profile.favorite_room_ids.clone(),
+        favorite_theme_ids: profile.favorite_theme_ids.clone(),
     }
 }
