@@ -7,7 +7,7 @@ use late_core::models::chat_message::ChatMessage;
 use uuid::Uuid;
 
 use super::{
-    SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, build_transcript,
+    Reservation, SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, build_transcript,
 };
 use crate::app::ai::svc::AiService;
 
@@ -106,7 +106,7 @@ async fn an_armed_cooldown_refuses_before_any_work() {
     let service = inert_service(true);
     let user = Uuid::from_u128(1);
     let room = Uuid::from_u128(2);
-    service.arm_cooldown(user, room);
+    service.finish_slot(user, room);
     let mut events = service.subscribe();
 
     service.request(user, room, "#lounge".to_string(), Utc::now(), Vec::new());
@@ -121,7 +121,58 @@ async fn an_armed_cooldown_refuses_before_any_work() {
     assert!(remaining <= super::SUMMARY_COOLDOWN);
 
     // A different room for the same user is not throttled by that cooldown.
-    assert!(service.cooldown_remaining(user, Uuid::from_u128(3)).is_none());
+    assert!(matches!(
+        service.reserve_slot(user, Uuid::from_u128(3)),
+        Reservation::Reserved
+    ));
+}
+
+#[tokio::test]
+async fn an_in_flight_request_collapses_duplicates_without_spending() {
+    let service = inert_service(true);
+    let user = Uuid::from_u128(1);
+    let room = Uuid::from_u128(2);
+    // The first request holds the slot for the whole fetch-and-call span.
+    assert!(matches!(
+        service.reserve_slot(user, room),
+        Reservation::Reserved
+    ));
+    let mut events = service.subscribe();
+
+    // A duplicate submitted while it runs answers InFlight before any work:
+    // no fetch, no daily-cap spend, no model call.
+    service.request(user, room, "#lounge".to_string(), Utc::now(), Vec::new());
+
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("event within timeout")
+        .expect("channel open");
+    assert!(matches!(event.outcome, SummaryOutcome::InFlight));
+}
+
+#[test]
+fn a_released_slot_allows_the_retry_a_finished_one_refuses() {
+    let service = inert_service(true);
+    let user = Uuid::from_u128(1);
+    let room = Uuid::from_u128(2);
+
+    // A failed request releases the slot: `/summary` stays its own retry.
+    assert!(matches!(
+        service.reserve_slot(user, room),
+        Reservation::Reserved
+    ));
+    service.release_slot(user, room);
+    assert!(matches!(
+        service.reserve_slot(user, room),
+        Reservation::Reserved
+    ));
+
+    // A delivered one arms the cooldown instead.
+    service.finish_slot(user, room);
+    assert!(matches!(
+        service.reserve_slot(user, room),
+        Reservation::Cooldown(remaining) if remaining <= super::SUMMARY_COOLDOWN
+    ));
 }
 
 #[test]

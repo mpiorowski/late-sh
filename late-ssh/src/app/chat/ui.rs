@@ -1449,25 +1449,31 @@ fn chat_rows_cache_key(ctx: &ChatRowsContext<'_>, width: usize) -> ChatRowsCache
     }
 }
 
+/// The `new messages` rule, one builder for every surface (live tail,
+/// history modal) so the styles cannot drift. Heavy rule in the accent
+/// colour, not a dim light one: the unread boundary is the row people scan
+/// for, and the old faint `─` lost itself among the message bodies (user
+/// feedback).
+pub(crate) fn new_messages_divider_line(width: usize) -> Line<'static> {
+    let label = " new messages ";
+    let rule_width = width.saturating_sub(label.len()).max(2);
+    let left = rule_width / 2;
+    let right = rule_width.saturating_sub(left);
+    let style = Style::default().fg(theme::AMBER());
+    Line::from(vec![
+        Span::styled("━".repeat(left), style),
+        Span::styled(label, style.add_modifier(Modifier::BOLD)),
+        Span::styled("━".repeat(right), style),
+    ])
+}
+
 fn push_new_messages_divider(
     rows: &mut Vec<Line<'static>>,
     row_message: &mut Vec<Option<Uuid>>,
     row_kind: &mut Vec<RowKindLite>,
     width: usize,
 ) {
-    let label = " new messages ";
-    let rule_width = width.saturating_sub(label.len()).max(2);
-    let left = rule_width / 2;
-    let right = rule_width.saturating_sub(left);
-    // Heavy rule in the accent colour, not a dim light one: in a busy room the
-    // unread boundary is the row people scan for, and the old faint `─` lost
-    // itself among the message bodies (user feedback).
-    let style = Style::default().fg(theme::AMBER());
-    rows.push(Line::from(vec![
-        Span::styled("━".repeat(left), style),
-        Span::styled(label, style.add_modifier(Modifier::BOLD)),
-        Span::styled("━".repeat(right), style),
-    ]));
+    rows.push(new_messages_divider_line(width));
     row_message.push(None);
     row_kind.push(RowKindLite::Blank);
 }

@@ -35,6 +35,8 @@ pub enum SummaryResult {
     Summarized,
     /// Nothing in the window to summarize; no call spent.
     Empty,
+    /// Collapsed into a request already running for the same user and room.
+    InFlight,
     Cooldown,
     CapExhausted,
     /// AI is disabled or unconfigured for this deployment.
@@ -355,6 +357,7 @@ mod inner {
         match result {
             SummaryResult::Summarized => "summarized",
             SummaryResult::Empty => "empty",
+            SummaryResult::InFlight => "in_flight",
             SummaryResult::Cooldown => "cooldown",
             SummaryResult::CapExhausted => "cap_exhausted",
             SummaryResult::Unavailable => "unavailable",

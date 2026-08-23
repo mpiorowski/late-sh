@@ -644,6 +644,10 @@ pub struct ChatState {
     room_owner_ids: HashMap<Uuid, Uuid>,
     username_rx: watch::Receiver<Arc<Vec<String>>>,
     overlay: Option<Overlay>,
+    /// A ready `/summary` that arrived while another overlay was up. It
+    /// takes the surface in `drain_summary_events` as soon as it frees,
+    /// instead of clobbering what the user is reading.
+    pending_summary_overlay: Option<Overlay>,
     news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
     /// Cells the open image modal can devote to an image, reported back from
@@ -1021,6 +1025,7 @@ impl ChatState {
             room_owner_ids: HashMap::new(),
             username_rx,
             overlay: None,
+            pending_summary_overlay: None,
             news_modal: None,
             image_modal: None,
             image_modal_capacity: None,
@@ -1496,10 +1501,21 @@ impl ChatState {
     }
 
     /// Drain `/summary` results. A ready summary opens the shared overlay
-    /// (the `/rules` surface); every other outcome banners. The broadcast
-    /// carries all users' results, so foreign events are dropped here.
-    fn drain_summary_events(&mut self) -> Option<Banner> {
+    /// (the `/rules` surface); when another overlay is already up it waits
+    /// in `pending_summary_overlay` instead of clobbering it, and takes the
+    /// surface here as soon as it frees. Every other outcome banners. The
+    /// broadcast carries all users' results, so foreign events are dropped.
+    /// Returns the banner plus whether a waiting summary was promoted (a
+    /// render-visible change `tick` cannot see from the queues).
+    fn drain_summary_events(&mut self) -> (Option<Banner>, bool) {
         use tokio::sync::broadcast::error::TryRecvError;
+        let mut promoted = false;
+        if self.overlay.is_none()
+            && let Some(overlay) = self.pending_summary_overlay.take()
+        {
+            self.overlay = Some(overlay);
+            promoted = true;
+        }
         let mut banner = None;
         loop {
             let event = match self.summary_rx.try_recv() {
@@ -1527,13 +1543,23 @@ impl ChatState {
                     }
                     let mut lines = vec![head, String::new()];
                     lines.extend(text.lines().map(str::to_string));
-                    self.overlay = Some(Overlay::new(
-                        format!("{} catch-up", event.room_label),
-                        lines,
-                    ));
+                    let overlay = Overlay::new(format!("{} catch-up", event.room_label), lines);
+                    match self.overlay {
+                        // An overlay the user is reading is not clobbered
+                        // by an async result; the summary waits its turn.
+                        Some(_) => {
+                            self.pending_summary_overlay = Some(overlay);
+                            banner =
+                                Some(Banner::info("Summary ready, close the open panel to view"));
+                        }
+                        None => self.overlay = Some(overlay),
+                    }
                 }
                 SummaryOutcome::Empty => {
                     banner = Some(Banner::info("Nothing new to summarize"));
+                }
+                SummaryOutcome::InFlight => {
+                    banner = Some(Banner::info("Summary already running"));
                 }
                 SummaryOutcome::Cooldown { remaining } => {
                     let minutes = remaining.as_secs().div_ceil(60).max(1);
@@ -1552,7 +1578,7 @@ impl ChatState {
                 }
             }
         }
-        banner
+        (banner, promoted)
     }
 
     fn flush_pending_read_cursors(&mut self) {
@@ -3150,25 +3176,7 @@ impl ChatState {
             if room.visibility != "public" {
                 return Some(Banner::error("Summaries cover public rooms only"));
             }
-            // The window: since the pre-mark unread marker when one is set
-            // (the server cursor advanced the moment the room opened), else
-            // a default look-back so a caught-up `/summary` still answers
-            // "what happened today". A never-read room gets the max window.
-            let since = match self.room_unread_markers.get(&room_id) {
-                Some(Some(marker)) => *marker,
-                Some(None) => {
-                    Utc::now()
-                        - chrono::Duration::hours(
-                            crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS,
-                        )
-                }
-                None => {
-                    Utc::now()
-                        - chrono::Duration::hours(
-                            crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS,
-                        )
-                }
-            };
+            let since = summary_since(self.room_unread_markers.get(&room_id), Utc::now());
             let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
             self.summary_service.request(
                 self.user_id,
@@ -4490,7 +4498,7 @@ impl ChatState {
         let changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
         let translation_banner = self.drain_translation_events();
-        let summary_banner = self.drain_summary_events();
+        let (summary_banner, summary_overlay_promoted) = self.drain_summary_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
@@ -4571,6 +4579,7 @@ impl ChatState {
         ChatTick {
             banner,
             changed: changed
+                || summary_overlay_promoted
                 || feeds_tick.changed
                 || news_tick.changed
                 || notif_tick.changed
@@ -7688,6 +7697,27 @@ fn parse_room_ban_command<'a>(
 fn short_user_id(user_id: Uuid) -> String {
     let id = user_id.to_string();
     id[..id.len().min(8)].to_string()
+}
+
+/// The `/summary` window start, from the room's `room_unread_markers` entry:
+/// the pre-mark unread marker when one is set (the server cursor advanced
+/// the moment the room opened), the max window for a never-read room with
+/// unread waiting (inner `None`), and a default look-back when caught up
+/// (no entry) so `/summary` still answers "what happened today". The
+/// service re-clamps every request to the max window as cost policy.
+fn summary_since(
+    marker: Option<&Option<DateTime<Utc>>>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    match marker {
+        Some(Some(marker)) => *marker,
+        Some(None) => {
+            now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
+        }
+        None => {
+            now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS)
+        }
+    }
 }
 
 fn sentence_case(text: &str) -> String {

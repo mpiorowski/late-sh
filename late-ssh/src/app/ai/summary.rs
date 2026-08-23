@@ -2,9 +2,11 @@
 //! model (the `/summary` command).
 //!
 //! Every request funnels through [`SummaryService::request`]: a per-user
-//! per-room cooldown (results are per viewer, so unlike translation there is
-//! no shared cache to absorb repeats), a global daily call cap as the runaway
-//! backstop, and a small concurrency gate. The window is bounded two ways
+//! per-room slot reserved before any work (in flight while a request runs,
+//! then a cooldown armed on success; results are per viewer, so unlike
+//! translation there is no shared cache to absorb repeats), a global daily
+//! call cap as the runaway backstop, and a small concurrency gate. The
+//! window is bounded two ways
 //! before the model sees anything: wall clock (at most
 //! [`SUMMARY_MAX_WINDOW_HOURS`] back) and transcript size
 //! ([`SUMMARY_PROMPT_CHAR_BUDGET`]); whichever bites first drops the oldest
@@ -92,6 +94,9 @@ pub enum SummaryOutcome {
     },
     /// Nothing in the window to summarize; no call spent.
     Empty,
+    /// A request for this room is already running; the duplicate collapses
+    /// into it and spends nothing.
+    InFlight,
     Cooldown { remaining: Duration },
     CapExhausted,
     /// AI is disabled or unconfigured for this deployment.
@@ -104,8 +109,11 @@ pub struct SummaryService {
     db: Db,
     ai: AiService,
     event_tx: broadcast::Sender<SummaryEvent>,
-    /// Last successful summary per `(user, room)`.
-    cooldowns: Arc<Mutex<HashMap<(Uuid, Uuid), Instant>>>,
+    /// Request slot per `(user, room)`: in flight while a request runs, then
+    /// the armed cooldown. Reserved under one lock before any work, so a
+    /// burst of submits cannot race past the cooldown check and each spend
+    /// a fetch, a daily-cap slot, and a model call.
+    slots: Arc<Mutex<HashMap<(Uuid, Uuid), SummarySlot>>>,
     daily_spend: Arc<Mutex<(NaiveDate, u32)>>,
     api_gate: Arc<Semaphore>,
 }
@@ -117,7 +125,7 @@ impl SummaryService {
             db,
             ai,
             event_tx,
-            cooldowns: Arc::new(Mutex::new(HashMap::new())),
+            slots: Arc::new(Mutex::new(HashMap::new())),
             daily_spend: Arc::new(Mutex::new((Utc::now().date_naive(), 0))),
             api_gate: Arc::new(Semaphore::new(MAX_CONCURRENT_CALLS)),
         }
@@ -190,13 +198,23 @@ impl SummaryService {
                 metrics::record_chat_summary(SummaryResult::Empty);
                 SummaryOutcome::Empty
             }
+            Ok(Resolution::InFlight) => {
+                metrics::record_chat_summary(SummaryResult::InFlight);
+                SummaryOutcome::InFlight
+            }
             Ok(Resolution::Cooldown(remaining)) => {
                 metrics::record_chat_summary(SummaryResult::Cooldown);
                 SummaryOutcome::Cooldown { remaining }
             }
             Ok(Resolution::CapExhausted) => {
                 metrics::record_chat_summary(SummaryResult::CapExhausted);
-                tracing::warn!("summary daily cap exhausted; refusing until utc rollover");
+                // The cap is process-global: name who tripped it so abuse
+                // is attributable from the logs alone.
+                tracing::warn!(
+                    user_id = %user_id,
+                    room_id = %room_id,
+                    "summary daily cap exhausted; refusing until utc rollover"
+                );
                 SummaryOutcome::CapExhausted
             }
             Ok(Resolution::Unavailable) => {
@@ -226,10 +244,36 @@ impl SummaryService {
         if !self.ai.is_enabled() {
             return Ok(Resolution::Unavailable);
         }
-        if let Some(remaining) = self.cooldown_remaining(user_id, room_id) {
-            return Ok(Resolution::Cooldown(remaining));
+        // Reserve the (user, room) slot before any work: check and
+        // reservation happen under one lock, so duplicate submits fired
+        // while a request is still running collapse instead of each
+        // spending a fetch, a daily-cap slot, and a model call.
+        match self.reserve_slot(user_id, room_id) {
+            Reservation::InFlight => return Ok(Resolution::InFlight),
+            Reservation::Cooldown(remaining) => return Ok(Resolution::Cooldown(remaining)),
+            Reservation::Reserved => {}
         }
+        let result = self
+            .summarize(user_id, room_id, since, exclude_user_ids)
+            .await;
+        // Only a delivered summary arms the cooldown; every other outcome
+        // frees the slot so `/summary` stays its own retry.
+        match &result {
+            Ok(Resolution::Ready { .. }) => self.finish_slot(user_id, room_id),
+            _ => self.release_slot(user_id, room_id),
+        }
+        result
+    }
 
+    /// The paid path: fetch, budget, and model call. The caller holds the
+    /// `(user, room)` slot for the whole of it.
+    async fn summarize(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        since: DateTime<Utc>,
+        exclude_user_ids: &[Uuid],
+    ) -> anyhow::Result<Resolution> {
         // The wall-clock clamp is service cost policy, not caller trust:
         // whatever cursor the session hands over, a summary never reads
         // further back than the max window.
@@ -280,7 +324,6 @@ impl SummaryService {
         if text.is_empty() {
             return Ok(Resolution::NoText);
         }
-        self.arm_cooldown(user_id, room_id);
         Ok(Resolution::Ready {
             text,
             message_count,
@@ -289,17 +332,45 @@ impl SummaryService {
         })
     }
 
-    fn cooldown_remaining(&self, user_id: Uuid, room_id: Uuid) -> Option<Duration> {
-        let cooldowns = self.cooldowns.lock().expect("cooldown lock poisoned");
-        let last = cooldowns.get(&(user_id, room_id))?;
-        SUMMARY_COOLDOWN.checked_sub(last.elapsed())
+    /// Atomically claim the `(user, room)` slot for a new request. A live
+    /// request or a running cooldown refuses; an expired cooldown re-arms
+    /// as in flight.
+    fn reserve_slot(&self, user_id: Uuid, room_id: Uuid) -> Reservation {
+        let mut slots = self.slots.lock().expect("summary slot lock poisoned");
+        let cooldown_remaining = match slots.get(&(user_id, room_id)) {
+            Some(SummarySlot::InFlight) => return Reservation::InFlight,
+            Some(SummarySlot::Done(last)) => SUMMARY_COOLDOWN.checked_sub(last.elapsed()),
+            None => None,
+        };
+        if let Some(remaining) = cooldown_remaining {
+            return Reservation::Cooldown(remaining);
+        }
+        slots.insert((user_id, room_id), SummarySlot::InFlight);
+        Reservation::Reserved
     }
 
-    fn arm_cooldown(&self, user_id: Uuid, room_id: Uuid) {
-        self.cooldowns
+    /// A delivered summary: the held slot becomes the armed cooldown.
+    fn finish_slot(&self, user_id: Uuid, room_id: Uuid) {
+        self.slots
             .lock()
-            .expect("cooldown lock poisoned")
-            .insert((user_id, room_id), Instant::now());
+            .expect("summary slot lock poisoned")
+            .insert((user_id, room_id), SummarySlot::Done(Instant::now()));
+    }
+
+    /// Anything but a delivered summary: free the held slot so `/summary`
+    /// stays its own retry.
+    fn release_slot(&self, user_id: Uuid, room_id: Uuid) {
+        self.slots
+            .lock()
+            .expect("summary slot lock poisoned")
+            .remove(&(user_id, room_id));
+    }
+
+    /// Test-only: inject an event as if a request had resolved, so state
+    /// tests can drive the drain path without a model call.
+    #[cfg(test)]
+    pub(crate) fn emit_for_test(&self, event: SummaryEvent) {
+        let _ = self.event_tx.send(event);
     }
 
     /// One API call's worth of the daily cap, reset on UTC day rollover.
@@ -370,10 +441,27 @@ enum Resolution {
         truncated: bool,
     },
     Empty,
+    InFlight,
     Cooldown(Duration),
     CapExhausted,
     Unavailable,
     NoText,
+}
+
+/// One `(user, room)` pair's state in [`SummaryService::slots`].
+enum SummarySlot {
+    /// A request is running; duplicates collapse into it.
+    InFlight,
+    /// The last delivered summary, arming [`SUMMARY_COOLDOWN`].
+    Done(Instant),
+}
+
+/// What [`SummaryService::reserve_slot`] decided for a new request.
+enum Reservation {
+    /// The slot is claimed; the caller owns it until finish or release.
+    Reserved,
+    InFlight,
+    Cooldown(Duration),
 }
 
 #[cfg(test)]

@@ -3488,6 +3488,128 @@ fn parse_golive_clamps_titles_at_the_boundary() {
 }
 
 #[test]
+fn summary_since_maps_the_unread_marker_to_the_window() {
+    use chrono::TimeZone;
+    let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
+    let marker = now - chrono::Duration::hours(3);
+
+    // The pre-mark unread marker wins when one is set.
+    assert_eq!(summary_since(Some(&Some(marker)), now), marker);
+    // A never-read room with unread waiting gets the max window.
+    assert_eq!(
+        summary_since(Some(&None), now),
+        now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
+    );
+    // Caught up (no marker entry) gets the default look-back.
+    assert_eq!(
+        summary_since(None, now),
+        now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS)
+    );
+}
+
+/// Minimal room for the `/summary` command gate; the branch reads only
+/// `visibility` (and `id` for the request).
+fn summary_room(visibility: &str) -> ChatRoom {
+    ChatRoom {
+        id: Uuid::now_v7(),
+        created: Utc::now(),
+        updated: Utc::now(),
+        kind: "topic".to_string(),
+        visibility: visibility.to_string(),
+        auto_join: false,
+        permanent: false,
+        slug: None,
+        language_code: None,
+        dm_user_a: None,
+        dm_user_b: None,
+        topic: None,
+        rules: None,
+        created_by: None,
+    }
+}
+
+#[tokio::test]
+async fn summary_command_refuses_non_public_rooms() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_priv").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("private");
+    state.visible_room_id = Some(room.id);
+    state.rooms.push((room, Vec::new()));
+
+    state.composer.insert_str("/summary");
+    let banner = state.submit_composer(false, false).expect("banner");
+
+    assert_eq!(banner.message, "Summaries cover public rooms only");
+}
+
+#[tokio::test]
+async fn summary_command_requests_the_visible_public_room() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_pub").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("public");
+    let room_id = room.id;
+    state.visible_room_id = Some(room_id);
+    state.rooms.push((room, Vec::new()));
+    let mut events = state.summary_service.subscribe();
+
+    state.composer.insert_str("/summary");
+    let banner = state.submit_composer(false, false).expect("banner");
+    assert_eq!(banner.message, "Summarizing…");
+
+    // AI is disabled in this wiring, so the issued request answers
+    // Unavailable; its arrival is the proof a request went out for this
+    // user and room.
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+        .await
+        .expect("event within timeout")
+        .expect("channel open");
+    assert_eq!(event.user_id, user.id);
+    assert_eq!(event.room_id, room_id);
+    assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
+}
+
+#[tokio::test]
+async fn a_ready_summary_waits_for_an_open_overlay_instead_of_clobbering_it() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "sum_overlay").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.overlay = Some(Overlay::new("Rules", vec!["be kind".to_string()]));
+
+    state.summary_service.emit_for_test(SummaryEvent {
+        user_id: user.id,
+        room_id: Uuid::now_v7(),
+        room_label: "#lounge".to_string(),
+        outcome: SummaryOutcome::Ready {
+            text: "- alice shipped the thing".to_string(),
+            message_count: 3,
+            since: Utc::now() - chrono::Duration::hours(2),
+            truncated: false,
+        },
+    });
+    let tick = state.tick();
+
+    // The overlay the user is reading stays; a banner says the summary
+    // waits for the surface.
+    assert_eq!(state.overlay.as_ref().map(|o| o.title.as_str()), Some("Rules"));
+    assert_eq!(
+        tick.banner.expect("banner").message,
+        "Summary ready, close the open panel to view"
+    );
+
+    // Closing it hands the surface to the waiting summary, and the tick
+    // reports the change so the frame redraws.
+    state.overlay = None;
+    let tick = state.tick();
+    assert!(tick.changed);
+    assert_eq!(
+        state.overlay.as_ref().map(|o| o.title.as_str()),
+        Some("#lounge catch-up")
+    );
+}
+
+#[test]
 fn selection_scroll_steps_within_measured_overflow_and_reports_edges() {
     let scroll = SelectionScroll::default();
     // No measurement yet (or a selection that fits): every step falls
