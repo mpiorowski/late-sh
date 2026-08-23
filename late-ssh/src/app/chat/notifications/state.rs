@@ -58,6 +58,13 @@ impl State {
         self.service.refresh_unread_count_task(self.user_id);
     }
 
+    /// The given messages, which mention this user, were rendered in their own
+    /// room; clear their mentions and let the service republish the badge.
+    pub fn mark_read_for_messages(&self, message_ids: Vec<Uuid>) {
+        self.service
+            .mark_read_for_messages_task(self.user_id, message_ids);
+    }
+
     pub fn selected_index(&self) -> usize {
         clamp_index(self.selected, self.items.len())
     }

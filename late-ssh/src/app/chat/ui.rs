@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
@@ -1429,17 +1430,6 @@ fn is_unread_boundary_message(
     marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
 }
 
-/// Whether `body` mentions `username_lower`. Uses the same mention parser as
-/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
-/// does not, and a mention inside a code span does not count.
-fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
-    let Some(username_lower) = username_lower else {
-        return false;
-    };
-    crate::app::common::mentions::extract_mentions(body)
-        .iter()
-        .any(|mentioned| mentioned == username_lower)
-}
 
 /// Whether `message` is a reply to a message written by `user_id`. Human
 /// replies carry only the target message id, so the target's author is looked

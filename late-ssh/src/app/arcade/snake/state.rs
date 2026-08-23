@@ -1,9 +1,7 @@
 use late_core::models::snake::{Game, GameParams};
-use ratatui::style::Color;
 use uuid::Uuid;
 
 use super::svc::SnakeService;
-use crate::app::common::theme;
 use rand::Rng;
 
 const MAX_LEVEL: u8 = 125;
@@ -341,7 +339,7 @@ impl Position {
     }
 }
 
-enum ThingKind {
+pub(crate) enum ThingKind {
     Food,
     Drug,
     Rock,
@@ -352,67 +350,54 @@ enum ThingKind {
 pub struct ThingOnScreen {
     position: Position,
     pub value: String,
-    pub color: Color,
     effect: Option<CobraEffect>,
-    kind: ThingKind,
+    pub(crate) kind: ThingKind,
 }
 
 impl ThingOnScreen {
-    // Every glyph on the board is painted over `theme::BG_SELECTION()`, so all
-    // of these have to come from the palette rather than the ANSI 16: a fixed
-    // magenta star sat invisibly on the violet selection background of the
-    // Amoled Ultra Violet theme.
+    // No colors live here: the board is rendered on the palette's selection
+    // fill, and `ui.rs` resolves each kind's color against that fill at draw
+    // time, so a mid-level theme switch repaints glyphs together with the
+    // board they sit on.
     fn from_kind_at_pos(kind: ThingKind, position: Position) -> Self {
         match kind {
             ThingKind::Food => Self {
                 position,
                 kind,
-                color: theme::AMBER_GLOW(),
                 effect: Some(CobraEffect::Grow),
                 value: String::from("◉"),
             },
             ThingKind::Drug => Self {
                 position,
                 kind,
-                color: theme::MENTION(),
                 effect: Some(CobraEffect::PowerUp),
                 value: String::from("★"),
             },
             ThingKind::Rock => Self {
                 position,
                 kind,
-                color: theme::TEXT_FAINT(),
                 effect: Some(CobraEffect::Blow),
                 value: String::from("×"),
             },
             ThingKind::Cobra => Self {
                 position,
                 kind,
-                color: theme::SUCCESS(),
                 effect: None,
                 value: String::from("━"),
             },
-            _ => Self {
+            ThingKind::Edge => Self {
                 position,
                 kind,
-                color: theme::TEXT_BRIGHT(),
                 effect: None,
                 value: String::new(),
             },
         }
     }
 
-    /// The powered-up snake wears the same color as the star that powered it
-    /// up, so the effect reads at a glance on every palette.
-    pub fn get_cobra_pixel(value: String, position: Position, state: &CobraState) -> Self {
-        let color = match state {
-            CobraState::PoweredUp => theme::MENTION(),
-            _ => theme::SUCCESS(),
-        };
+    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
         Self {
             position,
             kind: ThingKind::Cobra,
-            color,
             effect: None,
             value,
         }
@@ -443,7 +428,6 @@ impl ThingOnScreen {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
-                color: theme::TEXT_BRIGHT(),
                 kind: ThingKind::Edge,
                 value,
             })
@@ -669,11 +653,9 @@ impl Cobra {
         field.cobra_things.clear();
         for (p, position) in self.body.iter().enumerate() {
             let value = self.get_value(p);
-            field.cobra_things.push(ThingOnScreen::get_cobra_pixel(
-                value,
-                position.clone(),
-                &self.state,
-            ));
+            field
+                .cobra_things
+                .push(ThingOnScreen::get_cobra_pixel(value, position.clone()));
         }
         effect
     }

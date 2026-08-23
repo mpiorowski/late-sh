@@ -313,7 +313,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_seed: self.seed as i64,
             grid: serde_json::to_value(self.grid).unwrap_or_default(),
             fixed_mask: serde_json::to_value(self.fixed_mask).unwrap_or_default(),
@@ -442,8 +445,12 @@ impl State {
             self.is_game_over = true;
             self.store_active_snapshot();
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string(), 1);
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                    1,
+                );
             }
         }
     }

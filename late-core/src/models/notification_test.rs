@@ -2,85 +2,110 @@ use crate::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_room::ChatRoom,
-        chat_room_member::ChatRoomMember,
         notification::Notification,
     },
     test_utils::{create_test_user, test_db},
 };
 
-/// Reading the room the mention lives in clears it. The mention feed's own
-/// cursor is a single global watermark that only moves when the Mentions entry
-/// is opened, so a mention stayed on the rail badge forever if you read the
-/// message where it was actually said.
+/// Rendering the message a mention rides on clears that mention and only that
+/// mention. The mention feed's own cursor is a single global watermark that
+/// only moves when the Mentions entry is opened, so a mention stayed on the
+/// rail badge forever if you read the message where it was actually said. The
+/// room's coarse read cursor is deliberately not the fix: it moves whenever
+/// the room is merely opened, which would also clear mentions above the
+/// loaded tail that were never on screen.
 #[tokio::test]
-async fn mention_read_in_its_own_room_stops_counting_as_unread() {
+async fn rendering_a_mention_clears_it_and_leaves_unrendered_ones_unread() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let room = ChatRoom::ensure_lounge(&client)
         .await
         .expect("ensure lounge");
-    let actor = create_test_user(&test_db.db, "room-read-actor").await;
-    let reader = create_test_user(&test_db.db, "room-read-reader").await;
-    ChatRoomMember::join(&client, room.id, reader.id)
-        .await
-        .expect("join room");
+    let actor = create_test_user(&test_db.db, "render-read-actor").await;
+    let reader = create_test_user(&test_db.db, "render-read-reader").await;
 
-    let message = ChatMessage::create(
+    let old_message = ChatMessage::create(
         &client,
         ChatMessageParams {
             room_id: room.id,
             user_id: actor.id,
-            body: "@room-read-reader over here".to_string(),
+            body: "@render-read-reader way up in the backlog".to_string(),
         },
     )
     .await
-    .expect("create message");
-    Notification::create_mentions_batch(&client, &[reader.id], actor.id, message.id, room.id)
-        .await
-        .expect("create mention");
+    .expect("create old message");
+    let seen_message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: actor.id,
+            body: "@render-read-reader over here".to_string(),
+        },
+    )
+    .await
+    .expect("create seen message");
+    for message in [&old_message, &seen_message] {
+        Notification::create_mentions_batch(&client, &[reader.id], actor.id, message.id, room.id)
+            .await
+            .expect("create mention");
+    }
 
     assert_eq!(
         Notification::unread_count(&client, reader.id)
             .await
             .expect("count before"),
-        1
+        2
     );
 
-    ChatRoomMember::mark_read_now(&client, room.id, reader.id)
-        .await
-        .expect("mark room read");
+    // Only the newer message was rendered; the old one sits above the tail.
+    let cleared =
+        Notification::mark_read_for_messages(&client, reader.id, &[seen_message.id])
+            .await
+            .expect("mark rendered mention read");
+    assert_eq!(cleared, 1);
 
     assert_eq!(
         Notification::unread_count(&client, reader.id)
             .await
             .expect("count after"),
-        0,
-        "a mention read in its room still showed on the badge"
+        1,
+        "the unrendered mention above the tail must stay unread"
+    );
+
+    let listed = Notification::list_for_user(&client, reader.id, 10)
+        .await
+        .expect("list");
+    let read_ids: Vec<_> = listed
+        .iter()
+        .filter(|view| view.read_at.is_some())
+        .map(|view| view.message_id)
+        .collect();
+    assert_eq!(
+        read_ids,
+        vec![seen_message.id],
+        "only the rendered mention should carry a read stamp"
     );
 }
 
-/// The room cursor only ever clears a mention; never having opened the room
-/// (no membership row at all) must keep the mention unread rather than swallow
-/// it.
+/// The read stamp is owner-scoped in the query itself: another user marking
+/// the same message read must not clear this user's mention.
 #[tokio::test]
-async fn mention_in_a_never_opened_room_stays_unread() {
+async fn marking_read_is_scoped_to_the_mentioned_user() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let room = ChatRoom::ensure_lounge(&client)
         .await
         .expect("ensure lounge");
-    let actor = create_test_user(&test_db.db, "no-member-actor").await;
-    let reader = create_test_user(&test_db.db, "no-member-reader").await;
-    ChatRoomMember::leave(&client, room.id, reader.id)
-        .await
-        .expect("leave room");
+    let actor = create_test_user(&test_db.db, "scope-actor").await;
+    let reader = create_test_user(&test_db.db, "scope-reader").await;
+    let other = create_test_user(&test_db.db, "scope-other").await;
 
     let message = ChatMessage::create(
         &client,
         ChatMessageParams {
             room_id: room.id,
             user_id: actor.id,
-            body: "@no-member-reader hello".to_string(),
+            body: "@scope-reader hello".to_string(),
         },
     )
     .await
@@ -89,10 +114,26 @@ async fn mention_in_a_never_opened_room_stays_unread() {
         .await
         .expect("create mention");
 
+    let cleared = Notification::mark_read_for_messages(&client, other.id, &[message.id])
+        .await
+        .expect("mark as the wrong user");
+    assert_eq!(cleared, 0);
+
     assert_eq!(
         Notification::unread_count(&client, reader.id)
             .await
             .expect("count"),
-        1
+        1,
+        "another user's read must not clear this user's mention"
     );
+
+    // Repeating the stamp as the right user clears it exactly once.
+    let cleared = Notification::mark_read_for_messages(&client, reader.id, &[message.id])
+        .await
+        .expect("mark as the mentioned user");
+    assert_eq!(cleared, 1);
+    let cleared = Notification::mark_read_for_messages(&client, reader.id, &[message.id])
+        .await
+        .expect("mark again");
+    assert_eq!(cleared, 0, "an already-read mention is a no-op");
 }

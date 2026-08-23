@@ -1365,6 +1365,7 @@ impl App {
                     cyberspace: config.cyberspace_service.clone(),
                 },
                 config.user_id,
+                config.username.clone(),
                 config.permissions,
                 active_users.clone(),
                 notifier.clone(),
@@ -2071,6 +2072,7 @@ impl App {
             self.scratchpad = None;
         }
 
+        let screen_changed = self.screen != screen;
         self.screen = screen;
 
         // Every top-level move repaints from scratch. ratatui only re-emits
@@ -2079,8 +2081,12 @@ impl App {
         // sidebar's bonsai emoji on screen, because a wide glyph the new
         // layout writes a space over occupies two columns and only one of
         // them differs. Clearing costs one full frame per page switch, which
-        // every door and the Artboard already paid for the same reason.
-        self.force_full_repaint();
+        // every door and the Artboard already paid for the same reason. A
+        // same-screen call (the nav key for the page already open) changes no
+        // layout and skips the clear.
+        if screen_changed {
+            self.force_full_repaint();
+        }
 
         if matches!(self.screen, Screen::Dashboard) {
             self.chat.request_list();

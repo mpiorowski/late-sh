@@ -756,6 +756,7 @@ impl State {
                 self.svc.record_win_task(
                     self.user_id,
                     self.difficulty_key().to_string(),
+                    self.daily_date,
                     self.score() as i32,
                 );
             }
@@ -833,7 +834,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded deal's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // deal must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_seed: self.seed as i64,
             stock: serde_json::to_value(&self.stock).unwrap_or_default(),
             waste: serde_json::to_value(&self.waste).unwrap_or_default(),

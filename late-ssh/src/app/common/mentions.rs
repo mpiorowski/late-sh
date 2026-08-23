@@ -24,6 +24,18 @@ pub(crate) fn valid_mention_start(text: &str, at: usize) -> bool {
         .unwrap_or(true)
 }
 
+/// Whether `body` mentions `username_lower`. Uses the same mention parser as
+/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
+/// does not, and a mention inside a code span does not count.
+pub(crate) fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
+    let Some(username_lower) = username_lower else {
+        return false;
+    };
+    extract_mentions(body)
+        .iter()
+        .any(|mentioned| mentioned == username_lower)
+}
+
 /// Extract unique usernames from `@mention`s in a message body.
 /// Returns deduplicated, lowercased usernames (without the `@` prefix).
 pub(crate) fn extract_mentions(body: &str) -> Vec<String> {

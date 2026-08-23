@@ -37,7 +37,7 @@ use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, Translatio
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
 
-use crate::app::common::{composer, primitives::Banner};
+use crate::app::common::{composer, mentions, primitives::Banner};
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
 use crate::authz::Permissions;
@@ -653,6 +653,10 @@ pub struct ChatState {
     pub(crate) room_unread_markers: HashMap<Uuid, Option<DateTime<Utc>>>,
     pending_read_rooms: HashSet<Uuid>,
     pending_read_flush: PendingReadCursorFlush,
+    /// Message ids whose mentions of this user were already reported as
+    /// rendered, so a room that stays visible does not resend the same stamp
+    /// on every cursor flush. Session-local; the DB update is idempotent.
+    mention_reads_sent: HashSet<Uuid>,
     /// The DM currently held in the promoted unread-DMs group even though its
     /// unread count is already zero. See `note_sticky_unread_dm`.
     pub(crate) sticky_unread_dm: Option<Uuid>,
@@ -896,6 +900,7 @@ impl ChatState {
     pub(crate) fn new(
         services: ChatServices,
         user_id: Uuid,
+        username: String,
         permissions: Permissions,
         active_users: Option<ActiveUsers>,
         notifier: Notifier,
@@ -940,7 +945,10 @@ impl ChatState {
             active_polls: HashMap::new(),
             lounge_room_id: None,
             activity_ticker: Vec::new(),
-            usernames: HashMap::new(),
+            // Seeded with the session's own name so self-referential features
+            // (the mention highlight, rendered-mention read stamps) work
+            // before the user has authored anything a payload would carry.
+            usernames: HashMap::from([(user_id, username)]),
             countries: HashMap::new(),
             ignored_user_ids: HashSet::new(),
             friend_user_ids: HashSet::new(),
@@ -956,6 +964,7 @@ impl ChatState {
             room_unread_markers: HashMap::new(),
             pending_read_rooms: HashSet::new(),
             pending_read_flush: PendingReadCursorFlush::default(),
+            mention_reads_sent: HashSet::new(),
             sticky_unread_dm: None,
             visible_room_id: None,
             room_tx,
@@ -1427,10 +1436,50 @@ impl ChatState {
         self.flush_read_cursors(room_ids);
     }
 
-    fn flush_read_cursors(&self, room_ids: Vec<Uuid>) {
-        for room_id in room_ids {
-            self.service.mark_room_read_task(self.user_id, room_id);
+    fn flush_read_cursors(&mut self, room_ids: Vec<Uuid>) {
+        for room_id in &room_ids {
+            self.service.mark_room_read_task(self.user_id, *room_id);
         }
+        self.flush_rendered_mention_reads(&room_ids);
+    }
+
+    /// Report mentions of this user whose messages are actually loaded in the
+    /// rooms being marked read, so their rail-badge entries clear. This is
+    /// deliberately narrower than the room's own read cursor: a mention
+    /// sitting above the loaded tail was never on screen and stays unread.
+    /// Runs on the same debounced flush as the cursors; every event that can
+    /// surface a mention (tail landing, a live message, the room becoming
+    /// visible) re-queues the room, so nothing is missed by collecting here.
+    fn flush_rendered_mention_reads(&mut self, room_ids: &[Uuid]) {
+        let username_lower = self
+            .usernames
+            .get(&self.user_id)
+            .map(|username| username.to_ascii_lowercase());
+        let Some(username_lower) = username_lower else {
+            return;
+        };
+        let mut rendered: Vec<Uuid> = Vec::new();
+        for room_id in room_ids {
+            let Some((_, messages)) = self.rooms.iter().find(|(room, _)| room.id == *room_id)
+            else {
+                continue;
+            };
+            rendered.extend(
+                messages
+                    .iter()
+                    .filter(|message| {
+                        message.user_id != self.user_id
+                            && !self.mention_reads_sent.contains(&message.id)
+                            && mentions::mentions_user(&message.body, Some(&username_lower))
+                    })
+                    .map(|message| message.id),
+            );
+        }
+        if rendered.is_empty() {
+            return;
+        }
+        self.mention_reads_sent.extend(rendered.iter().copied());
+        self.notifications.mark_read_for_messages(rendered);
     }
 
     /// Returns visible messages for the given room.

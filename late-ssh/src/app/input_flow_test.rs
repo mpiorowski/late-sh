@@ -3,8 +3,8 @@
 use crate::authz::Permissions;
 use crate::test_helpers::{
     assert_render_not_contains_for, chat_compose_app, make_app, make_app_with_chat_service,
-    make_app_with_permissions, new_test_db, render_plain, wait_for_render_contains, wait_until,
-    with_session_key,
+    make_app_in_world, make_app_with_permissions, new_test_db, render_plain,
+    wait_for_render_contains, wait_for_render_not_contains, wait_until, with_session_key,
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -2012,4 +2012,81 @@ async fn image_upload_keeps_the_reply_it_was_composed_against() {
         app.chat.reply_target().is_some(),
         "the upload dropped the reply it was composed against"
     );
+}
+
+/// A mention read in its own room used to sit on the rail badge for the rest
+/// of the session: the DB count moved but nothing republished it. Rendering
+/// the mention's message now stamps `notifications.read_at` and the service
+/// republishes the count in the same task, so the badge clears live.
+#[tokio::test]
+async fn mention_rendered_in_its_room_clears_the_rail_badge() {
+    use late_core::models::notification::Notification;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "f-badge-viewer").await;
+    let actor = create_test_user(&test_db.db, "f-badge-actor").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    ChatRoomMember::join(&client, lounge.id, actor.id)
+        .await
+        .expect("join actor");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: actor.id,
+            body: "@f-badge-viewer over here".to_string(),
+        },
+    )
+    .await
+    .expect("create mention message");
+    Notification::create_mentions_batch(&client, &[viewer.id], actor.id, message.id, lounge.id)
+        .await
+        .expect("create mention notification");
+
+    // The session must know its own username for the rendered-mention match.
+    let mut app = make_app_in_world(
+        test_db.db.clone(),
+        viewer.id,
+        "f-badge-flow-it",
+        crate::test_helpers::SessionWorld {
+            username: Some("f-badge-viewer".to_string()),
+            ..Default::default()
+        },
+    );
+    app.resize(160, 32).expect("resize test terminal");
+
+    // The mention's message lands on screen in its own room.
+    wait_for_render_contains(&mut app, "over here").await;
+
+    // That must stamp the mention read without the Mentions entry ever being
+    // opened. The stamp rides the app tick's read-cursor flush, so keep
+    // ticking while polling for it; asserting a lit badge first would race
+    // the very fix under test (the stamp can beat the initial count render).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        app.tick();
+        app.reset_render();
+        app.render().expect("render");
+        let unread = Notification::unread_count(&client, viewer.id)
+            .await
+            .expect("unread count");
+        if unread == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the rendered mention was never stamped read"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+
+    // The count republished after the stamp committed reaches the rail: the
+    // badge is dark for good, with the mention read where it was said.
+    wait_for_render_not_contains(&mut app, "mentions (").await;
 }

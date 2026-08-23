@@ -176,9 +176,11 @@ impl State {
             let Some(pack) = self.library.pack_by_size_key(difficulty.size_key) else {
                 continue;
             };
-            let Some(snapshot) = generate_snapshot(pack, Mode::Daily, &self.svc, today) else {
-                continue;
-            };
+            // Same contract as `new`: a pack always yields a daily puzzle.
+            // Degrading silently here would leave yesterday's board behind an
+            // advanced `daily_date`, the exact bug this rollover fixes.
+            let snapshot = generate_snapshot(pack, Mode::Daily, &self.svc, today)
+                .expect("daily nonogram pack should always have a puzzle");
             self.daily_snapshots
                 .insert(difficulty.key.to_string(), snapshot);
         }
@@ -446,8 +448,11 @@ impl State {
         if solved {
             self.is_game_over = true;
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string());
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                );
             }
         }
     }
@@ -528,7 +533,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
             is_game_over: self.is_game_over,

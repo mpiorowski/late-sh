@@ -48,11 +48,17 @@ impl NonogramService {
         DailyWin::has_won_today(&client, user_id, difficulty_key, self.today()).await
     }
 
-    pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String) {
+    /// `puzzle_date` is the date of the board that was actually solved, not
+    /// the wall clock: a session that crosses UTC midnight mid-board must
+    /// bank the win under the board's own day, never as today's daily.
+    pub fn record_win_task(&self, user_id: Uuid, difficulty_key: String, puzzle_date: NaiveDate) {
         let svc = self.clone();
         tokio::spawn(async move {
-            let puzzle_date = match svc.record_win(user_id, difficulty_key.clone()).await {
-                Ok(puzzle_date) => puzzle_date,
+            match svc
+                .record_win(user_id, difficulty_key.clone(), puzzle_date)
+                .await
+            {
+                Ok(()) => {}
                 Err(error) => {
                     tracing::error!(error = ?error, "failed to record nonogram daily win");
                     return;
@@ -76,10 +82,14 @@ impl NonogramService {
         });
     }
 
-    async fn record_win(&self, user_id: Uuid, difficulty_key: String) -> Result<NaiveDate> {
+    async fn record_win(
+        &self,
+        user_id: Uuid,
+        difficulty_key: String,
+        puzzle_date: NaiveDate,
+    ) -> Result<()> {
         let client = self.db.get().await?;
-        let puzzle_date = self.today();
         DailyWin::record_win(&client, user_id, difficulty_key, puzzle_date).await?;
-        Ok(puzzle_date)
+        Ok(())
     }
 }

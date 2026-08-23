@@ -917,6 +917,26 @@ pub async fn wait_for_render_contains(app: &mut App, needle: &str) {
     panic!("timed out waiting for render to contain {needle:?}; last render:\n{last_plain}");
 }
 
+/// Tick and render until `needle` disappears from the frame; panics at the
+/// timeout if it is still there. The absence counterpart of
+/// [`wait_for_render_contains`], for state that clears asynchronously.
+pub async fn wait_for_render_not_contains(app: &mut App, needle: &str) {
+    let deadline = Instant::now() + ASYNC_TEST_TIMEOUT;
+    let mut last_plain = String::new();
+    while Instant::now() < deadline {
+        app.tick();
+        app.reset_render();
+        let frame = app.render().expect("render");
+        let plain = strip_ansi(&String::from_utf8_lossy(&frame));
+        if !plain.contains(needle) {
+            return;
+        }
+        last_plain = plain;
+        sleep(Duration::from_millis(30)).await;
+    }
+    panic!("timed out waiting for render to drop {needle:?}; last render:\n{last_plain}");
+}
+
 pub async fn assert_render_not_contains_for(app: &mut App, needle: &str, duration: Duration) {
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
