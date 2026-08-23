@@ -121,12 +121,13 @@ fn every_walkable_room_is_reachable_from_the_start_room() {
     // stay unvisited.
     use std::collections::VecDeque;
     let world = seed_world();
-    let portal_only: std::collections::HashSet<&str> =
-        super::portal_lands().into_iter().collect();
+    let portal_only: std::collections::HashSet<&str> = super::portal_lands().into_iter().collect();
     let mut seen = std::collections::HashSet::from([world.start_room]);
     let mut queue = VecDeque::from([world.start_room]);
     while let Some(rid) = queue.pop_front() {
-        let Some(room) = world.room(rid) else { continue };
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
         for &dest in room.exits.values() {
             if seen.insert(dest) {
                 queue.push_back(dest);
@@ -138,9 +139,7 @@ fn every_walkable_room_is_reachable_from_the_start_room() {
         .keys()
         .copied()
         .filter(|id| !seen.contains(id))
-        .filter(|id| {
-            region_atlas_entry(*id).is_none_or(|(name, _)| !portal_only.contains(name))
-        })
+        .filter(|id| region_atlas_entry(*id).is_none_or(|(name, _)| !portal_only.contains(name)))
         .collect();
     cut_off.sort_unstable();
     cut_off.truncate(12);
@@ -408,9 +407,6 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
         }
     }
 }
-
-
-
 
 // ---- collision resolution favours where the player actually stands -------
 
@@ -722,14 +718,7 @@ fn map_canvas_draws_corridors_between_visited_rooms_and_fogs_the_rest() {
 
     // Everything visited: the centre is the start room, and corridors render.
     let all: HashSet<_> = world.rooms.keys().copied().collect();
-    let canvas = super::map_canvas(
-        &coords,
-        center,
-        cols,
-        rows,
-        &all,
-        start,
-    );
+    let canvas = super::map_canvas(&coords, center, cols, rows, &all, start);
     assert!(matches!(canvas[cy][cx], Tile::Room(id) if id == start));
     assert!(
         canvas
@@ -741,14 +730,7 @@ fn map_canvas_draws_corridors_between_visited_rooms_and_fogs_the_rest() {
 
     // Nothing visited: only the player shows, and no corridors leak the layout.
     let empty = HashSet::new();
-    let fogged = super::map_canvas(
-        &coords,
-        center,
-        cols,
-        rows,
-        &empty,
-        start,
-    );
+    let fogged = super::map_canvas(&coords, center, cols, rows, &empty, start);
     let visible_rooms: Vec<_> = fogged
         .iter()
         .flatten()
@@ -818,14 +800,7 @@ fn a_discovered_room_ringed_by_fog_shows_exit_hints() {
 
     // Only the anchor is explored - every neighbour is fog.
     let visited: std::collections::HashSet<_> = std::iter::once(anchor).collect();
-    let canvas = super::map_canvas(
-        &coords,
-        coords[&anchor],
-        21,
-        21,
-        &visited,
-        anchor,
-    );
+    let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
 
     let hints = canvas
         .iter()
@@ -888,14 +863,7 @@ fn a_link_to_an_already_visited_scattered_room_shows_a_known_hint() {
     // actually renders rather than assuming the first candidate always will.
     let renders = candidates.into_iter().any(|(anchor, dest)| {
         let visited: std::collections::HashSet<_> = [anchor, dest].into_iter().collect();
-        let canvas = super::map_canvas(
-            &coords,
-            coords[&anchor],
-            21,
-            21,
-            &visited,
-            anchor,
-        );
+        let canvas = super::map_canvas(&coords, coords[&anchor], 21, 21, &visited, anchor);
         canvas
             .iter()
             .flatten()
@@ -954,14 +922,7 @@ fn a_room_with_a_way_down_shows_a_stair_on_the_map() {
         "the square keeps its Frontier stair down and its city stair up"
     );
     let visited = std::collections::HashSet::from([square]);
-    let canvas = super::map_canvas(
-        coords,
-        coords[&square],
-        21,
-        11,
-        &visited,
-        square,
-    );
+    let canvas = super::map_canvas(coords, coords[&square], 21, 11, &visited, square);
     let stairs: Vec<char> = canvas
         .iter()
         .flatten()
@@ -988,14 +949,7 @@ fn stair_corners_never_collide_with_rooms_corridors_or_each_other() {
     // A dense hand-authored neighbourhood with stairs, houses and roads in it.
     let here = super::world().start_room;
     let visited: std::collections::HashSet<_> = super::world().rooms.keys().copied().collect();
-    let canvas = super::map_canvas(
-        coords,
-        coords[&here],
-        41,
-        21,
-        &visited,
-        here,
-    );
+    let canvas = super::map_canvas(coords, coords[&here], 41, 21, &visited, here);
     for (r, row) in canvas.iter().enumerate() {
         for (c, tile) in row.iter().enumerate() {
             // Rooms land on even offsets from the centre cell, corridors on the
@@ -1088,14 +1042,7 @@ fn a_scattered_links_stub_follows_the_exit_not_the_coordinate_delta() {
 
     let visited: std::collections::HashSet<_> = w.rooms.keys().copied().collect();
     let (cols, rows) = (11, 7);
-    let canvas = super::map_canvas(
-        coords,
-        coords[&entrance],
-        cols,
-        rows,
-        &visited,
-        entrance,
-    );
+    let canvas = super::map_canvas(coords, coords[&entrance], cols, rows, &visited, entrance);
     let (cx, cy) = ((cols / 2) as usize, (rows / 2) as usize);
     assert!(
         matches!(canvas[cy][cx + 1], super::Tile::HintKnown(_)),
@@ -1202,5 +1149,3 @@ fn the_land_graph_is_read_off_the_room_graph_and_covers_every_region() {
     assert!(links["Silvael"].contains(&"The Overworld & Capitals"));
     assert!(!links["The Overworld & Capitals"].contains(&"Aelunor, the Faewood"));
 }
-
-

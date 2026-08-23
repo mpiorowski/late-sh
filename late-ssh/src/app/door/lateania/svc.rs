@@ -9231,9 +9231,7 @@ impl WorldState {
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
                         let near = |c: &super::worldmap::Coord| {
-                            c.z == pc.z
-                                && (c.x - pc.x).abs() <= 16
-                                && (c.y - pc.y).abs() <= 12
+                            c.z == pc.z && (c.x - pc.x).abs() <= 16 && (c.y - pc.y).abs() <= 12
                         };
                         (
                             foe_rooms

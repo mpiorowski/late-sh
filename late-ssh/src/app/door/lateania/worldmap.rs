@@ -1007,6 +1007,10 @@ pub struct Interleave {
 /// that is honest geometry, not a fold.
 const FOLD_WALK_LIMIT: usize = 6;
 
+/// Zone pair (ordered by name) mapped to how many cells they touch in and the
+/// lowest-id room pair witnessing the fold.
+type FoldTally = BTreeMap<(&'static str, &'static str), (usize, (RoomId, RoomId))>;
+
 /// Scan the coordinate field for zone folds. Rooms of different zones sitting
 /// within one cell of each other (same z) read as one connected place on the
 /// map, so unless they really are a few moves apart (`FOLD_WALK_LIMIT`), that
@@ -1018,8 +1022,7 @@ pub fn zone_interleaves(world: &World, coords: &HashMap<RoomId, Coord>) -> Vec<I
         by_cell.entry((c.x, c.y, c.z)).or_default().push(rid);
     }
 
-    let mut pairs: BTreeMap<(&'static str, &'static str), (usize, (RoomId, RoomId))> =
-        BTreeMap::new();
+    let mut pairs: FoldTally = BTreeMap::new();
     for (&rid, &c) in coords {
         let Some(room) = world.room(rid) else {
             continue;
