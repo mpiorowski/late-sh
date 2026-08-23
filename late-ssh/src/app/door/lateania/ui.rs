@@ -549,6 +549,28 @@ fn hug_poi_arrows(
 /// on the field mean exactly one thing, walkable path: bright stubs are the
 /// current room's exits, faint stubs are paths running on into fog. POI
 /// direction arrows belong to the atlas only.
+/// The map header's layer caption. `z` counts layers, and for the underground
+/// zones it still reads as literal depth, but ever since each descent zone
+/// took its own level a couple of zones sit below z 0 while being open sky in
+/// the fiction. Those name their own layer while the player is looking at the
+/// layer they stand on; every other view keeps the plain depth wording.
+fn level_label(player_room: RoomId, viewed_z: i32, player_z: i32) -> String {
+    if viewed_z == player_z
+        && let Some(label) = match super::worldmap::zone_of(player_room) {
+            Some("Frostspire Ascent") => Some("mountainside"),
+            Some("the Saltwind Wharves") => Some("the waterline"),
+            _ => None,
+        }
+    {
+        return label.to_string();
+    }
+    match viewed_z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    }
+}
+
 fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, world_coords};
@@ -578,11 +600,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
     // Header: the land you stand in and the depth, so the field is grounded.
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
-    let depth = match center.z {
-        0 => "surface".to_string(),
-        z if z < 0 => format!("underground {}", -z),
-        z => format!("above {z}"),
-    };
+    let depth = level_label(player_room, center.z, center.z);
     let mut header = vec![Span::styled(
         region_name.to_string(),
         Style::default()
@@ -607,22 +625,9 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
     // the static atlas; a red dagger marks a room holding a live foe (from the
     // snapshot's nearby list); a gem marks a harvestable resource room (static).
-    // Resolved before the canvas because occupied rooms bypass the live region
-    // filter: the field never pans, so the filter is always on here, and a
-    // live foe or another adventurer one cell across a region seam must still
-    // show on the primary play screen.
     let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
     let players: std::collections::HashSet<u32> = view.nearby_players.iter().copied().collect();
-    let exempt: std::collections::HashSet<u32> = foes.union(&players).copied().collect();
-    let canvas = map_canvas(
-        coords,
-        center,
-        cols,
-        height,
-        &view.visited,
-        player_room,
-        &exempt,
-    );
+    let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
 
     // The player token turns hostile-red in a fight, so a glance at the field
     // tells you combat is on even with your eyes off the log.
@@ -1433,11 +1438,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     // Header: region name, where this zone sits in the region's chain, the
     // zone's own name, the danger tier, and the current level (z).
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
-    let level = match center.z {
-        0 => "surface".to_string(),
-        z if z < 0 => format!("underground {}", -z),
-        z => format!("above {z}"),
-    };
+    let level = level_label(player_room, center.z, player.z);
     let mut header = vec![Span::styled(
         region_name.to_string(),
         Style::default()
@@ -1512,21 +1513,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     };
     let quest_cells: std::collections::HashSet<super::world::RoomId> =
         quest_targets.iter().copied().collect();
-    // The player's own marks bypass the live region filter: the `⚑` and `!`
-    // markers only ever render on a drawn room cell, and `quest_arrows`
-    // treats an in-viewport target as "the canvas draws it", so a filtered
-    // cell would make a mark vanish with no marker, no arrow, and no count.
-    let exempt: std::collections::HashSet<super::world::RoomId> =
-        quest_cells.iter().copied().chain(dest_room).collect();
-    let canvas = map_canvas(
-        coords,
-        center,
-        cols,
-        height,
-        &view.visited,
-        player_room,
-        &exempt,
-    );
+    let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
 
     let player_style = Style::default()
         .fg(Color::Rgb(250, 240, 140))

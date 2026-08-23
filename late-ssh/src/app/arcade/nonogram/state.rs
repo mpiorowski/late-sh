@@ -118,6 +118,9 @@ pub struct State {
     player_grid: Vec<Vec<u8>>,
     is_game_over: bool,
     daily_snapshots: HashMap<String, PuzzleSnapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, PuzzleSnapshot>,
     pub svc: NonogramService,
 }
@@ -172,11 +175,39 @@ impl State {
             player_grid: Vec::new(),
             is_game_over: false,
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_pack();
         state
+    }
+
+    /// Roll the daily puzzles forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Returns true when they moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for difficulty in DIFFICULTIES {
+            let Some(pack) = self.library.pack_by_size_key(difficulty.size_key) else {
+                continue;
+            };
+            // Same contract as `new`: a pack always yields a daily puzzle.
+            // Degrading silently here would leave yesterday's board behind an
+            // advanced `daily_date`, the exact bug this rollover fixes.
+            let snapshot = generate_snapshot(pack, Mode::Daily, &self.svc, today)
+                .expect("daily nonogram pack should always have a puzzle");
+            self.daily_snapshots
+                .insert(difficulty.key.to_string(), snapshot);
+        }
+        if self.mode == Mode::Daily {
+            self.load_mode_snapshot_for_selected_pack();
+        }
+        true
     }
 
     pub fn has_puzzles(&self) -> bool {
@@ -466,8 +497,11 @@ impl State {
         if solved {
             self.is_game_over = true;
             if self.mode == Mode::Daily {
-                self.svc
-                    .record_win_task(self.user_id, self.difficulty_key().to_string());
+                self.svc.record_win_task(
+                    self.user_id,
+                    self.difficulty_key().to_string(),
+                    self.daily_date,
+                );
             }
         }
     }
@@ -548,7 +582,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded board's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // board must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_id: self.current_puzzle_id.clone(),
             player_grid: serde_json::to_value(&self.player_grid).unwrap_or_default(),
             is_game_over: self.is_game_over,

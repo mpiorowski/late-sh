@@ -57,7 +57,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   label tinting everywhere via `App.drunk_levels` (copied ~1/s in
   `App::tick`). The drunk map is NOT pruned on roster sync, so recent
   drinkers who logged out keep tinting their chat history until they decay.
-- **Username effects:** a bought 24h Name Glow/Gradient/Shimmer (see
+- **Username effects:** a bought Name Glow/Gradient/Shimmer, 24h or 30-day tier (see
   `hub/CONTEXT.md`) paints the name-label foreground per character
   (`put_label_styled` in `ui.rs`, styles from `ClubhouseView.name_styles` =
   `App.name_styles`, resolved ~1/s in `App::tick` from the process-shared

@@ -273,6 +273,6 @@ pub fn portrait(class_key: &str, sel: &[u8; N_FIELDS]) -> Vec<String> {
         format!(" {ls} {le} {re} {rs} "),
         format!(" {ls}  ‸  {rs} "),
         format!(" {ls} {mouth}{mouth}{mouth} {rs} "),
-        format!("  ╲▁▁▁▁▁╱  "),
+        "  ╲▁▁▁▁▁╱  ".to_string(),
     ]
 }

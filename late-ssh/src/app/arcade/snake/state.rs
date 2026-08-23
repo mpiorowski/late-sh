@@ -1,5 +1,4 @@
 use late_core::models::snake::{Game, GameParams};
-use ratatui::style::Color;
 use uuid::Uuid;
 
 use super::svc::SnakeService;
@@ -340,7 +339,7 @@ impl Position {
     }
 }
 
-enum ThingKind {
+pub(crate) enum ThingKind {
     Food,
     Drug,
     Rock,
@@ -351,61 +350,54 @@ enum ThingKind {
 pub struct ThingOnScreen {
     position: Position,
     pub value: String,
-    pub color: Color,
     effect: Option<CobraEffect>,
-    kind: ThingKind,
+    pub(crate) kind: ThingKind,
 }
 
 impl ThingOnScreen {
+    // No colors live here: the board is rendered on the palette's selection
+    // fill, and `ui.rs` resolves each kind's color against that fill at draw
+    // time, so a mid-level theme switch repaints glyphs together with the
+    // board they sit on.
     fn from_kind_at_pos(kind: ThingKind, position: Position) -> Self {
         match kind {
             ThingKind::Food => Self {
                 position,
                 kind,
-                color: Color::Yellow,
                 effect: Some(CobraEffect::Grow),
                 value: String::from("◉"),
             },
             ThingKind::Drug => Self {
                 position,
                 kind,
-                color: Color::Magenta,
                 effect: Some(CobraEffect::PowerUp),
                 value: String::from("★"),
             },
             ThingKind::Rock => Self {
                 position,
                 kind,
-                color: Color::Gray,
                 effect: Some(CobraEffect::Blow),
                 value: String::from("×"),
             },
             ThingKind::Cobra => Self {
                 position,
                 kind,
-                color: Color::Green,
                 effect: None,
                 value: String::from("━"),
             },
-            _ => Self {
+            ThingKind::Edge => Self {
                 position,
                 kind,
-                color: Color::White,
                 effect: None,
                 value: String::new(),
             },
         }
     }
 
-    pub fn get_cobra_pixel(value: String, position: Position, state: &CobraState) -> Self {
-        let color = match state {
-            CobraState::PoweredUp => Color::Magenta,
-            _ => Color::Green,
-        };
+    pub fn get_cobra_pixel(value: String, position: Position) -> Self {
         Self {
             position,
             kind: ThingKind::Cobra,
-            color,
             effect: None,
             value,
         }
@@ -436,7 +428,6 @@ impl ThingOnScreen {
             Some(Self {
                 effect: Some(CobraEffect::Blow),
                 position: Position { x, y },
-                color: Color::White,
                 kind: ThingKind::Edge,
                 value,
             })
@@ -662,11 +653,9 @@ impl Cobra {
         field.cobra_things.clear();
         for (p, position) in self.body.iter().enumerate() {
             let value = self.get_value(p);
-            field.cobra_things.push(ThingOnScreen::get_cobra_pixel(
-                value,
-                position.clone(),
-                &self.state,
-            ));
+            field
+                .cobra_things
+                .push(ThingOnScreen::get_cobra_pixel(value, position.clone()));
         }
         effect
     }

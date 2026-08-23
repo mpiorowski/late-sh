@@ -59,8 +59,8 @@ pub enum ActivityKind {
         game: String,
         match_id: Uuid,
     },
-    /// A bought 24h username effect went live ("mat is glowing (24h)").
-    /// Shown in #lounge: the whole point of the purchase is being seen.
+    /// A bought username effect went live ("mat is glowing (24h)"). Shown in
+    /// #lounge: the whole point of the purchase is being seen.
     UsernameEffectApplied {
         effect: late_core::models::username_effect::UsernameEffect,
     },
@@ -371,25 +371,27 @@ impl ActivityEvent {
         )
     }
 
-    /// A bought 24h username effect went live. The action names the style,
-    /// not the color: "is glowing (24h)" reads as a story, and the name
-    /// itself shows the color everywhere it renders.
+    /// A bought username effect went live. The action names the style, not
+    /// the color: "is glowing (24h)" reads as a story, and the name itself
+    /// shows the color everywhere it renders. The tag carries the bought
+    /// tier's window, so a month purchase reads "(30d)".
     pub fn username_effect_applied(
         user_id: Uuid,
         username: impl Into<String>,
         effect: late_core::models::username_effect::UsernameEffect,
+        duration_secs: i64,
     ) -> Self {
-        use late_core::models::username_effect::UsernameEffect;
-        let action = match effect {
-            UsernameEffect::Glow(_) => "is glowing (24h)",
-            UsernameEffect::Gradient(_) => "went gradient (24h)",
-            UsernameEffect::Shimmer => "is shimmering (24h)",
+        use late_core::models::username_effect::{UsernameEffect, duration_tag};
+        let style = match effect {
+            UsernameEffect::Glow(_) => "is glowing",
+            UsernameEffect::Gradient(_) => "went gradient",
+            UsernameEffect::Shimmer => "is shimmering",
         };
         Self::new(
             Some(user_id),
             username,
             ActivityKind::UsernameEffectApplied { effect },
-            action.to_string(),
+            format!("{style} ({})", duration_tag(duration_secs)),
         )
     }
 

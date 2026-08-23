@@ -109,6 +109,46 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Stamp `read_at` on this user's mentions riding on the given rendered
+    /// messages, then republish the unread count when anything moved. The
+    /// count query runs in the same task after the update commits, so the
+    /// badge the session renders next is never behind the stamp.
+    pub fn mark_read_for_messages_task(&self, user_id: Uuid, message_ids: Vec<Uuid>) {
+        if message_ids.is_empty() {
+            return;
+        }
+        let svc = self.clone();
+        tokio::spawn(
+            async move {
+                if let Err(e) = svc.do_mark_read_for_messages(user_id, &message_ids).await {
+                    late_core::error_span!(
+                        "notification_mark_messages_read_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        "failed to mark rendered mentions read"
+                    );
+                }
+            }
+            .instrument(info_span!(
+                "notification.mark_read_for_messages",
+                user_id = %user_id
+            )),
+        );
+    }
+
+    async fn do_mark_read_for_messages(
+        &self,
+        user_id: Uuid,
+        message_ids: &[Uuid],
+    ) -> anyhow::Result<()> {
+        let client = self.db.get().await?;
+        let cleared = Notification::mark_read_for_messages(&client, user_id, message_ids).await?;
+        if cleared > 0 {
+            self.publish_unread_count(user_id).await?;
+        }
+        Ok(())
+    }
+
     pub fn mark_all_read_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(

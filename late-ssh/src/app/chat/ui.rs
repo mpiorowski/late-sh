@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::{
     composer::composer_line_count,
+    mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
@@ -1474,18 +1475,6 @@ fn is_unread_boundary_message(
     marker.is_some_and(|marker| message.created > marker && message.user_id != current_user_id)
 }
 
-/// Whether `body` mentions `username_lower`. Uses the same mention parser as
-/// the notification path, so `@Alice` matches the user `alice`, `@alicebob`
-/// does not, and a mention inside a code span does not count.
-fn mentions_user(body: &str, username_lower: Option<&str>) -> bool {
-    let Some(username_lower) = username_lower else {
-        return false;
-    };
-    crate::app::common::mentions::extract_mentions(body)
-        .iter()
-        .any(|mentioned| mentioned == username_lower)
-}
-
 /// Whether `message` is a reply to a message written by `user_id`. Human
 /// replies carry only the target message id, so the target's author is looked
 /// up in `message_authors`; bot replies carry the target user id directly.
@@ -1540,15 +1529,20 @@ fn ensure_chat_rows_cache(
 
     for msg in messages.into_iter().rev() {
         let is_own = msg.user_id == ctx.current_user_id;
+        // A bumped `updated` marks a message that's been edited; there is no
+        // dedicated edited flag.
+        let is_edited = msg.updated > msg.created;
+        // An edit always breaks the run. "(edited)" rides in the author
+        // header's stamp and a continuation has no header, so grouping an
+        // edited message under the one above it hid the marker completely.
         let is_continuation = prev_user_id == Some(msg.user_id)
+            && !is_edited
             && prev_created.is_some_and(|prev| (msg.created - prev).num_seconds().abs() < 120);
         let mut stamp = format!(
             "[{}]",
             crate::app::common::primitives::format_relative_time(msg.created)
         );
-        // A bumped `updated` marks a message that's been edited; there is no
-        // dedicated edited flag.
-        if msg.updated > msg.created {
+        if is_edited {
             stamp.push_str(" (edited)");
         }
         let raw_author = ctx

@@ -30,6 +30,11 @@ pub struct NotificationView {
     pub actor_username: String,
     pub room_slug: Option<String>,
     pub message_preview: String,
+    /// When this mention's message was rendered in its own room, `None` while
+    /// it never has been. Stamped by [`Notification::mark_read_for_messages`];
+    /// the list's unread dot honors it the same way
+    /// [`Notification::unread_count`] does.
+    pub read_at: Option<DateTime<Utc>>,
 }
 
 impl Notification {
@@ -73,7 +78,8 @@ impl Notification {
                 "SELECT n.id, n.created, n.user_id, n.actor_id, n.message_id, n.room_id,
                         COALESCE(u.username, '') AS actor_username,
                         r.slug AS room_slug,
-                        LEFT(m.body, 120) AS message_preview
+                        LEFT(m.body, 120) AS message_preview,
+                        n.read_at
                  FROM notifications n
                  JOIN users u ON u.id = n.actor_id
                  JOIN users recipient ON recipient.id = n.user_id
@@ -111,11 +117,20 @@ impl Notification {
                 actor_username: row.get("actor_username"),
                 room_slug: row.get("room_slug"),
                 message_preview: row.get("message_preview"),
+                read_at: row.get("read_at"),
             })
             .collect())
     }
 
     /// Count unread notifications for a user.
+    ///
+    /// Two things clear a mention, and either one is enough: the mention
+    /// feed's own watermark (opening the Mentions entry) and the mention's own
+    /// `read_at`, stamped by [`Self::mark_read_for_messages`] when the message
+    /// it rides on is actually rendered in its room. The room's coarse
+    /// `chat_room_members.last_read_at` cursor deliberately plays no part
+    /// here: it moves whenever the room is merely opened, which would clear
+    /// mentions sitting above the loaded tail that were never on screen.
     pub async fn unread_count(client: &Client, user_id: Uuid) -> Result<i64> {
         let row = client
             .query_one(
@@ -125,6 +140,7 @@ impl Notification {
                  JOIN users recipient ON recipient.id = n.user_id
                  LEFT JOIN mention_feed_reads mfr ON mfr.user_id = $1
                  WHERE n.user_id = $1
+                   AND n.read_at IS NULL
                    AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)
                    AND NOT (
                         COALESCE(recipient.settings, '{}'::jsonb)
@@ -148,6 +164,32 @@ impl Notification {
     /// Mark all unread notifications as read for a user.
     pub async fn mark_all_read(client: &Client, user_id: Uuid) -> Result<()> {
         MentionFeedRead::mark_read_now(client, user_id).await
+    }
+
+    /// Stamp `read_at` on this user's mentions riding on the given messages.
+    /// Called when those messages are rendered in their own room; a message id
+    /// with no mention row for this user is a no-op. Returns how many mentions
+    /// were newly marked read, so the caller knows whether the unread count
+    /// moved.
+    pub async fn mark_read_for_messages(
+        client: &Client,
+        user_id: Uuid,
+        message_ids: &[Uuid],
+    ) -> Result<u64> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+        let count = client
+            .execute(
+                "UPDATE notifications
+                 SET read_at = current_timestamp, updated = current_timestamp
+                 WHERE user_id = $1
+                   AND message_id = ANY($2)
+                   AND read_at IS NULL",
+                &[&user_id, &message_ids],
+            )
+            .await?;
+        Ok(count)
     }
 
     pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {

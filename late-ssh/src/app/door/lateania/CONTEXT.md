@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-20 (weapon coats corrected after review: a coat re-seeded its DoT on every strike at the same cadence the DoT ticked, so `POISON_DOT_TICKS` stacks ran live at once and every coat was silently worth 3x its documented rider - coats now keep **one refreshing wound per attacker** (`svc::DotSource`, persisted via `SavedMobDot::from_coat`, logged once), and both coat curves are re-tuned as a share of the newly measured `svc::TIER_ATTACK_BAR` into burst-vs-sustain shapes (poison ~30% of the auto for 5 strikes and 2 herbs, oil ~20% for 12). The world pass's grind-rate budget now **derives** its rider from those constants instead of declaring a `0.15` no assertion could check; zone-boss profiles are asserted rather than skipped; six stale "bosses keep their own" table comments corrected; one Aelunor glade rethemed Resonant -> Haunted so the region has a Holy coat lane. Spec in §7's "The world resist/weak pass" section, coat mechanics in Crafting depth)
+- Last updated: 2026-08-23 (the coordinate field no longer folds: the Wildbound Waste decodes as reserved blocks via `wildbound_layout` with each gate town anchored on its field's entrance cell, each descent zone has its own z-level, and the town/road wings were re-aimed, all pinned by `zone_interleaves` + `no_zone_presses_against_another_it_has_no_gate_into` and `each_wildbound_gate_sits_directly_above_the_field_cell_it_opens_onto`. The live region filter and `exempt` sets that papered over the folds are removed; the `nearby_foes`/`nearby_players` lists are scoped by the field's cell window alone. `link` panics on an occupied exit and `seed_world` runs synchronously at boot, so bad wiring refuses server startup; `every_walkable_room_is_reachable_from_the_start_room` pins connectivity)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -205,11 +205,45 @@ Two placement mechanisms:
 - Procedurally-generated zones decode straight from the room id via `world::region_layout` (`id = base + zone*stride + cell`), so each zone is an exact `w x h` block at its own reserved origin and is collision-free by construction.
 - Hand-authored rooms (capitals, roads, villages, housing, archipelago) have no grid and are walked out by BFS over exits, one connected component at a time.
 
+#### Geometry and safeguards (post-unfold)
+
+The picture is honest by construction, not by filtering. Generated zones are
+reserved blocks that cannot overlap; the hand-authored core is authored so its
+summed-step embedding stays truthful: each descent zone sits on its own
+z-level behind Up/Down seam exits (Whisperwood 0, Duskhollow -1, the Crypts
+-2..-4, the Mines -5, Frostspire climbing -4 to -3, the Citadel -4, the
+Throne -5), the Wildbound Waste decodes as blocks (`world::wildbound_layout`),
+and the town/road wings fan away from what they once folded over. There is no
+hide/filter/exempt layer on top of any of this - fog of war and the block
+margins are the only things that keep a room off screen, so what is drawn one
+cell away really is a few moves away.
+
+The safeguards, in `worldmap_test.rs` unless said otherwise:
+
+- `no_zone_presses_against_another_it_has_no_gate_into`: the fold detector
+  (`worldmap::zone_interleaves`) proves no two zones draw within one cell of
+  each other while more than `FOLD_WALK_LIMIT` real moves apart. Content that
+  re-folds the field fails it with a report naming both rooms, their coords,
+  and the walking distance.
+- `every_walkable_room_is_reachable_from_the_start_room`: the exit graph is
+  connected (portal-only lands excepted), so a severed wing cannot ship;
+  `world::link` backs it up by asserting on an occupied exit instead of
+  skipping it silently.
+- `generated_zones_are_collision_free_and_the_core_stays_tight`: no generated
+  room may ever collide; the hand-authored stack tail is measured and capped.
+- `one_screen_never_shows_two_reserved_blocks`: `COMPONENT_MARGIN` beats a
+  full pan plus a full viewport.
+- `a_foe_beyond_the_cell_window_stays_off_the_field` (`svc_test.rs`): the live
+  `†`/`☺` lists are scoped by the field's cell window and nothing else.
+- `ui::level_label` captions the viewed z; an open-sky zone the ladder pushed
+  below z 0 (Frostspire Ascent, the Saltwind Wharves) names its own layer
+  instead of reading "underground".
+
 Invariants to keep:
 
 - **`COMPONENT_MARGIN` must stay >= `MAX_VIEWPORT_COLS`.** Blocks are unrelated places; a seam between two of them must never share a screen. At the original margin of 4, an 80-column map showed five zones side by side with a forest slab against Embergate's town square. Locked by `one_screen_never_shows_two_reserved_blocks`.
-- **The player always wins their own cell; failing that, the room matching where they stand wins.** BFS over the hand-authored core produces genuine non-Euclidean loops, so ~1% of rooms share a coordinate, and whole regions can collide: the Mistfen sits under Whisperwood, the Obsidian Throne under Frostspire, every house interior under Embergate. `resolve_collision` (shared by `viewport_explored` and `map_canvas`) resolves each contested cell as player-room first, then a room in the *same region the player currently stands in*, then lowest *visited* id as a last, purely-deterministic tie-break. Region-aware resolution matters: a plain lowest-id pick used to paint an unrelated region's rooms around a player who was clearly standing in a different one - "overlapping areas should show whatever's near the player" was a real player complaint, not a hypothetical. `viewport` (fog-less, lowest id wins, no player/region context) is for dumps and tests only.
-- **A harder cut on top: foreign regions don't just lose collisions, they don't render at all in a live view.** Region-aware collision resolution only ever fires on a literal shared cell; two regions that are merely adjacent or interleaved in the flat embedding without colliding still both rendered in the same viewport, which read as "overlapping" even with every real collision resolved correctly - a follow-up player complaint after the fix above shipped. `live_filter_region` decides which single region (if any) a view is allowed to show: only when the viewport is centred on the player's own position (`center == coords[player_room]`, a live, player-following view), never when the camera has panned away to review already-explored history elsewhere (`the_camera_pans_and_clamps_to_the_field` keeps working exactly as before - "which one region is being viewed" isn't well-defined at an intentional cross-region collision cell like the Mistfen/Whisperwood pair). `in_viewed_region` applies that filter in `viewport_explored`, `map_canvas`, and `room_at` before any candidate ever reaches `resolve_collision`, so a foreign region never appears at all while standing in a different one, even for cells that don't literally collide. The cut removes region *scenery*, never information something else depends on. Always exempt: rooms outside every `REGIONS` range (hand-authored connective tissue the atlas doesn't list), so nothing structural silently vanishes; and atlas landmarks (boss/tameable rooms), because `poi_arrows` and `quest_arrows` skip any in-viewport target on the promise that "the canvas (or fog) handles it", so a filtered landmark cell would vanish with no marker, no border arrow, and no footer count. On top of that, `map_canvas` takes a caller-supplied `exempt` set for dynamic rooms with the same problem: the overhead map passes the marked destination and active-quest targets (the `⚑`/`!` markers only render on a drawn room cell), and the live field passes rooms holding live foes or other adventurers (`view.nearby_foes`/`view.nearby_players`, which are region-unaware coordinate windows). The field matters here because it *never* pans - `draw_field` always centres on the player, so the filter is always on there, and without the exemption a foe one cell across a region seam would be in the snapshot but invisible on the primary play screen. Finally, a seen exit into a filtered neighbour draws as a `HintKnown` stub, not the full `LinkH`/`LinkV` corridor styling reserved for a link between two drawn rooms. Locked by `live_view_hides_a_visited_room_outside_the_players_current_region` (which also pins the panned carve-out and `room_at` agreement), `a_visited_foreign_boss_stays_drawn_through_the_live_region_filter`, `an_exempt_room_stays_drawn_through_the_live_region_filter`, and `a_seam_exit_stubs_instead_of_drawing_a_corridor_into_blank_space`.
+- **The player always wins their own cell; failing that, the room matching where they stand wins.** Since the unfold the field's collisions are a handful of same-zone stacks (a named wing folded back over its own zone's side room: Frostspire 92/425, Emberpeak 77/395), 0.04% of rooms, measured by `generated_zones_are_collision_free_and_the_core_stays_tight`. `resolve_collision` (shared by `viewport_explored` and `map_canvas`) still resolves each contested cell as player-room first, then a room in the *same region the player currently stands in*, then lowest *visited* id as a last, purely-deterministic tie-break; the region preference is what keeps the answer following the player if a cross-region stack ever returns. `viewport` (fog-less, lowest id wins, no player/region context) is for dumps and tests only.
+- **The map never lies about distance: no zone presses against another it has no gate into.** The old flat embedding drew places many moves apart one cell apart (the Sunken Glade corridor beside Embergate's square, Duskmire Wood draped over the descent), papered over by a live region filter plus `exempt` sets; the geometry was fixed instead and that machinery is gone. The full picture and the test suite that pins it live in "Geometry and safeguards (post-unfold)" above.
 - The collision tail is measured, not assumed: `generated_zones_are_collision_free_and_the_core_stays_tight` fails if any *generated* room collides at all, and caps the hand-authored tail at 3% of rooms.
 
 **What the map can and cannot do, measured.** Over the built world's 22,839 exits, 22,827 (99.95%) land exactly where the direction walked says they should, so the embedding does *not* lie about direction and "I walked north and the map moved me south" is not a real failure mode. What is real: **198 rooms have an exit whose two ends sit further apart in the field than a whole screen** (median ~5,600 cells, max ~60,000), because `COMPONENT_MARGIN` reserves a block per zone and almost every zone chains to the next one by a *vertical* exit. Crossing one replaces everything on screen at once. That is the whole of "you enter one node and you're in a totally different graph", and no amount of rendering fidelity addresses it - the three things that do are below, and all three work by adding information the picture structurally cannot carry.

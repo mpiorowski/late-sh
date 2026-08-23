@@ -147,6 +147,9 @@ pub struct State {
     pub reset_pending: Option<ResetKind>,
     undo_stack: Vec<Snapshot>,
     daily_snapshots: HashMap<String, Snapshot>,
+    /// The UTC date `daily_snapshots` was built for. A session that never
+    /// disconnects has to notice midnight itself; see `ensure_current_daily`.
+    daily_date: NaiveDate,
     personal_snapshots: HashMap<String, Snapshot>,
     pub svc: SolitaireService,
 }
@@ -194,11 +197,35 @@ impl State {
             reset_pending: None,
             undo_stack: Vec::new(),
             daily_snapshots,
+            daily_date: today,
             personal_snapshots,
             svc,
         };
         state.load_mode_snapshot_for_selected_difficulty();
         state
+    }
+
+    /// Roll the daily deals forward when the UTC date changes under a live
+    /// session; see `minesweeper::state::State::ensure_current_daily` for why
+    /// only a long-lived connection needs this. Returns true when they moved.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        let today = self.svc.today();
+        if self.daily_date == today {
+            return false;
+        }
+        self.daily_date = today;
+        for &difficulty_key in &DIFFICULTIES {
+            self.daily_snapshots.insert(
+                difficulty_key.to_string(),
+                snapshot_from_seed(self.svc.get_daily_seed(difficulty_key)),
+            );
+        }
+        if self.mode == Mode::Daily {
+            self.reset_pending = None;
+            self.undo_stack.clear();
+            self.load_mode_snapshot_for_selected_difficulty();
+        }
+        true
     }
 
     pub fn difficulty_key(&self) -> &'static str {
@@ -729,6 +756,7 @@ impl State {
                 self.svc.record_win_task(
                     self.user_id,
                     self.difficulty_key().to_string(),
+                    self.daily_date,
                     self.score() as i32,
                 );
             }
@@ -806,7 +834,10 @@ impl State {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty_key().to_string(),
-            puzzle_date: puzzle_date_for_mode(self.mode, self.svc.today()),
+            // The loaded deal's own date, not the wall clock: past UTC
+            // midnight the two disagree until the rollover lands, and a stale
+            // deal must save as its own (then ignored) day.
+            puzzle_date: puzzle_date_for_mode(self.mode, self.daily_date),
             puzzle_seed: self.seed as i64,
             stock: serde_json::to_value(&self.stock).unwrap_or_default(),
             waste: serde_json::to_value(&self.waste).unwrap_or_default(),

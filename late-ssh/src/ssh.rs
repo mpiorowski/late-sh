@@ -197,6 +197,16 @@ pub async fn run_with_listener(
         // the real publickey auth is even attempted.
         auth_rejection_time_initial: Some(std::time::Duration::ZERO),
         keys,
+        // Offer `none` only. russh advertises zlib by default, and clients
+        // that ask for it (`ssh -C`, `Compression yes`) have been dropping
+        // mid-session with "closed by remote host" on the first keystroke
+        // that moves a character. A TUI frame stream is small and already
+        // poorly compressible, so there is nothing to win here and a live
+        // disconnect to lose.
+        preferred: russh::Preferred {
+            compression: std::borrow::Cow::Borrowed(&[russh::compression::NONE]),
+            ..russh::Preferred::DEFAULT
+        },
         window_size: 8 * 1024 * 1024, // 8MB window size
         event_buffer_size: 128,
         nodelay: true,
