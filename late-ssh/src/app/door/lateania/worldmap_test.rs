@@ -150,6 +150,34 @@ fn every_walkable_room_is_reachable_from_the_start_room() {
 }
 
 #[test]
+fn each_wildbound_gate_sits_directly_above_the_field_cell_it_opens_onto() {
+    // The gate town is placed by `wildbound_layout` while the gate's South
+    // exit is wired by `extend_wildbound` to the carve's entrance cell. If
+    // the two disagree, the map draws a path from the gate into a field room
+    // the exit does not lead to, the exact drawn-adjacent-but-not-connected
+    // lie the fold detector exists to kill, invisible to it because town and
+    // field share a zone.
+    use crate::app::door::lateania::world::{Dir, WILDBOUND_BASE, WILDBOUND_BIOME_STRIDE};
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    for b in 0..3u32 {
+        let gate = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE + 3;
+        let dest = world
+            .room(gate)
+            .and_then(|r| r.exits.get(&Dir::South))
+            .copied()
+            .expect("each wildbound gate has a south exit into its field");
+        let (g, d) = (coords[&gate], coords[&dest]);
+        assert_eq!(
+            (d.x - g.x, d.y - g.y, d.z - g.z),
+            (0, 1, 0),
+            "biome {b}: gate {gate}'s south exit lands in room {dest}, which is not \
+             the cell drawn directly below the gate"
+        );
+    }
+}
+
+#[test]
 fn no_zone_presses_against_another_it_has_no_gate_into() {
     let world = seed_world();
     let coords = derive_coords(&world);

@@ -1230,7 +1230,17 @@ impl LateaniaService {
         // Build the overhead map's coordinate field and POI index now. Both are
         // lazy statics costing a world-gen apiece, and their first caller is
         // `draw_world_map`, which runs on the render task under the app mutex.
-        tokio::task::spawn_blocking(super::worldmap::warm);
+        // A panic in here would poison the lazies and then panic every later
+        // map render on a server that looked healthy at boot, so it is fatal
+        // instead: the world data itself already proved sound (`seed_world`
+        // ran synchronously above), which makes a warm-up panic a code bug.
+        let warm = tokio::task::spawn_blocking(super::worldmap::warm);
+        tokio::spawn(async move {
+            if let Err(error) = warm.await {
+                tracing::error!(?error, "world map warm-up panicked, exiting");
+                std::process::exit(1);
+            }
+        });
         svc.load_world_state_task();
         svc.start_tick_loop();
         svc.start_autosave_loop();

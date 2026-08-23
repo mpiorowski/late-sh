@@ -19,7 +19,7 @@
 // the planned full design target remains 200.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use super::damage::{DamageProfile, DamageType, ZoneTheme};
 use super::skills::{CraftSkill, GatherSkill};
@@ -7416,6 +7416,22 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                 .is_some_and(|r| !r.exits.contains_key(&portal)),
             "{district}'s portal {portal:?} is already taken on room {square}"
         );
+        // The exits maps below are built wholesale, not through `link`, so a
+        // street step doubling back on the previous one would silently
+        // overwrite the back-link and make the street one-way. Refuse the
+        // authoring instead.
+        assert!(
+            street[0] != back_to_square,
+            "{district}'s first street step walks straight back into the square"
+        );
+        for k in 0..street.len() - 1 {
+            assert!(
+                street[k + 1] != street[k].opposite(),
+                "{district}'s street step {} doubles back on step {}",
+                k + 1,
+                k
+            );
+        }
         let zone: &'static str = district;
         let spine = base;
         rooms.insert(
@@ -9442,23 +9458,29 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
 }
 
 /// The Wildbound Waste's map block: each biome is its own reserved `w` x `h`
-/// field, with that biome's four gate-town rooms on two spare rows above it
-/// (y -1 and y -2) so the town keeps the square / shelter / outfitter / gate
-/// shape its exits describe without ever landing on a field cell. Unlike the
-/// other chained regions the three biomes are not one uniform grid, so this
-/// decodes by hand instead of going through `multi`.
+/// field, with that biome's four gate-town rooms anchored on the carve's
+/// entrance cell so the gate sits directly above the field room its South
+/// exit really opens onto (pinned by `each_wildbound_gate_sits_directly_
+/// above_the_field_cell_it_opens_onto`). The entrance is the first floor
+/// cell in row-major order, so every cell before it is wall: the four town
+/// cells (one row up and two rows up around the entrance's column) can never
+/// land on a field room. Unlike the other chained regions the three biomes
+/// are not one uniform grid, so this decodes by hand instead of going
+/// through `multi`.
 fn wildbound_layout(id: RoomId) -> Option<RegionPlacement> {
     let off = id - WILDBOUND_BASE;
     let zone = off / WILDBOUND_BIOME_STRIDE;
     let slot = off % WILDBOUND_BIOME_STRIDE;
     let biome = &WILDBOUND_BIOMES[zone as usize];
     let (w, h) = (biome.w as i32, biome.h as i32);
+    let entrance = WILDBOUND_ENTRANCES[zone as usize] as i32;
+    let (ex, ey) = (entrance % w, entrance / w);
     let (x, y) = match slot {
-        0 => (1, -2),         // the square
-        1 => (0, -2),         // the shelter, west of the square
-        2 => (2, -2),         // the outfitter, east of the square
-        3 => (1, -1),         // the gate, between the square and the field
-        4..=9 => return None, // reserved, never built
+        0 => (ex, ey - 2),     // the square
+        1 => (ex - 1, ey - 2), // the shelter, west of the square
+        2 => (ex + 1, ey - 2), // the outfitter, east of the square
+        3 => (ex, ey - 1),     // the gate, directly above the entrance cell
+        4..=9 => return None,  // reserved, never built
         // The contested field: `field_base = base + 10`, one id per cell.
         _ => {
             let cell = slot as i32 - 10;
@@ -10933,7 +10955,7 @@ const WILDBOUND_SEED: u64 = 0x5741_5354_4501_u64;
 /// Room ids reserved per biome: four for the town plus the field carve. The
 /// largest field (26x20 = 520 cells) starting at offset 10 leaves comfortable
 /// headroom under this stride.
-const WILDBOUND_BIOME_STRIDE: u32 = 700;
+pub const WILDBOUND_BIOME_STRIDE: u32 = 700;
 /// The Sahra Wastes' terminal room (see `extend_overworld`'s Sahra wing): its
 /// `Dir::South` is never claimed there (the chain ends at this room), so the
 /// Waste hangs off it cleanly without disturbing that wing.
@@ -10945,6 +10967,50 @@ pub fn is_wildbound_room(id: RoomId) -> bool {
     (WILDBOUND_BASE..WILDBOUND_BASE + WILDBOUND_BIOMES.len() as u32 * WILDBOUND_BIOME_STRIDE)
         .contains(&id)
 }
+
+/// One biome's carved field, deterministic per biome index. Shared by
+/// `extend_wildbound` (which builds the rooms from it) and the entrance table
+/// below (which `wildbound_layout` reads), so the drawn gate town and the
+/// gate's real exit can never disagree. `rng` is threaded through so a
+/// caller's later draws see the same state the inline carve used to leave.
+enum WildboundCarve {
+    Cavern(Vec<bool>),
+    Maze(Vec<Walls>),
+}
+
+fn wildbound_carve(b: usize, rng: &mut MazeRng) -> WildboundCarve {
+    let biome = &WILDBOUND_BIOMES[b];
+    let (w, h) = (biome.w, biome.h);
+    if biome.cavern {
+        let floor = carve_cavern(w, h, rng);
+        if floor.iter().filter(|f| **f).count() >= 40 {
+            return WildboundCarve::Cavern(floor);
+        }
+    }
+    WildboundCarve::Maze(carve_maze(w, h, rng))
+}
+
+impl WildboundCarve {
+    /// The field cell the biome's gate opens onto: the first floor cell in
+    /// row-major order for a cavern, cell 0 for a maze. First-in-row-major
+    /// is also what makes the town placement in `wildbound_layout`
+    /// collision-free: every cell before the entrance is wall.
+    fn entrance(&self) -> usize {
+        match self {
+            Self::Cavern(floor) => (0..floor.len()).find(|&i| floor[i]).unwrap_or(0),
+            Self::Maze(_) => 0,
+        }
+    }
+}
+
+/// Entrance cell per biome, cached: `wildbound_layout` decodes ids in tight
+/// loops and the carve behind the answer costs a full field each.
+static WILDBOUND_ENTRANCES: LazyLock<[usize; 3]> = LazyLock::new(|| {
+    std::array::from_fn(|b| {
+        let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        wildbound_carve(b, &mut rng).entrance()
+    })
+});
 
 /// The five-tier power ladder shared by every biome's regular mobs, from the
 /// biome's edge (Lesser) to its deep interior (Ancient) - one step short of
@@ -11295,20 +11361,11 @@ fn extend_wildbound(
         let n = w * h;
         let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
-        let cavern_floor = if biome.cavern {
-            let floor = carve_cavern(w, h, &mut rng);
-            (floor.iter().filter(|f| **f).count() >= 40).then_some(floor)
-        } else {
-            None
-        };
-        let (entrance, reachable, dist, cell_exits): (
-            usize,
-            Vec<bool>,
-            Vec<usize>,
-            Vec<Vec<(Dir, usize)>>,
-        ) = if let Some(floor) = cavern_floor {
-            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
-            let dist = cavern_distances(&floor, w, h, entrance);
+        let carve = wildbound_carve(b, &mut rng);
+        let entrance = carve.entrance();
+        let (reachable, dist, cell_exits): (Vec<bool>, Vec<usize>, Vec<Vec<(Dir, usize)>>) =
+            if let WildboundCarve::Cavern(floor) = &carve {
+            let dist = cavern_distances(floor, w, h, entrance);
             let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
             let exits: Vec<Vec<(Dir, usize)>> = (0..n)
                 .map(|c| {
@@ -11332,10 +11389,12 @@ fn extend_wildbound(
                     v
                 })
                 .collect();
-            (entrance, reachable, dist, exits)
+            (reachable, dist, exits)
         } else {
-            let open = carve_maze(w, h, &mut rng);
-            let dist = maze_distances(&open, w, h, 0);
+            let WildboundCarve::Maze(open) = &carve else {
+                unreachable!("a carve is either a cavern or a maze");
+            };
+            let dist = maze_distances(open, w, h, 0);
             let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
             let exits: Vec<Vec<(Dir, usize)>> = (0..n)
                 .map(|c| {
@@ -11353,7 +11412,7 @@ fn extend_wildbound(
                     v
                 })
                 .collect();
-            (0, reachable, dist, exits)
+            (reachable, dist, exits)
         };
 
         let deepest = (0..n)
@@ -11930,7 +11989,9 @@ struct WingRoom {
 /// opposite back to `from`. Wiring a direction that already leads somewhere
 /// else is an authoring bug, and skipping it silently would sever the new
 /// rooms with nothing to notice (a cut-off component still gets coordinates
-/// of its own), so it fails the boot loudly instead.
+/// of its own), so it panics instead. That refuses server startup:
+/// `LateaniaService::new` runs `seed_world` synchronously in `main` before
+/// the listener serves.
 fn link(rooms: &mut HashMap<RoomId, Room>, from: RoomId, dir: Dir, to: RoomId) {
     if let Some(r) = rooms.get_mut(&from) {
         let prev = r.exits.insert(dir, to);
