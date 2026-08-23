@@ -41,6 +41,11 @@ pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
     &WORLD_COORDS
 }
 
+/// The zone a room belongs to, from the shared world.
+pub fn zone_of(id: RoomId) -> Option<&'static str> {
+    world().room(id).map(|r| r.zone)
+}
+
 /// Force the coordinate field and the POI index to build now. Both are lazy
 /// statics that cost a world-gen apiece; the service calls this at startup so
 /// the first player to open the map doesn't pay for them on the render thread,
@@ -49,7 +54,6 @@ pub fn warm() {
     LazyLock::force(&WORLD_COORDS);
     LazyLock::force(&POIS);
     LazyLock::force(&LAND_LINKS);
-    LazyLock::force(&ZONE_LINKS);
 }
 
 /// A room's place in the overhead map. `z` is the vertical level: 0 is the
@@ -257,11 +261,11 @@ pub fn viewport(
 /// Which of two rooms sharing a map cell should be shown. The player's own
 /// room always wins; failing that, a room in the same region as the one the
 /// player currently stands in wins, so a collision reads as "the place I'm
-/// in", not an arbitrary global pick - the hand-authored core stacks whole
-/// regions on shared cells (the Mistfen under Whisperwood, the Obsidian
-/// Throne under Frostspire, every house interior under Embergate), and
-/// resolving those purely by lowest id used to paint the *other* region's
-/// rooms around a player who was clearly standing in one of them. The lowest
+/// in", not an arbitrary global pick. Since the unfold (`zone_interleaves`
+/// keeps it that way) the field's few remaining collisions are same-zone
+/// stacks - a named wing folded back over its own zone's side room - but the
+/// region preference stays: it is what makes the answer follow the player
+/// rather than the id order if a cross-region stack ever returns. The lowest
 /// id is the final tie-break, kept only for determinism when neither room
 /// matches (or both do).
 fn resolve_collision(
@@ -290,119 +294,6 @@ fn resolve_collision(
     current.min(candidate)
 }
 
-/// Zone name -> the zones a single exit crosses into. Read off the room
-/// graph, never listed by hand, so a zone that grows an exit links itself.
-/// Symmetric: a one-way exit still makes the two zones neighbours, since a
-/// player who walked it is standing in one and looking back at the other.
-static ZONE_LINKS: LazyLock<HashMap<&'static str, HashSet<&'static str>>> =
-    LazyLock::new(|| derive_zone_links(world()));
-
-fn derive_zone_links(world: &World) -> HashMap<&'static str, HashSet<&'static str>> {
-    let mut links: HashMap<&'static str, HashSet<&'static str>> = HashMap::new();
-    for room in world.rooms.values() {
-        for dest in room.exits.values() {
-            let Some(there) = world.room(*dest) else {
-                continue;
-            };
-            if there.zone != room.zone {
-                links.entry(room.zone).or_default().insert(there.zone);
-                links.entry(there.zone).or_default().insert(room.zone);
-            }
-        }
-    }
-    links
-}
-
-/// Whether `id` is in the player's own zone or in a zone one exit away.
-///
-/// The "near me" for the snapshot's live foe/adventurer lists (`svc`'s
-/// snapshot pass), which the field draws as `†`/`☺`. It has to be graph
-/// adjacency and not coordinate proximity: the whole hand-authored core
-/// embeds into a box 41 rows tall, with Matlatesh 12 columns from
-/// Embergate's south gate, so a window measured in cells around one capital
-/// physically contains four others - and the atlas region is no better a
-/// scope, since a `REGIONS` entry is an id range that lumps those same
-/// unrelated cities together. Zone plus its exit-neighbours is what a player
-/// actually perceives as "around me": it keeps a foe one real gate away
-/// (even across a region border, where the field's `exempt` set draws its
-/// room through the live cut) and drops everything that is only near by an
-/// accident of the embedding.
-///
-/// Deliberately NOT used by the map's own scenery filter, which stays at the
-/// atlas region (`live_filter_region`): the map is a picture of the land,
-/// the daggers are live danger, and "what the land looks like" and "what can
-/// reach me" are different questions.
-pub fn in_zone_neighbourhood(player_room: RoomId, id: RoomId) -> bool {
-    let Some(zone) = world().room(player_room).map(|r| r.zone) else {
-        return true;
-    };
-    let Some(there) = world().room(id).map(|r| r.zone) else {
-        return true;
-    };
-    there == zone || ZONE_LINKS.get(zone).is_some_and(|ns| ns.contains(there))
-}
-
-/// The atlas region to hard-filter the view to, or `None` to skip that
-/// filter entirely. Only kicks in when the viewport is actually centred on
-/// the player's own position (`center == coords[player_room]`) - a live,
-/// player-following view. The camera can also pan away to review
-/// already-explored history elsewhere (see `the_camera_pans_and_clamps_to_
-/// the_field`), and "which single region is being viewed" isn't well-defined
-/// at an intentional cross-region collision cell (the Mistfen under
-/// Whisperwood and the like: several *different* regions deliberately share
-/// one coordinate there), so a panned view keeps today's plain
-/// `resolve_collision` behaviour instead of this harder cut - its
-/// player-room and lowest-id tie-breaks already handle that case correctly
-/// on their own.
-fn live_filter_region(
-    coords: &HashMap<RoomId, Coord>,
-    center: Coord,
-    player_room: RoomId,
-    player_region: Option<&'static str>,
-) -> Option<&'static str> {
-    if coords.get(&player_room) == Some(&center) {
-        player_region
-    } else {
-        None
-    }
-}
-
-/// Whether `id` belongs on-screen at all for a viewport whose live-view
-/// region filter resolved to `filter_region` (see `live_filter_region`). An
-/// atlas landmark (a boss or tameable room) always counts, since its marker
-/// is an atlas annotation, not region scenery, and `poi_arrows`/
-/// `quest_arrows` skip anything inside the viewport on the promise that the
-/// canvas (or fog) handles it - filtering a landmark's cell would silently
-/// drop it from the map with no marker, no border arrow, and no count; a
-/// room with no atlas entry (an id outside every `REGIONS` range -
-/// hand-authored connective rooms the atlas simply doesn't list) always
-/// counts as well, so nothing structural goes silently invisible; everything
-/// else only counts if it's in the region actually being viewed. The
-/// player's own room needs no special case: `filter_region` is only ever
-/// `None` or the player's own region, which their room passes by
-/// construction.
-///
-/// This is a harder cut than `resolve_collision`'s same-region *preference*:
-/// that only ever picks a winner for a single contested cell, so two regions
-/// that don't literally collide (adjacent or interleaved in the flat
-/// embedding without sharing a cell) still both rendered at once, reading as
-/// "overlapping" even when every actual collision was already resolved
-/// correctly. Filtering candidates down to one region *before* they ever
-/// reach `resolve_collision` removes that case entirely: a foreign region
-/// never appears on screen while viewing a different one, full stop.
-fn in_viewed_region(id: RoomId, filter_region: Option<&'static str>) -> bool {
-    let Some(region) = filter_region else {
-        return true;
-    };
-    if poi(id).is_some_and(|p| p.boss.is_some() || p.tameable.is_some()) {
-        return true;
-    }
-    match super::world::region_atlas_entry(id) {
-        Some((name, _)) => name == region,
-        None => true,
-    }
-}
-
 /// A viewport with fog of war: cells the player hasn't visited read as empty.
 /// `visited` is the player's explored-room set.
 ///
@@ -421,13 +312,9 @@ pub fn viewport_explored(
     let rx = cols / 2;
     let ry = rows / 2;
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_region = live_filter_region(coords, center, player_room, player_region);
     let mut at: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rx + 1, ry + 1) {
         if id != player_room && !visited.contains(&id) {
-            continue;
-        }
-        if !in_viewed_region(id, filter_region) {
             continue;
         }
         at.entry((c.x, c.y))
@@ -660,11 +547,9 @@ pub fn room_at(
     player_room: RoomId,
 ) -> Option<RoomId> {
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_region = live_filter_region(coords, at, player_room, player_region);
     visible(coords, at, 0, 0)
         .into_iter()
         .filter(|(id, _)| *id == player_room || visited.contains(id))
-        .filter(|(id, _)| in_viewed_region(*id, filter_region))
         .map(|(id, _)| id)
         .reduce(|a, b| resolve_collision(a, b, player_room, player_region))
 }
@@ -795,13 +680,6 @@ fn stair_glyph(down: bool, up: bool) -> Option<char> {
 /// room itself as a `Tile::Stair` in that room's corner cell instead. The
 /// player's room wins any cell collision so `@` never vanishes under a stacked
 /// hand-authored room.
-///
-/// `exempt` is the caller's set of rooms that bypass the live region filter
-/// (never the fog): the overhead map passes the marked destination and
-/// active-quest targets so a player's own marks can't vanish behind the cut,
-/// and the live field passes rooms holding live foes or other adventurers so
-/// danger and company stay visible at a region seam. Pass an empty set to
-/// exempt nothing beyond what `in_viewed_region` always keeps.
 pub fn map_canvas(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -809,7 +687,6 @@ pub fn map_canvas(
     rows: i32,
     visited: &HashSet<RoomId>,
     player_room: RoomId,
-    exempt: &HashSet<RoomId>,
 ) -> Vec<Vec<Tile>> {
     let (w, h) = (cols.max(0) as usize, rows.max(0) as usize);
     let mut canvas = vec![vec![Tile::Empty; w]; h];
@@ -844,14 +721,9 @@ pub fn map_canvas(
     // is (see `resolve_collision`) instead of whichever happened to be last
     // out of a hash-ordered iterator.
     let player_region = super::world::region_atlas_entry(player_room).map(|(name, _)| name);
-    let filter_region = live_filter_region(coords, center, player_room, player_region);
-    let viewed = |id: RoomId| in_viewed_region(id, filter_region) || exempt.contains(&id);
     let mut winners: HashMap<(i32, i32), RoomId> = HashMap::new();
     for (id, c) in visible(coords, center, rxw, ryw) {
         if c.z != center.z || !seen(id) {
-            continue;
-        }
-        if !viewed(id) {
             continue;
         }
         winners
@@ -898,26 +770,6 @@ pub fn map_canvas(
                 {
                     let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
                     canvas[hy as usize][hx as usize] = Tile::Hint(stub);
-                }
-                continue;
-            }
-            if !viewed(*dest) {
-                // A seen exit into a region this live view doesn't draw. The
-                // full `LinkH`/`LinkV` corridor styling is reserved for a
-                // link between two drawn rooms; a filtered neighbour gets the
-                // explored-jump stub instead (same contract as the
-                // non-adjacent `HintKnown` below: "runs on into somewhere
-                // you've been that isn't drawn here").
-                let Some((dx, dy)) = dir.delta_2d() else {
-                    continue; // up/down: flagged as a Stair, not a stub
-                };
-                let (hx, hy) = (sc + dx, sr + dy);
-                if (0..cols).contains(&hx)
-                    && (0..rows).contains(&hy)
-                    && canvas[hy as usize][hx as usize] == Tile::Empty
-                {
-                    let stub = if dx != 0 { '\u{2500}' } else { '\u{2502}' };
-                    canvas[hy as usize][hx as usize] = Tile::HintKnown(stub);
                 }
                 continue;
             }
@@ -1129,6 +981,143 @@ pub fn collisions(coords: &HashMap<RoomId, Coord>) -> BTreeMap<Coord, Vec<RoomId
         ids.sort_unstable();
     }
     by_coord
+}
+
+/// Two zones pressed together on screen with no gate between the touching
+/// rooms: the signature of a fold, where summed exit steps carry a far-away
+/// corridor back beside an unrelated place (the Sunken Glade wing climbing the
+/// column next to Embergate). One entry per zone pair, worst first.
+#[derive(Debug)]
+pub struct Interleave {
+    pub zone_a: &'static str,
+    pub zone_b: &'static str,
+    /// Room pairs from the two zones within one cell of each other on the
+    /// same level, yet more than `FOLD_WALK_LIMIT` real moves apart.
+    pub touching: usize,
+    /// One pair to look at: (room in `zone_a`, room in `zone_b`), the
+    /// smallest ids among the touching pairs so the report is stable.
+    pub example: (RoomId, RoomId),
+    /// Moves between the example rooms walking real exits; `None` if no path.
+    pub walk: Option<usize>,
+}
+
+/// How many real moves apart two rooms drawn side by side may be before that
+/// closeness counts as a lie. Rooms around the corner from a shared gate sit
+/// diagonal to each other with no direct exit and are a couple of moves apart;
+/// that is honest geometry, not a fold.
+const FOLD_WALK_LIMIT: usize = 6;
+
+/// Scan the coordinate field for zone folds. Rooms of different zones sitting
+/// within one cell of each other (same z) read as one connected place on the
+/// map, so unless they really are a few moves apart (`FOLD_WALK_LIMIT`), that
+/// closeness is a lie the embedding tells. An empty report means every
+/// apparent neighbourhood on the map is walkable.
+pub fn zone_interleaves(world: &World, coords: &HashMap<RoomId, Coord>) -> Vec<Interleave> {
+    let mut by_cell: HashMap<(i32, i32, i32), Vec<RoomId>> = HashMap::new();
+    for (&rid, &c) in coords {
+        by_cell.entry((c.x, c.y, c.z)).or_default().push(rid);
+    }
+
+    let mut pairs: BTreeMap<(&'static str, &'static str), (usize, (RoomId, RoomId))> =
+        BTreeMap::new();
+    for (&rid, &c) in coords {
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let Some(cell) = by_cell.get(&(c.x + dx, c.y + dy, c.z)) else {
+                    continue;
+                };
+                for &other in cell {
+                    // Visit each unordered pair once.
+                    if other <= rid {
+                        continue;
+                    }
+                    let Some(there) = world.room(other) else {
+                        continue;
+                    };
+                    if there.zone == room.zone {
+                        continue;
+                    }
+                    // Rooms genuinely a few steps apart may draw side by side.
+                    if walk_within(world, rid, other, FOLD_WALK_LIMIT) {
+                        continue;
+                    }
+                    let (key, sample) = if room.zone <= there.zone {
+                        ((room.zone, there.zone), (rid, other))
+                    } else {
+                        ((there.zone, room.zone), (other, rid))
+                    };
+                    let entry = pairs.entry(key).or_insert((0, sample));
+                    entry.0 += 1;
+                    entry.1 = entry.1.min(sample);
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<Interleave> = pairs
+        .into_iter()
+        .map(|((zone_a, zone_b), (touching, example))| Interleave {
+            zone_a,
+            zone_b,
+            touching,
+            example,
+            walk: walk_distance(world, example.0, example.1),
+        })
+        .collect();
+    out.sort_by(|l, r| {
+        r.touching
+            .cmp(&l.touching)
+            .then(l.zone_a.cmp(r.zone_a))
+            .then(l.zone_b.cmp(r.zone_b))
+    });
+    out
+}
+
+/// Whether `to` is reachable from `from` within `limit` moves. A bounded BFS,
+/// cheap enough to run per touching pair.
+fn walk_within(world: &World, from: RoomId, to: RoomId, limit: usize) -> bool {
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    let mut queue: VecDeque<(RoomId, usize)> = VecDeque::from([(from, 0)]);
+    while let Some((rid, steps)) = queue.pop_front() {
+        if rid == to {
+            return true;
+        }
+        if steps == limit {
+            continue;
+        }
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for &dest in room.exits.values() {
+            if seen.insert(dest) {
+                queue.push_back((dest, steps + 1));
+            }
+        }
+    }
+    false
+}
+
+/// Shortest path in moves between two rooms, walking real exits.
+fn walk_distance(world: &World, from: RoomId, to: RoomId) -> Option<usize> {
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    let mut queue: VecDeque<(RoomId, usize)> = VecDeque::from([(from, 0)]);
+    while let Some((rid, steps)) = queue.pop_front() {
+        if rid == to {
+            return Some(steps);
+        }
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for &dest in room.exits.values() {
+            if seen.insert(dest) {
+                queue.push_back((dest, steps + 1));
+            }
+        }
+    }
+    None
 }
 
 /// A plain-text picture of one z-level around `center`, `radius` cells each way,

@@ -9222,38 +9222,28 @@ impl WorldState {
             // in the same window, so the live field can mark where danger and
             // company sit. Bounded to a window around the player on the same
             // level; the field's own fog still hides rooms never seen. Only the
-            // field draws these, so a session without it pays nothing.
-            //
-            // The cell window alone is not enough. The hand-authored core
-            // embeds into a box 41 rows tall, and Matlatesh's caravanserai
-            // sits 12 columns from Embergate's south gate, so a +/-16 by
-            // +/-12 window around one capital physically contains four
-            // others and the King's Road besides. The field passes these
-            // rooms to `map_canvas` as `exempt`, which bypasses the live
-            // region filter outright, so an unscoped window painted every
-            // live mob in the core onto whichever city you were standing in.
-            // `in_zone_neighbourhood` (the player's zone plus zones one exit
-            // away) is the "near me" these lists are scoped by: it keeps a
-            // foe one real gate away, even across a region border, and drops
-            // everything that is only near by accident of the embedding.
+            // field draws these, so a session without it pays nothing. The
+            // cell window is an honest "near me" ever since the coordinate
+            // field stopped folding unrelated zones together (worldmap's
+            // `zone_interleaves` pin keeps it that way): what sits within a
+            // few cells really is a few moves away.
             let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
-                        let near = |r: &RoomId, c: &super::worldmap::Coord| {
+                        let near = |c: &super::worldmap::Coord| {
                             c.z == pc.z
                                 && (c.x - pc.x).abs() <= 16
                                 && (c.y - pc.y).abs() <= 12
-                                && super::worldmap::in_zone_neighbourhood(player.room, *r)
                         };
                         (
                             foe_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && near(r, c))
+                                .filter(|(r, c)| *r != player.room && near(c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                             occupied_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && near(r, c))
+                                .filter(|(r, c)| *r != player.room && near(c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                         )

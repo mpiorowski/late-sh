@@ -3103,23 +3103,25 @@ fn nearby_foes_lists_foes_in_neighbouring_rooms() {
 }
 
 #[test]
-fn a_foe_a_dozen_cells_away_in_another_zone_stays_off_the_field() {
+fn a_foe_beyond_the_cell_window_stays_off_the_field() {
     const HERE: RoomId = 722; // Matlatesh - The Caravanserai
     const NEAR: RoomId = 608; // The Greatroad, one exit out of Matlatesh
-    const FAR: RoomId = 6; // The King's Road - Open Country
-    // The flat map embedding squeezes the whole hand-authored core into a
-    // box 41 rows tall, so the King's Road sits a dozen cells from Matlatesh
-    // and lands well inside the field's cell window. It is nowhere near it in
-    // the world, and the live map won't draw it, so a foe lairing there must
-    // not be marked on the field either.
+    const FAR: RoomId = 30055; // Duskmire Wood, its own reserved block
+    // The field's hint lists are scoped by the cell window alone: since the
+    // unfold (worldmap's `zone_interleaves` pin keeps it that way), what sits
+    // within a few cells really is a few moves away, and whole other lands
+    // sit in reserved blocks hundreds of columns off, so a foe in one can
+    // never land "near" by accident of the embedding.
     let coords = crate::app::door::lateania::worldmap::world_coords();
     let (here, far, near) = (coords[&HERE], coords[&FAR], coords[&NEAR]);
-    for (id, c) in [(FAR, far), (NEAR, near)] {
-        assert!(
-            c.z == here.z && (c.x - here.x).abs() <= 16 && (c.y - here.y).abs() <= 12,
-            "fixture assumption broke: room {id} should sit inside the field's cell window"
-        );
-    }
+    assert!(
+        near.z == here.z && (near.x - here.x).abs() <= 16 && (near.y - here.y).abs() <= 12,
+        "fixture assumption broke: room {NEAR} should sit inside the field's cell window"
+    );
+    assert!(
+        far.z != here.z || (far.x - here.x).abs() > 16 || (far.y - here.y).abs() > 12,
+        "fixture assumption broke: room {FAR} should sit outside the field's cell window"
+    );
 
     let mut s = world();
     s.join(uid(1));
@@ -3138,7 +3140,7 @@ fn a_foe_a_dozen_cells_away_in_another_zone_stays_off_the_field() {
     }
     assert!(
         !s.snapshot().players[&uid(1)].nearby_foes.contains(&FAR),
-        "a foe two zones away must not be marked just for landing near in the embedding"
+        "a foe in another land, outside the cell window, must not be marked"
     );
 
     // One exit out is genuinely near, and still shows.
