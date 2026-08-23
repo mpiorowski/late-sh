@@ -314,6 +314,96 @@ impl ChatMessage {
         Ok(page)
     }
 
+    /// A public room's messages since `floor`, oldest first, for the
+    /// `/summary` AI catch-up. Membership is required in the query (the
+    /// command runs from a room the caller sits in), and the room must be
+    /// public: private rooms and DMs are deliberately never handed to the
+    /// summarizer. System-feed lines and `exclude_user_ids` (ignored
+    /// authors, and bot replies aimed at them) are skipped so the summary
+    /// describes the conversation the viewer actually sees; the viewer's
+    /// own messages stay in, since the thread makes no sense without them.
+    ///
+    /// The query walks newest-first and the result is reversed, so a backlog
+    /// larger than `limit` keeps the newest messages: for catching up, the
+    /// old end is the right end to lose.
+    pub async fn list_public_room_since(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+        floor: DateTime<Utc>,
+        exclude_user_ids: &[Uuid],
+        limit: i64,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND room.visibility = 'public'
+                   AND EXISTS (
+                        SELECT 1 FROM chat_room_members mem
+                        WHERE mem.room_id = $1 AND mem.user_id = $2
+                   )
+                   AND msg.created > $3
+                   AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created DESC, msg.id DESC
+                 LIMIT $5",
+                &[&room_id, &user_id, &floor, &exclude_user_ids, &limit],
+            )
+            .await?;
+        let mut page: Vec<Self> = rows.into_iter().map(Self::from).collect();
+        page.reverse();
+        Ok(page)
+    }
+
+    /// The oldest message in a room created after `cutoff` and authored by
+    /// someone other than the viewer: the message the `new messages` divider
+    /// points at. Read scoping, ignored users, and system-feed exclusion
+    /// match `list_page_for_viewer`, so the answer is a message the viewer
+    /// would actually see in a history page. Used by the `/history`
+    /// open-at-unread path, with the cutoff supplied by the session (its
+    /// pre-mark unread marker), never from `last_read_at` directly, which
+    /// has usually already advanced by the time the command runs.
+    pub async fn first_unread_after(
+        client: &Client,
+        room_id: Uuid,
+        user_id: Uuid,
+        cutoff: DateTime<Utc>,
+        exclude_user_ids: &[Uuid],
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT msg.*
+                 FROM chat_messages msg
+                 JOIN users author ON author.id = msg.user_id
+                 JOIN chat_rooms room ON room.id = msg.room_id
+                 WHERE msg.room_id = $1
+                   AND (
+                     (room.visibility = 'public' AND room.kind <> 'game')
+                     OR EXISTS (
+                        SELECT 1 FROM chat_room_members mem
+                        WHERE mem.room_id = $1 AND mem.user_id = $2
+                     )
+                   )
+                   AND msg.created > $3
+                   AND msg.user_id <> $2
+                   AND msg.user_id <> ALL($4::uuid[])
+                   AND (msg.reply_to_user_id IS NULL
+                        OR msg.reply_to_user_id <> ALL($4::uuid[]))
+                   AND COALESCE((author.settings->>'system')::boolean, false) = false
+                 ORDER BY msg.created ASC, msg.id ASC
+                 LIMIT 1",
+                &[&room_id, &user_id, &cutoff, &exclude_user_ids],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     /// Up to `limit_each` messages immediately before and after a message in
     /// its room, both in chronological order. Read scoping, ignored users and
     /// system-feed exclusion all come from `list_page_for_viewer`; this is the

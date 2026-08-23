@@ -29,6 +29,9 @@
 //!   model's reasoning tokens so the visible line isn't sheared off mid-thought.
 //!   Use for pure in-character banter that never needs a lookup: **@graybeard
 //!   mentions**.
+//! - `generate_ungrounded`: like `generate_short_reply` but with the full
+//!   output cap. Used by the **`/summary` catch-up** (`summary.rs`), whose
+//!   input is a room's whole unread backlog and whose output is prose.
 //!
 //! When adding a bot line, default to `generate_short_reply` and only reach
 //! for `generate_reply` if the character genuinely answers factual questions.

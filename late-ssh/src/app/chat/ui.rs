@@ -37,8 +37,9 @@ use crate::usernames::UsernameLookup;
 
 use super::state::{
     MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, TranslationDisplay, compare_dm_rooms_for_nav, dm_is_promoted_unread,
-    dm_peer_is_ignored, is_chat_list_room, is_selected_slot, visual_order_for_rooms,
+    SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
+    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_selected_slot,
+    visual_order_for_rooms,
 };
 use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
 
@@ -138,6 +139,9 @@ pub struct DashboardChatView<'a> {
     /// layout so `app::input` can map clicks in the message area to a
     /// message id, header segment, or inline-image row.
     pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
+    /// Row offset inside a selected too-tall message, plus the overflow
+    /// measurement written back for the input layer.
+    pub selection_scroll: Option<&'a SelectionScroll>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1160,6 +1164,7 @@ pub fn draw_dashboard_chat_card(
             view.selected_message_id,
             view.highlighted_message_id,
             height,
+            view.selection_scroll,
         );
         lines = visible.lines;
         chat_hits = Some(visible.hits);
@@ -1737,6 +1742,7 @@ fn visible_chat_rows(
     selected_message_id: Option<Uuid>,
     highlighted_message_id: Option<Uuid>,
     height: usize,
+    selection_scroll: Option<&SelectionScroll>,
 ) -> VisibleChatRows {
     let total_rows = cache.all_rows.len();
     if total_rows == 0 {
@@ -1751,7 +1757,16 @@ fn visible_chat_rows(
     let highlighted_row_range =
         highlighted_message_id.and_then(|id| cache.highlighted_ranges.get(&id).copied());
     let focus_range = selected_row_range.or(highlighted_row_range);
-    let scroll = effective_chat_scroll(total_rows, height, focus_range);
+    let offset = selection_scroll.map_or(0, |cells| cells.rows.get());
+    let (scroll, overflow) = effective_chat_scroll(total_rows, height, focus_range, offset);
+    if let Some(cells) = selection_scroll {
+        // Publish this frame's measurement for the input layer, and pull a
+        // stale offset back inside a range a resize or rewrap just shrank.
+        cells.overflow.set(overflow);
+        if cells.rows.get() > overflow {
+            cells.rows.set(overflow);
+        }
+    }
     let visible_end = total_rows.saturating_sub(scroll);
     let visible_start = visible_end.saturating_sub(height);
     let mut lines = cache.all_rows[visible_start..visible_end].to_vec();
@@ -2079,36 +2094,54 @@ fn line_display_width(line: &Line<'_>) -> usize {
         .sum()
 }
 
+/// Where the chat viewport sits, derived from the focused message. Returns
+/// `(scroll, overflow)`: `scroll` counts rows hidden below the viewport
+/// (0 = bottom-anchored), and `overflow` is how many more rows of a
+/// focused message taller than the pane can still be walked into view by
+/// `selection_offset` (0 whenever the focus fits). The caller publishes
+/// `overflow` back to `ChatState::selection_scroll` so `j`/`k` know when
+/// to scroll rows instead of moving the selection.
 fn effective_chat_scroll(
     total_rows: usize,
     height: usize,
     selected_row_range: Option<(usize, usize)>,
-) -> usize {
+    selection_offset: usize,
+) -> (usize, usize) {
     const SELECTED_SCROLL_MARGIN: usize = 2;
 
     let max_scroll = total_rows.saturating_sub(height);
-    let scroll = 0;
 
     let Some((start, end)) = selected_row_range else {
-        return scroll;
+        return (0, 0);
     };
 
-    let visible_end = total_rows.saturating_sub(scroll);
+    let visible_end = total_rows;
     let visible_start = visible_end.saturating_sub(height);
     let selected_end = end.min(total_rows);
     let selected_len = selected_end.saturating_sub(start);
     let margin = SELECTED_SCROLL_MARGIN.min(height.saturating_sub(1) / 2);
 
-    let target_end = if selected_len >= height || start < visible_start {
+    let (target_end, overflow) = if selected_len >= height {
+        // Taller than the pane: pin the top, then let the row offset walk
+        // the rest of the message (plus the usual margin) into view.
         let target_start = start.saturating_sub(margin);
-        (target_start + height).min(total_rows)
+        let base_end = (target_start + height).min(total_rows);
+        let max_end = (selected_end + margin).min(total_rows);
+        let overflow = max_end.saturating_sub(base_end);
+        ((base_end + selection_offset.min(overflow)), overflow)
+    } else if start < visible_start {
+        let target_start = start.saturating_sub(margin);
+        ((target_start + height).min(total_rows), 0)
     } else if selected_end > visible_end.saturating_sub(margin) {
-        (selected_end + margin).min(total_rows)
+        ((selected_end + margin).min(total_rows), 0)
     } else {
-        visible_end
+        (visible_end, 0)
     };
 
-    total_rows.saturating_sub(target_end).min(max_scroll)
+    (
+        total_rows.saturating_sub(target_end).min(max_scroll),
+        overflow,
+    )
 }
 
 /// Scroll the rooms sidebar so the selected row lands near the vertical
@@ -2641,6 +2674,9 @@ pub struct ChatRenderInput<'a> {
     /// layout — only set in the real-room message branch (synthetic
     /// entries like Discover/News/Showcase don't produce one).
     pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
+    /// Row offset inside a selected too-tall message, plus the overflow
+    /// measurement written back for the input layer.
+    pub selection_scroll: Option<&'a SelectionScroll>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2770,6 +2806,9 @@ pub struct EmbeddedRoomChatView<'a> {
     /// layout (with `content` set to the painted text area, not the
     /// bordered frame).
     pub(crate) chat_hit_slot: Option<&'a std::cell::Cell<Option<ChatHitLayout>>>,
+    /// Row offset inside a selected too-tall message, plus the overflow
+    /// measurement written back for the input layer.
+    pub selection_scroll: Option<&'a SelectionScroll>,
 }
 
 pub fn draw_embedded_room_chat(
@@ -2860,6 +2899,7 @@ pub fn draw_embedded_room_chat(
         view.selected_message_id,
         view.highlighted_message_id,
         height,
+        view.selection_scroll,
     );
     let chat_hits = visible.hits;
     let lines = if visible.lines.is_empty() {
@@ -4722,6 +4762,7 @@ fn draw_selected_content(
                 view.selected_message_id,
                 view.highlighted_message_id,
                 height,
+                view.selection_scroll,
             );
             chat_hits = Some(visible.hits);
 

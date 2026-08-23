@@ -2036,6 +2036,127 @@ impl ChatService {
         );
     }
 
+    /// Open the history modal at the room's first unread message: resolve
+    /// the oldest message past `cutoff` by someone else, then load a page
+    /// either side of it and answer with the anchor pipeline
+    /// (`HistoryAnchorLoaded`). When nothing past the cutoff survives the
+    /// page filters (deleted since, ignored authors, system lines) the
+    /// answer degrades to a plain tail page (`HistoryPageLoaded`) under the
+    /// same request id, so the modal opens at the newest messages exactly
+    /// like a `/history` on a caught-up room.
+    pub fn load_history_unread_task(
+        &self,
+        user_id: Uuid,
+        request_id: Uuid,
+        room_id: Uuid,
+        cutoff: DateTime<Utc>,
+        exclude_user_ids: Vec<Uuid>,
+    ) {
+        // The two ways this open can land; both carry a full page run.
+        enum UnreadOpen {
+            Anchor(Uuid, HistoryPage),
+            Tail(HistoryPage),
+        }
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<UnreadOpen> = async {
+                    let _permit = service.read_permits.acquire().await?;
+                    let client = service.db.get().await?;
+                    let Some(anchor) = ChatMessage::first_unread_after(
+                        &client,
+                        room_id,
+                        user_id,
+                        cutoff,
+                        &exclude_user_ids,
+                    )
+                    .await?
+                    else {
+                        let messages = ChatMessage::list_page_for_viewer(
+                            &client,
+                            room_id,
+                            user_id,
+                            None,
+                            HistoryDirection::Older,
+                            &exclude_user_ids,
+                            HISTORY_PAGE_SIZE,
+                        )
+                        .await?;
+                        let author_ids: Vec<Uuid> =
+                            messages.iter().map(|message| message.user_id).collect();
+                        let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                        return Ok(UnreadOpen::Tail((messages, usernames)));
+                    };
+                    let (before, after) = ChatMessage::list_around(
+                        &client,
+                        room_id,
+                        user_id,
+                        anchor.created,
+                        anchor.id,
+                        &exclude_user_ids,
+                        HISTORY_PAGE_SIZE,
+                    )
+                    .await?;
+                    let anchor_id = anchor.id;
+                    let mut messages = before;
+                    messages.push(anchor);
+                    messages.extend(after);
+                    let author_ids: Vec<Uuid> =
+                        messages.iter().map(|message| message.user_id).collect();
+                    let usernames = User::list_usernames_by_ids(&client, &author_ids).await?;
+                    Ok(UnreadOpen::Anchor(anchor_id, (messages, usernames)))
+                }
+                .await;
+                match result {
+                    Ok(UnreadOpen::Anchor(anchor_id, (messages, usernames))) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryAnchorLoaded {
+                                user_id,
+                                request_id,
+                                anchor_id,
+                                messages,
+                                usernames,
+                            },
+                        );
+                    }
+                    Ok(UnreadOpen::Tail((messages, usernames))) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryPageLoaded {
+                                user_id,
+                                request_id,
+                                direction: HistoryDirection::Older,
+                                messages,
+                                usernames,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::HistoryPageFailed {
+                                user_id,
+                                request_id,
+                                direction: HistoryDirection::Older,
+                            },
+                        );
+                        late_core::error_span!(
+                            "chat_history_unread_failed",
+                            error = ?e,
+                            "failed to load chat history at first unread"
+                        );
+                    }
+                }
+            }
+            .instrument(info_span!(
+                "chat.load_history_unread_task",
+                user_id = %user_id,
+                room_id = %room_id
+            )),
+        );
+    }
+
     /// Fetch one membership-gated message as a single-hit search result
     /// (`MessageSearchLoaded`). Backs the Mentions fallback: previewing a
     /// mention whose message is older than the loaded room history.

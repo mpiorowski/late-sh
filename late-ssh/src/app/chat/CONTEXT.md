@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-17 (the room header's stream row now sizes its title and watcher count from the measured watch-link width instead of a hardcoded guess, so the watch URL renders instead of being the thing that gets dropped; see §11 Room Header. Previously: composer `/ban` and `/unban` join `/kick` as room moderation commands routed through `ModerationService::room_command`; chat-originated room actions now name the room by id instead of slug, and an ownership-granted ban can no longer touch an active staff ban; see Room Membership Commands items 5-6 and `stream/CONTEXT.md` §6)
+- Last updated: 2026-08-23 (three catch-up features: `j`/`k`/arrows/wheel now scroll by rows inside a selected message taller than the pane before moving selection (`ChatState::selection_scroll`, §9); the history modal draws the `new messages` divider and `/history` opens on the first unread message when the unread marker is set (§14 History Modal); new `/summary` command asks the AI for a public-room catch-up since the last read, guarded by cooldown/daily-cap/window caps (`app/ai/summary.rs`, §14 Summary))
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -291,6 +291,7 @@ User commands:
 - `/pomodoro [minutes] [label...]` starts a session-local focus countdown (default 25 minutes, cap 180, label control-stripped and capped at 24 display cells); a leading integer is the duration, so `/pomodoro deep work` is a default-length block named `deep work`. `/pomodoro stop` cancels it, a second start replaces the running one, and the label is echoed in the banner. Parsed in `submit_composer`, drained via `take_requested_pomodoro` in `handle_post_submit_requests`; the timer itself is `App::pomodoro` (in-memory, no DB, dropped on disconnect) because `tick.rs` fires it and the status HUD draws it on every screen. Expiry rides the shared 1Hz edge: it banners and pushes a `GameEvents` desktop notification, and a running timer dirties that edge so the `MM:SS` badge in the top border counts down. The badge is the only width-degrading segment in `status_hud_title`: the right-aligned HUD paints over the left title, so the newcomer sheds its label and then itself when the border is tight (an 80-col terminal with unread mentions + voice + chips has no room for it) rather than eating the page tabs. Expiry still banners and notifies with the badge hidden. Peers see a presence badge instead: every session that changes its timer (start, stop, tick expiry, disconnect teardown in `ssh.rs`) publishes through `App::publish_pomodoro` into the process-shared `common/pomodoro.rs` snapshot-swap directory (same shape as the flair directory), which stores only `ends_at`, never the label; `tick.rs` resolves it once a second into `App::peer_pomodoros` and chat author labels paint the rounded-up whole-minute countdown as a presence badge after AFK. The badge string only changes on minute rollovers, so the chat-row epoch bump is 1/60th the resolve cadence.
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
 - `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
+- `/summary` asks the AI for a catch-up of the visible public room since the user's last read; see §14 Summary. `/history` opens the scroll-back modal, at the first unread message when the unread marker is set; see §14 History Modal.
 - `/voice` joins the enabled voice channel for the active room; `/mute` toggles paired-CLI mic mute.
 - `/ultimate` opens owned Ultimate Spells.
 - Staff-only `/audio`, `/audio fallback`, and `/audio skip` route trusted music controls.
@@ -377,7 +378,7 @@ Image uploads and inline rendering:
 Shared message actions live in `chat::input::handle_message_action_in_room`.
 
 Keys:
-- `j` / `k` and arrows move selected message.
+- `j` / `k` and arrows move selected message. When the selected message wraps taller than the pane, they (and the mouse wheel) first scroll by rows inside it, then move selection once its edge is reached: chat scroll is otherwise derived purely from selection (`ui.rs::effective_chat_scroll`), which pins a too-tall message's top and would leave its bottom unreachable. State is `ChatState::selection_scroll` (`rows` offset + renderer-measured `overflow`, both `Cell`s written back during draw, reset on any selection change); the measurement is one frame stale by design, so a held-down key skims across messages instead of crawling through every long one. `Ctrl+D`/`Ctrl+U` deliberately skip the fallback.
 - `Ctrl+D` / `Ctrl+U` move by an approximate half-page in message units.
 - `r` replies.
 - `e` edits.
@@ -538,7 +539,7 @@ Cache:
 | `h` / `l` / `left` / `right` | Switch room/synthetic selection |
 | `Ctrl+N` / `Ctrl+P` | Next/previous room |
 | `Space` | Room-jump mode |
-| `j` / `k` / arrows | Move message selection or synthetic-list selection |
+| `j` / `k` / arrows | Move message selection or synthetic-list selection; inside a selected message taller than the pane they scroll it by rows first (§9) |
 | `Ctrl+D` / `Ctrl+U` | Approximate half-page message selection |
 | `i` | Start composing in selected room, or start News composer when selected |
 | `/` | Start command composer in selected room |
@@ -658,6 +659,20 @@ Chat messages translate on demand (`t`) or, opt-in, automatically. The model cal
 - **Guardrails are for bugs and abuse, not for legitimate traffic**, which is orders of magnitude below them: a global daily call cap (`TRANSLATE_DAILY_CAP`, degrading to "translation unavailable" until UTC rollover), a 4-way concurrency gate so a burst queues instead of tripping API rate limits, and a body-length cap. Failures never retry on their own; `t` is the retry. `record_chat_translation` reports every outcome (`cache_hit` / `translated` / `same_language` / `failed` / `cap_exhausted` / `stale`), so the cache hit ratio and the cap are both visible.
 - **DMs and private rooms are included.** The *viewer* opted in and it is their received text, unlike Drunk Text above, which is excluded from private rooms because it rewrites what the *author* said.
 - Target language, auto mode, and the author-side English share are per account (`users.settings`: `translate_to`, `auto_translate`, `translate_mine_to_en`), edited under `Ctrl+O` → Settings → Translation; the first two sync into `ChatState` each tick, the third is read by `ChatService` at send/edit time. The settings row reads "Target language" because `translate_to` now decides two things: what `t` and auto mode translate into, and which authors' shared translations this session receives (a shared English row shows only to English-target readers).
+
+### History Modal
+
+Scroll-driven room history (`history_modal/`), opened by `/history` or by a search hit/mention older than the loaded tail. Three open modes on `ChatHistoryModalState`: `open_at_tail`, `open_at_message` (anchored, highlighted), and `open_at_unread`. `/history` picks between tail and unread by the session's unread marker (`ChatState::room_unread_markers`); the cutoff is always that pre-mark value, never `chat_room_members.last_read_at` read fresh, because opening the room already advanced the server cursor. `ChatService::load_history_unread_task` resolves the exact first unread server-side (`ChatMessage::first_unread_after`, same read-scope/ignore/system filters as history pages, so it can sit further back than the tail's 500) and answers through the anchor pipeline; when nothing qualifies it degrades to a plain tail page under the same request id, which the modal accepts as a tail open. The modal draws the same `new messages` divider as the live tail, before the first loaded message from someone else past the cutoff (`unread_divider_target`); a never-read room gets no divider, mirroring the live tail's flattened marker.
+
+### Summary
+
+`/summary` is the AI room catch-up: one call summarizing the visible public room since the user's last read. `app/ai/summary.rs` owns the whole pipeline (`SummaryService`, translate.rs-shaped); `ChatState` only parses the command, picks the window, and drains `SummaryEvent`s in tick (ready summaries open the shared `Overlay`, everything else banners).
+
+- **Window**: the pre-mark unread marker when set, else `SUMMARY_DEFAULT_WINDOW_HOURS` (24h) so a caught-up `/summary` still answers "what happened today"; a never-read room gets the max. The service clamps every request to `SUMMARY_MAX_WINDOW_HOURS` (48h) as cost policy.
+- **Bounded two ways** before the model sees anything: wall clock (48h) and transcript size (`SUMMARY_PROMPT_CHAR_BUDGET`, 200k chars, newest kept, oldest dropped). The SQL fetch limit is derived from the char budget (`SUMMARY_FETCH_LIMIT`, budget / minimum line size), so it bounds memory without being a third policy knob. The overlay header says when the caps cut messages.
+- **Public rooms only**, enforced in the SQL (`ChatMessage::list_public_room_since`: membership required, `visibility = 'public'`, system lines and ignored users excluded) with a fast client-side banner first. Private rooms and DMs never reach the summarizer.
+- **Guardrails**: per-user-per-room cooldown (`SUMMARY_COOLDOWN`, 10 min, armed on success only so `/summary` is its own retry), global daily cap (`SUMMARY_DAILY_CAP`), a 2-way concurrency gate, and `record_chat_summary` telemetry per outcome. Results are per viewer (everyone's cursor differs), so unlike translation there is no shared cache; the cooldown is what absorbs repeats.
+- The system prompt marks the transcript as untrusted chat content: instructions inside messages are reported, not followed.
 
 ### Tail And Delta Recovery
 

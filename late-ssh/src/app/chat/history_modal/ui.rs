@@ -80,6 +80,7 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
     let body_width = width.saturating_sub(TIME_WIDTH).max(1);
 
     let start = resolve_viewport(state, height, body_width);
+    let divider_before = state.unread_divider_target();
     let mut lines: Vec<Line<'static>> = Vec::with_capacity(height);
     let mut last_date: Option<chrono::NaiveDate> = None;
     let mut fully_shown = 0usize;
@@ -97,6 +98,16 @@ fn draw_messages(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {
                 format!("── {date} "),
                 Style::default().fg(theme::BORDER_DIM()),
             )));
+            if lines.len() >= height {
+                break;
+            }
+        }
+        // The unread divider hugs the first message past the viewer's read
+        // cursor, same label as the live tail's. Like the day separators it
+        // is left out of the viewport budgets: one row off-center is
+        // invisible.
+        if divider_before == Some(message.id) {
+            lines.push(new_messages_divider(width));
             if lines.len() >= height {
                 break;
             }
@@ -241,6 +252,21 @@ fn wrapped_body(state: &ChatHistoryModalState, message: &ChatMessage, width: usi
         out.push(String::new());
     }
     out
+}
+
+/// The `new messages` rule, same label as the live tail's divider
+/// (`chat::ui::push_new_messages_divider`), sized to the modal pane.
+fn new_messages_divider(width: usize) -> Line<'static> {
+    let label = " new messages ";
+    let rule_width = width.saturating_sub(label.len()).max(2);
+    let left = rule_width / 2;
+    let right = rule_width.saturating_sub(left);
+    let style = Style::default().fg(theme::TEXT_DIM());
+    Line::from(vec![
+        Span::styled("─".repeat(left), style),
+        Span::styled(label, style.add_modifier(Modifier::BOLD)),
+        Span::styled("─".repeat(right), style),
+    ])
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &ChatHistoryModalState) {

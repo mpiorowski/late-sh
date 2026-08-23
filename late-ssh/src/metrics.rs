@@ -28,6 +28,20 @@ pub enum TranslationResult {
     Stale,
 }
 
+/// How a `/summary` catch-up request resolved. `Summarized` is the variant
+/// that spent an API call; the rest are the guardrails and the empty case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryResult {
+    Summarized,
+    /// Nothing in the window to summarize; no call spent.
+    Empty,
+    Cooldown,
+    CapExhausted,
+    /// AI is disabled or unconfigured for this deployment.
+    Unavailable,
+    Failed,
+}
+
 /// How a five-minute online-time flush resolved. `Failed` means the batch is
 /// retained in memory for retry; a sustained run of failures is accruing time
 /// that dies with the process.
@@ -46,7 +60,10 @@ mod inner {
         metrics::{Counter, UpDownCounter},
     };
 
-    use super::{ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, TranslationResult};
+    use super::{
+        ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, SummaryResult,
+        TranslationResult,
+    };
 
     fn meter() -> opentelemetry::metrics::Meter {
         global::meter("late-ssh")
@@ -334,6 +351,31 @@ mod inner {
         );
     }
 
+    fn summary_result_label(result: SummaryResult) -> &'static str {
+        match result {
+            SummaryResult::Summarized => "summarized",
+            SummaryResult::Empty => "empty",
+            SummaryResult::Cooldown => "cooldown",
+            SummaryResult::CapExhausted => "cap_exhausted",
+            SummaryResult::Unavailable => "unavailable",
+            SummaryResult::Failed => "failed",
+        }
+    }
+
+    fn chat_summaries_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_summaries_total")
+                .with_description("Chat /summary catch-up requests by resolution")
+                .build()
+        })
+    }
+
+    pub fn record_chat_summary(result: SummaryResult) {
+        chat_summaries_total().add(1, &[KeyValue::new("result", summary_result_label(result))]);
+    }
+
     fn door_ingest_lines_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -399,7 +441,10 @@ mod inner {
 
 #[cfg(not(feature = "otel"))]
 mod inner {
-    use super::{ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, TranslationResult};
+    use super::{
+        ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, SummaryResult,
+        TranslationResult,
+    };
 
     pub fn record_ssh_connection() {}
     pub fn record_render(_reason: RenderReason) {}
@@ -416,6 +461,7 @@ mod inner {
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
+    pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}

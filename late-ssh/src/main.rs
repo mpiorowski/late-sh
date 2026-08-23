@@ -166,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
     let ai_service = AiService::new(config.ai.enabled, config.ai.api_key.clone());
     let translation_service =
         late_ssh::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
+    let summary_service =
+        late_ssh::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
     let chat_service = ChatService::new_with_active_users(
         db.clone(),
         notification_service.clone(),
@@ -338,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
         db: db.clone(),
         ai_service: ai_service.clone(),
         translation_service: translation_service.clone(),
+        summary_service: summary_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
         stream_service,

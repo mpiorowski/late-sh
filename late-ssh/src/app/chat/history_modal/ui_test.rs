@@ -31,7 +31,13 @@ fn message(index: u64, body: &str) -> ChatMessage {
 fn opened_with(bodies: &[&str]) -> ChatHistoryModalState {
     let mut state = ChatHistoryModalState::default();
     let request_id = Uuid::now_v7();
-    state.open_at_tail(Uuid::from_u128(1), "#lounge".to_string(), request_id);
+    state.open_at_tail(
+        Uuid::from_u128(1),
+        "#lounge".to_string(),
+        request_id,
+        Uuid::from_u128(42),
+        None,
+    );
     let messages = bodies
         .iter()
         .enumerate()
@@ -70,6 +76,8 @@ fn an_anchored_open_centers_the_anchor_by_wrapped_lines() {
         "#lounge".to_string(),
         anchor_id,
         request_id,
+        Uuid::from_u128(42),
+        None,
     );
     let messages = (0..41).map(|i| message(i, &format!("m{i}"))).collect();
     state.apply_anchor(request_id, anchor_id, messages, HashMap::new());

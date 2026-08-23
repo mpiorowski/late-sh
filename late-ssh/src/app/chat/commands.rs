@@ -140,6 +140,7 @@ const COMMANDS: &[Command] = &[
     global("settings", "open settings"),
     global("shop", "open the shop (badges, effects, companions)"),
     global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
+    global("summary", "AI catch-up of this room since your last read"),
     global("tea", "post tea cup"),
     global("unban", "lift a room ban (/unban @user)"),
     global("unfriend", "remove a friend mark (/unfriend @user)"),

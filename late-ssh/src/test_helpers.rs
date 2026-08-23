@@ -233,6 +233,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let ai_service = AiService::new(false, None);
     let translation_service =
         crate::app::ai::translate::TranslationService::new(db.clone(), ai_service.clone());
+    let summary_service =
+        crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
@@ -307,6 +309,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         notification_service,
         ai_service,
         translation_service,
+        summary_service,
         article_service,
         feed_service,
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -465,6 +468,10 @@ fn make_app_with_chat_service_and_permissions(
         stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: chat_service.clone(),
         translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        summary_service: crate::app::ai::summary::SummaryService::new(
             db.clone(),
             AiService::new(false, None),
         ),
@@ -679,6 +686,10 @@ pub fn make_app_with_paired_client(
         stream_service: test_stream_service(db.clone(), activity_tx.clone()),
         chat_service: ChatService::new(db.clone(), notification_service.clone()),
         translation_service: crate::app::ai::translate::TranslationService::new(
+            db.clone(),
+            AiService::new(false, None),
+        ),
+        summary_service: crate::app::ai::summary::SummaryService::new(
             db.clone(),
             AiService::new(false, None),
         ),

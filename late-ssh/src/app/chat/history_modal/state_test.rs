@@ -7,6 +7,9 @@ use uuid::Uuid;
 use super::{ChatHistoryModalState, HistoryStatus};
 
 const ROOM: u128 = 1;
+/// The session's own user; distinct from `message`'s author (7) so every
+/// generated message counts as "authored by someone else".
+const VIEWER: Uuid = Uuid::from_u128(42);
 
 /// `index` doubles as the ordering key, so a run built with ascending indices
 /// is already chronological.
@@ -33,7 +36,13 @@ fn run(range: std::ops::Range<u64>) -> Vec<ChatMessage> {
 fn opened_at_tail(count: u64) -> ChatHistoryModalState {
     let mut state = ChatHistoryModalState::default();
     let request_id = Uuid::now_v7();
-    state.open_at_tail(Uuid::from_u128(ROOM), "#lounge".to_string(), request_id);
+    state.open_at_tail(
+        Uuid::from_u128(ROOM),
+        "#lounge".to_string(),
+        request_id,
+        VIEWER,
+        None,
+    );
     state.set_visible_rows(10);
     state.apply_page(
         request_id,
@@ -128,6 +137,8 @@ fn an_anchored_open_becomes_ready_and_marks_the_anchor() {
         "#lounge".to_string(),
         anchor_id,
         request_id,
+        VIEWER,
+        None,
     );
     state.apply_anchor(request_id, anchor_id, run(0..41), HashMap::new());
 
@@ -146,6 +157,8 @@ fn a_missing_anchor_is_a_settled_state() {
         "#lounge".to_string(),
         Uuid::from_u128(999),
         request_id,
+        VIEWER,
+        None,
     );
     state.apply_anchor_missing(request_id);
 
@@ -154,4 +167,80 @@ fn a_missing_anchor_is_a_settled_state() {
     // message that does not exist.
     assert!(!state.wants_page(HistoryDirection::Older));
     assert!(!state.wants_page(HistoryDirection::Newer));
+}
+
+#[test]
+fn an_unread_open_lands_on_the_anchor_when_the_service_finds_one() {
+    let mut state = ChatHistoryModalState::default();
+    let request_id = Uuid::now_v7();
+    let cutoff = Utc::now() - Duration::hours(1);
+    state.open_at_unread(
+        Uuid::from_u128(ROOM),
+        "#lounge".to_string(),
+        request_id,
+        VIEWER,
+        Some(cutoff),
+    );
+    let anchor_id = message(20).id;
+    state.apply_anchor(request_id, anchor_id, run(0..41), HashMap::new());
+
+    assert_eq!(state.status(), HistoryStatus::Ready);
+    assert_eq!(state.anchor_id(), Some(anchor_id));
+    // The anchor sits mid-history, so newer messages must remain reachable.
+    state.set_visible_rows(10);
+    state.scroll(i32::MAX / 2);
+    assert!(state.wants_page(HistoryDirection::Newer));
+}
+
+#[test]
+fn an_unread_open_falls_back_to_a_tail_page() {
+    let mut state = ChatHistoryModalState::default();
+    let request_id = Uuid::now_v7();
+    state.open_at_unread(
+        Uuid::from_u128(ROOM),
+        "#lounge".to_string(),
+        request_id,
+        VIEWER,
+        Some(Utc::now()),
+    );
+    state.apply_page(
+        request_id,
+        HistoryDirection::Older,
+        run(0..30),
+        HashMap::new(),
+    );
+
+    // Nothing unread survived server-side: the open settles exactly like a
+    // tail open, no anchor to highlight.
+    assert_eq!(state.status(), HistoryStatus::Ready);
+    assert_eq!(state.anchor_id(), None);
+    assert_eq!(state.messages().len(), 30);
+}
+
+#[test]
+fn unread_divider_targets_the_first_foreign_message_past_the_cutoff() {
+    let mut state = ChatHistoryModalState::default();
+    let request_id = Uuid::now_v7();
+    let mut messages = run(0..20);
+    // The viewer's own message right past the cutoff must not take the
+    // divider; the first message by someone else does.
+    messages[10].user_id = VIEWER;
+    // Cutoff at message 9: messages 10..20 count as unread.
+    let cutoff = messages[9].created;
+    state.open_at_tail(
+        Uuid::from_u128(ROOM),
+        "#lounge".to_string(),
+        request_id,
+        VIEWER,
+        Some(cutoff),
+    );
+    state.apply_page(request_id, HistoryDirection::Older, messages, HashMap::new());
+
+    assert_eq!(state.unread_divider_target(), Some(message(11).id));
+}
+
+#[test]
+fn no_cutoff_means_no_divider() {
+    let state = opened_at_tail(20);
+    assert_eq!(state.unread_divider_target(), None);
 }

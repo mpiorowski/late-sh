@@ -370,6 +370,13 @@ pub fn handle_scroll(app: &mut App, delta: isize) {
 }
 
 pub fn handle_scroll_in_room(app: &mut App, room_id: Uuid, delta: isize) {
+    // Wheel notches arrive as ±1 and get the same row-first fallback as
+    // `j`/`k` so a too-tall selected message stays readable. Larger deltas
+    // (PageUp/PageDown mirroring Ctrl-U/Ctrl-D) are deliberate jumps and
+    // skip it, like Ctrl-U/Ctrl-D themselves.
+    if delta.abs() == 1 && app.chat.scroll_selected_message_rows(-delta) {
+        return;
+    }
     select_message_in_room(app, room_id, delta);
 }
 
@@ -569,12 +576,20 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
     }
 
     match byte {
+        // Single-step moves scroll by rows inside a selected message that
+        // wraps taller than the pane before stepping off it; without the
+        // fallback a too-tall message's bottom is unreachable, since the
+        // viewport is otherwise derived purely from the selection.
         b'j' | b'J' => {
-            select_message_in_room(app, room_id, -1);
+            if !app.chat.scroll_selected_message_rows(1) {
+                select_message_in_room(app, room_id, -1);
+            }
             true
         }
         b'k' | b'K' => {
-            select_message_in_room(app, room_id, 1);
+            if !app.chat.scroll_selected_message_rows(-1) {
+                select_message_in_room(app, room_id, 1);
+            }
             true
         }
         0x04 => {
@@ -613,12 +628,18 @@ pub fn handle_message_arrow(app: &mut App, key: u8) -> bool {
 
 pub fn handle_message_arrow_in_room(app: &mut App, room_id: Uuid, key: u8) -> bool {
     match key {
+        // Arrows fall back the same way `j`/`k` do: rows inside a too-tall
+        // selected message first, then the adjacent message.
         b'A' => {
-            select_message_in_room(app, room_id, 1);
+            if !app.chat.scroll_selected_message_rows(-1) {
+                select_message_in_room(app, room_id, 1);
+            }
             true
         }
         b'B' => {
-            select_message_in_room(app, room_id, -1);
+            if !app.chat.scroll_selected_message_rows(1) {
+                select_message_in_room(app, room_id, -1);
+            }
             true
         }
         _ => false,

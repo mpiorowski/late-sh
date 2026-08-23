@@ -63,6 +63,15 @@ pub(crate) struct ChatHistoryModalState {
     scroll_index: Cell<usize>,
     /// A parking request for the next rendered frame; see [`Park`].
     park: Cell<Option<Park>>,
+    /// The viewer, for the unread divider's "authored by someone else".
+    viewer_id: Option<Uuid>,
+    /// Draw the `new messages` divider before the first loaded message
+    /// authored by someone else and created after this instant. Captured
+    /// from the session's own unread marker at open, because the server-side
+    /// read cursor has usually already advanced by then (opening the room is
+    /// what marks it read). `None` (no marker, or a never-read room, mirroring
+    /// the live tail's divider) means no divider.
+    unread_cutoff: Option<DateTime<Utc>>,
     /// Request id of the in-flight page for each edge, at most one apiece, so
     /// holding a scroll key queues one fetch instead of one per key repeat.
     pending_older: Option<Uuid>,
@@ -95,6 +104,8 @@ impl Default for ChatHistoryModalState {
             status: HistoryStatus::Loading,
             scroll_index: Cell::new(0),
             park: Cell::new(None),
+            viewer_id: None,
+            unread_cutoff: None,
             pending_older: None,
             pending_newer: None,
             pending_open: None,
@@ -157,7 +168,14 @@ impl ChatHistoryModalState {
 
     /// Open at the room's newest messages. Nothing is newer than the tail, so
     /// that edge starts exhausted and never asks for a page.
-    pub(crate) fn open_at_tail(&mut self, room_id: Uuid, room_label: String, request_id: Uuid) {
+    pub(crate) fn open_at_tail(
+        &mut self,
+        room_id: Uuid,
+        room_label: String,
+        request_id: Uuid,
+        viewer_id: Uuid,
+        unread_cutoff: Option<DateTime<Utc>>,
+    ) {
         *self = Self {
             open: true,
             room_id: Some(room_id),
@@ -165,6 +183,8 @@ impl ChatHistoryModalState {
             status: HistoryStatus::Loading,
             pending_open: Some(request_id),
             exhausted_newer: true,
+            viewer_id: Some(viewer_id),
+            unread_cutoff,
             ..Self::default()
         };
     }
@@ -177,6 +197,8 @@ impl ChatHistoryModalState {
         room_label: String,
         anchor_id: Uuid,
         request_id: Uuid,
+        viewer_id: Uuid,
+        unread_cutoff: Option<DateTime<Utc>>,
     ) {
         *self = Self {
             open: true,
@@ -185,8 +207,50 @@ impl ChatHistoryModalState {
             anchor_id: Some(anchor_id),
             status: HistoryStatus::Loading,
             pending_open: Some(request_id),
+            viewer_id: Some(viewer_id),
+            unread_cutoff,
             ..Self::default()
         };
+    }
+
+    /// Open at the room's first unread message when the service can find
+    /// one, else at the tail. Which of the two happened arrives with the
+    /// answer: an anchor load (`apply_anchor`) centers and highlights the
+    /// first unread, a plain page (`apply_page`) is the tail fallback. The
+    /// newer edge starts unexhausted because an anchor landing mid-history
+    /// must be able to page forward; for the tail fallback the first
+    /// newer-edge probe comes back empty and settles the flag.
+    pub(crate) fn open_at_unread(
+        &mut self,
+        room_id: Uuid,
+        room_label: String,
+        request_id: Uuid,
+        viewer_id: Uuid,
+        unread_cutoff: Option<DateTime<Utc>>,
+    ) {
+        *self = Self {
+            open: true,
+            room_id: Some(room_id),
+            room_label,
+            status: HistoryStatus::Loading,
+            pending_open: Some(request_id),
+            viewer_id: Some(viewer_id),
+            unread_cutoff,
+            ..Self::default()
+        };
+    }
+
+    /// The message the `new messages` divider is drawn before: the first
+    /// loaded message authored by someone else past the unread cutoff. The
+    /// target can shift as older pages splice in; it converges on the true
+    /// first unread once the run reaches back past the cutoff.
+    pub(crate) fn unread_divider_target(&self) -> Option<Uuid> {
+        let cutoff = self.unread_cutoff?;
+        let viewer = self.viewer_id?;
+        self.messages
+            .iter()
+            .find(|m| m.created > cutoff && m.user_id != viewer)
+            .map(|m| m.id)
     }
 
     pub(crate) fn close(&mut self) {

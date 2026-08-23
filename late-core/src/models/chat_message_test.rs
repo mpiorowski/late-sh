@@ -485,3 +485,241 @@ async fn history_pages_walk_the_room_without_gaps_or_repeats() {
     let forward_ids: Vec<Uuid> = forward.iter().map(|message| message.id).collect();
     assert_eq!(forward_ids, expected_ids[1..].to_vec());
 }
+
+#[tokio::test]
+async fn list_public_room_since_scopes_to_public_members_and_window() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let member = User::create(
+        &client,
+        UserParams {
+            fingerprint: "sum-member".to_string(),
+            username: "summember".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let peer = User::create(
+        &client,
+        UserParams {
+            fingerprint: "sum-peer".to_string(),
+            username: "sumpeer".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    crate::models::chat_room_member::ChatRoomMember::join(&client, room.id, member.id)
+        .await
+        .unwrap();
+    crate::models::chat_room_member::ChatRoomMember::join(&client, room.id, peer.id)
+        .await
+        .unwrap();
+
+    let early = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: peer.id,
+            body: "before the window".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let late = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: peer.id,
+            body: "inside the window".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let own = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: member.id,
+            body: "my own reply".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Floor between the two peer messages: only the later two qualify, own
+    // messages included, oldest first.
+    let page = ChatMessage::list_public_room_since(&client, room.id, member.id, early.created, &[], 100)
+        .await
+        .unwrap();
+    let ids: Vec<Uuid> = page.iter().map(|message| message.id).collect();
+    assert_eq!(ids, vec![late.id, own.id]);
+
+    // Over-cap backlogs keep the newest end.
+    let capped = ChatMessage::list_public_room_since(&client, room.id, member.id, early.created, &[], 1)
+        .await
+        .unwrap();
+    let capped_ids: Vec<Uuid> = capped.iter().map(|message| message.id).collect();
+    assert_eq!(capped_ids, vec![own.id]);
+
+    // An ignored author disappears from the transcript.
+    let filtered = ChatMessage::list_public_room_since(
+        &client,
+        room.id,
+        member.id,
+        early.created,
+        &[peer.id],
+        100,
+    )
+    .await
+    .unwrap();
+    let filtered_ids: Vec<Uuid> = filtered.iter().map(|message| message.id).collect();
+    assert_eq!(filtered_ids, vec![own.id]);
+
+    // A non-member gets nothing: membership is the auth boundary even for a
+    // public room, because /summary runs from rooms the caller sits in.
+    let outsider = User::create(
+        &client,
+        UserParams {
+            fingerprint: "sum-outsider".to_string(),
+            username: "sumoutsider".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let outside = ChatMessage::list_public_room_since(
+        &client,
+        room.id,
+        outsider.id,
+        early.created,
+        &[],
+        100,
+    )
+    .await
+    .unwrap();
+    assert!(outside.is_empty());
+}
+
+#[tokio::test]
+async fn list_public_room_since_never_reads_private_rooms() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let owner = User::create(
+        &client,
+        UserParams {
+            fingerprint: "sum-priv-owner".to_string(),
+            username: "sumprivowner".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let room = ChatRoom::create_private_room(&client, "sum-private", owner.id)
+        .await
+        .unwrap();
+    crate::models::chat_room_member::ChatRoomMember::join(&client, room.id, owner.id)
+        .await
+        .unwrap();
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: owner.id,
+            body: "private words".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Even the room's own member gets an empty page: private content must
+    // never reach the summarizer, membership or not.
+    let floor = chrono::Utc::now() - chrono::Duration::hours(1);
+    let page = ChatMessage::list_public_room_since(&client, room.id, owner.id, floor, &[], 100)
+        .await
+        .unwrap();
+    assert!(page.is_empty());
+}
+
+#[tokio::test]
+async fn first_unread_after_finds_the_oldest_foreign_message_past_the_cutoff() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let room = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let member = User::create(
+        &client,
+        UserParams {
+            fingerprint: "unread-member".to_string(),
+            username: "unreadmember".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    let peer = User::create(
+        &client,
+        UserParams {
+            fingerprint: "unread-peer".to_string(),
+            username: "unreadpeer".to_string(),
+            settings: serde_json::json!({}),
+        },
+    )
+    .await
+    .unwrap();
+    crate::models::chat_room_member::ChatRoomMember::join(&client, room.id, member.id)
+        .await
+        .unwrap();
+    crate::models::chat_room_member::ChatRoomMember::join(&client, room.id, peer.id)
+        .await
+        .unwrap();
+
+    let read = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: peer.id,
+            body: "already read".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    // The member's own message past the cutoff must not count as unread.
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: member.id,
+            body: "my own message".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    let first_unread = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: peer.id,
+            body: "first unread".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let found = ChatMessage::first_unread_after(&client, room.id, member.id, read.created, &[])
+        .await
+        .unwrap()
+        .expect("first unread found");
+    assert_eq!(found.id, first_unread.id);
+
+    // Ignoring the only unread author leaves nothing to point at.
+    let none =
+        ChatMessage::first_unread_after(&client, room.id, member.id, read.created, &[peer.id])
+            .await
+            .unwrap();
+    assert!(none.is_none());
+}

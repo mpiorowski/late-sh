@@ -2232,6 +2232,7 @@ fn chat_state_with_cyberspace(
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
     // Dead base URL: state logic under test never talks to the network.
@@ -2243,6 +2244,7 @@ fn chat_state_with_cyberspace(
         ChatServices {
             chat,
             translation,
+            summary,
             notifications,
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -3035,6 +3037,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let mut translation_events = translation.subscribe();
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
@@ -3042,6 +3045,7 @@ async fn auto_mode_requests_fire_without_a_pending_placeholder() {
         ChatServices {
             chat: chat.clone(),
             translation,
+            summary,
             notifications,
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -3194,6 +3198,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
+    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let mut translation_events = translation.subscribe();
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
@@ -3201,6 +3206,7 @@ async fn author_shared_translations_show_without_auto_mode_or_t() {
         ChatServices {
             chat,
             translation: translation.clone(),
+            summary,
             notifications,
             articles,
             feeds: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
@@ -3470,4 +3476,28 @@ fn parse_golive_clamps_titles_at_the_boundary() {
         }
         other => panic!("expected clamped obs title, got {other:?}"),
     }
+}
+
+#[test]
+fn selection_scroll_steps_within_measured_overflow_and_reports_edges() {
+    let scroll = SelectionScroll::default();
+    // No measurement yet (or a selection that fits): every step falls
+    // through to selection movement.
+    assert!(!scroll.step(1));
+    assert!(!scroll.step(-1));
+
+    scroll.overflow.set(3);
+    assert!(scroll.step(1));
+    assert!(scroll.step(1));
+    assert!(scroll.step(1));
+    assert_eq!(scroll.rows.get(), 3);
+    // The bottom edge is reached: the next step falls through.
+    assert!(!scroll.step(1));
+
+    assert!(scroll.step(-1));
+    assert_eq!(scroll.rows.get(), 2);
+
+    scroll.reset();
+    assert_eq!(scroll.rows.get(), 0);
+    assert!(!scroll.step(1));
 }

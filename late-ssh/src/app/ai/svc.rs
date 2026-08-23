@@ -181,6 +181,19 @@ impl AiService {
         self.generate(system_prompt, history, false, 2048).await
     }
 
+    /// An ungrounded reply with a full-size output budget: no Google Search
+    /// (the answer is entirely in the prompt), but room for a multi-paragraph
+    /// result plus a thinking model's reasoning tokens, which count against
+    /// `maxOutputTokens` too. Used by the chat catch-up summarizer, whose
+    /// input is large (a room's unread backlog) and whose output is prose.
+    pub async fn generate_ungrounded(
+        &self,
+        system_prompt: &str,
+        prompt: &str,
+    ) -> Result<Option<String>> {
+        self.generate(system_prompt, prompt, false, 8192).await
+    }
+
     async fn generate(
         &self,
         system_prompt: &str,

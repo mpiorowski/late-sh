@@ -33,6 +33,7 @@ use uuid::Uuid;
 use late_core::models::chat_message::HistoryDirection;
 
 use crate::app::ai::ladder::MentionLadders;
+use crate::app::ai::summary::{SummaryEvent, SummaryOutcome, SummaryService};
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
@@ -699,6 +700,10 @@ pub struct ChatState {
     /// fire-and-forget; results land on `translation_rx` and drain in tick.
     translation_service: TranslationService,
     translation_rx: tokio::sync::broadcast::Receiver<TranslationEvent>,
+    /// `/summary` handle + result feed (`app/ai/summary.rs`), same
+    /// fire-and-forget contract as translation.
+    summary_service: SummaryService,
+    summary_rx: tokio::sync::broadcast::Receiver<SummaryEvent>,
     /// This session's translations for the current target language, keyed by
     /// message id. Cleared when the target language changes.
     pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
@@ -715,6 +720,10 @@ pub struct ChatState {
     translate_to: TranslateLang,
     auto_translate: bool,
     pub(crate) selected_message_id: Option<Uuid>,
+    /// Row-level viewport offset inside a selected message that wraps taller
+    /// than the chat pane; see [`SelectionScroll`]. Reset whenever the
+    /// selection lands on a different message.
+    pub(crate) selection_scroll: SelectionScroll,
     /// Armed by a first `d` press on a message; a second `d` on the same
     /// still-selected message confirms the delete. Any selection change or
     /// clear disarms it so a stale confirm can't reap the wrong message.
@@ -852,6 +861,49 @@ pub struct ChatState {
     pub(crate) last_image_upload_at: Option<std::time::Instant>,
 }
 
+/// Row-level scroll inside a selected message that wraps taller than the
+/// chat pane. Chat scroll is otherwise derived purely from message
+/// selection, which pins a too-tall message's top edge and leaves its
+/// bottom unreachable; this is the escape hatch `j`/`k` fall back to.
+///
+/// `rows` is how many rows past the message's pinned top the viewport
+/// starts; `overflow` is the renderer's measurement of how far `rows` can
+/// go (0 for a selection that fits the pane). Both are `Cell`s because the
+/// renderer writes them through the shared view's `&self`: it publishes
+/// `overflow` each frame and clamps `rows` back when a resize shrinks the
+/// range. Input reads the previous frame's measurement, the same one-frame
+/// contract as the history modal's `visible_rows`.
+#[derive(Default)]
+pub struct SelectionScroll {
+    pub(crate) rows: Cell<usize>,
+    pub(crate) overflow: Cell<usize>,
+}
+
+impl SelectionScroll {
+    fn reset(&self) {
+        self.rows.set(0);
+        self.overflow.set(0);
+    }
+
+    /// Apply a row delta against the last measured overflow. Returns whether
+    /// the viewport moved; `false` means that direction has nothing left to
+    /// reveal (or the selection fits the pane) and the caller should move
+    /// the selection instead.
+    fn step(&self, delta: isize) -> bool {
+        let overflow = self.overflow.get();
+        if overflow == 0 {
+            return false;
+        }
+        let current = self.rows.get();
+        let next = (current as isize + delta).clamp(0, overflow as isize) as usize;
+        if next == current {
+            return false;
+        }
+        self.rows.set(next);
+        true
+    }
+}
+
 /// What the UI knows about one message's translation into the session's
 /// target language. `Failed` renders nothing but lets `t` retry.
 /// `SameLanguage` renders nothing and sticks: the model already judged the
@@ -867,6 +919,7 @@ pub enum TranslationDisplay {
 pub(crate) struct ChatServices {
     pub chat: ChatService,
     pub translation: crate::app::ai::translate::TranslationService,
+    pub summary: crate::app::ai::summary::SummaryService,
     pub notifications: NotificationService,
     pub articles: news::svc::ArticleService,
     pub feeds: feeds::svc::FeedService,
@@ -894,6 +947,7 @@ impl ChatState {
         let ChatServices {
             chat: service,
             translation: translation_service,
+            summary: summary_service,
             notifications: notification_service,
             articles: article_service,
             feeds: feed_service,
@@ -972,6 +1026,8 @@ impl ChatState {
             voice_channels_by_room_id: HashMap::new(),
             translation_rx: translation_service.subscribe(),
             translation_service,
+            summary_rx: summary_service.subscribe(),
+            summary_service,
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
             translation_manual: HashSet::new(),
@@ -979,6 +1035,7 @@ impl ChatState {
             translate_to: TranslateLang::En,
             auto_translate: false,
             selected_message_id: None,
+            selection_scroll: SelectionScroll::default(),
             pending_delete_message_id: None,
             reaction_leader_active: false,
             highlighted_message_id: None,
@@ -1091,6 +1148,7 @@ impl ChatState {
         self.composing = true;
         self.composer_room_id = Some(room_id);
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.reply_target = None;
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
@@ -1405,6 +1463,66 @@ impl ChatState {
         banner
     }
 
+    /// Drain `/summary` results. A ready summary opens the shared overlay
+    /// (the `/rules` surface); every other outcome banners. The broadcast
+    /// carries all users' results, so foreign events are dropped here.
+    fn drain_summary_events(&mut self) -> Option<Banner> {
+        use tokio::sync::broadcast::error::TryRecvError;
+        let mut banner = None;
+        loop {
+            let event = match self.summary_rx.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Lagged(_)) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            };
+            if event.user_id != self.user_id {
+                continue;
+            }
+            match event.outcome {
+                SummaryOutcome::Ready {
+                    text,
+                    message_count,
+                    since,
+                    truncated,
+                } => {
+                    let plural = if message_count == 1 { "" } else { "s" };
+                    let mut head = format!(
+                        "{message_count} message{plural} since {}",
+                        since.format("%b %d %H:%M UTC")
+                    );
+                    if truncated {
+                        head.push_str(" · older messages past the cap left out");
+                    }
+                    let mut lines = vec![head, String::new()];
+                    lines.extend(text.lines().map(str::to_string));
+                    self.overlay = Some(Overlay::new(
+                        format!("{} catch-up", event.room_label),
+                        lines,
+                    ));
+                }
+                SummaryOutcome::Empty => {
+                    banner = Some(Banner::info("Nothing new to summarize"));
+                }
+                SummaryOutcome::Cooldown { remaining } => {
+                    let minutes = remaining.as_secs().div_ceil(60).max(1);
+                    banner = Some(Banner::info(&format!(
+                        "Summary cooling down, try again in {minutes}m"
+                    )));
+                }
+                SummaryOutcome::CapExhausted => {
+                    banner = Some(Banner::error("Summaries hit today's cap, back tomorrow"));
+                }
+                SummaryOutcome::Unavailable => {
+                    banner = Some(Banner::error("Summaries are not available here"));
+                }
+                SummaryOutcome::Failed => {
+                    banner = Some(Banner::error("Summary failed, try again"));
+                }
+            }
+        }
+        banner
+    }
+
     fn flush_pending_read_cursors(&mut self) {
         let room_ids = self.pending_read_flush.take_all();
         self.flush_read_cursors(room_ids);
@@ -1703,6 +1821,7 @@ impl ChatState {
         self.pending_delete_message_id = None;
         if ids.is_empty() {
             self.selected_message_id = None;
+            self.selection_scroll.reset();
             return;
         }
 
@@ -1717,7 +1836,24 @@ impl ChatState {
             None => 0,
         };
 
+        // A clamped move that stays on the same message keeps its row
+        // offset; landing anywhere else starts reading from the top again.
+        if self.selected_message_id != Some(ids[new_idx]) {
+            self.selection_scroll.reset();
+        }
         self.selected_message_id = Some(ids[new_idx]);
+    }
+
+    /// Scroll by rows inside the selected message when it wraps taller than
+    /// the chat pane. Positive walks toward the message's end, negative back
+    /// toward its top. Returns whether the viewport moved; `false` means
+    /// there is nothing left to reveal in that direction and the caller
+    /// should move the selection instead. The overflow measurement is the
+    /// previous frame's, so a fresh selection reads 0 until it has rendered
+    /// once; a held-down key therefore skims across messages instead of
+    /// getting stuck inside every long one.
+    pub(crate) fn scroll_selected_message_rows(&mut self, delta: isize) -> bool {
+        self.selected_message_id.is_some() && self.selection_scroll.step(delta)
     }
 
     /// Move message cursor by delta. Positive = toward older, negative = toward newer.
@@ -1736,11 +1872,13 @@ impl ChatState {
         self.reaction_leader_active = false;
         self.pending_delete_message_id = None;
         self.selected_message_id = None;
+        self.selection_scroll.reset();
     }
 
     pub fn focus_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) {
         self.reaction_leader_active = false;
         self.pending_delete_message_id = None;
+        self.selection_scroll.reset();
         // Every synthetic entry drops, the open cyberspace room included: a
         // jump lands on a real room, and a room nobody is looking at must not
         // keep its stream and heartbeat running.
@@ -1900,6 +2038,7 @@ impl ChatState {
             .iter()
             .find(|(room, _)| room.id == room_id)
             .and_then(|(_, msgs)| adjacent_message_id(msgs, selected_id));
+        self.selection_scroll.reset();
         Some(Banner::success("Deleting message..."))
     }
 
@@ -1972,6 +2111,9 @@ impl ChatState {
         self.highlighted_message_id = None;
         self.pending_delete_message_id = None;
         let changed = self.selected_message_id != Some(message_id);
+        if changed {
+            self.selection_scroll.reset();
+        }
         self.selected_message_id = Some(message_id);
         changed
     }
@@ -2004,11 +2146,16 @@ impl ChatState {
     }
 
     /// Open the history modal at a room's newest messages (the `/history`
-    /// path).
+    /// path for a caught-up room).
     pub(crate) fn open_history_at_tail(&mut self, room_id: Uuid) {
         let request_id = Uuid::now_v7();
-        self.history_modal
-            .open_at_tail(room_id, self.history_room_label(room_id), request_id);
+        self.history_modal.open_at_tail(
+            room_id,
+            self.history_room_label(room_id),
+            request_id,
+            self.user_id,
+            self.history_unread_cutoff(room_id),
+        );
         let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
         self.service.load_history_page_task(
             self.user_id,
@@ -2030,6 +2177,8 @@ impl ChatState {
             self.history_room_label(room_id),
             message_id,
             request_id,
+            self.user_id,
+            self.history_unread_cutoff(room_id),
         );
         let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
         self.service.load_history_anchor_task(
@@ -2038,6 +2187,38 @@ impl ChatState {
             message_id,
             exclude_user_ids,
         );
+    }
+
+    /// Open the history modal at the room's first unread message (the
+    /// `/history` path while the unread marker is set). The service resolves
+    /// the exact first unread even when it sits further back than the live
+    /// tail's 500; a room with nothing unread server-side falls back to a
+    /// plain tail page under the same request id.
+    pub(crate) fn open_history_at_unread(&mut self, room_id: Uuid, cutoff: DateTime<Utc>) {
+        let request_id = Uuid::now_v7();
+        self.history_modal.open_at_unread(
+            room_id,
+            self.history_room_label(room_id),
+            request_id,
+            self.user_id,
+            Some(cutoff),
+        );
+        let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+        self.service.load_history_unread_task(
+            self.user_id,
+            request_id,
+            room_id,
+            cutoff,
+            exclude_user_ids,
+        );
+    }
+
+    /// The unread cutoff the history modal's divider draws against: the
+    /// pre-mark `last_read_at` captured by the room's tail load. A missing
+    /// marker (caught up) or a never-read room (inner `None`) yields no
+    /// divider, mirroring the live tail.
+    fn history_unread_cutoff(&self, room_id: Uuid) -> Option<DateTime<Utc>> {
+        self.room_unread_markers.get(&room_id).copied().flatten()
     }
 
     /// Title for the history modal. A public-room mention can point at a room
@@ -2430,6 +2611,7 @@ impl ChatState {
 
     pub(crate) fn select_room_slot(&mut self, slot: RoomSlot) -> bool {
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.reaction_leader_active = false;
         self.highlighted_message_id = None;
 
@@ -2883,12 +3065,62 @@ impl ChatState {
             return None;
         }
 
+        if body.trim() == "/summary" {
+            self.clear_composer_after_submit();
+            let Some(room_id) = self.visible_room_id else {
+                return Some(Banner::error("open a room first"));
+            };
+            let Some((room, _)) = self.rooms.iter().find(|(room, _)| room.id == room_id) else {
+                return Some(Banner::error("open a room first"));
+            };
+            // Public rooms only, checked again in the SQL; this one is for
+            // an immediate, honest banner.
+            if room.visibility != "public" {
+                return Some(Banner::error("Summaries cover public rooms only"));
+            }
+            // The window: since the pre-mark unread marker when one is set
+            // (the server cursor advanced the moment the room opened), else
+            // a default look-back so a caught-up `/summary` still answers
+            // "what happened today". A never-read room gets the max window.
+            let since = match self.room_unread_markers.get(&room_id) {
+                Some(Some(marker)) => *marker,
+                Some(None) => {
+                    Utc::now()
+                        - chrono::Duration::hours(
+                            crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS,
+                        )
+                }
+                None => {
+                    Utc::now()
+                        - chrono::Duration::hours(
+                            crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS,
+                        )
+                }
+            };
+            let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+            self.summary_service.request(
+                self.user_id,
+                room_id,
+                self.history_room_label(room_id),
+                since,
+                exclude_user_ids,
+            );
+            return Some(Banner::info("Summarizing…"));
+        }
+
         if body.trim() == "/history" {
             self.clear_composer_after_submit();
             let Some(room_id) = self.visible_room_id else {
                 return Some(Banner::error("open a room first"));
             };
-            self.open_history_at_tail(room_id);
+            // With unread messages waiting, land on the first of them
+            // instead of the tail; the cutoff is the session's pre-mark
+            // unread marker, since the server cursor advanced the moment
+            // the room was opened.
+            match self.history_unread_cutoff(room_id) {
+                Some(cutoff) => self.open_history_at_unread(room_id, cutoff),
+                None => self.open_history_at_tail(room_id),
+            }
             return None;
         }
 
@@ -4148,11 +4380,13 @@ impl ChatState {
             || !self.targeted_event_rx.is_empty()
             || !self.event_rx.is_empty()
             || !self.moderation_event_rx.is_empty()
-            || !self.translation_rx.is_empty();
+            || !self.translation_rx.is_empty()
+            || !self.summary_rx.is_empty();
         self.drain_username_directory();
         let changed = self.drain_snapshot() || changed;
         let banner = self.drain_events();
         let translation_banner = self.drain_translation_events();
+        let summary_banner = self.drain_summary_events();
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
@@ -4223,6 +4457,7 @@ impl ChatState {
         let banner = moderation_banner
             .or(banner)
             .or(translation_banner)
+            .or(summary_banner)
             .or(feeds_tick.banner)
             .or(news_tick.banner)
             .or(notif_tick.banner)
@@ -4261,6 +4496,7 @@ impl ChatState {
         self.showcase_selected = false;
         self.work_selected = false;
         self.selected_message_id = None;
+        self.selection_scroll.reset();
         self.highlighted_message_id = None;
     }
 

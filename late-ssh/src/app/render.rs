@@ -579,6 +579,7 @@ impl App {
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
             chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+            selection_scroll: Some(&self.chat.selection_scroll),
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
@@ -747,6 +748,7 @@ impl App {
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
             chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+            selection_scroll: Some(&self.chat.selection_scroll),
         };
         self.settings_modal_state
             .set_modal_width(settings_modal::ui::MODAL_WIDTH);
@@ -812,6 +814,7 @@ impl App {
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                    selection_scroll: Some(&self.chat.selection_scroll),
                 });
         let house_chat_view =
             self.house
@@ -875,6 +878,7 @@ impl App {
                     composer_rect_slot: Some(&self.chat.last_composer_rect),
                     composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                    selection_scroll: Some(&self.chat.selection_scroll),
                 });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.

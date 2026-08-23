@@ -190,6 +190,7 @@ pub struct SessionConfig {
     pub stream_service: crate::app::stream::svc::StreamService,
     pub chat_service: ChatService,
     pub translation_service: crate::app::ai::translate::TranslationService,
+    pub summary_service: crate::app::ai::summary::SummaryService,
     pub notification_service: NotificationService,
     pub article_service: ArticleService,
     pub feed_service: crate::app::chat::feeds::svc::FeedService,
@@ -1357,6 +1358,7 @@ impl App {
                 chat::state::ChatServices {
                     chat: config.chat_service,
                     translation: config.translation_service,
+                    summary: config.summary_service,
                     notifications: config.notification_service,
                     articles: config.article_service.clone(),
                     feeds: config.feed_service.clone(),

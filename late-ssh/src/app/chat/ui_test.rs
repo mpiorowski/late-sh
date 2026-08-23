@@ -124,14 +124,50 @@ fn chat_composer_layout_keeps_one_blank_row_gap() {
 
 #[test]
 fn effective_chat_scroll_keeps_selected_message_off_top_edge() {
-    let scroll = effective_chat_scroll(40, 10, Some((24, 25)));
+    let (scroll, overflow) = effective_chat_scroll(40, 10, Some((24, 25)), 0);
     assert_eq!(scroll, 8);
+    assert_eq!(overflow, 0);
 }
 
 #[test]
 fn effective_chat_scroll_keeps_selected_message_off_bottom_edge() {
-    let scroll = effective_chat_scroll(40, 10, Some((29, 31)));
+    let (scroll, overflow) = effective_chat_scroll(40, 10, Some((29, 31)), 0);
     assert_eq!(scroll, 3);
+    assert_eq!(overflow, 0);
+}
+
+#[test]
+fn effective_chat_scroll_reports_overflow_for_a_message_taller_than_the_pane() {
+    // 25 rows of message in a 10-row pane: the top pins at start - margin
+    // (row 8), the pane shows rows 8..18, and rows 18..37 (message end 35
+    // plus the 2-row margin) are left to walk through.
+    let (scroll, overflow) = effective_chat_scroll(40, 10, Some((10, 35)), 0);
+    assert_eq!(scroll, 40 - 18);
+    assert_eq!(overflow, 19);
+}
+
+#[test]
+fn effective_chat_scroll_offset_walks_a_tall_message_bottom_into_view() {
+    let (base_scroll, overflow) = effective_chat_scroll(40, 10, Some((10, 35)), 0);
+    // Each offset step reveals one more row below.
+    let (scroll, _) = effective_chat_scroll(40, 10, Some((10, 35)), 5);
+    assert_eq!(scroll, base_scroll - 5);
+    // At full overflow the message's last row plus the margin is visible.
+    let (scroll, _) = effective_chat_scroll(40, 10, Some((10, 35)), overflow);
+    assert_eq!(40 - scroll, 35 + 2);
+    // An offset past the overflow clamps rather than scrolling into the
+    // messages below.
+    let (clamped, _) = effective_chat_scroll(40, 10, Some((10, 35)), overflow + 50);
+    assert_eq!(clamped, scroll);
+}
+
+#[test]
+fn effective_chat_scroll_overflow_stops_at_the_newest_row() {
+    // A tall message at the very tail: nothing below it, so the walk ends
+    // exactly at the bottom of the loaded rows.
+    let (_, overflow) = effective_chat_scroll(40, 10, Some((15, 40)), 0);
+    let (scroll, _) = effective_chat_scroll(40, 10, Some((15, 40)), overflow);
+    assert_eq!(scroll, 0);
 }
 
 #[test]
@@ -446,7 +482,7 @@ fn mentions_and_replies_paint_a_background_wash() {
             .iter()
             .position(|owner| *owner == Some(message_id))
             .expect("message should own at least one row");
-        let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len());
+        let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len(), None);
         visible.lines[row].spans[0].style.bg
     };
 
@@ -520,7 +556,7 @@ fn background_wash_fills_the_whole_row_width() {
     let width = 60;
     let mut cache = ChatRowsCache::default();
     ensure_chat_rows_cache(&mut cache, vec![&mention], width, ctx);
-    let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len());
+    let visible = visible_chat_rows(&cache, None, None, cache.all_rows.len(), None);
 
     for (index, line) in visible.lines.iter().enumerate() {
         if cache.row_message.get(index).copied().flatten() != Some(mention.id) {
@@ -723,6 +759,7 @@ fn chat_view<'a>(
         composer_rect_slot: None,
         composer_viewport_top_slot: None,
         chat_hit_slot: None,
+        selection_scroll: None,
     }
 }
 
@@ -850,7 +887,7 @@ fn visible_rows_paint_background_for_selected_highlighted_message() {
     cache.selected_ranges.insert(message_id, (1, 2));
     cache.highlighted_ranges.insert(message_id, (0, 2));
 
-    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4);
+    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 4, None);
     assert_eq!(
         visible.lines.len(),
         visible.hits.len(),
@@ -880,7 +917,7 @@ fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
     cache.selected_ranges.insert(message_id, (0, 1));
     cache.highlighted_ranges.insert(message_id, (0, 1));
 
-    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 1);
+    let visible = visible_chat_rows(&cache, Some(message_id), Some(message_id), 1, None);
     let marker_fg = theme::AMBER();
     theme::set_current_by_id("contrast");
 
@@ -2069,7 +2106,7 @@ fn visible_chat_rows_pads_top_with_none_hits() {
         ..Default::default()
     };
 
-    let visible = visible_chat_rows(&cache, None, None, 5);
+    let visible = visible_chat_rows(&cache, None, None, 5, None);
     assert_eq!(visible.lines.len(), 5);
     assert_eq!(visible.hits.len(), 5);
     // Top two are padding.
