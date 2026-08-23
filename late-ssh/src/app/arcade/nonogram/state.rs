@@ -306,7 +306,6 @@ impl State {
         self.mode == Mode::Daily
     }
 
-    /// Jump straight to a daily board: the backtick workspace entry path.
     /// Arm or confirm a destructive reset. Returns `true` only when the same
     /// `kind` was already armed (the confirming second press); a press for a
     /// different kind re-arms for that kind instead of firing.
@@ -325,6 +324,7 @@ impl State {
         self.reset_pending = None;
     }
 
+    /// Jump straight to a daily board: the backtick workspace entry path.
     pub fn open_daily(&mut self, difficulty_index: usize) {
         self.clear_reset_pending();
         self.store_active_snapshot();

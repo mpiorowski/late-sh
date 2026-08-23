@@ -217,7 +217,16 @@ fn theme_search_line(state: &SettingsModalState) -> Line<'static> {
         ));
     }
 
-    let matches = state.theme_tree_rows().len();
+    // With a query the rows are all matches; without one they are still the
+    // full tree (headers, favorites copies), so a count there would lie.
+    let tail = match state.theme_query().trim().is_empty() {
+        true => "   type to search · Esc back".to_string(),
+        false => match state.theme_tree_rows().len() {
+            0 => "   no matches · Esc back".to_string(),
+            1 => "   1 match · ↑↓ preview · Esc back".to_string(),
+            n => format!("   {n} matches · ↑↓ preview · Esc back"),
+        },
+    };
     Line::from(vec![
         Span::styled("  search ", Style::default().fg(theme::TEXT_DIM())),
         Span::styled("› ", Style::default().fg(theme::AMBER_GLOW())),
@@ -226,14 +235,7 @@ fn theme_search_line(state: &SettingsModalState) -> Line<'static> {
             Style::default().fg(theme::TEXT_BRIGHT()),
         ),
         Span::styled("_", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled(
-            match matches {
-                0 => "   no matches · Esc back".to_string(),
-                1 => "   1 match · ↑↓ preview · Esc back".to_string(),
-                n => format!("   {n} matches · ↑↓ preview · Esc back"),
-            },
-            Style::default().fg(theme::TEXT_DIM()),
-        ),
+        Span::styled(tail, Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 

@@ -467,6 +467,12 @@ pub(crate) struct SettingsModalState {
     theme_query: String,
     /// Whether keystrokes are editing [`Self::theme_query`].
     theme_searching: bool,
+    /// Whether a search-time preview changed the theme without persisting it.
+    /// While the search is open every keystroke can move the preview, and each
+    /// `save()` is a detached task with no ordering, so racing one per key
+    /// could persist a theme other than the last one previewed. Settled by one
+    /// save when the search closes.
+    theme_preview_unsaved: bool,
     /// Whether the starred-themes block at the top of the tree is folded away.
     theme_favorites_collapsed: bool,
     theme_collapsed_groups: u32,
@@ -534,6 +540,7 @@ impl SettingsModalState {
             theme_visible_height: Cell::new(1),
             theme_query: String::new(),
             theme_searching: false,
+            theme_preview_unsaved: false,
             theme_favorites_collapsed: false,
             theme_collapsed_groups: 0,
             editing_username: false,
@@ -608,6 +615,12 @@ impl SettingsModalState {
         self.account_row_index = 0;
         self.tweak_row_index = 0;
         self.sync_theme_index_to_draft();
+        // A reserved chord (Ctrl+G) can close the modal over an open theme
+        // search, so reopening must not land back inside it with a stale
+        // query. The collapse states survive on purpose, like the groups'.
+        self.theme_query.clear();
+        self.theme_searching = false;
+        self.theme_preview_unsaved = false;
         self.editing_username = false;
         self.username_input = new_short_textarea(false);
         self.editing_system_field = None;
@@ -686,6 +699,12 @@ impl SettingsModalState {
         }
         if self.selected_tab == Tab::Feeds && self.editing_feed_url {
             self.cancel_feed_url_edit();
+        }
+        if self.selected_tab == Tab::Themes && self.theme_searching {
+            // Leaving mid-search closes it (persisting any pending preview),
+            // so returning to Themes never lands inside a stale query where
+            // j/k type instead of navigate.
+            self.cancel_theme_search();
         }
         if next == Tab::Themes {
             self.sync_theme_index_to_draft();
@@ -1401,7 +1420,13 @@ impl SettingsModalState {
             self.draft.theme_id = Some(option.id.to_string());
             self.keep_theme_cursor_visible();
             if changed {
-                self.save();
+                // The render loop previews straight from the draft, so the
+                // save is persistence only; during a search it is deferred to
+                // `cancel_theme_search` (see `theme_preview_unsaved`).
+                match self.theme_searching {
+                    true => self.theme_preview_unsaved = true,
+                    false => self.save(),
+                }
             }
         }
     }
@@ -1426,6 +1451,10 @@ impl SettingsModalState {
     pub(crate) fn cancel_theme_search(&mut self) {
         self.theme_searching = false;
         self.theme_query.clear();
+        if self.theme_preview_unsaved {
+            self.theme_preview_unsaved = false;
+            self.save();
+        }
         self.theme_selected_row = self.theme_row_for_option(self.theme_index).unwrap_or(0);
         self.keep_theme_cursor_visible();
     }

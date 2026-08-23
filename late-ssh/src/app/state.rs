@@ -149,6 +149,9 @@ const CURSOR_SHAPE_STEADY_UNDERLINE: &[u8] = b"\x1b[4 q";
 /// can hand it back on the way out: an `ssh late.sh` in one tab of ten should
 /// be findable by name without permanently renaming that tab. Terminals that
 /// implement neither leave the title alone, which is the behaviour we had.
+/// The known tradeoff: a terminal that sets titles (OSC 2) but lacks the
+/// title stack (tmux panes, for one) keeps "late.sh" after exit, since the
+/// old title cannot be read back. Every title-setting program shares it.
 const SET_WINDOW_TITLE: &[u8] = b"\x1b[22;2t\x1b]2;late.sh\x1b\\";
 /// `CSI 23;2t`: restore the pushed title on the way out.
 const POP_WINDOW_TITLE: &[u8] = b"\x1b[23;2t";

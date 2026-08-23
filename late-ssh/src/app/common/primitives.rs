@@ -231,10 +231,12 @@ pub fn draw_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
 /// The one "your terminal is too small" line, for every screen that has a
 /// minimum size. Always names what needs the room, the size it needs, and the
 /// size you currently have: a bare "too small" leaves people resizing blind
-/// with no idea how far they have to go (user feedback).
+/// with no idea how far they have to go (user feedback). It says "space", not
+/// "terminal": callers pass their constrained inner area, which is smaller
+/// than the terminal by whatever chrome surrounds it.
 pub fn too_small_text(what: &str, min_width: u16, min_height: u16, area: Rect) -> String {
     format!(
-        "{what} needs at least {min_width}×{min_height} — this terminal is {}×{}",
+        "{what} needs at least {min_width}×{min_height}, this space is {}×{}",
         area.width, area.height
     )
 }
