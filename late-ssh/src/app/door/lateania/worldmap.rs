@@ -41,6 +41,11 @@ pub fn world_coords() -> &'static HashMap<RoomId, Coord> {
     &WORLD_COORDS
 }
 
+/// The zone a room belongs to, from the shared world.
+pub fn zone_of(id: RoomId) -> Option<&'static str> {
+    world().room(id).map(|r| r.zone)
+}
+
 /// Force the coordinate field and the POI index to build now. Both are lazy
 /// statics that cost a world-gen apiece; the service calls this at startup so
 /// the first player to open the map doesn't pay for them on the render thread,
@@ -223,8 +228,11 @@ pub fn visible(
 /// `grid[row][col]` is the room at that screen cell, or `None` for empty space.
 /// Where the spatial field still collides (hand-authored core), the lowest room
 /// id wins so the picture is stable. This is the fog-less view, used by the
-/// dumps and the tests; what players see comes from `viewport_explored`, which
-/// resolves collisions against the player and their explored set instead.
+/// dumps and the tests; what players see comes from `map_canvas` (both the
+/// live field and the overhead map), which resolves collisions against the
+/// player and their explored set instead. `viewport_explored` is that same
+/// fog-and-filter resolution without the corridor pass, kept for the tests
+/// that pin it.
 pub fn viewport(
     coords: &HashMap<RoomId, Coord>,
     center: Coord,
@@ -253,11 +261,11 @@ pub fn viewport(
 /// Which of two rooms sharing a map cell should be shown. The player's own
 /// room always wins; failing that, a room in the same region as the one the
 /// player currently stands in wins, so a collision reads as "the place I'm
-/// in", not an arbitrary global pick - the hand-authored core stacks whole
-/// regions on shared cells (the Mistfen under Whisperwood, the Obsidian
-/// Throne under Frostspire, every house interior under Embergate), and
-/// resolving those purely by lowest id used to paint the *other* region's
-/// rooms around a player who was clearly standing in one of them. The lowest
+/// in", not an arbitrary global pick. Since the unfold (`zone_interleaves`
+/// keeps it that way) the field's few remaining collisions are same-zone
+/// stacks - a named wing folded back over its own zone's side room - but the
+/// region preference stays: it is what makes the answer follow the player
+/// rather than the id order if a cross-region stack ever returns. The lowest
 /// id is the final tie-break, kept only for determinism when neither room
 /// matches (or both do).
 fn resolve_collision(
@@ -973,6 +981,146 @@ pub fn collisions(coords: &HashMap<RoomId, Coord>) -> BTreeMap<Coord, Vec<RoomId
         ids.sort_unstable();
     }
     by_coord
+}
+
+/// Two zones pressed together on screen with no gate between the touching
+/// rooms: the signature of a fold, where summed exit steps carry a far-away
+/// corridor back beside an unrelated place (the Sunken Glade wing climbing the
+/// column next to Embergate). One entry per zone pair, worst first.
+#[derive(Debug)]
+pub struct Interleave {
+    pub zone_a: &'static str,
+    pub zone_b: &'static str,
+    /// Room pairs from the two zones within one cell of each other on the
+    /// same level, yet more than `FOLD_WALK_LIMIT` real moves apart.
+    pub touching: usize,
+    /// One pair to look at: (room in `zone_a`, room in `zone_b`), the
+    /// smallest ids among the touching pairs so the report is stable.
+    pub example: (RoomId, RoomId),
+    /// Moves between the example rooms walking real exits; `None` if no path.
+    pub walk: Option<usize>,
+}
+
+/// How many real moves apart two rooms drawn side by side may be before that
+/// closeness counts as a lie. Rooms around the corner from a shared gate sit
+/// diagonal to each other with no direct exit and are a couple of moves apart;
+/// that is honest geometry, not a fold.
+const FOLD_WALK_LIMIT: usize = 6;
+
+/// Zone pair (ordered by name) mapped to how many cells they touch in and the
+/// lowest-id room pair witnessing the fold.
+type FoldTally = BTreeMap<(&'static str, &'static str), (usize, (RoomId, RoomId))>;
+
+/// Scan the coordinate field for zone folds. Rooms of different zones sitting
+/// within one cell of each other (same z) read as one connected place on the
+/// map, so unless they really are a few moves apart (`FOLD_WALK_LIMIT`), that
+/// closeness is a lie the embedding tells. An empty report means every
+/// apparent neighbourhood on the map is walkable.
+pub fn zone_interleaves(world: &World, coords: &HashMap<RoomId, Coord>) -> Vec<Interleave> {
+    let mut by_cell: HashMap<(i32, i32, i32), Vec<RoomId>> = HashMap::new();
+    for (&rid, &c) in coords {
+        by_cell.entry((c.x, c.y, c.z)).or_default().push(rid);
+    }
+
+    let mut pairs: FoldTally = BTreeMap::new();
+    for (&rid, &c) in coords {
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let Some(cell) = by_cell.get(&(c.x + dx, c.y + dy, c.z)) else {
+                    continue;
+                };
+                for &other in cell {
+                    // Visit each unordered pair once.
+                    if other <= rid {
+                        continue;
+                    }
+                    let Some(there) = world.room(other) else {
+                        continue;
+                    };
+                    if there.zone == room.zone {
+                        continue;
+                    }
+                    // Rooms genuinely a few steps apart may draw side by side.
+                    if walk_within(world, rid, other, FOLD_WALK_LIMIT) {
+                        continue;
+                    }
+                    let (key, sample) = if room.zone <= there.zone {
+                        ((room.zone, there.zone), (rid, other))
+                    } else {
+                        ((there.zone, room.zone), (other, rid))
+                    };
+                    let entry = pairs.entry(key).or_insert((0, sample));
+                    entry.0 += 1;
+                    entry.1 = entry.1.min(sample);
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<Interleave> = pairs
+        .into_iter()
+        .map(|((zone_a, zone_b), (touching, example))| Interleave {
+            zone_a,
+            zone_b,
+            touching,
+            example,
+            walk: walk_distance(world, example.0, example.1),
+        })
+        .collect();
+    out.sort_by(|l, r| {
+        r.touching
+            .cmp(&l.touching)
+            .then(l.zone_a.cmp(r.zone_a))
+            .then(l.zone_b.cmp(r.zone_b))
+    });
+    out
+}
+
+/// Whether `to` is reachable from `from` within `limit` moves. A bounded BFS,
+/// cheap enough to run per touching pair.
+fn walk_within(world: &World, from: RoomId, to: RoomId, limit: usize) -> bool {
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    let mut queue: VecDeque<(RoomId, usize)> = VecDeque::from([(from, 0)]);
+    while let Some((rid, steps)) = queue.pop_front() {
+        if rid == to {
+            return true;
+        }
+        if steps == limit {
+            continue;
+        }
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for &dest in room.exits.values() {
+            if seen.insert(dest) {
+                queue.push_back((dest, steps + 1));
+            }
+        }
+    }
+    false
+}
+
+/// Shortest path in moves between two rooms, walking real exits.
+fn walk_distance(world: &World, from: RoomId, to: RoomId) -> Option<usize> {
+    let mut seen: HashSet<RoomId> = HashSet::from([from]);
+    let mut queue: VecDeque<(RoomId, usize)> = VecDeque::from([(from, 0)]);
+    while let Some((rid, steps)) = queue.pop_front() {
+        if rid == to {
+            return Some(steps);
+        }
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for &dest in room.exits.values() {
+            if seen.insert(dest) {
+                queue.push_back((dest, steps + 1));
+            }
+        }
+    }
+    None
 }
 
 /// A plain-text picture of one z-level around `center`, `radius` cells each way,

@@ -549,6 +549,28 @@ fn hug_poi_arrows(
 /// on the field mean exactly one thing, walkable path: bright stubs are the
 /// current room's exits, faint stubs are paths running on into fog. POI
 /// direction arrows belong to the atlas only.
+/// The map header's layer caption. `z` counts layers, and for the underground
+/// zones it still reads as literal depth, but ever since each descent zone
+/// took its own level a couple of zones sit below z 0 while being open sky in
+/// the fiction. Those name their own layer while the player is looking at the
+/// layer they stand on; every other view keeps the plain depth wording.
+fn level_label(player_room: RoomId, viewed_z: i32, player_z: i32) -> String {
+    if viewed_z == player_z
+        && let Some(label) = match super::worldmap::zone_of(player_room) {
+            Some("Frostspire Ascent") => Some("mountainside"),
+            Some("the Saltwind Wharves") => Some("the waterline"),
+            _ => None,
+        }
+    {
+        return label.to_string();
+    }
+    match viewed_z {
+        0 => "surface".to_string(),
+        z if z < 0 => format!("underground {}", -z),
+        z => format!("above {z}"),
+    }
+}
+
 fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     use super::world::region_atlas_entry;
     use super::worldmap::{Tile, map_canvas, poi, world_coords};
@@ -578,11 +600,7 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
 
     // Header: the land you stand in and the depth, so the field is grounded.
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
-    let depth = match center.z {
-        0 => "surface".to_string(),
-        z if z < 0 => format!("underground {}", -z),
-        z => format!("above {z}"),
-    };
+    let depth = level_label(player_room, center.z, center.z);
     let mut header = vec![Span::styled(
         region_name.to_string(),
         Style::default()
@@ -604,6 +622,11 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
     let body = rows[1];
     let cols = body.width as i32;
     let height = body.height as i32;
+    // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
+    // the static atlas; a red dagger marks a room holding a live foe (from the
+    // snapshot's nearby list); a gem marks a harvestable resource room (static).
+    let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
+    let players: std::collections::HashSet<u32> = view.nearby_players.iter().copied().collect();
     let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
 
     // The player token turns hostile-red in a fight, so a glance at the field
@@ -687,11 +710,6 @@ fn draw_field(frame: &mut Frame, area: Rect, view: &PlayerView) {
         }
     };
 
-    // Colour-coded detail on what's around you. Landmarks (boss/tame) come from
-    // the static atlas; a red dagger marks a room holding a live foe (from the
-    // snapshot's nearby list); a gem marks a harvestable resource room (static).
-    let foes: std::collections::HashSet<u32> = view.nearby_foes.iter().copied().collect();
-    let players: std::collections::HashSet<u32> = view.nearby_players.iter().copied().collect();
     let foe_style = Style::default()
         .fg(Color::Rgb(235, 90, 80))
         .add_modifier(Modifier::BOLD);
@@ -1420,11 +1438,7 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     // Header: region name, where this zone sits in the region's chain, the
     // zone's own name, the danger tier, and the current level (z).
     let (region_name, tier) = region_atlas_entry(player_room).unwrap_or(("The wilds", ""));
-    let level = match center.z {
-        0 => "surface".to_string(),
-        z if z < 0 => format!("underground {}", -z),
-        z => format!("above {z}"),
-    };
+    let level = level_label(player_room, center.z, player.z);
     let mut header = vec![Span::styled(
         region_name.to_string(),
         Style::default()
@@ -1483,6 +1497,22 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let height = body.height as i32;
     let cx = (cols / 2) as usize;
     let cy = (height / 2) as usize;
+    // The room the player marked, resolved once per frame rather than per cell.
+    let dest_room = state.dest_room();
+    // Active-quest targets, when the overlay is on (`q`). Same-block targets
+    // get a `!` on their cell or a border arrow; cross-block ones are only
+    // counted - across reserved blocks an arrow's direction means nothing.
+    let quest_targets: Vec<super::world::RoomId> = if state.map_quests() {
+        view.quests
+            .iter()
+            .filter(|q| !q.done)
+            .filter_map(|q| q.target)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let quest_cells: std::collections::HashSet<super::world::RoomId> =
+        quest_targets.iter().copied().collect();
     let canvas = map_canvas(coords, center, cols, height, &view.visited, player_room);
 
     let player_style = Style::default()
@@ -1504,23 +1534,6 @@ fn draw_world_map(frame: &mut Frame, area: Rect, state: &State, view: &PlayerVie
     let quest_style = Style::default()
         .fg(theme::SUCCESS())
         .add_modifier(Modifier::BOLD);
-    // The room the player marked, resolved once per frame rather than per cell.
-    let dest_room = state.dest_room();
-    // Active-quest targets, when the overlay is on (`q`). Same-block targets
-    // get a `!` on their cell or a border arrow; cross-block ones are only
-    // counted - across reserved blocks an arrow's direction means nothing.
-    let quest_targets: Vec<super::world::RoomId> = if state.map_quests() {
-        view.quests
-            .iter()
-            .filter(|q| !q.done)
-            .filter_map(|q| q.target)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let quest_cells: std::collections::HashSet<super::world::RoomId> =
-        quest_targets.iter().copied().collect();
-
     let mut cells: Vec<Vec<(String, Style)>> = canvas
         .iter()
         .map(|row| {

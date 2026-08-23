@@ -128,12 +128,16 @@ impl ActivityPublisher {
         &self,
         user_id: Uuid,
         effect: late_core::models::username_effect::UsernameEffect,
+        duration_secs: i64,
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
             let username = publisher.username_for(user_id).await;
             let _ = publisher.tx.send(ActivityEvent::username_effect_applied(
-                user_id, username, effect,
+                user_id,
+                username,
+                effect,
+                duration_secs,
             ));
         });
     }

@@ -1230,7 +1230,17 @@ impl LateaniaService {
         // Build the overhead map's coordinate field and POI index now. Both are
         // lazy statics costing a world-gen apiece, and their first caller is
         // `draw_world_map`, which runs on the render task under the app mutex.
-        tokio::task::spawn_blocking(super::worldmap::warm);
+        // A panic in here would poison the lazies and then panic every later
+        // map render on a server that looked healthy at boot, so it is fatal
+        // instead: the world data itself already proved sound (`seed_world`
+        // ran synchronously above), which makes a warm-up panic a code bug.
+        let warm = tokio::task::spawn_blocking(super::worldmap::warm);
+        tokio::spawn(async move {
+            if let Err(error) = warm.await {
+                tracing::error!(?error, "world map warm-up panicked, exiting");
+                std::process::exit(1);
+            }
+        });
         svc.load_world_state_task();
         svc.start_tick_loop();
         svc.start_autosave_loop();
@@ -9222,22 +9232,26 @@ impl WorldState {
             // in the same window, so the live field can mark where danger and
             // company sit. Bounded to a window around the player on the same
             // level; the field's own fog still hides rooms never seen. Only the
-            // field draws these, so a session without it pays nothing.
+            // field draws these, so a session without it pays nothing. The
+            // cell window is an honest "near me" ever since the coordinate
+            // field stopped folding unrelated zones together (worldmap's
+            // `zone_interleaves` pin keeps it that way): what sits within a
+            // few cells really is a few moves away.
             let (nearby_foes, nearby_players): (Vec<RoomId>, Vec<RoomId>) =
                 match coords.get(&player.room) {
                     Some(&pc) if player.rpg_mode => {
-                        let in_window = |c: &super::worldmap::Coord| {
+                        let near = |c: &super::worldmap::Coord| {
                             c.z == pc.z && (c.x - pc.x).abs() <= 16 && (c.y - pc.y).abs() <= 12
                         };
                         (
                             foe_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .filter(|(r, c)| *r != player.room && near(c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                             occupied_rooms
                                 .iter()
-                                .filter(|(r, c)| *r != player.room && in_window(c))
+                                .filter(|(r, c)| *r != player.room && near(c))
                                 .map(|(r, _)| *r)
                                 .collect(),
                         )

@@ -1,8 +1,8 @@
 use super::{
     Coord, MAX_VIEWPORT_COLS, MapCamera, PAN_LIMIT, collisions, derive_bounds, derive_coords,
-    dump_level, visible,
+    dump_level, visible, zone_interleaves,
 };
-use crate::app::door::lateania::world::seed_world;
+use crate::app::door::lateania::world::{RoomId, region_atlas_entry, seed_world};
 
 #[test]
 fn every_room_gets_a_coordinate() {
@@ -109,6 +109,114 @@ fn housing_interiors_never_share_a_cell_with_the_town() {
              field would draw another room's paths around a player standing inside",
         );
     }
+}
+
+#[test]
+fn every_walkable_room_is_reachable_from_the_start_room() {
+    // `link` refuses to clobber an occupied exit, but a room authored with no
+    // path to it at all would still boot fine and still get coordinates (a
+    // cut-off component seeds its own island), so nothing else notices a
+    // severed wing. Walk the whole exit graph from the start room; only the
+    // lands with no walking entrance at all (reached by waystone portal) may
+    // stay unvisited.
+    use std::collections::VecDeque;
+    let world = seed_world();
+    let portal_only: std::collections::HashSet<&str> = super::portal_lands().into_iter().collect();
+    let mut seen = std::collections::HashSet::from([world.start_room]);
+    let mut queue = VecDeque::from([world.start_room]);
+    while let Some(rid) = queue.pop_front() {
+        let Some(room) = world.room(rid) else {
+            continue;
+        };
+        for &dest in room.exits.values() {
+            if seen.insert(dest) {
+                queue.push_back(dest);
+            }
+        }
+    }
+    let mut cut_off: Vec<RoomId> = world
+        .rooms
+        .keys()
+        .copied()
+        .filter(|id| !seen.contains(id))
+        .filter(|id| region_atlas_entry(*id).is_none_or(|(name, _)| !portal_only.contains(name)))
+        .collect();
+    cut_off.sort_unstable();
+    cut_off.truncate(12);
+    assert!(
+        cut_off.is_empty(),
+        "rooms exist that no walk from the start can reach (first few): {cut_off:?}"
+    );
+}
+
+#[test]
+fn each_wildbound_gate_sits_directly_above_the_field_cell_it_opens_onto() {
+    // The gate town is placed by `wildbound_layout` while the gate's South
+    // exit is wired by `extend_wildbound` to the carve's entrance cell. If
+    // the two disagree, the map draws a path from the gate into a field room
+    // the exit does not lead to, the exact drawn-adjacent-but-not-connected
+    // lie the fold detector exists to kill, invisible to it because town and
+    // field share a zone.
+    use crate::app::door::lateania::world::{Dir, WILDBOUND_BASE, WILDBOUND_BIOME_STRIDE};
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    for b in 0..3u32 {
+        let gate = WILDBOUND_BASE + b * WILDBOUND_BIOME_STRIDE + 3;
+        let dest = world
+            .room(gate)
+            .and_then(|r| r.exits.get(&Dir::South))
+            .copied()
+            .expect("each wildbound gate has a south exit into its field");
+        let (g, d) = (coords[&gate], coords[&dest]);
+        assert_eq!(
+            (d.x - g.x, d.y - g.y, d.z - g.z),
+            (0, 1, 0),
+            "biome {b}: gate {gate}'s south exit lands in room {dest}, which is not \
+             the cell drawn directly below the gate"
+        );
+    }
+}
+
+#[test]
+fn no_zone_presses_against_another_it_has_no_gate_into() {
+    let world = seed_world();
+    let coords = derive_coords(&world);
+    let report = zone_interleaves(&world, &coords);
+    let lines: Vec<String> = report
+        .iter()
+        .map(|i| {
+            let name = |id: RoomId| world.room(id).map(|r| r.name).unwrap_or("?");
+            let at = |id: RoomId| {
+                coords
+                    .get(&id)
+                    .map(|c| format!("({}, {}, z{})", c.x, c.y, c.z))
+                    .unwrap_or_default()
+            };
+            let walk = match i.walk {
+                Some(w) => format!("{w} moves apart"),
+                None => "no walking path".to_string(),
+            };
+            format!(
+                "{} <-> {}: {} touching pairs, e.g. {} '{}' {} beside {} '{}' {}, {}",
+                i.zone_a,
+                i.zone_b,
+                i.touching,
+                i.example.0,
+                name(i.example.0),
+                at(i.example.0),
+                i.example.1,
+                name(i.example.1),
+                at(i.example.1),
+                walk,
+            )
+        })
+        .collect();
+    assert!(
+        report.is_empty(),
+        "zones fold onto each other on the map, a place drawn one cell away is \
+         really a journey away:\n{}",
+        lines.join("\n"),
+    );
 }
 
 #[test]
@@ -293,18 +401,37 @@ fn fog_of_war_hides_unvisited_rooms_but_keeps_the_player() {
         "only the player shows under full fog"
     );
 
-    // With everything visited, fog matches the plain viewport everywhere except
-    // the player's own cell, which they always win (see the collision test).
+    // With everything visited, the explored view matches the plain viewport
+    // everywhere except where rooms genuinely stack on one cell: the explored
+    // view resolves a stack with `resolve_collision` (the player's room, then
+    // the player's region, then the lowest id), while the plain viewport is
+    // collision-naive. Since the unfold the field's stacks are rare
+    // (`generated_zones_are_collision_free_and_the_core_stays_tight` counts
+    // them), so a divergence anywhere else is a bug, not a tie-break.
     let all: HashSet<_> = world.rooms.keys().copied().collect();
     let lit = super::viewport_explored(&coords, center, cols, rows, &all, world.start_room);
     let plain = super::viewport(&coords, center, cols, rows);
     let (cx, cy) = (cols as usize / 2, rows as usize / 2);
+    let stacked = collisions(&coords);
     assert_eq!(lit[cy][cx], Some(world.start_room));
     for (r, (lit_row, plain_row)) in lit.iter().zip(plain.iter()).enumerate() {
         for (c, (l, p)) in lit_row.iter().zip(plain_row.iter()).enumerate() {
-            if (r, c) != (cy, cx) {
-                assert_eq!(l, p, "cell ({r}, {c}) diverged from the fog-less view");
+            if (r, c) == (cy, cx) || l == p {
+                continue;
             }
+            let cell = Coord {
+                x: center.x - cols / 2 + c as i32,
+                y: center.y - rows / 2 + r as i32,
+                z: center.z,
+            };
+            let both_stacked = stacked.get(&cell).is_some_and(|ids| {
+                l.is_some_and(|id| ids.contains(&id)) && p.is_some_and(|id| ids.contains(&id))
+            });
+            assert!(
+                both_stacked,
+                "cell ({r}, {c}) diverged from the fog-less view for a reason other than \
+                 a stacked cell's tie-break: lit={l:?} plain={p:?}"
+            );
         }
     }
 }
@@ -326,23 +453,20 @@ fn resolve_collision_falls_back_to_lowest_id_without_a_region_match() {
 
 #[test]
 fn a_collision_favours_the_room_that_matches_where_the_player_stands() {
-    // The hand-authored core stacks whole regions on shared cells. When the
-    // player is in neither colliding room, the map must still favour the one
-    // that shares a region with wherever they *are*, not whichever id is
-    // lower - painting an unrelated region around a player who's clearly
-    // standing in one specific land is the bug this guards.
+    // Two rooms can still share a cell (a home interior over the street, a
+    // wing folded back over its own zone). When the player is in neither, the
+    // map must favour the one that shares a region with wherever they *are*,
+    // not whichever id is lower - painting an unrelated region around a player
+    // who's clearly standing in one specific land is the bug this guards. The
+    // pair is named rather than mined out of the field: the field's remaining
+    // collisions are all within one region, and the tie-break is about regions.
     use crate::app::door::lateania::world::region_atlas_entry;
-    let world = seed_world();
-    let coords = derive_coords(&world);
-    let clashes = collisions(&coords);
-    let (_, ids) = clashes
-        .iter()
-        .find(|(_, ids)| {
-            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
-        })
-        .expect("some collision spans two different regions");
-    let lower = *ids.first().unwrap();
-    let higher = *ids.last().unwrap();
+    let (lower, higher) = (308, 651);
+    assert_ne!(
+        region_atlas_entry(lower),
+        region_atlas_entry(higher),
+        "fixture assumption broke: {lower} and {higher} should be in different regions"
+    );
     let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
 
     // No region context (or the player is elsewhere with no matching room):
@@ -363,17 +487,19 @@ fn a_collision_favours_the_room_that_matches_where_the_player_stands() {
 fn viewport_explored_paints_a_collision_as_the_players_own_region() {
     use crate::app::door::lateania::world::region_atlas_entry;
     let world = seed_world();
-    let coords = derive_coords(&world);
-    let clashes = collisions(&coords);
-    let (&cell, ids) = clashes
-        .iter()
-        .find(|(_, ids)| {
-            ids.len() > 1 && region_atlas_entry(ids[0]) != region_atlas_entry(*ids.last().unwrap())
-        })
-        .expect("some collision spans two different regions");
-    let lower = *ids.first().unwrap();
-    let higher = *ids.last().unwrap();
+    // Stack a named cross-region pair on one cell: the field no longer folds
+    // two regions onto each other by itself, and this is a test of how the
+    // viewport resolves such a cell, not of whether one happens to exist.
+    let (lower, higher) = (308, 651);
+    let mut coords = derive_coords(&world);
+    let cell = coords[&lower];
+    coords.insert(higher, cell);
     let (higher_region, _) = region_atlas_entry(higher).expect("higher room has a region");
+    assert_ne!(
+        region_atlas_entry(lower),
+        region_atlas_entry(higher),
+        "fixture assumption broke: {lower} and {higher} should be in different regions"
+    );
 
     // Some other room in the higher room's region, not part of the collision
     // itself, so only the region match can explain the result.

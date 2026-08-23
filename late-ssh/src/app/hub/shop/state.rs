@@ -63,6 +63,9 @@ pub(crate) struct PendingUsernameEffect {
     pub sku: String,
     pub item_name: String,
     pub price_chips: i64,
+    /// How long the bought tier runs, so the confirm modal quotes the window
+    /// the buyer is actually paying for.
+    pub duration_secs: i64,
     pub options: Vec<UsernameEffect>,
     pub selected: usize,
 }
@@ -379,6 +382,7 @@ impl ShopState {
                 return Some(Banner::error("This effect is not available"));
             }
             self.pending_username_effect = Some(PendingUsernameEffect {
+                duration_secs: item.username_effect_duration(),
                 sku: item.sku,
                 item_name: item.name,
                 price_chips: item.price_chips,

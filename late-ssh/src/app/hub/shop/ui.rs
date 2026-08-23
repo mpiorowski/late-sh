@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use late_core::models::username_effect::UsernameEffect;
+use late_core::models::username_effect::{UsernameEffect, duration_label};
 
 use crate::app::{
     common::theme,
@@ -306,7 +306,10 @@ fn draw_item_detail(
         lines.push(Line::from(vec![
             Span::raw("  lasts  "),
             Span::styled(
-                "24 hours, rebuy replaces the active style",
+                format!(
+                    "{}, rebuy replaces the active style",
+                    duration_label(item.username_effect_duration())
+                ),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
@@ -668,17 +671,18 @@ fn username_effect_option_label(effect: UsernameEffect) -> &'static str {
     }
 }
 
-/// Compact remaining-time label for an active effect: "17h left", "45m
-/// left", "1m left" (floors at one minute so it never reads as already over).
+/// Compact remaining-time label for an active effect: "30d left", "17h left",
+/// "45m left", "1m left" (floors at one minute so it never reads as already
+/// over).
 fn remaining_label(
     ends_at: chrono::DateTime<chrono::Utc>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
     let minutes = (ends_at - now).num_minutes().max(1);
     // Strictly greater than a day, not >=: a 24h-exact remaining duration
-    // (every username effect's max) must still read "24h left" rather than
-    // flip to "1d left" for the single minute before it drops into the hour
-    // tier, otherwise "24h left" is never shown at all post-purchase.
+    // (the day tier's max) must still read "24h left" rather than flip to
+    // "1d left" for the single minute before it drops into the hour tier,
+    // otherwise "24h left" is never shown at all post-purchase.
     if minutes > 60 * 24 {
         format!("{}d left", minutes / (60 * 24))
     } else if minutes >= 60 {
@@ -756,7 +760,10 @@ fn draw_username_effect_confirm(frame: &mut Frame, area: Rect, pending: &Pending
         ]),
         Line::from(vec![
             Span::raw("  lasts    "),
-            Span::styled("24 hours", Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                duration_label(pending.duration_secs),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![

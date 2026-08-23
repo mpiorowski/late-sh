@@ -19,7 +19,7 @@
 // the planned full design target remains 200.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use super::damage::{DamageProfile, DamageType, ZoneTheme};
 use super::skills::{CraftSkill, GatherSkill};
@@ -4610,8 +4610,8 @@ pub fn seed_world() -> World {
             "You descend into a flooded hall where black water laps at carved \
              sarcophagi like moored boats. The cold is total and intimate, the kind \
              that settles in the marrow and stays. Up returns to the caverns; the \
-             crypt runs south.",
-            &[(Dir::Up, 50), (Dir::South, 52)],
+             crypt drops away below.",
+            &[(Dir::Up, 50), (Dir::Down, 52)],
         ),
         room(
             52,
@@ -4620,8 +4620,8 @@ pub fn seed_world() -> World {
             false,
             "Stone coffins line both walls, their lids carved with the serene faces \
              of the long-dead. Several lids lie aside in the water. The faces beneath \
-             are no longer serene. Ways lead north, south, and east.",
-            &[(Dir::North, 51), (Dir::South, 53), (Dir::East, 54)],
+             are no longer serene. Ways lead up, south, and east.",
+            &[(Dir::Up, 51), (Dir::South, 53), (Dir::East, 54)],
         ),
         room(
             53,
@@ -4694,8 +4694,8 @@ pub fn seed_world() -> World {
             false,
             "Stalactites of crystallized brine hang in ranks like organ pipes, and \
              when the slow current stirs the flood they keen a single sustained note \
-             that you feel in your teeth more than hear. North and south.",
-            &[(Dir::North, 57), (Dir::South, 60)],
+             that you feel in your teeth more than hear. North, and down.",
+            &[(Dir::North, 57), (Dir::Down, 60)],
         ),
         room(
             60,
@@ -4704,8 +4704,8 @@ pub fn seed_world() -> World {
             false,
             "Submerged steps lead up onto a broad landing where three flooded halls \
              converge, their arches reflected in the still water until you cannot \
-             tell stone from its double. Ways lead north, south, and east.",
-            &[(Dir::North, 59), (Dir::South, 61), (Dir::East, 62)],
+             tell stone from its double. Ways lead up, south, and east.",
+            &[(Dir::Up, 59), (Dir::South, 61), (Dir::East, 62)],
         ),
         room(
             61,
@@ -4754,11 +4754,11 @@ pub fn seed_world() -> World {
             "Drowned Crypts - The Ember Stair",
             "Drowned Crypts",
             false,
-            "The flood drains away up a stair cut from raw red stone, and the air \
+            "The flood drains away down a stair cut from raw red stone, and the air \
              changes utterly: drier, sharper, carrying the faraway tang of smoke and \
              hot metal. Something deep in the rock is awake and burning. North \
-             returns to the crypts; up climbs toward the heat.",
-            &[(Dir::North, 64), (Dir::Up, 66)],
+             returns to the crypts; the stair drops toward the heat.",
+            &[(Dir::North, 64), (Dir::Down, 66)],
         ),
         // ---- Emberpeak Mines (fire & dwarven ruin, tier 5-6) ------------
         room(
@@ -4766,10 +4766,10 @@ pub fn seed_world() -> World {
             "Emberpeak Mines - The Cinder Gate",
             "Emberpeak Mines",
             false,
-            "You climb into a hewn hall where the very walls hold a sullen red \
+            "You descend into a hewn hall where the very walls hold a sullen red \
              warmth, and runes carved by long-vanished dwarves still glow faintly in \
-             the heat. Down leads back to the cold crypts; the mines open north.",
-            &[(Dir::Down, 65), (Dir::North, 67)],
+             the heat. Up leads back to the cold crypts; the mines open north.",
+            &[(Dir::Up, 65), (Dir::North, 67)],
         ),
         room(
             67,
@@ -4925,8 +4925,9 @@ pub fn seed_world() -> World {
             false,
             "You emerge onto a mountainside of blue glacial ice, and the cold takes \
              your breath as a physical theft. Wind screams past, carrying snow like \
-             ground glass. Down returns to the warm dark; the ascent climbs north.",
-            &[(Dir::Down, 80), (Dir::North, 82)],
+             ground glass. Down returns to the warm dark; the ascent climbs up \
+             from here.",
+            &[(Dir::Down, 80), (Dir::Up, 82)],
         ),
         room(
             82,
@@ -4935,8 +4936,8 @@ pub fn seed_world() -> World {
             false,
             "The path threads a pass where the wind has sculpted the ice into a \
              gallery of blades and figures, frozen courtiers bowing eternally to a \
-             gale that never tires of them. Ways lead south, north, and east.",
-            &[(Dir::South, 81), (Dir::North, 83), (Dir::East, 84)],
+             gale that never tires of them. Ways lead down, north, and east.",
+            &[(Dir::Down, 81), (Dir::North, 83), (Dir::East, 84)],
         ),
         room(
             83,
@@ -5071,7 +5072,7 @@ pub fn seed_world() -> World {
              lintel carved with a citadel that should not be here, on a peak, at the \
              top of the world. The way in leads down, into stone, into the past. \
              South returns to the snow.",
-            &[(Dir::South, 94), (Dir::Up, 96)],
+            &[(Dir::South, 94), (Dir::Down, 96)],
         ),
         // ---- The Sunken Citadel (megadungeon, tier 7-8) -----------------
         room(
@@ -5081,9 +5082,9 @@ pub fn seed_world() -> World {
             false,
             "You pass from ice into a hall of black stone so vast the lantern cannot \
              find its roof, and the cold here is not winter's cold but something \
-             older and more deliberate. The gate is down and behind; the citadel \
+             older and more deliberate. The gate is up and behind; the citadel \
              opens north.",
-            &[(Dir::Down, 95), (Dir::North, 97)],
+            &[(Dir::Up, 95), (Dir::North, 97)],
         ),
         room(
             97,
@@ -7282,15 +7283,25 @@ pub fn is_frontier_room(id: RoomId) -> bool {
 // than waypoints. Rooms are authored from a per-city theme; ids start at 3000
 // (free, between the Frontier band and the living-world mazes).
 fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
-    // (square, city name, district label, [4 (room-name, room-desc) pairs]).
-    // Each description is at least two sentences and a paragraph long, to satisfy
-    // the world invariants. Ids start at 3000 (free, between Frontier and mazes).
+    // (square, city name, district label, portal, street, [4 (room-name,
+    // room-desc) pairs]). `portal` is the free direction the district opens off
+    // the square; `street` is the step into each haunt in turn, so a district
+    // can turn a corner or drop a stair instead of running one straight line.
+    // Both are authored per city rather than derived: which way a district
+    // faces decides where it lands on the world map, and a district that walks
+    // back over its own capital's road is a fold (see `worldmap`'s
+    // `zone_interleaves`). Each description is at least two sentences and a
+    // paragraph long, to satisfy the world invariants. Ids start at 3000 (free,
+    // between Frontier and mazes).
     #[allow(clippy::type_complexity)]
-    const CITIES: [(RoomId, &str, &str, [(&str, &str); 4]); 4] = [
+    const CITIES: [(RoomId, &str, &str, Dir, [Dir; 4], [(&str, &str); 4]); 4] = [
         (
             1,
             "Embergate",
             "the Lamplit Quarter",
+            // Up onto the terraced quarter above the square, then east along it.
+            Dir::Up,
+            [Dir::East, Dir::East, Dir::East, Dir::East],
             [
                 (
                     "the Lamplit Baths",
@@ -7314,6 +7325,10 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             TASMANIA_SQUARE,
             "Tasmania",
             "the Saltwind Wharves",
+            // West out of the square, then down the harbour stair and north
+            // along the water, away from the Greatroad and Embergate.
+            Dir::West,
+            [Dir::Down, Dir::North, Dir::North, Dir::North],
             [
                 (
                     "the Fishmarket",
@@ -7337,6 +7352,9 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             MELVANALA_SQUARE,
             "Melvanala",
             "the Hightarn Terraces",
+            // Up onto the terraces cut above the lakeshore, then east.
+            Dir::Up,
+            [Dir::East, Dir::East, Dir::East, Dir::East],
             [
                 (
                     "the Mirrorlake Walk",
@@ -7360,6 +7378,10 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
             MATLATESH_SQUARE,
             "Matlatesh",
             "the Sunbaked Bazaar",
+            // North off the square and on north into the dunes, clear of the
+            // Greatroad running east from Matlatesh's gate.
+            Dir::North,
+            [Dir::North, Dir::North, Dir::North, Dir::North],
             [
                 (
                     "the Spice Bazaar",
@@ -7381,29 +7403,35 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         ),
     ];
 
-    for (c, &(square, city, district, district_rooms)) in CITIES.iter().enumerate() {
+    for (c, &(square, city, district, portal, street, district_rooms)) in CITIES.iter().enumerate()
+    {
         let base = 3000 + (c as RoomId) * 10;
-        // Find a free direction off the square to open the district.
-        let portal = [
-            Dir::North,
-            Dir::South,
-            Dir::East,
-            Dir::West,
-            Dir::Up,
-            Dir::Down,
-        ]
-        .into_iter()
-        .find(|d| rooms.get(&square).is_some_and(|r| !r.exits.contains_key(d)))
-        .unwrap_or(Dir::Up);
         let back_to_square = portal.opposite();
-        // The district is a walkable street: the spine faces the square, and the
-        // several haunts run off it along one axis (chained to each other), so you
-        // can stroll through them rather than dead-ending back at the spine from
-        // each. Prefer an east-west run; never reuse the way back to the square.
-        let street = [Dir::East, Dir::West, Dir::South, Dir::North]
-            .into_iter()
-            .find(|d| *d != back_to_square)
-            .unwrap_or(Dir::East);
+        // The district is a walkable street: the spine faces the square and the
+        // several haunts chain on from it, so you can stroll through them rather
+        // than dead-ending back at the spine from each.
+        assert!(
+            rooms
+                .get(&square)
+                .is_some_and(|r| !r.exits.contains_key(&portal)),
+            "{district}'s portal {portal:?} is already taken on room {square}"
+        );
+        // The exits maps below are built wholesale, not through `link`, so a
+        // street step doubling back on the previous one would silently
+        // overwrite the back-link and make the street one-way. Refuse the
+        // authoring instead.
+        assert!(
+            street[0] != back_to_square,
+            "{district}'s first street step walks straight back into the square"
+        );
+        for k in 0..street.len() - 1 {
+            assert!(
+                street[k + 1] != street[k].opposite(),
+                "{district}'s street step {} doubles back on step {}",
+                k + 1,
+                k
+            );
+        }
         let zone: &'static str = district;
         let spine = base;
         rooms.insert(
@@ -7420,7 +7448,7 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
                     )
                     .into_boxed_str(),
                 ),
-                exits: [(back_to_square, square), (street, base + 1)]
+                exits: [(back_to_square, square), (street[0], base + 1)]
                     .into_iter()
                     .collect(),
             },
@@ -7434,9 +7462,9 @@ fn extend_cities(rooms: &mut HashMap<RoomId, Room>) {
         for (k, (rname, rdesc)) in district_rooms.iter().enumerate() {
             let id = base + 1 + k as RoomId;
             let prev = if k == 0 { spine } else { base + k as RoomId };
-            let mut exits: Vec<(Dir, RoomId)> = vec![(street.opposite(), prev)];
+            let mut exits: Vec<(Dir, RoomId)> = vec![(street[k].opposite(), prev)];
             if k + 1 < n {
-                exits.push((street, base + 2 + k as RoomId));
+                exits.push((street[k + 1], base + 2 + k as RoomId));
             }
             rooms.insert(
                 id,
@@ -9423,7 +9451,55 @@ pub fn region_layout(id: RoomId) -> Option<RegionPlacement> {
             AELUNOR_ZONES,
         ));
     }
+    if is_wildbound_room(id) {
+        return wildbound_layout(id);
+    }
     None
+}
+
+/// The Wildbound Waste's map block: each biome is its own reserved `w` x `h`
+/// field, with that biome's four gate-town rooms anchored on the carve's
+/// entrance cell so the gate sits directly above the field room its South
+/// exit really opens onto (pinned by `each_wildbound_gate_sits_directly_
+/// above_the_field_cell_it_opens_onto`). The entrance is the first floor
+/// cell in row-major order, so every cell before it is wall: the four town
+/// cells (one row up and two rows up around the entrance's column) can never
+/// land on a field room. Unlike the other chained regions the three biomes
+/// are not one uniform grid, so this decodes by hand instead of going
+/// through `multi`.
+fn wildbound_layout(id: RoomId) -> Option<RegionPlacement> {
+    let off = id - WILDBOUND_BASE;
+    let zone = off / WILDBOUND_BIOME_STRIDE;
+    let slot = off % WILDBOUND_BIOME_STRIDE;
+    let biome = &WILDBOUND_BIOMES[zone as usize];
+    let (w, h) = (biome.w as i32, biome.h as i32);
+    let entrance = WILDBOUND_ENTRANCES[zone as usize] as i32;
+    let (ex, ey) = (entrance % w, entrance / w);
+    let (x, y) = match slot {
+        0 => (ex, ey - 2),     // the square
+        1 => (ex - 1, ey - 2), // the shelter, west of the square
+        2 => (ex + 1, ey - 2), // the outfitter, east of the square
+        3 => (ex, ey - 1),     // the gate, directly above the entrance cell
+        4..=9 => return None,  // reserved, never built
+        // The contested field: `field_base = base + 10`, one id per cell.
+        _ => {
+            let cell = slot as i32 - 10;
+            if cell >= w * h {
+                return None;
+            }
+            (cell % w, cell / w)
+        }
+    };
+    Some(RegionPlacement {
+        region: "wildbound",
+        zone,
+        x,
+        y,
+        z: 0,
+        zone_w: w,
+        zone_h: h + 2,
+        zone_count: WILDBOUND_BIOMES.len() as u32,
+    })
 }
 
 /// A room's map biome, for colouring the overhead world map. Derived from its
@@ -9469,6 +9545,13 @@ pub fn biome_of(id: RoomId) -> Biome {
             "kaelmyr" => Biome::Ash,
             "lakes" => Biome::Water,
             "reaches" | "frontier" => Biome::Badlands,
+            // The Waste's three biomes are three different lands: bramble
+            // forest, the maze cavern past it, then burnt flats.
+            "wildbound" => match p.zone {
+                0 => Biome::Forest,
+                1 => Biome::Cavern,
+                _ => Biome::Badlands,
+            },
             _ => Biome::Plains,
         };
     }
@@ -10872,11 +10955,62 @@ const WILDBOUND_SEED: u64 = 0x5741_5354_4501_u64;
 /// Room ids reserved per biome: four for the town plus the field carve. The
 /// largest field (26x20 = 520 cells) starting at offset 10 leaves comfortable
 /// headroom under this stride.
-const WILDBOUND_BIOME_STRIDE: u32 = 700;
+pub const WILDBOUND_BIOME_STRIDE: u32 = 700;
 /// The Sahra Wastes' terminal room (see `extend_overworld`'s Sahra wing): its
 /// `Dir::South` is never claimed there (the chain ends at this room), so the
 /// Waste hangs off it cleanly without disturbing that wing.
 const WILDBOUND_GATEWAY: RoomId = 751;
+
+/// Whether `id` belongs to the Wildbound Waste (any of its three biomes,
+/// gate town and contested field alike).
+pub fn is_wildbound_room(id: RoomId) -> bool {
+    (WILDBOUND_BASE..WILDBOUND_BASE + WILDBOUND_BIOMES.len() as u32 * WILDBOUND_BIOME_STRIDE)
+        .contains(&id)
+}
+
+/// One biome's carved field, deterministic per biome index. Shared by
+/// `extend_wildbound` (which builds the rooms from it) and the entrance table
+/// below (which `wildbound_layout` reads), so the drawn gate town and the
+/// gate's real exit can never disagree. `rng` is threaded through so a
+/// caller's later draws see the same state the inline carve used to leave.
+enum WildboundCarve {
+    Cavern(Vec<bool>),
+    Maze(Vec<Walls>),
+}
+
+fn wildbound_carve(b: usize, rng: &mut MazeRng) -> WildboundCarve {
+    let biome = &WILDBOUND_BIOMES[b];
+    let (w, h) = (biome.w, biome.h);
+    if biome.cavern {
+        let floor = carve_cavern(w, h, rng);
+        if floor.iter().filter(|f| **f).count() >= 40 {
+            return WildboundCarve::Cavern(floor);
+        }
+    }
+    WildboundCarve::Maze(carve_maze(w, h, rng))
+}
+
+impl WildboundCarve {
+    /// The field cell the biome's gate opens onto: the first floor cell in
+    /// row-major order for a cavern, cell 0 for a maze. First-in-row-major
+    /// is also what makes the town placement in `wildbound_layout`
+    /// collision-free: every cell before the entrance is wall.
+    fn entrance(&self) -> usize {
+        match self {
+            Self::Cavern(floor) => (0..floor.len()).find(|&i| floor[i]).unwrap_or(0),
+            Self::Maze(_) => 0,
+        }
+    }
+}
+
+/// Entrance cell per biome, cached: `wildbound_layout` decodes ids in tight
+/// loops and the carve behind the answer costs a full field each.
+static WILDBOUND_ENTRANCES: LazyLock<[usize; 3]> = LazyLock::new(|| {
+    std::array::from_fn(|b| {
+        let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        wildbound_carve(b, &mut rng).entrance()
+    })
+});
 
 /// The five-tier power ladder shared by every biome's regular mobs, from the
 /// biome's edge (Lesser) to its deep interior (Ancient) - one step short of
@@ -11227,20 +11361,11 @@ fn extend_wildbound(
         let n = w * h;
         let mut rng = MazeRng::new(WILDBOUND_SEED ^ (b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
-        let cavern_floor = if biome.cavern {
-            let floor = carve_cavern(w, h, &mut rng);
-            (floor.iter().filter(|f| **f).count() >= 40).then_some(floor)
-        } else {
-            None
-        };
-        let (entrance, reachable, dist, cell_exits): (
-            usize,
-            Vec<bool>,
-            Vec<usize>,
-            Vec<Vec<(Dir, usize)>>,
-        ) = if let Some(floor) = cavern_floor {
-            let entrance = (0..n).find(|&i| floor[i]).unwrap_or(0);
-            let dist = cavern_distances(&floor, w, h, entrance);
+        let carve = wildbound_carve(b, &mut rng);
+        let entrance = carve.entrance();
+        let (reachable, dist, cell_exits): (Vec<bool>, Vec<usize>, Vec<Vec<(Dir, usize)>>) =
+            if let WildboundCarve::Cavern(floor) = &carve {
+            let dist = cavern_distances(floor, w, h, entrance);
             let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
             let exits: Vec<Vec<(Dir, usize)>> = (0..n)
                 .map(|c| {
@@ -11264,10 +11389,12 @@ fn extend_wildbound(
                     v
                 })
                 .collect();
-            (entrance, reachable, dist, exits)
+            (reachable, dist, exits)
         } else {
-            let open = carve_maze(w, h, &mut rng);
-            let dist = maze_distances(&open, w, h, 0);
+            let WildboundCarve::Maze(open) = &carve else {
+                unreachable!("a carve is either a cavern or a maze");
+            };
+            let dist = maze_distances(open, w, h, 0);
             let reachable: Vec<bool> = (0..n).map(|c| dist[c] != usize::MAX).collect();
             let exits: Vec<Vec<(Dir, usize)>> = (0..n)
                 .map(|c| {
@@ -11285,7 +11412,7 @@ fn extend_wildbound(
                     v
                 })
                 .collect();
-            (0, reachable, dist, exits)
+            (reachable, dist, exits)
         };
 
         let deepest = (0..n)
@@ -11859,13 +11986,27 @@ struct WingRoom {
 }
 
 /// Link two rooms reciprocally: `from` gets `dir` -> `to`, `to` gets the
-/// opposite back to `from`. Never overwrites an existing exit.
+/// opposite back to `from`. Wiring a direction that already leads somewhere
+/// else is an authoring bug, and skipping it silently would sever the new
+/// rooms with nothing to notice (a cut-off component still gets coordinates
+/// of its own), so it panics instead. That refuses server startup:
+/// `LateaniaService::new` runs `seed_world` synchronously in `main` before
+/// the listener serves.
 fn link(rooms: &mut HashMap<RoomId, Room>, from: RoomId, dir: Dir, to: RoomId) {
     if let Some(r) = rooms.get_mut(&from) {
-        r.exits.entry(dir).or_insert(to);
+        let prev = r.exits.insert(dir, to);
+        assert!(
+            prev.is_none_or(|p| p == to),
+            "room {from} exit {dir:?} already leads to {prev:?}, cannot relink it to {to}"
+        );
     }
     if let Some(r) = rooms.get_mut(&to) {
-        r.exits.entry(dir.opposite()).or_insert(from);
+        let prev = r.exits.insert(dir.opposite(), from);
+        assert!(
+            prev.is_none_or(|p| p == from),
+            "room {to} exit {:?} already leads to {prev:?}, cannot relink it to {from}",
+            dir.opposite()
+        );
     }
 }
 
@@ -11952,13 +12093,13 @@ fn extend_world(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn>) {
         "Whisperwood",
         false,
         14,
-        Dir::North,
+        Dir::Down,
         start,
         &[
             wr(
                 "Whisperwood - The Mushroom Stair",
-                "Shelves of bracket-fungus climb a steep slope like a giant's staircase, soft and cold and faintly yielding underfoot, and a slow rain of spores drifts down through the lanternlight to settle on your shoulders. The deeper air tastes of loam and rot and something sweeter beneath. The stair leads north, and the standing-stone ring lies back south.",
-                Dir::North,
+                "Shelves of bracket-fungus climb a steep slope like a giant's staircase, soft and cold and faintly yielding underfoot, and a slow rain of spores drifts down through the lanternlight to settle on your shoulders. The deeper air tastes of loam and rot and something sweeter beneath. The stair leads down, and the standing-stone ring lies back up.",
+                Dir::Down,
             ),
             wr(
                 "Whisperwood - The Glowcap Grotto",
@@ -13178,12 +13319,12 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         &[
             wr(
                 "The Sapphire Coast - The Cliff Path",
-                "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs east, and Tasmania lies west.",
-                Dir::East,
+                "A narrow path clings to the chalk cliff above a sheer drop where the sea breaks white on black rocks a hundred feet below, and the wind comes off the water hard enough to lean your whole weight against. Seabirds wheel and scream from their nests in the cliff-face, loudly resentful of the company. The path runs north, and Tasmania lies west.",
+                Dir::North,
             ),
             wr(
                 "The Sapphire Coast - The Smuggler's Cove",
-                "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and west.",
+                "A hidden cove opens at the foot of a treacherous goat-track, its shingle beach littered with the grey ribs of wrecked boats and, higher up the strand, the cold ashes and stacked kegs of folk who do their trading strictly by moonlight. The tide is out, and the sea-caves gape black and dripping. East and south.",
                 Dir::East,
             ),
             wr(
@@ -13352,27 +13493,27 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         &[
             wr(
                 "The Verdant Highlands - The Herders' Path",
-                "A grassy path winds east through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. East, and Melvanala lies west.",
-                Dir::East,
+                "A grassy path winds north through high rolling pasture, dotted with the small dark shapes of grazing yaks and the occasional stone cairn raised by herders to mark the way through the fog that rolls in without warning. Skylarks burst up singing from beneath your very boots. North, and Melvanala lies west.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Gentian Meadow",
-                "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. East and west.",
-                Dir::East,
+                "A meadow of deep-blue gentian and nodding white edelweiss spills down the hillside in a sweep of color so intense it looks painted, loud with bees and the click of grasshoppers in the warm grass. A lone shepherd's flute carries faintly from somewhere out of sight. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Standing Stones",
-                "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. East and west.",
-                Dir::East,
+                "A ring of moss-furred standing stones crowns a green hill, far older than any herder's memory, and the sheep will not graze within the circle no matter how rich the grass grows there. The wind drops oddly still as you step inside. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Thundering Falls",
-                "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. East and west.",
-                Dir::East,
+                "A river throws itself off a high green shelf in a white roar of spray, and the path crosses behind the falling water on a slick ledge where the whole world becomes noise and cold rainbow mist. The rock is treacherous and the drop is long. North and south.",
+                Dir::North,
             ),
             wr(
                 "The Verdant Highlands - The Heather Moor",
-                "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and west.",
+                "The grass gives way to a vast purple moor of springy heather and black peat-pools, stretching to every horizon under a sky full of racing cloud-shadow. Curlews call their lonely falling cry, and the wind never once stops moving over the open land. East and south.",
                 Dir::East,
             ),
             wr(
@@ -13463,53 +13604,53 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
         "The Mistfen",
         false,
         686,
-        Dir::South,
+        Dir::North,
         700,
         &[
             wr(
                 "The Mistfen - The Sinking Path",
-                "The firm highland turf rots away southward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. South, and the hills lie north.",
-                Dir::South,
+                "The firm highland turf rots away northward into a treacherous fen of black water and floating sedge, where a path of half-sunk logs offers the only footing and a cold white mist drinks the sound right out of the air. Something plops into the water just out of sight. North, and the hills lie south.",
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Reed Labyrinth",
                 "Walls of reed twice your height close in on every side, channels of still brown water branching and rejoining until the world shrinks to mud, mist, and the rustle of unseen things parting the stems ahead of you. Direction becomes a matter of faith. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Drowned Village",
                 "The peaked roofs of a sunken village break the surface of the fen, their windows full of black water, a church spire leaning at a drunken angle with its bell still hung and waiting. The mist hangs a single rope of woodsmoke that has no fire to come from. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Will-o'-Wisp Mire",
                 "Pale lights drift and bob across the deep mire, beautiful and patient, each one hovering just over the worst of the sucking mud, each one promising firm ground that is not there at all. They brighten, hopefully, as you draw near. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Bog-Body Barrow",
                 "A low island of slightly firmer peat holds an ancient barrow, and the black bog has kept its dead so perfectly that the faces pressing up through the surface still wear their final expressions of surprise. The peat sighs and shifts as if breathing. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Leech-Black Pool",
                 "The path skirts a pool so utterly black and still it might be a hole cut clean through the world, and the things that live in it - long, soft, and far too many - lift the surface in slow ripples that all turn, somehow, toward you. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Hag's Causeway",
                 "A causeway of mortared skulls, white and grinning, lifts the path above the deepest fen, and at its midpoint a wicker idol leans over the water, freshly garlanded by hands that did not love what they were appeasing. A fungal glow leaks from a sinkhole side-delving here. North, south, and down.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Sunken Cathedral",
                 "A vast drowned cathedral rears from the mire, three-quarters swallowed, its remaining stained glass casting drowned and broken colors across the water, and from within comes the slow drip and the slower, deliberate sound of something very large turning over. North and south.",
-                Dir::South,
+                Dir::North,
             ),
             wr(
                 "The Mistfen - The Marsh-Mother's Hollow",
-                "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is north.",
-                Dir::South,
+                "The fen opens into a stagnant lagoon ringed by dead willows, and from its center, draped in weed and rising water, the Marsh-Mother lifts her ancient drowned head and opens arms enough to gather in the whole foolish world. The only way back is south.",
+                Dir::North,
             ),
         ],
     );
@@ -13949,12 +14090,12 @@ fn extend_overworld(rooms: &mut HashMap<RoomId, Room>, spawns: &mut Vec<MobSpawn
             ),
             wr(
                 "The Skyreach Mesas - The Thunderbird Eyrie",
-                "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky to the north growls in warning. North and south.",
-                Dir::North,
+                "The trail passes beneath a ledge heaped with an enormous nest of whole tree-trunks and sun-bleached bones, and the very rock is scorched in long forking patterns, for this is the eyrie of the thunderbird, and the sky above growls in warning. Up and south.",
+                Dir::Up,
             ),
             wr(
                 "The Skyreach Mesas - The Petroglyph Gallery",
-                "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and south.",
+                "A long sheltered wall is covered floor to unreachable ceiling in spiraling petroglyphs - suns, beasts, falling stars, and figures with too many arms - a history or a warning pecked into the rock by hands no one remembers. North and down.",
                 Dir::North,
             ),
             wr(
