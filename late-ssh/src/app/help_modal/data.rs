@@ -205,7 +205,7 @@ pub(crate) fn bot_app_context() -> String {
 /// in depth, so anything past "which screen / which key" should route there.
 pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
-    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
+    - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels), 4 Artboard (shared ASCII canvas), 5 Profiles (the people: their projects and open-to-work cards), 6 Leaderboards (every board, monthly and all-time).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-6 jump straight to one.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Typing /shop into the composer opens the Shop.\n\
     - Ctrl+/ opens jump search across rooms and DMs; typing ?query searches messages.\n\
@@ -519,7 +519,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /history           browse this room's full history in a scrollable modal",
         "                     with unread waiting it opens on your first unread message",
         "  /summary           AI catch-up of this public room, the last day or since your last read",
-        "                     (up to 2 days back; cooldown per room)",
+        "                     (up to 2 days back; one per room every 10 minutes)",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
@@ -550,6 +550,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  e                  edit selected message",
         "  dd                 delete selected message (press d twice)",
         "  c                  copy selected message to clipboard",
+        "  new messages       a rule marks where you left off, in the room and in /history",
         "  t                  translate selected message (press again to hide)",
         "",
         "Translation",
@@ -573,6 +574,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  va / vb / vc       vote while a poll is visible",
         "  v1 / v2 / v3       select music streams/stations",
         "  limit              one active poll per room",
+        "  author             the strip names who started the poll, when it fits",
         "",
         "Compose",
         // `<<COMPOSE_SEND_LINES>>` marker is replaced after collection so the
@@ -603,6 +605,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  - item             unordered list",
         "  1. item            ordered list",
         "  ```                fenced code block (close with ```)",
+        "  :shortcode:        GitHub/Discord emoji names expand on screen (:tada: -> 🎉);",
+        "                     unknown codes and anything inside code stay exactly as typed",
         "",
         "Icon picker",
         "  ↑/↓ or Ctrl+K/J    move selection",
@@ -1016,7 +1020,8 @@ fn overview_lines() -> Vec<String> {
         "  0 Clubhouse       the Late Lounge: walk around, everyone is live",
         "  1 Home            chat, music, and live activity",
         "  2 The Arcade      daily puzzles, endless games, quests at the top",
-        "  3 Games           door games: Lateania, Rebels, NetHack, CodeKeep",
+        "  3 Games           door games: Lateania, NetHack, DCSS, Brogue, Usurper,",
+        "                    Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels",
         "  4 Artboard        shared persistent ASCII canvas",
         "  5 Profiles        the people, one row each: their projects and work cards",
         "  6 Leaderboards    every board, monthly and all-time",
@@ -1026,6 +1031,7 @@ fn overview_lines() -> Vec<String> {
         "",
         "The Games hub is a grouped sidebar: arrow keys or j/k move between its",
         "games; Enter launches the selected game. CodeKeep needs 108x24 inside the frame.",
+        "Any screen too small to draw says so, naming the size it needs and the size you have.",
         "Inside a running roguelike, ` steps out while the game keeps going (a green",
         "dot marks it; ` or Enter on its card resumes). c on the NetHack or DCSS card",
         "opens the config paste box (.nethackrc / init.txt).",
@@ -1070,6 +1076,7 @@ fn overview_lines() -> Vec<String> {
         "Shop",
         "  /shop             open the Shop modal from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
+        "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
         "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",
         "Jump search",
@@ -1127,7 +1134,7 @@ fn architecture_lines() -> Vec<String> {
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub, including NetHack and CodeKeep), Artboard, Profiles, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub: Lateania, the roguelikes, the BBS doors, CodeKeep, Rebels), Artboard, Profiles, and the persistent bonsai sidebar",
         "  Home chat includes synthetic entries: RSS, News, Cyberspace, Voice, Mentions, Discover; Profiles owns the projects and work-card feed",
         "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
         "  House-table runtime state is process-local and can reset on SSH server restart",
