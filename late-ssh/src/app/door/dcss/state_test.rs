@@ -199,6 +199,31 @@ async fn idle_shutdown_closes_a_stale_running_game_without_grace() {
     assert!(!state.in_exit_grace());
 }
 
+/// The dcss twin of the brogue arrow regression: crawl's ncurses asks for
+/// application cursor keys, our vt100 parser eats the request, and the CSI
+/// arrows the client keeps sending decode as ESC + `[` + a letter command.
+#[tokio::test]
+async fn arrows_follow_the_game_into_application_cursor_mode() {
+    let mut state = disabled_state();
+    state.force_running_for_test();
+    let proxy = state.proxy().expect("running proxy");
+
+    // Normal cursor mode (a game that never asked): nothing is rewritten.
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1b[A");
+
+    // Once crawl turns the mode on, the same keystroke has to arrive in the
+    // SS3 form or ncurses decodes it as three separate keys.
+    proxy.feed_for_test(b"\x1b[?1h");
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1bOA");
+    assert_eq!(keys_for_game(proxy, b"\x1b[B"), b"\x1bOB");
+    assert_eq!(keys_for_game(proxy, b"\x1b[C"), b"\x1bOC");
+    assert_eq!(keys_for_game(proxy, b"\x1b[D"), b"\x1bOD");
+
+    // And back off again when the game leaves keypad mode (`rmkx`).
+    proxy.feed_for_test(b"\x1b[?1l");
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1b[A");
+}
+
 #[test]
 fn is_f1_matches_both_encodings() {
     assert!(is_f1(b"\x1bOP"));

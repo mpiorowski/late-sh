@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 
 use super::proxy::{BrogueProcess, ProcessConfig, ProxyStatus};
 use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
 
 // The launcher UI renders straight off the shared flow's status.
@@ -259,10 +260,10 @@ impl State {
     /// The game stays keyboard-driven here, like the other roguelike doors.
     pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
-            let filtered = strip_input_noise(data);
-            if !filtered.is_empty() {
+            let keys = keys_for_game(proxy, data);
+            if !keys.is_empty() {
                 self.last_input = Instant::now();
-                proxy.send_input(filtered);
+                proxy.send_input(keys);
             }
         }
     }
@@ -283,6 +284,20 @@ impl State {
             repaint: None,
         }));
         self.mode = Mode::Running;
+    }
+}
+
+/// The exact bytes a client chunk becomes for the running game: terminal
+/// reports dropped, then the cursor keys spoken in the form brogue is
+/// listening for. brogue's ncurses asks the terminal for application cursor
+/// keys the moment it starts (`keypad(TRUE)`), but that request stops at our
+/// vt100 parser and never reaches the player's terminal, so the client keeps
+/// sending the CSI form the game cannot decode. See `app/door/keys.rs`.
+fn keys_for_game(proxy: &BrogueProcess, data: &[u8]) -> Vec<u8> {
+    let filtered = strip_input_noise(data);
+    match proxy.with_screen(|screen| screen.application_cursor()) {
+        true => keys::to_application_cursor(&filtered),
+        false => filtered,
     }
 }
 

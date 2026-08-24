@@ -11,6 +11,7 @@ pub mod game;
 pub mod greendragon;
 pub mod hub;
 pub mod ingest;
+pub mod keys;
 pub mod landing;
 pub mod lateania;
 pub mod nethack;

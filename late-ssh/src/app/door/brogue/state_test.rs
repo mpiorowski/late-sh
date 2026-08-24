@@ -192,6 +192,35 @@ async fn idle_shutdown_closes_a_stale_running_game_without_grace() {
     assert!(!state.in_exit_grace());
 }
 
+/// The bug this pins: brogue's ncurses asks the terminal for application
+/// cursor keys (`keypad(TRUE)` -> `smkx`), that request dies in our vt100
+/// parser, so the player's terminal keeps sending CSI arrows while the game
+/// only recognizes the SS3 form. Forwarded verbatim, an Up arrow reached
+/// brogue as ESC + `[` + `A`, i.e. cancel + "turn on autopilot?".
+#[tokio::test]
+async fn arrows_follow_the_game_into_application_cursor_mode() {
+    let mut state = disabled_state();
+    state.force_running_for_test();
+    let proxy = state.proxy().expect("running proxy");
+
+    // Normal cursor mode (a game that never asked): CSI arrows are already
+    // what the game is listening for, so nothing is rewritten.
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1b[A");
+
+    // Once the game turns the mode on, the same keystroke has to arrive in
+    // the SS3 form or ncurses decodes it as three separate keys.
+    proxy.feed_for_test(b"\x1b[?1h");
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1bOA");
+    assert_eq!(keys_for_game(proxy, b"\x1b[B"), b"\x1bOB");
+    assert_eq!(keys_for_game(proxy, b"\x1b[C"), b"\x1bOC");
+    assert_eq!(keys_for_game(proxy, b"\x1b[D"), b"\x1bOD");
+
+    // And back off again when the game leaves keypad mode (`rmkx`), so the
+    // launcher-adjacent screens keep getting what they expect.
+    proxy.feed_for_test(b"\x1b[?1l");
+    assert_eq!(keys_for_game(proxy, b"\x1b[A"), b"\x1b[A");
+}
+
 #[test]
 fn is_f1_matches_both_encodings() {
     assert!(is_f1(b"\x1bOP"));
