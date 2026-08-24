@@ -24,7 +24,7 @@ ARG DEBIAN_VERSION=bookworm
 # bump and its recipe change ship in the same commit and cannot drift apart.
 # Bump the pin whenever a door's recipe or upstream version changes; the same
 # tag must never be re-pushed with new content.
-FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2 AS nethack-build
+FROM ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r3 AS nethack-build
 FROM ghcr.io/mpiorowski/late-sh/door-dopewars:1.6.2-r1 AS dopewars-build
 FROM ghcr.io/mpiorowski/late-sh/door-dcss:0.34.1-r2 AS dcss-build
 FROM ghcr.io/mpiorowski/late-sh/door-usurper:0.25-r1 AS usurper-build

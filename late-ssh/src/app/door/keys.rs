@@ -1,4 +1,5 @@
-// Keyboard translation shared by the curses door games (Brogue, DCSS).
+// Keyboard translation shared by the ncurses door games (Brogue, DCSS, and
+// NetHack under its opt-in curses windowport).
 //
 // A door puts a `vt100::Parser` between the player's terminal and the game, and
 // that parser is where the guest's terminal-mode requests stop: we render its

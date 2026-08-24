@@ -7,6 +7,17 @@ IMAGE="$1"
 
 docker run --rm "$IMAGE" /var/games/nethack/nethack --version
 
+# Prove both windowports shipped in the installed binary: tty (the default) and
+# curses (opt-in via OPTIONS=windowtype:curses, the only port whose input layer
+# decodes arrow keys). Each port registers in winchoices[] by an exact name
+# string (WPID stringizes it into .rodata), so an exact-line strings match is a
+# reliable witness; the build stage already asserts the same via nm on the
+# pre-install binary.
+docker run --rm "$IMAGE" sh -c '
+  strings /var/games/nethack/nethack | grep -qx tty
+  strings /var/games/nethack/nethack | grep -qx curses
+'
+
 # Prove the A1 split actually compiled in and the install seeded save/.
 # GCC lowers the constant-path copy into immediate stores, so `strings`
 # cannot reliably find VAR_PLAYGROUND in the optimized binary. Instead,

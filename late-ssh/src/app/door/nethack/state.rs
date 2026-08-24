@@ -7,6 +7,7 @@ use super::proxy::{NethackProcess, ProcessConfig, ProxyStatus};
 use crate::app::activity::event::ActivityGame;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
 
 // The launcher UI renders straight off the shared flow's status.
@@ -291,12 +292,28 @@ impl State {
     /// Stripping them is what makes in-game `?` actually work.
     pub fn forward_input(&mut self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
-            let filtered = strip_input_noise(data);
-            if !filtered.is_empty() {
+            let keys = keys_for_game(proxy, data);
+            if !keys.is_empty() {
                 self.last_input = Instant::now();
-                proxy.send_input(filtered);
+                proxy.send_input(keys);
             }
         }
+    }
+}
+
+/// The exact bytes a client chunk becomes for the running game: terminal
+/// reports dropped. The tty windowport reads raw `getchar()` and decodes no
+/// escapes, so arrows never work there; the curses windowport (opt-in via
+/// `OPTIONS=windowtype:curses` in the player rc) asks the terminal for
+/// application cursor keys (`keypad(stdscr, TRUE)` in cursmain.c), but that
+/// request stops at our vt100 parser and never reaches the player's terminal,
+/// so the client keeps sending the CSI form the game cannot decode. See
+/// `app/door/keys.rs`.
+fn keys_for_game(proxy: &NethackProcess, data: &[u8]) -> Vec<u8> {
+    let filtered = strip_input_noise(data);
+    match proxy.with_screen(|screen| screen.application_cursor()) {
+        true => keys::to_application_cursor(&filtered),
+        false => filtered,
     }
 }
 

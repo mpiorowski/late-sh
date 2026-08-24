@@ -3,7 +3,7 @@
 # nethack door-game build image. The stage below moved verbatim from the root
 # Dockerfile so the recipe rebuilds only when this file changes, not on every
 # image build. Built and pushed by .github/workflows/nethack.yml as
-# ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r2; the root Dockerfile pins that
+# ghcr.io/mpiorowski/late-sh/door-nethack:5.0.0-r3; the root Dockerfile pins that
 # image as its nethack-build stage. Bump the tag there on any recipe change.
 
 ARG DEBIAN_VERSION=bookworm
@@ -113,8 +113,20 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     && grep -qE '^#define CHRONICLE\b' include/config.h \
     && cd sys/unix && sh setup.sh hints/linux.500 && cd ../.. \
     && make fetch-Lua \
-    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games all \
-    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games install \
+    # Windowports: tty (the default players get) plus curses, opt-in per player
+    # via OPTIONS=windowtype:curses in the rc paste box. The tty port reads raw
+    # getchar() and decodes no escape sequences, so arrow keys can never work
+    # there; the curses port goes through keypad()/terminfo and does. All three
+    # flags are REQUIRED together: with WANT_WIN_CURSES=1 alone, the hints
+    # fallback (multiw-2.500) would no longer define WANT_WIN_TTY, silently
+    # dropping the tty port and flipping the default to curses for everyone.
+    # WANT_DEFAULT compiles into the binary as DEFAULT_WINDOW_SYS (linux.500).
+    # The nm asserts fail the build closed unless BOTH windowports actually
+    # linked into the binary (each port's window_procs symbol is present).
+    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games WANT_WIN_TTY=1 WANT_WIN_CURSES=1 WANT_DEFAULT=tty all \
+    && nm --defined-only src/nethack | grep -q ' tty_procs$' \
+    && nm --defined-only src/nethack | grep -q ' curses_procs$' \
+    && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games WANT_WIN_TTY=1 WANT_WIN_CURSES=1 WANT_DEFAULT=tty install \
     # Raise the concurrent-game cap. sysconf ships MAXPLAYERS=10; each value is
     # one live getlock slot, and once every slot is taken the whole door wedges
     # ("Too many hacks running now"), so size it up from the stock default.
