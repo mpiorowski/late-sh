@@ -7699,21 +7699,21 @@ fn short_user_id(user_id: Uuid) -> String {
     id[..id.len().min(8)].to_string()
 }
 
-/// The `/summary` window start, from the room's `room_unread_markers` entry:
-/// the pre-mark unread marker when one is set (the server cursor advanced
-/// the moment the room opened), the max window for a never-read room with
-/// unread waiting (inner `None`), and a default look-back when caught up
-/// (no entry) so `/summary` still answers "what happened today". The
-/// service re-clamps every request to the max window as cost policy.
+/// The `/summary` window start this session asks for: the pre-mark unread
+/// marker when one is set (the server cursor advanced the moment the room
+/// opened), the max window for a never-read room with unread waiting
+/// (inner `None`), and `now` when caught up (no entry).
+///
+/// Only the marker lives here. Both window bounds are the summary
+/// service's (`window_floor`), so a start inside the minimum window widens
+/// to it: `now` is "no reason to read further back", not "read nothing".
 fn summary_since(marker: Option<&Option<DateTime<Utc>>>, now: DateTime<Utc>) -> DateTime<Utc> {
     match marker {
         Some(Some(marker)) => *marker,
         Some(None) => {
             now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
         }
-        None => {
-            now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS)
-        }
+        None => now,
     }
 }
 

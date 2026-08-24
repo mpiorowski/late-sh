@@ -14,6 +14,10 @@
 #   chat_dumps/<slug>.txt   (override dir with LATE_DUMP_DIR; chat_dumps/
 #   itself is gitignored scratch space, use a different dir to commit output)
 #
+# Every message header ends with `id=<uuid>`, the chat_messages primary key.
+# Feed those ids to scripts/delete_chat_messages.sh to prune handled entries:
+#   grep -o 'id=[0-9a-f-]\{36\}' feedback/suggestions.txt | cut -d= -f2
+#
 # Optional env (same conventions as scripts/connect_db.sh):
 #   KUBECTL=kubectl  KUBE_CONTEXT=<ctx>  KUBE_NAMESPACE=default
 #   LATE_DB_KUBE_SERVICE=postgres-rw  LATE_DB_KUBE_SECRET=postgres-app
@@ -124,7 +128,7 @@ RUN_PSQL=("${PSQL}" -h "${LOCAL_HOST}" -p "${LOCAL_PORT}" -U "${DB_USER}" -d "${
   -v ON_ERROR_STOP=1 -P pager=off --set=default_transaction_read_only=on)
 
 # Per-message block:
-#   [YYYY-MM-DD HH:MI:SS UTC] username (reply to other: "snippet")
+#   [YYYY-MM-DD HH:MI:SS UTC] username (reply to other: "snippet")  id=<uuid>
 #   <body>
 #   ----------------------------------------------------------------------
 MSG_SQL_PATH="${TMP_DIR}/dump.sql"
@@ -137,6 +141,7 @@ select
     ' (reply to ' || coalesce(ru.username, '<deleted>') || ': "' ||
     left(regexp_replace(coalesce(rm.body, '<missing>'), '\s+', ' ', 'g'), 60) || '")'
   else '' end ||
+  '  id=' || m.id ||
   E'\n' || m.body || E'\n' ||
   '----------------------------------------------------------------------'
 from chat_messages m

@@ -518,7 +518,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /search [query]    search messages (opens the Ctrl+/ modal in ? mode)",
         "  /history           browse this room's full history in a scrollable modal",
         "                     with unread waiting it opens on your first unread message",
-        "  /summary           AI catch-up of this public room since your last read",
+        "  /summary           AI catch-up of this public room, the last day or since your last read",
         "                     (up to 2 days back; cooldown per room)",
         "",
         "Global chat keys",

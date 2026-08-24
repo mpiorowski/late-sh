@@ -7,7 +7,8 @@ use late_core::models::chat_message::ChatMessage;
 use uuid::Uuid;
 
 use super::{
-    Reservation, SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, build_transcript,
+    Reservation, SUMMARY_DEFAULT_WINDOW_HOURS, SUMMARY_MAX_WINDOW_HOURS,
+    SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, build_transcript, window_floor,
 };
 use crate::app::ai::svc::AiService;
 
@@ -37,6 +38,26 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
         user_id: author,
         body: body.to_string(),
     }
+}
+
+#[test]
+fn the_window_reaches_back_at_least_the_default_and_at_most_the_max() {
+    let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
+    let minimum = now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS);
+
+    // A start inside the minimum window widens to it: the read cursor of
+    // someone who left the room open overnight must not shrink the catch-up
+    // to nothing.
+    assert_eq!(window_floor(now - chrono::Duration::hours(3), now), minimum);
+    assert_eq!(window_floor(now, now), minimum);
+    // Between the bounds, the asked-for start stands.
+    let stale = now - chrono::Duration::hours(30);
+    assert_eq!(window_floor(stale, now), stale);
+    // Past the max, cost policy wins.
+    assert_eq!(
+        window_floor(now - chrono::Duration::days(9), now),
+        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+    );
 }
 
 #[test]

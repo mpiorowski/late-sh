@@ -3488,23 +3488,24 @@ fn parse_golive_clamps_titles_at_the_boundary() {
 }
 
 #[test]
-fn summary_since_maps_the_unread_marker_to_the_window() {
+fn summary_since_reports_the_marker_and_leaves_the_bounds_to_the_service() {
     use chrono::TimeZone;
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
-    let marker = now - chrono::Duration::hours(3);
 
-    // The pre-mark unread marker wins when one is set.
-    assert_eq!(summary_since(Some(&Some(marker)), now), marker);
-    // A never-read room with unread waiting gets the max window.
+    // The pre-mark unread marker is passed through as asked for, inside the
+    // minimum window or not; `window_floor` owns both bounds.
+    let recent = now - chrono::Duration::hours(3);
+    assert_eq!(summary_since(Some(&Some(recent)), now), recent);
+    let stale = now - chrono::Duration::hours(30);
+    assert_eq!(summary_since(Some(&Some(stale)), now), stale);
+    // A never-read room with unread waiting asks for the max window.
     assert_eq!(
         summary_since(Some(&None), now),
         now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
     );
-    // Caught up (no marker entry) gets the default look-back.
-    assert_eq!(
-        summary_since(None, now),
-        now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_DEFAULT_WINDOW_HOURS)
-    );
+    // Caught up (no marker entry) asks for nothing extra; the service still
+    // reads the minimum window back.
+    assert_eq!(summary_since(None, now), now);
 }
 
 /// Minimal room for the `/summary` command gate; the branch reads only
