@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use super::{
     Reservation, SUMMARY_DEFAULT_WINDOW_HOURS, SUMMARY_MAX_WINDOW_HOURS,
-    SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, build_transcript, window_floor,
+    SUMMARY_PROMPT_CHAR_BUDGET, SummaryOutcome, SummaryService, SummaryWindow, build_transcript,
+    window_start,
 };
 use crate::app::ai::svc::AiService;
 
@@ -41,21 +42,49 @@ fn message(index: u64, author: Uuid, body: &str) -> ChatMessage {
 }
 
 #[test]
-fn the_window_reaches_back_at_least_the_default_and_at_most_the_max() {
+fn a_read_marker_reaches_back_at_least_the_default_and_at_most_the_max() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
     let minimum = now - chrono::Duration::hours(SUMMARY_DEFAULT_WINDOW_HOURS);
+    let since_read = |marker| window_start(SummaryWindow::SinceRead(marker), now);
 
     // A start inside the minimum window widens to it: the read cursor of
     // someone who left the room open overnight must not shrink the catch-up
     // to nothing.
-    assert_eq!(window_floor(now - chrono::Duration::hours(3), now), minimum);
-    assert_eq!(window_floor(now, now), minimum);
+    assert_eq!(since_read(now - chrono::Duration::hours(3)), minimum);
+    assert_eq!(since_read(now), minimum);
     // Between the bounds, the asked-for start stands.
     let stale = now - chrono::Duration::hours(30);
-    assert_eq!(window_floor(stale, now), stale);
+    assert_eq!(since_read(stale), stale);
     // Past the max, cost policy wins.
     assert_eq!(
-        window_floor(now - chrono::Duration::days(9), now),
+        since_read(now - chrono::Duration::days(9)),
+        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+    );
+}
+
+#[test]
+fn an_explicit_window_is_taken_at_face_value_up_to_the_max() {
+    let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
+    let explicit = |back| window_start(SummaryWindow::Explicit(back), now);
+
+    // The whole point of typing a window: the default floor does not widen
+    // it, so `/summary 6h` covers six hours and not a day.
+    assert_eq!(
+        explicit(chrono::Duration::hours(6)),
+        now - chrono::Duration::hours(6)
+    );
+    assert_eq!(
+        explicit(chrono::Duration::minutes(90)),
+        now - chrono::Duration::minutes(90)
+    );
+    // The max is still the max, and an absurd ask clamps to it rather than
+    // overflowing the subtraction.
+    assert_eq!(
+        explicit(chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS + 1)),
+        now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
+    );
+    assert_eq!(
+        explicit(chrono::Duration::MAX),
         now - chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS)
     );
 }
@@ -110,7 +139,7 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
         Uuid::from_u128(1),
         Uuid::from_u128(2),
         "#lounge".to_string(),
-        Utc::now(),
+        SummaryWindow::SinceRead(Utc::now()),
         Vec::new(),
     );
 
@@ -130,7 +159,13 @@ async fn an_armed_cooldown_refuses_before_any_work() {
     service.finish_slot(user, room);
     let mut events = service.subscribe();
 
-    service.request(user, room, "#lounge".to_string(), Utc::now(), Vec::new());
+    service.request(
+        user,
+        room,
+        "#lounge".to_string(),
+        SummaryWindow::SinceRead(Utc::now()),
+        Vec::new(),
+    );
 
     let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
@@ -162,7 +197,13 @@ async fn an_in_flight_request_collapses_duplicates_without_spending() {
 
     // A duplicate submitted while it runs answers InFlight before any work:
     // no fetch, no daily-cap spend, no model call.
-    service.request(user, room, "#lounge".to_string(), Utc::now(), Vec::new());
+    service.request(
+        user,
+        room,
+        "#lounge".to_string(),
+        SummaryWindow::SinceRead(Utc::now()),
+        Vec::new(),
+    );
 
     let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await

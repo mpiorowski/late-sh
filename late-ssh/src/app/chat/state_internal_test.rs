@@ -3493,7 +3493,7 @@ fn summary_since_reports_the_marker_and_leaves_the_bounds_to_the_service() {
     let now = chrono::Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap();
 
     // The pre-mark unread marker is passed through as asked for, inside the
-    // minimum window or not; `window_floor` owns both bounds.
+    // minimum window or not; `window_start` owns both bounds.
     let recent = now - chrono::Duration::hours(3);
     assert_eq!(summary_since(Some(&Some(recent)), now), recent);
     let stale = now - chrono::Duration::hours(30);
@@ -3506,6 +3506,63 @@ fn summary_since_reports_the_marker_and_leaves_the_bounds_to_the_service() {
     // Caught up (no marker entry) asks for nothing extra; the service still
     // reads the minimum window back.
     assert_eq!(summary_since(None, now), now);
+}
+
+#[test]
+fn parse_summary_arg_names_every_outcome() {
+    use crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS;
+
+    // Bare `/summary` (the argument is whatever followed the command, so a
+    // trailing space is the same thing).
+    assert_eq!(parse_summary_arg(""), SummaryArg::CatchUp);
+    assert_eq!(parse_summary_arg("   "), SummaryArg::CatchUp);
+
+    // Both units, and the boundary that is still allowed.
+    assert_eq!(
+        parse_summary_arg(" 6h"),
+        SummaryArg::Window(chrono::Duration::hours(6))
+    );
+    assert_eq!(
+        parse_summary_arg(" 90m"),
+        SummaryArg::Window(chrono::Duration::minutes(90))
+    );
+    assert_eq!(
+        parse_summary_arg(" 6H"),
+        SummaryArg::Window(chrono::Duration::hours(6))
+    );
+    assert_eq!(
+        parse_summary_arg(&format!(" {SUMMARY_MAX_WINDOW_HOURS}h")),
+        SummaryArg::Window(chrono::Duration::hours(SUMMARY_MAX_WINDOW_HOURS))
+    );
+
+    // Past the max: refused, never quietly clamped, so a summary is never
+    // narrower than the window it was asked for.
+    assert_eq!(
+        parse_summary_arg(&format!(" {}h", SUMMARY_MAX_WINDOW_HOURS + 1)),
+        SummaryArg::TooLong
+    );
+    assert_eq!(parse_summary_arg(" 4000m"), SummaryArg::TooLong);
+    // Big enough to overflow a naive hours-to-minutes multiply.
+    assert_eq!(parse_summary_arg(" 4000000000h"), SummaryArg::TooLong);
+
+    // Empty windows.
+    assert_eq!(parse_summary_arg(" 0h"), SummaryArg::TooShort);
+    assert_eq!(parse_summary_arg(" 0m"), SummaryArg::TooShort);
+
+    // Junk, and the near-misses that must not be guessed at: a unitless
+    // number, a negative, a decimal, and a wrong unit.
+    for junk in [
+        " 6",
+        " -6h",
+        " 1.5h",
+        " 6d",
+        " h",
+        " six hours",
+        " 6 h",
+        " 6hh",
+    ] {
+        assert_eq!(parse_summary_arg(junk), SummaryArg::Unparseable, "{junk:?}");
+    }
 }
 
 /// Minimal room for the `/summary` command gate; the branch reads only
@@ -3569,6 +3626,28 @@ async fn summary_command_requests_the_visible_public_room() {
     assert_eq!(event.user_id, user.id);
     assert_eq!(event.room_id, room_id);
     assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
+}
+
+#[tokio::test]
+async fn summary_command_refuses_a_malformed_window_without_requesting() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "sum_cmd_bad").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    let room = summary_room("public");
+    state.visible_room_id = Some(room.id);
+    state.rooms.push((room, Vec::new()));
+    let mut events = state.summary_service.subscribe();
+
+    state.composer.insert_str("/summary 6");
+    let banner = state.submit_composer(false, false).expect("banner");
+
+    // The banner teaches the format, and nothing was spent: a typo must not
+    // fall back to the default window and answer the wrong question.
+    assert_eq!(banner.message, "Use /summary, or a window like /summary 6h");
+    assert!(matches!(
+        events.try_recv(),
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+    ));
 }
 
 #[tokio::test]

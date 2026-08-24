@@ -33,7 +33,7 @@ use uuid::Uuid;
 use late_core::models::chat_message::HistoryDirection;
 
 use crate::app::ai::ladder::MentionLadders;
-use crate::app::ai::summary::{SummaryEvent, SummaryOutcome, SummaryService};
+use crate::app::ai::summary::{SummaryEvent, SummaryOutcome, SummaryService, SummaryWindow};
 use crate::app::ai::translate::{TranslationEvent, TranslationOutcome, TranslationService};
 use crate::app::common::overlay::Overlay;
 use crate::app::common::theme;
@@ -3163,7 +3163,9 @@ impl ChatState {
             return None;
         }
 
-        if body.trim() == "/summary" {
+        if let Some(rest) = body.trim().strip_prefix("/summary")
+            && (rest.is_empty() || rest.starts_with(' '))
+        {
             self.clear_composer_after_submit();
             let Some(room_id) = self.visible_room_id else {
                 return Some(Banner::error("open a room first"));
@@ -3176,13 +3178,32 @@ impl ChatState {
             if room.visibility != "public" {
                 return Some(Banner::error("Summaries cover public rooms only"));
             }
-            let since = summary_since(self.room_unread_markers.get(&room_id), Utc::now());
+            let now = Utc::now();
+            let window = match parse_summary_arg(rest) {
+                SummaryArg::CatchUp => SummaryWindow::SinceRead(summary_since(
+                    self.room_unread_markers.get(&room_id),
+                    now,
+                )),
+                SummaryArg::Window(back) => SummaryWindow::Explicit(back),
+                SummaryArg::Unparseable => {
+                    return Some(Banner::error("Use /summary, or a window like /summary 6h"));
+                }
+                SummaryArg::TooShort => {
+                    return Some(Banner::error("Summary windows start at 1m"));
+                }
+                SummaryArg::TooLong => {
+                    return Some(Banner::error(&format!(
+                        "Summaries reach back at most {}h",
+                        crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS
+                    )));
+                }
+            };
             let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
             self.summary_service.request(
                 self.user_id,
                 room_id,
                 self.history_room_label(room_id),
-                since,
+                window,
                 exclude_user_ids,
             );
             return Some(Banner::info("Summarizing…"));
@@ -7705,7 +7726,7 @@ fn short_user_id(user_id: Uuid) -> String {
 /// (inner `None`), and `now` when caught up (no entry).
 ///
 /// Only the marker lives here. Both window bounds are the summary
-/// service's (`window_floor`), so a start inside the minimum window widens
+/// service's (`window_start`), so a start inside the minimum window widens
 /// to it: `now` is "no reason to read further back", not "read nothing".
 fn summary_since(marker: Option<&Option<DateTime<Utc>>>, now: DateTime<Utc>) -> DateTime<Utc> {
     match marker {
@@ -7714,6 +7735,51 @@ fn summary_since(marker: Option<&Option<DateTime<Utc>>>, now: DateTime<Utc>) -> 
             now - chrono::Duration::hours(crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS)
         }
         None => now,
+    }
+}
+
+/// What the text after `/summary` asked for. Every outcome is named so the
+/// command's match answers each one with its own banner: a typo must never
+/// silently become the default window.
+#[derive(Debug, PartialEq, Eq)]
+enum SummaryArg {
+    /// Bare `/summary`: catch up from the read marker.
+    CatchUp,
+    Window(chrono::Duration),
+    /// Not a `<count><unit>` duration at all.
+    Unparseable,
+    /// Parsed, but empty (`0h`): there is no window to read.
+    TooShort,
+    /// Parsed, but past [`SUMMARY_MAX_WINDOW_HOURS`]. Refused rather than
+    /// clamped, so the answer is never narrower than the question.
+    TooLong,
+}
+
+/// Parse the argument of `/summary [<count>h|<count>m]`.
+///
+/// The unit is required (`6h`, `90m`): a bare `6` could mean either, and
+/// guessing for the user is how a catch-up quietly covers the wrong day.
+fn parse_summary_arg(rest: &str) -> SummaryArg {
+    let arg = rest.trim().to_ascii_lowercase();
+    if arg.is_empty() {
+        return SummaryArg::CatchUp;
+    }
+    let (count, minutes_per_unit) = match (arg.strip_suffix('h'), arg.strip_suffix('m')) {
+        (Some(count), _) => (count, 60),
+        (None, Some(count)) => (count, 1),
+        (None, None) => return SummaryArg::Unparseable,
+    };
+    // `u32` keeps the multiply below inside i64 whatever is typed, and
+    // refuses the sign and decimal point along with the rest of the junk.
+    let Ok(count) = count.parse::<u32>() else {
+        return SummaryArg::Unparseable;
+    };
+    match i64::from(count) * minutes_per_unit {
+        0 => SummaryArg::TooShort,
+        minutes if minutes > crate::app::ai::summary::SUMMARY_MAX_WINDOW_HOURS * 60 => {
+            SummaryArg::TooLong
+        }
+        minutes => SummaryArg::Window(chrono::Duration::minutes(minutes)),
     }
 }
 

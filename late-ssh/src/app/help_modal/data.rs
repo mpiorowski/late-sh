@@ -519,6 +519,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /history           browse this room's full history in a scrollable modal",
         "                     with unread waiting it opens on your first unread message",
         "  /summary           AI catch-up of this public room, the last day or since your last read",
+        "  /summary 6h        catch up on exactly that window instead (also /summary 90m)",
         "                     (up to 2 days back; one per room every 10 minutes)",
         "",
         "Global chat keys",
