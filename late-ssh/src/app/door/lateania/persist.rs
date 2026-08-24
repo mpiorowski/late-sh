@@ -4,8 +4,8 @@
 // carried and banked gold, vitals, and gear. It serializes to the JSON blob
 // stored in the mud_characters table (see late_core::models::mud_character).
 // Transient combat state (current target, active effects, cooldowns, respawn
-// timers) is deliberately NOT saved - a character reloads at full readiness in
-// a safe room.
+// timers) is deliberately NOT saved - a character reloads out of combat, in the
+// room it logged out in.
 //
 // The struct is versioned. Unknown/missing fields fall back to defaults via
 // serde, so adding fields later never breaks an old save.

@@ -3606,8 +3606,10 @@ impl WorldState {
     // ---- Persistence: hydrate a save, export one, the shared world ------
 
     /// Apply a saved character onto a freshly-joined player. Restores class,
-    /// progression, gold, gear, and inventory; reloads at a safe room with full
-    /// vitals so a logged-out fight never resumes mid-swing.
+    /// progression, gold, gear, inventory, and the room they logged out in.
+    /// Nothing hostile acts on its own here (every fight is player-started and
+    /// no combat state is saved), so coming back where you stood is safe; only
+    /// a room that no longer exists falls back to the start room.
     fn hydrate(&mut self, user_id: Uuid, saved: &SavedCharacter) {
         let Some(class) = saved.class() else {
             // No class chosen last time; leave the player at the select screen.
@@ -3617,10 +3619,9 @@ impl WorldState {
         let saved_level = saved.level.clamp(1, Class::MAX_LEVEL);
         let level = saved_level.max(level_for_xp(xp)).clamp(1, Class::MAX_LEVEL);
         let stats = class.stats_at(level);
-        let room = if self.world.room(saved.room).is_some_and(|r| r.safe) {
-            saved.room
-        } else {
-            self.world.start_room
+        let room = match self.world.room(saved.room) {
+            Some(_) => saved.room,
+            None => self.world.start_room,
         };
         if let Some(p) = self.players.get_mut(&user_id) {
             p.class = Some(class);

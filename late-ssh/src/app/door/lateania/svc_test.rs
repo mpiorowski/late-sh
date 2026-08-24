@@ -3951,6 +3951,34 @@ fn a_returning_character_reloads_where_they_saved_not_the_tutorial() {
     assert_eq!(s2.players[&uid(1)].room, 1);
 }
 
+// Backtick hops out of the world (autosave + leave) and back in, so a hop from
+// anywhere but a town must put the character back where they stood: relocating
+// them to Embergate's square is a free recall out of the wilds (and out of the
+// Waste's pvp rooms) that nobody asked for.
+#[test]
+fn a_returning_character_reloads_in_an_unsafe_room_too() {
+    let mut s = world();
+    s.join(uid(1));
+    s.choose_class(uid(1), Class::Warrior);
+    const ROOM: RoomId = 2001; // Frontier zone 0, interior: not a haven
+    assert!(
+        !s.world.room(ROOM).unwrap().safe,
+        "test premise: an unsafe room"
+    );
+    s.players.get_mut(&uid(1)).unwrap().room = ROOM;
+    let saved = s.export_saved(uid(1)).expect("classed character exports");
+
+    // The hop out leaves the world; the hop back rejoins and rehydrates.
+    s.leave(uid(1));
+    s.join(uid(1));
+    s.hydrate(uid(1), &saved);
+    assert_eq!(
+        s.players[&uid(1)].room,
+        ROOM,
+        "hopping back in must not teleport the character to the start room"
+    );
+}
+
 #[test]
 fn leaderboard_ranks_by_level_pvp_kills_and_gold_and_skips_unclassed() {
     let mut s = world();
