@@ -1,5 +1,8 @@
-// Keyboard translation shared by the ncurses door games (Brogue, DCSS, and
-// NetHack under its opt-in curses windowport).
+// Keyboard translation shared by every vt100-backed door. The ncurses games
+// (Brogue, DCSS, NetHack under its opt-in curses windowport, dopewars) are the
+// ones that actually request the mode; the rest (Usurper, BashQuest, CodeKeep,
+// Rebels) are wired through the same gate so the bug class is closed once,
+// and for them it stays a no-op.
 //
 // A door puts a `vt100::Parser` between the player's terminal and the game, and
 // that parser is where the guest's terminal-mode requests stop: we render its

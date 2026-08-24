@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ratatui::layout::Rect;
 
 use super::proxy::{ProxyConfig, ProxyStatus, RebelsProxy};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,13 +114,19 @@ impl State {
     }
 
     /// Forward raw client bytes to rebels, rewriting SGR mouse coordinates so
-    /// they are relative to the viewport. Mouse events outside the viewport
-    /// content area are dropped. Non-mouse bytes pass through verbatim.
+    /// they are relative to the viewport, then retyping cursor keys to the
+    /// mode the guest holds (`app/door/keys.rs`; a no-op unless the guest
+    /// requested application cursor mode). Mouse events outside the viewport
+    /// content area are dropped. Other non-mouse bytes pass through verbatim.
     pub fn forward_input(&self, data: &[u8]) {
         let Some(proxy) = &self.proxy else {
             return;
         };
-        let out = rewrite_mouse(data, self.viewport.x, self.viewport.y);
+        let rewritten = rewrite_mouse(data, self.viewport.x, self.viewport.y);
+        let out = match proxy.with_screen(|screen| screen.application_cursor()) {
+            true => keys::to_application_cursor(&rewritten),
+            false => rewritten,
+        };
         if !out.is_empty() {
             proxy.send_input(out);
         }

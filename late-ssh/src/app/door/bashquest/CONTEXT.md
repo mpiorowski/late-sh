@@ -4,7 +4,7 @@
 - Scope: the BashQuest door as a whole — the **client** in `late-ssh/src/app/door/bashquest` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-bashquest/`**. There is no separate `late-bashquest/CONTEXT.md`; this file is the single source for both halves.
 - Domain: BashQuest, a native late.sh original (not a foreign upstream binary): an interactive terminal game teaching Linux/Bash, 90 levels across 18 tiers, written by Tony "Hardlygospel" Hosaroygard (GPL-3.0, `github.com/hardlygospel/bashquest`), run on a PTY inside a **dedicated `late-bashquest` SSH host** and reached by late-ssh as a network-proxied door (same transport model as dopewars/DCSS).
 - Primary audience: LLM agents changing the BashQuest launcher UI, the SSH client transport, the host crate (PTY bridge / auth), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-08-18 (TERM fallback for `clear`; see §9).
+- Last updated: 2026-08-24 (`forward_input` goes through `keys_for_game`, the shared `app/door/keys.rs` cursor-key gate wired into every vt100-backed door; a no-op for a plain bash script unless the guest ever requests application cursor mode)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI or build/deploy wiring.

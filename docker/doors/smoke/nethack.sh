@@ -12,11 +12,29 @@ docker run --rm "$IMAGE" /var/games/nethack/nethack --version
 # decodes arrow keys). Each port registers in winchoices[] by an exact name
 # string (WPID stringizes it into .rodata), so an exact-line strings match is a
 # reliable witness; the build stage already asserts the same via nm on the
-# pre-install binary.
+# pre-install binary. `-n 3` because `strings` defaults to 4-character runs
+# and would never emit the standalone `tty`.
 docker run --rm "$IMAGE" sh -c '
-  strings /var/games/nethack/nethack | grep -qx tty
-  strings /var/games/nethack/nethack | grep -qx curses
+  set -eu
+  strings -n 3 /var/games/nethack/nethack | grep -qx tty
+  strings -n 3 /var/games/nethack/nethack | grep -qx curses
 '
+
+# Prove WANT_DEFAULT=tty actually stuck as DEFAULT_WINDOW_SYS, without naming
+# any internal strings: with no usable terminal each port fails init with its
+# own message, so a default launch must fail exactly like a forced-tty launch
+# and differently from a forced-curses one. The second test also catches the
+# degenerate case where both ports fail identically and the probe proves
+# nothing; a red there means the probe needs rework, not that the image is bad.
+probe() {
+  docker run --rm --user 65534:65534 -e TERM= -e "NETHACKOPTIONS=${1}" "$IMAGE" \
+    sh -c 'timeout 15 /var/games/nethack/nethack </dev/null 2>&1 || true'
+}
+default_out="$(probe '')"
+tty_out="$(probe 'windowtype:tty')"
+curses_out="$(probe 'windowtype:curses')"
+test "$default_out" = "$tty_out"
+test "$default_out" != "$curses_out"
 
 # Prove the A1 split actually compiled in and the install seeded save/.
 # GCC lowers the constant-path copy into immediate stores, so `strings`

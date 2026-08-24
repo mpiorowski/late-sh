@@ -4,7 +4,7 @@
 - Scope: the dopewars door as a whole — the **client** in `late-ssh/src/app/door/dopewars` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-dopewars/`**. There is no separate `late-dopewars/CONTEXT.md`; this file is the single source for both halves.
 - Domain: dopewars, the real upstream curses "Drug Wars" trading game (GPLv2), run on a PTY inside a **dedicated `late-dopewars` SSH host** and reached by late-ssh as a network-proxied door (the same model as the NetHack door).
 - Primary audience: LLM agents changing the dopewars launcher UI, the SSH client transport, the host crate (PTY bridge / auth / TERM handling), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-07-01 (extracted from a local-PTY child of late-ssh to a standalone `late-dopewars` SSH host, matching nethack, for blast-radius isolation of the foreign C binary + a persistent shared high-score PVC).
+- Last updated: 2026-08-24 (`keys_for_game` retypes cursor keys to the mode the game holds via the shared `app/door/keys.rs` translator; dopewars is a real ncursesw client whose `keypad(TRUE)` request stops at our vt100 parser, so arrows only work through this rewrite. Invariant write-up in the DCSS CONTEXT §4.)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.

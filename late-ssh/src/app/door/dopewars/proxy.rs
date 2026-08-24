@@ -128,6 +128,14 @@ impl DopewarsProcess {
         let guard = self.parser.lock().expect("parser mutex");
         f(guard.screen())
     }
+
+    /// Test-only: feed bytes to the parser as if the host had sent them, so
+    /// tests can put the screen into a mode the game would have requested
+    /// (e.g. `ESC [ ? 1 h`, application cursor keys) without a live host.
+    #[cfg(test)]
+    pub fn feed_for_test(&self, bytes: &[u8]) {
+        self.parser.lock().expect("parser mutex").process(bytes);
+    }
 }
 
 impl Drop for DopewarsProcess {

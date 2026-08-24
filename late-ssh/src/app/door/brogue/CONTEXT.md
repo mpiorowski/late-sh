@@ -4,7 +4,7 @@
 - Scope: the Brogue CE door as a whole: the **client** in `late-ssh/src/app/door/brogue` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-brogue/`**. There is no separate `late-brogue/CONTEXT.md`; this file is the single source for both halves.
 - Domain: Brogue Community Edition (AGPL-3.0), the real upstream curses roguelike, run on a PTY inside a **dedicated `late-brogue` SSH host** and reached by late-ssh as a network-proxied door (the same model as the DCSS and NetHack doors).
 - Primary audience: LLM agents changing the Brogue launcher UI, the SSH client transport, the host crate (PTY bridge / auth / TERM handling / per-player cwd), input forwarding, or its config/deploy wiring.
-- Last updated: 2026-08-08 (the log pipe ships, Phase 3 of `devdocs/PLAN-ROGUELIKE-BOARDS.md`: the reserved `late_stats` session streams every player's run history to the shared ingestion service, which lands `door_runs`, feeds the Brogue board triple, grants the lifetime BRE/BRM badge pair, and posts death/win feed events)
+- Last updated: 2026-08-24 (arrow keys work: `keys_for_game` retypes cursor keys to the mode the game asked for via the shared `app/door/keys.rs` translator, tracked live off the parser; invariant write-up in the DCSS CONTEXT §4, which this door inherits)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.

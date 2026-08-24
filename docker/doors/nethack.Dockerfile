@@ -122,7 +122,9 @@ RUN sed -i "s|^/\* #define VAR_PLAYGROUND .*|#define VAR_PLAYGROUND \"${NETHACK_
     # dropping the tty port and flipping the default to curses for everyone.
     # WANT_DEFAULT compiles into the binary as DEFAULT_WINDOW_SYS (linux.500).
     # The nm asserts fail the build closed unless BOTH windowports actually
-    # linked into the binary (each port's window_procs symbol is present).
+    # linked into the binary (each port's window_procs symbol is present);
+    # WANT_DEFAULT itself is proven by the smoke script, which checks that a
+    # default launch of the installed binary behaves as the tty port.
     && make PREFIX=${NETHACK_PREFIX} HACKDIR=${NETHACK_HACKDIR} VARDIR=${NETHACK_VAR_PLAYGROUND} GAMEUID=root GAMEGRP=games WANT_WIN_TTY=1 WANT_WIN_CURSES=1 WANT_DEFAULT=tty all \
     && nm --defined-only src/nethack | grep -q ' tty_procs$' \
     && nm --defined-only src/nethack | grep -q ' curses_procs$' \

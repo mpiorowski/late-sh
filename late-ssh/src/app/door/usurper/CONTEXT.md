@@ -4,7 +4,7 @@
 - Scope: the Usurper door as a whole, the **client** in `late-ssh/src/app/door/usurper` (proxy/identity/state/render/mod) plus its screen lifecycle wiring in `late-ssh/src/app` (state/input/render/tick) **and the standalone host crate `late-usurper/`**. There is no separate `late-usurper/CONTEXT.md`; this file is the single source for both halves.
 - Domain: Usurper, the real upstream LORD-era BBS door game (Jakob Dangarden 1993-2009, GPL-2.0-or-later; Rick Parrish's 32/64-bit Free Pascal port), run on a PTY inside a **dedicated `late-usurper` SSH host** and reached by late-ssh as a network-proxied door (the same model as the NetHack/DCSS doors).
 - Primary audience: LLM agents changing the Usurper launcher UI, the SSH client transport, the host crate (PTY bridge / auth / dropfiles / node leases / CP437), input forwarding/filtering, or its config/deploy wiring.
-- Last updated: 2026-07-22 (Apple Silicon Compose build support)
+- Last updated: 2026-08-24 (`forward_input` goes through `keys_for_game`, the shared `app/door/keys.rs` cursor-key gate wired into every vt100-backed door; a no-op for this DOS-era game unless the guest ever requests application cursor mode)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.

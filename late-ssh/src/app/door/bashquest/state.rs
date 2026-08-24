@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use super::graduate::BashquestAwards;
 use super::proxy::{BashquestProcess, ProcessConfig, ProxyStatus};
 use crate::app::door::arcade::{ArcadeHandleService, HandleFlow, HandleKeyResult};
+use crate::app::door::keys;
 use crate::render_signal::RenderSignal;
 
 // The launcher UI renders straight off the shared flow's status.
@@ -239,11 +240,23 @@ impl State {
     /// as stray input.
     pub fn forward_input(&self, data: &[u8]) {
         if let Some(proxy) = &self.proxy {
-            let filtered = strip_input_noise(data);
-            if !filtered.is_empty() {
-                proxy.send_input(filtered);
+            let keys = keys_for_game(proxy, data);
+            if !keys.is_empty() {
+                proxy.send_input(keys);
             }
         }
+    }
+}
+
+/// The exact bytes a client chunk becomes for the running game: noise
+/// stripped, then cursor keys retyped to the mode the guest holds
+/// (`app/door/keys.rs`). A guest that never requests application cursor mode
+/// (the expected case for a plain bash script) gets its input untouched.
+fn keys_for_game(proxy: &BashquestProcess, data: &[u8]) -> Vec<u8> {
+    let filtered = strip_input_noise(data);
+    match proxy.with_screen(|screen| screen.application_cursor()) {
+        true => keys::to_application_cursor(&filtered),
+        false => filtered,
     }
 }
 
