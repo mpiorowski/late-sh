@@ -218,7 +218,6 @@ impl From<anyhow::Error> for GildError {
 /// what the author is told.
 #[derive(Clone, Debug)]
 pub struct GildOutcome {
-    pub room_id: Uuid,
     pub message_id: Uuid,
     pub tier: GildTier,
     pub buyer_username: String,
@@ -3830,10 +3829,7 @@ impl ChatService {
         }
     }
 
-    async fn handle_gild_notification(
-        &self,
-        message: tokio_postgres::AsyncMessage,
-    ) -> Result<()> {
+    async fn handle_gild_notification(&self, message: tokio_postgres::AsyncMessage) -> Result<()> {
         let tokio_postgres::AsyncMessage::Notification(notification) = message else {
             return Ok(());
         };
@@ -3941,7 +3937,7 @@ impl ChatService {
         message_id: Uuid,
         tier: GildTier,
     ) -> Result<GildOutcome, GildError> {
-        let client = self.db.get().await.map_err(anyhow::Error::from)?;
+        let client = self.db.get().await?;
         let Some(message) = ChatMessage::get(&client, message_id).await? else {
             return Err(GildError::Refused(GildRefusal::MessageNotFound));
         };
@@ -3963,8 +3959,13 @@ impl ChatService {
         if author.is_bot() {
             return Err(GildError::Refused(GildRefusal::BotAuthor));
         }
+        // The buyer is the session that pressed the key, so a missing row
+        // here is not a rule saying no, it is the database contradicting
+        // itself. Nothing to tell the buyer, everything to tell the log.
         let Some(buyer) = User::get(&client, user_id).await? else {
-            return Err(GildError::Refused(GildRefusal::MessageNotFound));
+            return Err(GildError::Failed(anyhow::anyhow!(
+                "gild buyer {user_id} has no user row"
+            )));
         };
         drop(client);
 
@@ -3982,7 +3983,6 @@ impl ChatService {
         // A gild that never landed must not spend the buyer's window.
         match self.settle_gild(user_id, &message, author.id, tier).await {
             Ok((buyer_balance, author_balance, total_gilds)) => Ok(GildOutcome {
-                room_id: message.room_id,
                 message_id,
                 tier,
                 buyer_username: buyer.username,
@@ -4009,7 +4009,7 @@ impl ChatService {
         author_id: Uuid,
         tier: GildTier,
     ) -> Result<(i64, i64, i64), GildError> {
-        let mut client = self.db.get().await.map_err(anyhow::Error::from)?;
+        let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
         // Serializes every gild on this message, which is what makes both the
         // duplicate-tier check and the threshold count exact.

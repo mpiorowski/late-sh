@@ -226,6 +226,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -253,6 +254,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -297,6 +299,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -319,6 +322,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -350,6 +354,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -378,6 +383,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -448,6 +454,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -469,6 +476,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -657,6 +665,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -678,6 +687,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -738,6 +748,7 @@ fn background_wash_fills_the_whole_row_width() {
     let afk_user_ids = HashSet::new();
     let live_user_ids = HashSet::new();
     let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
@@ -759,6 +770,7 @@ fn background_wash_fills_the_whole_row_width() {
         chat_badges: &chat_badges,
         profile_award_badges: &profile_award_badges,
         message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
@@ -844,6 +856,7 @@ fn chat_view<'a>(
         OnceLock::new();
     static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
+    static MESSAGE_GILDS: OnceLock<HashMap<Uuid, ChatMessageGildSummary>> = OnceLock::new();
 
     ChatRenderInput {
         pet_strip: None,
@@ -896,6 +909,7 @@ fn chat_view<'a>(
         countries,
         friend_user_ids: FRIEND_USER_IDS.get_or_init(HashSet::new),
         message_reactions,
+        message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
         room_unread_markers: ROOM_UNREAD_MARKERS.get_or_init(HashMap::new),
         unread_counts,

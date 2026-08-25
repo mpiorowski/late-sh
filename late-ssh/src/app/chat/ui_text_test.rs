@@ -61,6 +61,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         None,
         &[],
         None,
+        None,
     );
     let lines = lines_to_strings(&wrapped.lines);
     assert_eq!(lines[0], " mat filed a bug [now]");
@@ -86,6 +87,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         None,
         None,
         &[],
+        None,
         None,
     );
     assert_eq!(lines_to_strings(&wrapped.lines), vec![" * mat waves"]);
@@ -217,10 +219,73 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
             },
         ],
         None,
+        None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
     assert!(rendered.contains("[🧡 3]"));
     assert!(rendered.contains("[🔥 1]"));
+}
+
+/// The gild marker leads the footer, ahead of the reactions, and only shows
+/// a count once more than one person has paid.
+#[test]
+fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
+    use late_core::models::chat_message_gild::{ChatMessageGildSummary, GildTier};
+
+    let single = wrap_chat_entry_to_lines(
+        "hello world",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[],
+        Some(ChatMessageGildSummary {
+            top_tier: GildTier::Silver,
+            count: 1,
+        }),
+        None,
+    );
+    let rendered = lines_to_strings(&single.lines).join("\n");
+    assert!(rendered.contains("$$"), "{rendered:?}");
+    assert!(!rendered.contains("x1"), "{rendered:?}");
+
+    let stacked = wrap_chat_entry_to_lines(
+        "hello world",
+        "[1m]",
+        "alice",
+        80,
+        Style::default(),
+        None,
+        Style::default(),
+        false,
+        false,
+        None,
+        None,
+        &[ChatMessageReactionSummary {
+            icon: "🔥".to_string(),
+            count: 1,
+        }],
+        Some(ChatMessageGildSummary {
+            top_tier: GildTier::Gold,
+            count: 3,
+        }),
+        None,
+    );
+    let footer = lines_to_strings(&stacked.lines)
+        .pop()
+        .expect("a footer row");
+    assert!(footer.contains("$$$ x3"), "{footer:?}");
+    assert!(footer.contains("[🔥 1]"), "{footer:?}");
+    assert!(
+        footer.find("$$$").unwrap() < footer.find("[🔥").unwrap(),
+        "the gild marker leads the footer: {footer:?}"
+    );
 }
 
 #[test]
@@ -239,6 +304,7 @@ fn wrap_chat_entry_to_lines_renders_ready_translation_under_the_body() {
         None,
         None,
         &[],
+        None,
         Some(&translation),
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");
@@ -266,6 +332,7 @@ fn wrap_chat_entry_to_lines_renders_no_translation_line_when_hidden() {
         None,
         None,
         &[],
+        None,
         None,
     );
     let rendered = lines_to_strings(&wrapped.lines).join("\n");

@@ -439,6 +439,7 @@ pub struct App {
     pub(crate) show_profile_modal: bool,
     pub(crate) show_sheet_modal: bool,
     pub(crate) show_poll_modal: bool,
+    pub(crate) show_gild_modal: bool,
     pub(crate) show_bonsai_modal: bool,
     pub(crate) show_bonsai_v2_modal: bool,
     pub(crate) show_lobby_modal: bool,
@@ -571,6 +572,7 @@ pub struct App {
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
+    pub(crate) gild_modal_state: chat::gild::state::GildModalState,
     pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
     pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
     pub(crate) booth_modal_state: crate::app::audio::booth::state::BoothModalState,
@@ -936,6 +938,7 @@ impl App {
             && !self.show_profile_modal
             && !self.show_sheet_modal
             && !self.show_poll_modal
+            && !self.show_gild_modal
             && !self.show_bonsai_modal
             && !self.show_bonsai_v2_modal
             && !self.show_lobby_modal
@@ -1286,6 +1289,7 @@ impl App {
             show_profile_modal: false,
             show_sheet_modal: false,
             show_poll_modal: false,
+            show_gild_modal: false,
             show_bonsai_modal: false,
             show_bonsai_v2_modal: false,
             show_lobby_modal: false,
@@ -1394,6 +1398,7 @@ impl App {
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
+            gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
                 crate::app::room_search_modal::state::RoomSearchModalState::default(),
             room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(

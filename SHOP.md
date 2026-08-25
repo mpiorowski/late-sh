@@ -282,18 +282,40 @@ Behavior:
   #lounge"). Never per gild.
 - IRC sees nothing new (no marker), documented as such.
 
+Status: shipped 2026-08-25 (migration 154,
+`late-core/src/models/chat_message_gild.rs`, `ChatService::gild_message`,
+`late-ssh/src/app/chat/gild/`). Deviations from the design above, each
+deliberate:
+- The marker rides the **message footer**, ahead of the reaction chips,
+  not the author header. A message inside a run of messages has no header
+  at all, so a header marker would vanish on every continuation line.
+- The #lounge line reads "mira got a message gilded 3 times in #lounge".
+  The feed format is `<username> <action>`, always space-joined, so the
+  possessive "mira's message got gilded" is not expressible; the intent
+  (name the author, name nobody who paid) is unchanged.
+- Gilding has its **own** 30s cooldown map rather than sharing the gift
+  one. Two separate sinks, and a gift silently blocking a gild would read
+  as a bug.
+- `GildReceived` is `counts_as_earnings = false` as decided, which is not
+  what gifts do (`GiftReceived` counts). The explicit decision won.
+- The marker crosses processes over a `chat_message_gilded` Postgres
+  notify, and the selling replica repaints through the same path rather
+  than through its own broadcast, so there is one code path per marker.
+- `AlreadyGilded` is unreachable at the service layer within the cooldown
+  window, so its test lives at the model layer.
+
 Acceptance:
-- [ ] Ledger math: sender pays the tier price, author receives exactly
+- [x] Ledger math: sender pays the tier price, author receives exactly
       2/3, `SUM(chip_ledger)` for the pair shows the 1/3 gap.
-- [ ] Self-gild, DM, private room, bot author, and cooldown are refused
+- [x] Self-gild, DM, private room, bot author, and cooldown are refused
       uncharged, each as its own tagged error and its own test.
-- [ ] A message shows its marker to every viewer after one refresh on
+- [x] A message shows its marker to every viewer after one refresh on
       every replica.
-- [ ] Profile counts per tier are correct and scoped to the profile's
+- [x] Profile counts per tier are correct and scoped to the profile's
       user in the query.
-- [ ] Top Chips excludes `GildReceived` (assert through
+- [x] Top Chips excludes `GildReceived` (assert through
       `excluded_earning_reasons`).
-- [ ] Tests beside the model, the service, and the render; help copy;
+- [x] Tests beside the model, the service, and the render; help copy;
       `chat/CONTEXT.md`.
 
 Out of scope: gilding from IRC, un-gilding, a gild leaderboard.

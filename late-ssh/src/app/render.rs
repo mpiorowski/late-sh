@@ -247,6 +247,8 @@ struct DrawContext<'a> {
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
     poll_modal_state: &'a chat::polls::state::PollModalState,
+    show_gild_modal: bool,
+    gild_modal_state: &'a chat::gild::state::GildModalState,
     /// The pane state, not just its modal: the room picker checks its rows
     /// against the pinned rail list, which lives on the pane.
     cyberspace_modal: Option<&'a chat::cyberspace::state::State>,
@@ -455,6 +457,7 @@ impl App {
         let chat_badges = self.chat.chat_badges();
         let profile_award_badges = self.chat.profile_award_badges();
         let message_reactions = self.chat.message_reactions();
+        let message_gilds = self.chat.message_gilds();
         let voice_snapshot = self.voice.snapshot();
         // Presence values are recomputed on the ~1s tick cadence
         // (`tick.rs`), not per frame; reads here are owned-memory only.
@@ -547,6 +550,7 @@ impl App {
             afk_user_ids: self.afk_user_ids.as_ref(),
             live_user_ids: &self.chat.live_user_ids,
             message_reactions,
+            message_gilds,
             unread_marker: shell_active_room
                 .and_then(|room_id| self.chat.room_unread_markers.get(&room_id).copied())
                 .flatten(),
@@ -695,6 +699,7 @@ impl App {
             ignored_user_ids: self.chat.ignored_user_ids(),
             sticky_unread_dm: self.chat.sticky_unread_dm,
             message_reactions,
+            message_gilds,
             inline_images: &self.chat.inline_image_cache,
             room_unread_markers: &self.chat.room_unread_markers,
             unread_counts: &self.chat.unread_counts,
@@ -777,6 +782,7 @@ impl App {
                     afk_user_ids: self.afk_user_ids.as_ref(),
                     live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
+                    message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
                         .chat
@@ -841,6 +847,7 @@ impl App {
                     afk_user_ids: self.afk_user_ids.as_ref(),
                     live_user_ids: &self.chat.live_user_ids,
                     message_reactions,
+                    message_gilds,
                     inline_images: &self.chat.inline_image_cache,
                     unread_marker: self
                         .chat
@@ -930,6 +937,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
@@ -948,6 +956,7 @@ impl App {
             || self.show_profile_modal
             || self.show_sheet_modal
             || self.show_poll_modal
+            || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
             || self.show_bonsai_v2_modal
@@ -1077,6 +1086,8 @@ impl App {
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
                         poll_modal_state: &self.poll_modal_state,
+                        show_gild_modal: self.show_gild_modal,
+                        gild_modal_state: &self.gild_modal_state,
                         cyberspace_modal: self
                             .chat
                             .cyberspace
@@ -1695,6 +1706,10 @@ impl App {
             chat::polls::ui::draw_modal(frame, inner, ctx.poll_modal_state);
         }
 
+        if ctx.show_gild_modal {
+            chat::gild::ui::draw_modal(frame, inner, ctx.gild_modal_state, ctx.chip_balance);
+        }
+
         if let Some(cyberspace_modal) = ctx.cyberspace_modal {
             chat::cyberspace::ui::draw_modal(frame, inner, cyberspace_modal);
         }
@@ -1871,6 +1886,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_hub_modal
         || ctx.show_profile_modal
         || ctx.show_poll_modal
+        || ctx.show_gild_modal
         || ctx.cyberspace_modal.is_some()
         || ctx.show_bonsai_modal
         || ctx.show_bonsai_v2_modal

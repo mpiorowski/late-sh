@@ -8,7 +8,11 @@ use crate::app::chat::state::TranslationDisplay;
 use crate::app::chat::svc::ReportKind;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
-use late_core::models::{article::NEWS_MARKER, chat_message_reaction::ChatMessageReactionSummary};
+use late_core::models::{
+    article::NEWS_MARKER,
+    chat_message_gild::{ChatMessageGildSummary, GildTier},
+    chat_message_reaction::ChatMessageReactionSummary,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const NEWS_SEPARATOR: &str = " || ";
@@ -164,6 +168,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
     reactions: &[ChatMessageReactionSummary],
+    gild: Option<ChatMessageGildSummary>,
     translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
     let pad = if mentions_us {
@@ -238,7 +243,7 @@ pub(super) fn wrap_chat_entry_to_lines(
         lines.extend(translation_lines(translation, width, &pad));
     }
 
-    lines.extend(render_reaction_footer_lines(reactions, width, pad));
+    lines.extend(render_message_footer_lines(gild, reactions, width, pad));
     WrappedChatEntry {
         lines,
         header_line_index,
@@ -578,13 +583,52 @@ fn wrap_report_to_lines(
 
 // ── Reaction footer ─────────────────────────────────────────
 
-fn render_reaction_footer_lines(
+/// The gild marker's chip: the best tier the message holds, and the total
+/// count once more than one person has paid. It leads the footer rather than
+/// riding the author header because a message in a run of messages has no
+/// header at all, and a paid marker that vanishes on the second message of a
+/// run would be the one thing nobody accepts about it.
+pub(super) fn gild_chip_text(gild: ChatMessageGildSummary) -> String {
+    match gild.count {
+        1 => gild.top_tier.marker().to_string(),
+        count => format!("{} x{count}", gild.top_tier.marker()),
+    }
+}
+
+fn gild_color(tier: GildTier) -> Color {
+    match tier {
+        GildTier::Bronze => theme::BADGE_BRONZE(),
+        GildTier::Silver => theme::BADGE_SILVER(),
+        GildTier::Gold => theme::BADGE_GOLD(),
+    }
+}
+
+/// The row under a message: its gild marker first, then its reactions,
+/// packed left to right and wrapped at the pane width.
+fn render_message_footer_lines(
+    gild: Option<ChatMessageGildSummary>,
     reactions: &[ChatMessageReactionSummary],
     width: usize,
     pad: Span<'static>,
 ) -> Vec<Line<'static>> {
-    if reactions.is_empty() {
+    if gild.is_none() && reactions.is_empty() {
         return Vec::new();
+    }
+
+    let mut chips: Vec<(String, Style)> = Vec::with_capacity(reactions.len() + 1);
+    if let Some(gild) = gild {
+        chips.push((
+            gild_chip_text(gild),
+            Style::default()
+                .fg(gild_color(gild.top_tier))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    for reaction in reactions {
+        chips.push((
+            format!("[{} {}]", reaction.icon, reaction.count),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
 
     let mut footer_lines: Vec<Line<'static>> = Vec::new();
@@ -592,8 +636,7 @@ fn render_reaction_footer_lines(
     let mut current_width = 0usize;
     let mut current_spans = vec![pad.clone()];
 
-    for reaction in reactions {
-        let text = format!("[{} {}]", reaction.icon, reaction.count);
+    for (text, style) in chips {
         let chip_width = UnicodeWidthStr::width(text.as_str());
         let extra_space = usize::from(current_width > 0);
         if current_width > 0 && current_width + extra_space + chip_width > available_width {
@@ -605,7 +648,7 @@ fn render_reaction_footer_lines(
             current_spans.push(Span::raw(" "));
             current_width += 1;
         }
-        current_spans.push(Span::styled(text, Style::default().fg(theme::TEXT_DIM())));
+        current_spans.push(Span::styled(text, style));
         current_width += chip_width;
     }
 

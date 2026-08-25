@@ -1,7 +1,9 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
+use crate::app::common::primitives::thousands;
 use crate::app::common::qr::{Barcode, HalfBlock};
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
+    chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
@@ -442,7 +444,21 @@ fn chips_help_lines() -> Vec<String> {
         "  Lateania gold is its own in-world currency and never converts to chips.".to_string(),
         "  Usurper, dopewars, CodeKeep, BashQuest, and Rebels pay no chips yet. More door games will get payouts as they land.".to_string(),
         "".to_string(),
-        "6. Gifts".to_string(),
+        "6. Gilds".to_string(),
+        format!("  Press $ on someone else's message in a public room and pick a tier: Bronze {}, Silver {}, Gold {}.",
+            thousands(GildTier::Bronze.price()),
+            thousands(GildTier::Silver.price()),
+            thousands(GildTier::Gold.price())),
+        "  Two thirds of what the buyer pays lands in the author's balance; the last third is destroyed.".to_string(),
+        format!("  So an author receives {} / {} / {} chips per gild.",
+            thousands(GildTier::Bronze.author_share()),
+            thousands(GildTier::Silver.author_share()),
+            thousands(GildTier::Gold.author_share())),
+        "  The marker stays on the message forever. There is no un-gild, and you cannot gild yourself or a bot.".to_string(),
+        "  One gild per tier per message per buyer, so all three can be stacked on one message.".to_string(),
+        "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
+        "".to_string(),
+        "7. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
@@ -462,6 +478,7 @@ fn chips_help_lines() -> Vec<String> {
         "  @bartender drinks in the Clubhouse.".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
+        "  Gilds you buy on other people's messages.".to_string(),
         "  Monthly Top Chips ranks net chip delta, so Shop spending never lowers your rank; betting losses do.".to_string(),
     ]
 }
@@ -557,6 +574,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  c                  copy selected message to clipboard",
         "  new messages       a rule marks where you left off, in the room and in /history",
         "  t                  translate selected message (press again to hide)",
+        "  $                  gild selected message (three tiers, chips to the author)",
         "",
         "Translation",
         "  t                  translate the selected message into your language",
@@ -936,6 +954,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
+        "  $                 gild the selected chat message (public rooms only)",
         "  t                 translate the selected chat message",
         "  g                 jump to a reply's original even if it has an image",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",

@@ -574,14 +574,8 @@ impl UserChips {
         .await?;
 
         let source_ref = message_id.to_string();
-        let Some(sender) = Self::apply(
-            tx,
-            sender_id,
-            ChipMove::GildSent,
-            price,
-            Some(&source_ref),
-        )
-        .await?
+        let Some(sender) =
+            Self::apply(tx, sender_id, ChipMove::GildSent, price, Some(&source_ref)).await?
         else {
             return Ok(None);
         };

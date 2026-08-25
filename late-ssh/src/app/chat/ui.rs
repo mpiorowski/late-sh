@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
 use late_core::models::{
@@ -99,6 +100,7 @@ pub struct DashboardChatView<'a> {
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
     pub voice_channel_id: Option<Uuid>,
@@ -1193,6 +1195,7 @@ pub fn draw_dashboard_chat_card(
                 chat_badges: view.chat_badges,
                 profile_award_badges: view.profile_award_badges,
                 message_reactions: view.message_reactions,
+                message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
                 unread_marker: view.unread_marker,
                 drunk_levels: view.drunk_levels,
@@ -1282,6 +1285,7 @@ struct ChatRowsContext<'a> {
     chat_badges: &'a HashMap<Uuid, String>,
     profile_award_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     unread_marker: Option<DateTime<Utc>>,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
@@ -1651,6 +1655,7 @@ fn ensure_chat_rows_cache(
             .get(&msg.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let gild = ctx.message_gilds.get(&msg.id).copied();
 
         // A reply is checked before a mention because the composer prepends a
         // `> @author: …` quote line to every reply, which would otherwise make
@@ -1710,6 +1715,7 @@ fn ensure_chat_rows_cache(
             system_text,
             image_lines,
             reactions,
+            gild,
             translation,
         );
         let line_count = wrapped.lines.len();
@@ -2672,6 +2678,7 @@ pub struct ChatRenderInput<'a> {
     pub countries: &'a HashMap<Uuid, String>,
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub room_unread_markers: &'a HashMap<Uuid, Option<DateTime<Utc>>>,
     pub unread_counts: &'a HashMap<Uuid, i64>,
@@ -2842,6 +2849,7 @@ pub struct EmbeddedRoomChatView<'a> {
     /// Users whose stream is on air; painted as the LIVE presence tag.
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
     pub unread_marker: Option<DateTime<Utc>>,
     pub current_user_id: Uuid,
@@ -2963,6 +2971,7 @@ pub fn draw_embedded_room_chat(
             chat_badges: view.chat_badges,
             profile_award_badges: view.profile_award_badges,
             message_reactions: view.message_reactions,
+            message_gilds: view.message_gilds,
             inline_images: view.inline_images,
             unread_marker: view.unread_marker,
             drunk_levels: view.drunk_levels,
@@ -4793,6 +4802,7 @@ fn draw_selected_content(
                     chat_badges: view.chat_badges,
                     profile_award_badges: view.profile_award_badges,
                     message_reactions: view.message_reactions,
+                    message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
                     drunk_levels: view.drunk_levels,

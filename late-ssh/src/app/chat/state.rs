@@ -13,7 +13,7 @@ use late_core::{
     models::{
         article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
-        chat_message_gild::ChatMessageGildSummary,
+        chat_message_gild::{ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
@@ -53,7 +53,9 @@ use crate::usernames::UsernameResolver;
 
 use super::{
     commands::{RoomScopedCommand, rank_command_matches, room_owns_command},
-    cyberspace, discover, feeds, history_modal, news, notifications,
+    cyberspace, discover, feeds,
+    gild::state::GildTarget,
+    history_modal, news, notifications,
     notifications::svc::NotificationService,
     showcase,
     svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, ReportKind, RoomMemberListItem},
@@ -2473,6 +2475,35 @@ impl ChatState {
         self.service
             .toggle_message_reaction_task(self.user_id, message.id, icon);
         None
+    }
+
+    /// What the gild picker needs about the selected message. `None` when
+    /// nothing is selected or the selection is the viewer's own message: the
+    /// picker never opens on a message that could only be refused.
+    pub(crate) fn gild_target_in_room(&self, room_id: Uuid) -> Option<GildTarget> {
+        let message = self.selected_message_in_room(room_id)?;
+        if message.user_id == self.user_id {
+            return None;
+        }
+        Some(GildTarget {
+            message_id: message.id,
+            author_username: self.username_for(message.user_id),
+            // One line, always: the picker prints the preview in a single
+            // row, and a multi-line body would otherwise walk over the
+            // tier rows below it.
+            preview: message
+                .body
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        })
+    }
+
+    /// Ask the service to buy a gild. Fire and forget: the answer arrives as
+    /// a banner, and the marker arrives as a repaint.
+    pub fn gild_message(&self, message_id: Uuid, tier: GildTier) {
+        self.service
+            .gild_message_task(self.user_id, message_id, tier);
     }
 
     fn find_message_in_room(&self, room_id: Uuid, message_id: Uuid) -> Option<&ChatMessage> {

@@ -373,10 +373,7 @@ mod inner {
     }
 
     pub fn record_gild_refused(refusal: GildRefusal) {
-        chat_gilds_refused_total().add(
-            1,
-            &[KeyValue::new("reason", gild_refusal_label(refusal))],
-        );
+        chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
     }
 
     fn translation_result_label(result: TranslationResult) -> &'static str {

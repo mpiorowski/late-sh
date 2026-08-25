@@ -3,6 +3,7 @@ pub(crate) mod commands;
 pub mod cyberspace;
 pub mod discover;
 pub mod feeds;
+pub(crate) mod gild;
 pub(crate) mod history_modal;
 pub mod input;
 pub(crate) mod list_ui;

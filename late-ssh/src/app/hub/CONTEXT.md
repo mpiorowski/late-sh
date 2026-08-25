@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Last updated: 2026-08-25 (one title, tab order, Chat sections: migration 151 retires the 72 curated title rows (`active = false`) and renames the custom pair Your Own Title, the only title the Shop now sells; `ShopCategory::ALL` runs Chat, Badges, Flags, Companions, Aquarium, Ultimates; the Chat list is split by section rows into Name effects / Title / Consumables. Previous: custom titles: migration 150 adds a 2,000/24h and a 60,000/30d (80,000 after migration 153's 40x month tier) `title_custom_*` SKU whose text the buyer types into a prompt, screened by `app/ai/screen.rs` before the purchase transaction opens, so a refused title costs nothing and an unscreened one never ships. Previous: badges, flags, and titles became rentals: migrations 148/149 seed a 24h and a 30-day tier per badge/flag and 36 curated titles, retire the permanent badge SKUs (`active = false`), and the Shop now sells four rental kinds through one shared shape in `late-core/src/models/rental.rs`)
+- Last updated: 2026-08-25 (one title, tab order, Chat sections: migration 151 retires the 72 curated title rows (`active = false`) and renames the custom pair Your Own Title, the only title the Shop now sells; `ShopCategory::ALL` runs Chat, Badges, Flags, Companions, Aquarium, Ultimates; the Chat list is split by section rows into Name effects / Title / Consumables. Chat gilds (Economy Rules below) are a chip sink that does NOT live here: they are a chat message action, not a Shop item.)
 - Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -91,6 +91,7 @@ Current user-facing chip amounts:
 - Tron wins pay 50/75/100 chips for 2/3/4 round-start riders through `game_payout_claims` with a 5-minute per-player cooldown.
 - Blackjack and Poker chips move through bets and pots.
 - Tic-Tac-Toe currently publishes activity wins but does not pay chips.
+- Chat gilds are a player-to-player sink that lives outside the Shop entirely: `$` on someone else's message in a public room pays 500 / 5,000 / 50,000 chips, two thirds of which reaches the author (`ChipMove::GildReceived`, excluded from Top Chips) while the last third is burned. Nothing about it is a `marketplace_item` or a `reward_template`; see `late-ssh/src/app/chat/CONTEXT.md` §9b Gilds.
 
 `reward_templates` is the DB-backed source of truth for fixed minted rewards: daily puzzle base payouts, Asterion daily escape, Chess win cooldown payouts, ssHattrick win cooldown payouts, Tron win cooldown payouts, and quest rewards. Betting games still settle from wager/pot state. Keep `late-ssh/src/app/help_modal/hub_guide.rs`, `dailies.rs`, root context, and Arcade/Rooms context aligned when seeded reward rows change.
 

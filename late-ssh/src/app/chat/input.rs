@@ -156,6 +156,26 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_poll_modal = true;
 }
 
+/// Open the tier picker on a message someone else wrote.
+fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTarget) {
+    app.show_help = false;
+    app.show_settings = false;
+    app.show_mod_modal = false;
+    app.show_hub_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_bonsai_v2_modal = false;
+    app.show_quit_confirm = false;
+    crate::app::input::close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.gild_modal_state.open(target);
+    app.show_gild_modal = true;
+}
+
 pub(crate) fn open_requested_poll_modal(app: &mut App, room_id: Uuid, allow_poll_modal: bool) {
     if allow_poll_modal {
         open_poll_modal(app, room_id);
@@ -458,6 +478,7 @@ pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
                 | b'c'
                 | b't'
                 | b'T'
+                | b'$'
                 | b'f'
                 | b'F'
                 | b'g'
@@ -540,6 +561,22 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 app.show_profile_modal = true;
                 return true;
             }
+        }
+        // `$` opens the gild picker on the selected message. Its own key
+        // rather than a leader, because the modal is where the money is
+        // confirmed and a mistyped leader must not cost chips. With a
+        // message selected the key is always consumed: the one case that
+        // opens nothing is your own message, and that says so.
+        b'$' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+            match app.chat.gild_target_in_room(room_id) {
+                Some(target) => open_gild_modal(app, target),
+                None => {
+                    app.banner = Some(Banner::error(
+                        crate::app::chat::svc::GildRefusal::SelfGild.message(),
+                    ));
+                }
+            }
+            return true;
         }
         b'c' => {
             if let Some(body) = app.chat.selected_message_body_in_room(room_id) {
