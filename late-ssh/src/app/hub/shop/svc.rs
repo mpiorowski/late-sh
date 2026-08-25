@@ -144,10 +144,6 @@ pub struct ShopCatalogItem {
     /// tabs read this, so a rental lands in the same tab its permanent twin
     /// used to.
     pub badge_slot: Option<String>,
-    /// For `title_rental` items: the text the rental prints after the name.
-    /// `None` on a custom title, whose text does not exist until the buyer
-    /// types it.
-    pub title_text: Option<String>,
     /// Whether this title rental sells a text the buyer writes rather than one
     /// the catalog carries.
     pub custom_title: bool,
@@ -281,9 +277,38 @@ fn purchase_story(
 
 /// What renting a buyer-written title came to. `Refused` carries the banner
 /// the buyer sees and means no chips moved.
+#[derive(Debug, PartialEq, Eq)]
 enum CustomTitleOutcome {
     Rented(String),
     Refused(String),
+}
+
+/// What a purchase transaction came back with, once the rest of the app has
+/// been told: the status the ledger decided on (`None` when the SKU was not
+/// on sale) and the banner copy for it.
+#[derive(Debug, PartialEq, Eq)]
+struct SettledPurchase {
+    status: Option<PurchaseStatus>,
+    message: String,
+}
+
+/// Only a transaction that actually charged is a rental. The precheck runs
+/// before a screen that can take 30s and the transaction re-checks the
+/// balance, so a refusal from the ledger is real and lands on the failure
+/// banner like every other refusal in the flow.
+fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
+    match settled.status {
+        Some(PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded) => {
+            CustomTitleOutcome::Rented(settled.message)
+        }
+        Some(
+            PurchaseStatus::AlreadyOwned
+            | PurchaseStatus::InsufficientFunds
+            | PurchaseStatus::RequiresAquarium
+            | PurchaseStatus::DailyLimitReached,
+        )
+        | None => CustomTitleOutcome::Refused(settled.message),
+    }
 }
 
 /// Shown whenever no verdict on a title can be had: AI switched off, or the
@@ -684,7 +709,7 @@ impl ShopService {
         };
         drop(client);
 
-        self.settle_purchase(user_id, purchase).await
+        Ok(self.settle_purchase(user_id, purchase).await?.message)
     }
 
     /// Rent a title the buyer wrote themselves: validate, screen, then buy.
@@ -755,9 +780,8 @@ impl ShopService {
         let purchase =
             purchase_item_by_sku_with_custom_title(&mut client, user_id, sku, title).await?;
         drop(client);
-        Ok(CustomTitleOutcome::Rented(
-            self.settle_purchase(user_id, purchase).await?,
-        ))
+        let settled = self.settle_purchase(user_id, purchase).await?;
+        Ok(custom_title_outcome(settled))
     }
 
     /// Everything a completed purchase transaction owes the rest of the app:
@@ -768,7 +792,7 @@ impl ShopService {
         &self,
         user_id: Uuid,
         purchase: PurchaseWithEffectResult,
-    ) -> Result<String> {
+    ) -> Result<SettledPurchase> {
         // Flair that actually activated goes live immediately for every
         // session on this replica: re-read both halves rather than writing one
         // through, so a title purchase never drops a live color effect (and
@@ -793,6 +817,7 @@ impl ShopService {
             }
         }
 
+        let status = purchase.purchase.as_ref().map(|result| result.status);
         let message = match &purchase.purchase {
             None => "Item is not available".to_string(),
             Some(result) => match result.status {
@@ -885,7 +910,7 @@ impl ShopService {
         } else {
             self.refresh_user(user_id).await?;
         }
-        Ok(message)
+        Ok(SettledPurchase { status, message })
     }
 
     async fn adjust_aquarium_fish(&self, user_id: Uuid, sku: &str, delta: i32) -> Result<String> {
@@ -1177,9 +1202,6 @@ impl ShopService {
                 };
                 let custom_title =
                     item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
-                let title_text = (item_kind == TITLE_RENTAL_ITEM_KIND && !custom_title)
-                    .then(|| title_from_payload(&item.payload))
-                    .flatten();
                 ShopCatalogItem {
                     sku: item.sku,
                     item_kind,
@@ -1205,7 +1227,6 @@ impl ShopService {
                     username_effect_variant,
                     rental_duration_secs,
                     badge_slot,
-                    title_text,
                     custom_title,
                 }
             })

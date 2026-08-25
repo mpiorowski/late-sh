@@ -125,7 +125,6 @@ fn glow_item() -> ShopCatalogItem {
         username_effect_variant: Some("glow".to_string()),
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         badge_slot: None,
-        title_text: None,
         custom_title: false,
     }
 }
@@ -234,7 +233,6 @@ fn custom_title_item() -> ShopCatalogItem {
         effect_kind: None,
         username_effect_variant: None,
         rental_duration_secs: Some(RENTAL_DAY_SECS),
-        title_text: None,
         custom_title: true,
         ..glow_item()
     }
@@ -268,7 +266,6 @@ fn visible_chat_items_put_titles_under_username_effects() {
         item_kind: "chat_consumable".to_string(),
         username_effect_variant: None,
         rental_duration_secs: None,
-        title_text: None,
         ..glow_item()
     };
     let state = ShopState::for_test_snapshot(snapshot_with(vec![
@@ -344,7 +341,6 @@ fn username_effect_picker_carries_the_bought_tier_duration() {
         price_chips: 6_000,
         rental_duration_secs: Some(RENTAL_MONTH_SECS),
         badge_slot: None,
-        title_text: None,
         ..glow_item()
     };
     let snapshot = ShopSnapshot {

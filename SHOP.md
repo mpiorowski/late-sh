@@ -438,6 +438,209 @@ Out of scope: a machine in the Late Lounge tavern (later, once the command
 exists), a sealed-bid twin for the marquee, seeding the pot with minted
 chips, more than one pot at a time.
 
+## Phase 6: door payouts, repeatable
+
+Goal: every door milestone pays again. Today each one is a
+`reward_templates` row with `claim_policy = per_event` credited through the
+lifetime claim (`ChipService::credit_lifetime_reward_template`), so it pays
+exactly once per account, forever. A NetHack ascension is the same 20+ hours
+the second time, and a Green Dragon kill or an A Dark Room escape is a full
+run every time, so a repeat pays the full amount. The gate is whatever
+naturally limits the game; only where nothing does is a lockout added.
+
+Decided numbers (2026-08-25; one number per milestone, no first/repeat split):
+
+| Door | Milestone | Pays | Gate |
+|---|---|---|---|
+| NetHack | Amulet / Ascension | 20,000 / 50,000 | 7-day lockout, each |
+| DCSS | Orb / Escape | 20,000 / 50,000 | 7-day lockout, each |
+| Brogue | Escape / Mastery | 20,000 / 50,000 | 7-day lockout, each |
+| Green Dragon | dragon kill | 20,000 | none: the daily turn cap makes a kill 7-10 days |
+| A Dark Room | escape / beacon escape | 15,000 / 20,000 | none: the run is the gate (~5 days) |
+| Lateania | Archdemon, Frontier King | 10,000 each | once per character AND 7-day lockout per crown per account |
+| Lateania | Yssgar, Kaethyr | 20,000 each | same |
+
+Rate check: everything lands near 2,000 chips per day of effort, a
+completionist arcade day, so a door grind is a real alternative to the
+arcade. The top end (a weekly NetHack ascension, 50k/week) is the best rate
+in the app on purpose; the 40x month tiers are sized to eat it. Orb + Escape
+in one DCSS run (70k) stays: the Orb row exists for the player who dies on
+the way up.
+
+Why Lateania has two rules: the character persists, so a maxed character
+kills the easy two in an evening (lockout needed), and `d` in the Games hub
+deletes the character, so per-character alone would be a reroll farm of the
+easy two (lockout needed, and it must key on the account, not the
+character). Together the worst week is 20k from rerolling the easy pair, and
+the hard pair needs a leveled character each time.
+
+Behavior:
+- Roguelikes (`dcss_orb`, `dcss_win`, `nethack_amulet`, `nethack_ascension`,
+  `brogue_escape`, `brogue_mastery`): `claim_policy = cooldown`,
+  `cooldown_seconds = 604800`, credited through
+  `credit_cooldown_reward_template` from `door/ingest/award.rs`. The
+  ingest's per-run idempotency is unchanged: one run still credits at most
+  once.
+- Green Dragon (`greendragon_dragon_slain`): `per_event`, event key = the
+  kill number the service already carries (`kills`), credited through
+  `credit_per_event_reward_template`.
+- A Dark Room (`darkroom_escape`, `darkroom_beacon_escape`): `per_event`,
+  event key = the finished run's identity. If the save has no run id, add a
+  uuidv7 stamped when a run starts (the save is wiped on escape, so the next
+  run gets a new one); never key on the escape count alone.
+- Lateania (the four `lateania_*_defeat` rows): both checks in one
+  transaction, one ledger row: a `per_event` claim keyed on
+  `mud_characters.id`, and a `cooldown` claim (604800s) keyed on the account
+  and the crown. Either failing means no chips. Extend
+  `late-core/src/models/game_payout.rs` with one grant that does both under
+  the same advisory lock rather than calling two grants in sequence.
+- Profile badges (`NHA`/`NHY`, DCSS and Brogue pairs, `GDS`, `ADE`/`ADB`,
+  `LMG`/`LKN`/`LYS`/...) stay once per account: the `NOT EXISTS` award
+  insert is untouched. Only chips repeat.
+- #lounge feed: unchanged (every kill/escape already posts). A claim that
+  was gated (lockout, or same character) pays nothing and says nothing
+  extra; the in-door copy that reads "once per account" changes to name the
+  real gate ("pays again after 7 days", "once per character").
+- Asterion (`asterion_daily_escape`, 4,000 per UTC day) is NOT in this
+  table. Owner to time a final-maze escape first: under an hour means it is
+  the best rate in the app and should drop to ~1,000 or take the lockout
+  shape; multi-hour means it stays.
+
+Checklist:
+- [ ] Migration updates `reward_chips`, `claim_policy`, `cooldown_seconds`
+      on the thirteen rows above, and rewrites each description to name its
+      gate. Existing `game_payout_claims` rows are history: a lifetime claim
+      already on file must not block the first gated repeat (check how the
+      cooldown claim reads prior rows for the same `payout_kind`).
+- [ ] Lateania grant does the per-character and per-account checks in one
+      transaction; test: same character twice pays once, a second character
+      inside 7 days pays nothing, a second character after 7 days pays.
+- [ ] Roguelike cooldown: a second win inside 7 days pays nothing and the
+      badge insert still no-ops; a win after 7 days pays.
+- [ ] A Dark Room run id survives save/load and changes across runs.
+- [ ] Tests beside each model and service touched; door CONTEXT.md files
+      and the chips/quests context updated; the payout table above copied
+      nowhere else (link here).
+
+Out of scope: new milestones, Lobby game stakes, the loser consolation
+payout (both still under "To discuss"), Asterion until timed.
+
+## Phase 7: Lobby economics (daily matches)
+
+Goal: make a correspondence match worth finishing, and let two players put
+chips on one. Three parts, in this order: close the collusion hole in the
+win payout, pay the loser who saw the game through, add an optional wager.
+House tables are not touched.
+
+What the code says today (investigated 2026-08-25, `late-ssh/src/app/lobby`):
+- Win payouts: chess and chess960 500, battleship 300, connect four,
+  reversi, checkers, backgammon, briscola 400. One `per_event` template per
+  game credited on the match id (`DailyService::finish_events`), no
+  cooldown, no per-day cap. The only limit is `DAILY_MAX_ACTIVE_ENTRIES`
+  (10), and a finished match frees its slot. Two accounts sitting together
+  can post, claim, resign, and repeat: 500 chips per resign, as fast as the
+  keys go. This is the largest open faucet in the app and it predates this
+  document; it gets closed before anything is added on top.
+- Effort signal: every roster arm bumps `state.revision` by exactly one per
+  move (`state.revision.saturating_add(1)` in each `play_*` path) and
+  resign bumps it once more. There is no claim timestamp on
+  `daily_matches`, and only chess stores per-move timestamps, so the
+  effort gate is a move count, not elapsed time.
+- Timeout: `DailyMatch::forfeit_expired` makes the player whose turn it was
+  the loser. That is the abandoner by construction.
+- Draws pay nobody. Losers get a `Banner::info` and nothing else.
+- Wagers: parked in `daily/CONTEXT.md` section 8 as "a `wager` column plus
+  hold/settle in `ChipService`; claim and finish are the only touch
+  points". That is still the right shape.
+- House tables are chip transfers or small faucets and stay as they are:
+  poker (1,000 stack, 10/20 blinds) and blackjack (10-chip stake) settle
+  through `credit_payout`, Tron pays 50/75/100 on a 5-minute cooldown,
+  Super Snake banks a per-visit tally on leave. Asterion (8 mazes,
+  `MAX_MAZE_ID = 7`, 4,000 per UTC day) is the open dial from Phase 6, not
+  this phase.
+
+Decided numbers:
+
+| Dial | Value |
+|---|---|
+| Paid results per opponent per UTC day | 1 (win payout and consolation both) |
+| Consolation | 100 chips, flat, every roster game |
+| Consolation gate | `state.revision >= DailyGame::consolation_min_moves()`: chess and chess960 40, battleship 40, reversi 30, checkers 30, connect four 20, backgammon 20, briscola 20 (revision counts both players' moves) |
+| Who gets consolation | the loser on every decisive result except `timeout`; both players on `draw`; nobody on `timeout` |
+| Wager stakes | challenger picks one of 0 / 100 / 500 / 1,000 / 5,000 at post time |
+| Wager settle | winner receives `floor(2 x stake x 0.9)`, 10% never re-minted; draw refunds both; cancel refunds the challenger; timeout pays the pot to the winner |
+
+Why these:
+- The pair-day cap is the whole anti-collusion story. One paid result per
+  (user, opponent, day) turns the resign loop into 500 + 100 per pair per
+  day, and it does not touch honest play: nobody finishes two
+  correspondence games against the same person in one day by accident. A
+  rematch the same day is for the board and the wager only.
+- 100 flat rather than a share of the win: the consolation is for showing
+  up twenty times over three weeks, which costs the same in chess and in
+  connect four. Timeouts pay nothing because the timed-out player is the
+  one who left.
+- The wager is zero-sum minus burn, so it needs no cap: two accounts
+  trading wagers lose 10% a game. Abandoning a wagered match forfeits the
+  stake, which is the strongest "finish your games" lever in the phase.
+  Win payout and consolation still apply on top of a wager; they are the
+  faucet, the wager is the transfer.
+
+Behavior:
+- `ChipMove` gains `DailyMatchConsolation` (credit, earnings),
+  `DailyWagerHold` (debit, floor 0 like `Bet`, earnings), `DailyWagerWon`
+  (credit, earnings), `DailyWagerRefund` (credit, earnings; a refund
+  reverses a hold that counted, so it counts too). Reason strings follow
+  the roster (`daily_match_consolation`, `daily_wager_hold`, ...).
+- Migration: `daily_matches.wager BIGINT NOT NULL DEFAULT 0 CHECK (wager
+  >= 0)`; seed `daily_match_consolation` (`game: daily_match`,
+  `payout_kind: consolation`, `per_event`, 100). No pot column: the pot of
+  a claimed row is `wager * 2`, the ledger rows are the witness.
+- Pair-day cap: the win claim and the consolation claim each insert two
+  `game_payout_claims` rows in one transaction, the existing `per_event`
+  row on the match id and a `pair_day` row keyed `<opponent id>:<UTC
+  date>`; either conflict means no chips and no ledger row. This is the
+  same all-or-nothing multi-key grant Phase 6 needs for Lateania (per
+  character plus per-account lockout): whichever phase lands first builds
+  it in `late-core/src/models/game_payout.rs`, the other reuses it.
+- `finish_events` grows the loser/draw branch: same fire-and-forget shape
+  as the winner credit, gated on the result string and the revision the
+  finishing path already holds. Nothing new reads the DB for it.
+- Wager hold at `post_challenge` (a short balance fails the post with the
+  usual `DailyEvent::Error`), matched at `claim_challenge` (a short balance
+  fails the claim, the challenge stays open), settled in the same code
+  paths that finish today: `finish` (decisive, draw), `resign`,
+  `sweep_expired` (timeout), `cancel_challenge` (refund). Settlement is one
+  ledger write per player per match, idempotent on the match id through
+  the claims table like the win payout, so a sweeper retry cannot pay
+  twice.
+- UI: the `ChallengeDraft` gets a stake row (arrows cycle the fixed list,
+  default 0), open-challenge rows and the panel show the stake, the claim
+  confirm says "match 500 chips?", the result banner shows the wager
+  outcome and the consolation ("you lost the match (checkmate), +100 for
+  seeing it through"), the #lounge result line appends "for 1,000" on a
+  wagered match. `DailyGame::win_payout` stays display-only and equal to
+  the template, same rule for `consolation_min_moves`.
+
+Checklist:
+- [ ] Pair-day cap on the win payout, with a test: two decisive matches
+      against the same opponent on one UTC day pay once; the next day pays
+      again; a different opponent the same day pays.
+- [ ] Consolation: loser at the threshold is paid, one move short is not,
+      draw pays both, timeout pays neither, and the pair-day cap covers it.
+- [ ] Wager: hold on post, match on claim, short balance fails the right
+      step, settle on every finish path, refund on cancel and draw, timeout
+      pays the pot, retry of any path is a no-op. Whole-ledger assertions:
+      the sum of the four wager moves for a match equals minus the burn.
+- [ ] `daily/CONTEXT.md` sections 1, 3, 6, 8 and the chips context updated;
+      help copy for the stake row; roster protocol ("Adding a game to the
+      roster") gains the `consolation_min_moves` arm.
+
+Out of scope: spectator side bets (the arena, GAME.md phase 4), tournaments,
+draw offers, house-table stakes, an entry fee on unwagered matches, elapsed
+time as a gate (no claim timestamp exists; add one only if a game ever
+needs it).
+
 ## Parked
 
 - **The round** ("mira bought the house a round"): price 100 x patrons
@@ -456,23 +659,14 @@ chips, more than one pot at a time.
 
 Owner notes to pick up in a later spitball, kept here so they are not lost:
 
-- **Rebalance the big games' pricing and payouts.** The door games and the
-  Lobby games pay on their own scales (Lateania crowns 10k, door badge pairs
-  10k/20k, daily chess 500, Tron 50-100, ssHattrick 300, and so on) that were
-  set one at a time. Review them together against the sinks above once the
-  sinks exist, so the faucet side of the economy is one deliberate table.
-  Decided direction (2026-08-25): the big games become farmable on purpose,
-  and the month tiers are priced high (40x) to eat what they pay out. Tune
-  faucets up, not sinks down.
-- **Lobby game economics.** The `Ctrl+G` Lobby (daily correspondence matches
-  and the house tables) as a chip surface: entry stakes, side stakes, what a
-  win pays, whether a match can carry a wager (the daily CONTEXT already
-  parks "wagers" as a future hook).
-- **A payout for the loser, gated on effort.** A losing player who stayed in
-  a game past some threshold (elapsed time, or a number of moves) gets a
-  small consolation payout, so a long, fought match is never a total loss and
-  people finish games instead of abandoning them. Needs a threshold that
-  cannot be farmed by two accounts trading long games.
+- ~~Rebalance the big games' pricing and payouts.~~ Decided and written
+  up as Phase 6 above (door milestones pay again, gated; month tiers at 40x
+  eat what they pay). Still open there: Asterion's daily 4,000.
+- ~~Lobby game economics.~~ Phase 7 above (pair-day cap, consolation,
+  wagers). Still open in the Lobby: spectator side bets, tournaments.
+- ~~A payout for the loser, gated on effort.~~ Phase 7 above: 100 chips at
+  a per-game move threshold, never on timeout, capped per opponent per
+  day.
 
 ## Dropped
 

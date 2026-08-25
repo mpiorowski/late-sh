@@ -78,7 +78,6 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         username_effect_variant: None,
         rental_duration_secs: None,
         badge_slot: None,
-        title_text: None,
         custom_title: false,
     }
 }

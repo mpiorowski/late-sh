@@ -48,3 +48,41 @@ fn the_balance_gate_comes_before_the_cooldown_gate() {
         Some("Need 2000 chips for Custom Title".to_string())
     );
 }
+
+#[test]
+fn a_purchase_the_transaction_refused_is_a_refusal_not_a_rental() {
+    use late_core::models::marketplace::PurchaseStatus;
+
+    use super::{CustomTitleOutcome, SettledPurchase, custom_title_outcome};
+
+    // The balance precheck runs before a screen that can take 30s, and the
+    // transaction re-checks it. A refusal there must land on the failure
+    // banner, never read as "Rented".
+    let refused = SettledPurchase {
+        status: Some(PurchaseStatus::InsufficientFunds),
+        message: "Need 80000 chips for Your Own Title".to_string(),
+    };
+    assert_eq!(
+        custom_title_outcome(refused),
+        CustomTitleOutcome::Refused("Need 80000 chips for Your Own Title".to_string())
+    );
+
+    // A SKU that vanished between the prompt and the purchase is the same story.
+    let missing = SettledPurchase {
+        status: None,
+        message: "Item is not available".to_string(),
+    };
+    assert_eq!(
+        custom_title_outcome(missing),
+        CustomTitleOutcome::Refused("Item is not available".to_string())
+    );
+
+    let rented = SettledPurchase {
+        status: Some(PurchaseStatus::Purchased),
+        message: "Wearing \"the night clerk\" (24h)".to_string(),
+    };
+    assert_eq!(
+        custom_title_outcome(rented),
+        CustomTitleOutcome::Rented("Wearing \"the night clerk\" (24h)".to_string())
+    );
+}
