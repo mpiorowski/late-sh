@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::poll_fn,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -23,12 +24,12 @@ use late_core::{
             ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
             adjust_aquarium_fish_active_by_sku, aquarium_is_hungry, consume_aquarium_food_pinch,
             equip_owned_item_by_sku, listen_for_shop_changes,
-            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs, unequip_slot,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs, unequip_slot,
         },
         rental::{
-            BADGE_RENTAL_ITEM_KIND, BadgeRental, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
-            TITLE_RENTAL_ITEM_KIND, duration_tag, title_from_payload,
+            BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
+            TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title, title_from_payload,
         },
         shop_consumable_effect::ShopConsumableEffect,
         user::User,
@@ -40,6 +41,8 @@ use tokio_postgres::{AsyncMessage, NoTls};
 use uuid::Uuid;
 
 use super::entitlements::ShopEntitlements;
+use crate::app::ai::screen::{TitleScreen, screen_custom_title};
+use crate::app::ai::svc::AiService;
 use crate::app::common::username_effect::{FlairEffect, FlairTitle, NameFlair, NameFlairDirectory};
 
 #[derive(Clone, Debug, Default)]
@@ -73,6 +76,11 @@ pub struct ShopSnapshot {
     /// thing that can offer their owner a way to clear the slot.
     pub legacy_badge_equipped: bool,
     pub legacy_flag_equipped: bool,
+    /// Whether the Shop can sell a title the buyer writes themselves. Custom
+    /// text is screened before the purchase transaction opens, so with no AI
+    /// configured the custom SKUs render as unavailable rather than shipping
+    /// unscreened.
+    pub custom_titles_available: bool,
 }
 
 /// One live user-scoped rental as the Shop shows it: what it is, which SKU
@@ -138,7 +146,12 @@ pub struct ShopCatalogItem {
     /// used to.
     pub badge_slot: Option<String>,
     /// For `title_rental` items: the text the rental prints after the name.
+    /// `None` on a custom title, whose text does not exist until the buyer
+    /// types it.
     pub title_text: Option<String>,
+    /// Whether this title rental sells a text the buyer writes rather than one
+    /// the catalog carries.
+    pub custom_title: bool,
 }
 
 impl ShopCatalogItem {
@@ -172,6 +185,12 @@ impl ShopCatalogItem {
 
     pub fn is_title_rental(&self) -> bool {
         self.item_kind == TITLE_RENTAL_ITEM_KIND
+    }
+
+    /// A title rental the buyer writes the text for. Enter on one opens a
+    /// prompt rather than buying outright.
+    pub fn is_custom_title(&self) -> bool {
+        self.custom_title
     }
 
     /// Every timed item: the shop quotes a window and a rebuy resets it.
@@ -261,6 +280,50 @@ fn purchase_story(
     }
 }
 
+/// What renting a buyer-written title came to. `Refused` carries the banner
+/// the buyer sees and means no chips moved.
+enum CustomTitleOutcome {
+    Rented(String),
+    Refused(String),
+}
+
+/// Shown whenever no verdict on a title can be had: AI switched off, or the
+/// screen came back with nothing. The Shop hides the custom SKUs in that case,
+/// so this is the race where a session's snapshot is a beat behind.
+const CUSTOM_TITLES_UNAVAILABLE: &str = "Custom titles are closed right now";
+
+/// The least time between two screens for one user. Every screen is a paid
+/// API call and a refused one is free to the buyer by design, so without this
+/// a held-down Enter is an unmetered bill.
+const CUSTOM_TITLE_SCREEN_COOLDOWN: Duration = Duration::from_secs(10);
+
+/// Why a custom title is refused before the screen is even asked. Both gates
+/// exist to keep a paid API call from being made for a purchase that could
+/// not complete or that was just made: the buyer cannot afford the tier (the
+/// same `balance < price` rule the purchase transaction applies), or their
+/// last screen was inside the cooldown. `None` means go ahead and screen.
+fn custom_title_precheck(
+    balance: i64,
+    price_chips: i64,
+    item_name: &str,
+    last_screen: Option<Instant>,
+    now: Instant,
+) -> Option<String> {
+    if balance < price_chips {
+        return Some(format!("Need {price_chips} chips for {item_name}"));
+    }
+    match last_screen {
+        Some(last) if now.duration_since(last) < CUSTOM_TITLE_SCREEN_COOLDOWN => {
+            let wait = CUSTOM_TITLE_SCREEN_COOLDOWN - now.duration_since(last);
+            Some(format!(
+                "Wait {}s before screening another title",
+                wait.as_secs().max(1)
+            ))
+        }
+        Some(_) | None => None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ShopEvent {
     ActionCompleted { user_id: Uuid, message: String },
@@ -277,6 +340,14 @@ pub struct ShopService {
     flair_directory: Option<NameFlairDirectory>,
     /// Announces username-effect purchases to the #lounge ticker.
     activity: Option<crate::app::activity::publisher::ActivityPublisher>,
+    /// Screens buyer-written titles before they are charged for. Absent (or
+    /// switched off) means the Shop sells no custom titles at all.
+    ai_service: Option<AiService>,
+    /// When each user last had a title screened, for
+    /// `CUSTOM_TITLE_SCREEN_COOLDOWN`. Process-local like the chat gift
+    /// cooldown: a session lives on one replica, and this meters API spend,
+    /// not game state.
+    screen_cooldowns: Arc<Mutex<HashMap<Uuid, Instant>>>,
 }
 
 impl ShopService {
@@ -288,7 +359,14 @@ impl ShopService {
             evt_tx,
             flair_directory: None,
             activity: None,
+            ai_service: None,
+            screen_cooldowns: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_ai_service(mut self, ai_service: AiService) -> Self {
+        self.ai_service = Some(ai_service);
+        self
     }
 
     pub fn with_flair_directory(mut self, flair_directory: NameFlairDirectory) -> Self {
@@ -484,6 +562,33 @@ impl ShopService {
         });
     }
 
+    /// Rent a title the buyer wrote. Every outcome the flow has is listed
+    /// here, once: the text was refused before any money moved, the screen had
+    /// no verdict to give, the call itself broke, or the purchase went
+    /// through. A refusal is an `ActionFailed` banner and nothing else, which
+    /// is the whole "never charge for a no-op" rule.
+    pub fn purchase_custom_title_task(&self, user_id: Uuid, sku: String, text: String) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            match svc.purchase_custom_title(user_id, &sku, &text).await {
+                Ok(CustomTitleOutcome::Rented(message)) => {
+                    svc.publish_event(ShopEvent::ActionCompleted { user_id, message })
+                }
+                Ok(CustomTitleOutcome::Refused(message)) => {
+                    tracing::info!(user_id = %user_id, sku, reason = %message, "custom title refused");
+                    svc.publish_event(ShopEvent::ActionFailed { user_id, message })
+                }
+                Err(error) => {
+                    tracing::warn!(error = ?error, user_id = %user_id, sku, "custom title purchase failed");
+                    svc.publish_event(ShopEvent::ActionFailed {
+                        user_id,
+                        message: "Could not check that title, nothing was charged".to_string(),
+                    });
+                }
+            }
+        });
+    }
+
     pub fn equip_item_task(&self, user_id: Uuid, sku: String) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -578,7 +683,93 @@ impl ShopService {
                 purchase_item_by_sku_with_chat_effect(&mut client, user_id, sku, room_id).await?
             }
         };
+        drop(client);
 
+        self.settle_purchase(user_id, purchase).await
+    }
+
+    /// Rent a title the buyer wrote themselves: validate, screen, then buy.
+    /// The order matters. Nothing touches the chip ledger until the text has
+    /// passed both gates, so every refusal below is free.
+    async fn purchase_custom_title(
+        &self,
+        user_id: Uuid,
+        sku: &str,
+        text: &str,
+    ) -> Result<CustomTitleOutcome> {
+        let title = match CustomTitle::parse(text) {
+            Ok(title) => title,
+            Err(error) => return Ok(CustomTitleOutcome::Refused(error.message().to_string())),
+        };
+        let Some(ai_service) = self.ai_service.as_ref() else {
+            return Ok(CustomTitleOutcome::Refused(
+                CUSTOM_TITLES_UNAVAILABLE.to_string(),
+            ));
+        };
+
+        // The screen is a paid call. Before making one: the SKU must be a
+        // custom title that is on sale, the buyer must be able to afford it
+        // under the purchase's own rule, and their last screen must be
+        // outside the cooldown. Every refusal here is free and makes no call.
+        let (item_name, price_chips, balance) = {
+            let client = self.db.get().await?;
+            let item = match MarketplaceItem::find_visible_by_sku(&client, sku).await? {
+                Some(item)
+                    if item.item_kind == TITLE_RENTAL_ITEM_KIND
+                        && is_custom_title(&item.payload) =>
+                {
+                    item
+                }
+                Some(_) | None => {
+                    return Ok(CustomTitleOutcome::Refused(
+                        "That item does not take a custom title".to_string(),
+                    ));
+                }
+            };
+            let chips = UserChips::ensure(&client, user_id).await?;
+            (item.name, item.price_chips, chips.balance)
+        };
+        let now = Instant::now();
+        {
+            let mut cooldowns = self.screen_cooldowns.lock_recover();
+            let last_screen = cooldowns.get(&user_id).copied();
+            if let Some(message) =
+                custom_title_precheck(balance, price_chips, &item_name, last_screen, now)
+            {
+                return Ok(CustomTitleOutcome::Refused(message));
+            }
+            cooldowns.insert(user_id, now);
+        }
+
+        match screen_custom_title(ai_service, title.as_str()).await? {
+            TitleScreen::Allowed => {}
+            TitleScreen::Refused { reason } => return Ok(CustomTitleOutcome::Refused(reason)),
+            TitleScreen::Unavailable => {
+                return Ok(CustomTitleOutcome::Refused(
+                    CUSTOM_TITLES_UNAVAILABLE.to_string(),
+                ));
+            }
+        }
+
+        tracing::info!(user_id = %user_id, sku, "custom title passed the screen");
+        let mut client = self.db.get().await?;
+        let purchase =
+            purchase_item_by_sku_with_custom_title(&mut client, user_id, sku, title).await?;
+        drop(client);
+        Ok(CustomTitleOutcome::Rented(
+            self.settle_purchase(user_id, purchase).await?,
+        ))
+    }
+
+    /// Everything a completed purchase transaction owes the rest of the app:
+    /// the flair write-through, the #lounge story, the banner copy, and the
+    /// snapshot refresh. Shared by every purchase path so a new one cannot
+    /// quietly skip one of them.
+    async fn settle_purchase(
+        &self,
+        user_id: Uuid,
+        purchase: PurchaseWithEffectResult,
+    ) -> Result<String> {
         // Flair that actually activated goes live immediately for every
         // session on this replica: re-read both halves rather than writing one
         // through, so a title purchase never drops a live color effect (and
@@ -627,9 +818,17 @@ impl ShopService {
                 PurchaseStatus::Purchased | PurchaseStatus::QuantityAdded
                     if result.item.item_kind == TITLE_RENTAL_ITEM_KIND =>
                 {
+                    // The activated row, not the SKU name: a custom title's
+                    // name is "Custom Title", and the buyer wants to read back
+                    // the words they typed.
+                    let worn = purchase
+                        .title_rental
+                        .as_ref()
+                        .and_then(|row| title_from_payload(&row.payload))
+                        .unwrap_or_else(|| result.item.name.clone());
                     format!(
                         "Wearing \"{}\" ({})",
-                        result.item.name,
+                        worn,
                         duration_tag(rental_duration_secs(&result.item))
                     )
                 }
@@ -679,7 +878,6 @@ impl ShopService {
             },
         };
 
-        drop(client);
         if flair_changed {
             self.refresh_user_flair(user_id).await?;
         }
@@ -983,7 +1181,9 @@ impl ShopService {
                         .filter(|slot| matches!(*slot, CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
                         .map(ToOwned::to_owned),
                 };
-                let title_text = (item_kind == TITLE_RENTAL_ITEM_KIND)
+                let custom_title =
+                    item_kind == TITLE_RENTAL_ITEM_KIND && is_custom_title(&item.payload);
+                let title_text = (item_kind == TITLE_RENTAL_ITEM_KIND && !custom_title)
                     .then(|| title_from_payload(&item.payload))
                     .flatten();
                 ShopCatalogItem {
@@ -1012,6 +1212,7 @@ impl ShopService {
                     rental_duration_secs,
                     badge_slot,
                     title_text,
+                    custom_title,
                 }
             })
             .collect();
@@ -1032,7 +1233,15 @@ impl ShopService {
             chat_label_flag,
             legacy_badge_equipped,
             legacy_flag_equipped,
+            custom_titles_available: self.custom_titles_enabled(),
         })
+    }
+
+    /// Whether a buyer-written title can be screened on this process. Read
+    /// from local config, so it is the same answer on every replica running
+    /// the same deployment.
+    fn custom_titles_enabled(&self) -> bool {
+        self.ai_service.as_ref().is_some_and(AiService::is_enabled)
     }
 
     pub fn start_listener_task(&self, db_config: DbConfig) -> tokio::task::JoinHandle<()> {
@@ -1143,3 +1352,7 @@ fn is_consumable_kind(item_kind: &str) -> bool {
         CHAT_CONSUMABLE_ITEM_KIND | COMPANION_CONSUMABLE_ITEM_KIND | BONSAI_CONSUMABLE_ITEM_KIND
     )
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

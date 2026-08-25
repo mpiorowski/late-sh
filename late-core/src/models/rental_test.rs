@@ -79,3 +79,66 @@ fn title_payload_is_trimmed_clamped_and_never_blank() {
         Some("x".repeat(TITLE_MAX_LEN))
     );
 }
+
+#[test]
+fn custom_title_payload_flag_marks_the_buyer_written_skus() {
+    assert!(is_custom_title(
+        &json!({"custom": true, "duration_secs": RENTAL_DAY_SECS})
+    ));
+    assert!(!is_custom_title(&json!({"text": "the night clerk"})));
+    assert!(!is_custom_title(&json!({"custom": false})));
+    // A curated SKU carries no `custom` key at all.
+    assert!(!is_custom_title(&json!({})));
+}
+
+#[test]
+fn custom_title_trims_and_collapses_whitespace() {
+    assert_eq!(
+        CustomTitle::parse("  the  night   clerk ")
+            .expect("title")
+            .as_str(),
+        "the night clerk"
+    );
+    assert_eq!(
+        CustomTitle::parse("nightside")
+            .expect("title")
+            .into_string(),
+        "nightside"
+    );
+}
+
+#[test]
+fn custom_title_refuses_what_a_chat_row_cannot_wear() {
+    assert_eq!(CustomTitle::parse("   "), Err(CustomTitleError::Empty));
+    assert_eq!(CustomTitle::parse(""), Err(CustomTitleError::Empty));
+    assert_eq!(
+        CustomTitle::parse(&"x".repeat(TITLE_MAX_LEN + 1)),
+        Err(CustomTitleError::TooLong),
+        "over the cap is refused, never clamped: the buyer pays for what they typed"
+    );
+    assert!(CustomTitle::parse(&"x".repeat(TITLE_MAX_LEN)).is_ok());
+    assert_eq!(CustomTitle::parse("@mira"), Err(CustomTitleError::Mention));
+    assert_eq!(
+        CustomTitle::parse("night\nclerk"),
+        Err(CustomTitleError::Unprintable)
+    );
+    assert_eq!(
+        CustomTitle::parse("night\u{202E}clerk"),
+        Err(CustomTitleError::Unprintable)
+    );
+    assert_eq!(
+        CustomTitle::parse("night\u{200B}clerk"),
+        Err(CustomTitleError::Unprintable)
+    );
+}
+
+#[test]
+fn custom_title_counts_characters_not_bytes() {
+    // Twenty multi-byte characters still fit; twenty-one do not.
+    let twenty = "ł".repeat(TITLE_MAX_LEN);
+    assert_eq!(CustomTitle::parse(&twenty).expect("title").as_str(), twenty);
+    assert_eq!(
+        CustomTitle::parse(&"ł".repeat(TITLE_MAX_LEN + 1)),
+        Err(CustomTitleError::TooLong)
+    );
+}

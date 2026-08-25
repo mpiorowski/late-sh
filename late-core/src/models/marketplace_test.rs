@@ -11,13 +11,14 @@ use crate::{
             THEMATRIX_ULTIMATE_SKU, ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
             WONDERLAND_ULTIMATE_SKU, adjust_aquarium_fish_active_by_sku, aquarium_is_hungry,
             consume_aquarium_food_pinch, equip_owned_item_by_sku, purchase_durable_item_by_sku,
-            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs, unequip_slot,
+            purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+            purchase_item_by_sku_with_username_effect, rental_duration_secs, unequip_slot,
         },
         pet::PetCompanion,
         rental::{
-            BADGE_RENTAL_ITEM_KIND, BadgeRental, RENTAL_DAY_SECS, RENTAL_MONTH_SECS,
-            TITLE_EFFECT_KIND, TITLE_MAX_LEN, TITLE_RENTAL_ITEM_KIND, title_from_payload,
+            BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, RENTAL_MONTH_SECS,
+            TITLE_EFFECT_KIND, TITLE_MAX_LEN, TITLE_RENTAL_ITEM_KIND, is_custom_title,
+            title_from_payload,
         },
         shop_consumable_effect::ShopConsumableEffect,
         ultimate_cooldown::UltimateCastCooldown,
@@ -47,6 +48,8 @@ const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
 const TITLE_DAY_PRICE: i64 = 200;
 const TITLE_MONTH_PRICE: i64 = 6_000;
+const CUSTOM_TITLE_DAY_PRICE: i64 = 2_000;
+const CUSTOM_TITLE_MONTH_PRICE: i64 = 60_000;
 
 #[tokio::test]
 async fn seeded_catalog_contains_pet_companion_unlock() {
@@ -1183,6 +1186,7 @@ async fn seeded_catalog_contains_curated_titles_in_both_tiers() {
     let titles: Vec<&MarketplaceItem> = items
         .iter()
         .filter(|item| item.item_kind == TITLE_RENTAL_ITEM_KIND)
+        .filter(|item| !is_custom_title(&item.payload))
         .collect();
     // 30 to 40 curated titles, each in a day and a month tier.
     let day_count = titles
@@ -1307,6 +1311,158 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn seeded_catalog_contains_custom_title_tiers() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let custom: Vec<&MarketplaceItem> = items
+        .iter()
+        .filter(|item| item.item_kind == TITLE_RENTAL_ITEM_KIND)
+        .filter(|item| is_custom_title(&item.payload))
+        .collect();
+    assert_eq!(custom.len(), 2, "one day tier and one month tier");
+
+    let day = custom
+        .iter()
+        .find(|item| item.sku == "title_custom_day")
+        .expect("custom title, day tier");
+    let month = custom
+        .iter()
+        .find(|item| item.sku == "title_custom_month")
+        .expect("custom title, month tier");
+    assert_eq!(day.price_chips, CUSTOM_TITLE_DAY_PRICE);
+    assert_eq!(month.price_chips, CUSTOM_TITLE_MONTH_PRICE);
+    assert_eq!(rental_duration_secs(day), RENTAL_DAY_SECS);
+    assert_eq!(rental_duration_secs(month), RENTAL_MONTH_SECS);
+    assert_eq!(month.sort_order, day.sort_order + 5);
+    for item in &custom {
+        assert_eq!(item.slot, None);
+        // The text does not exist until someone types it, so nothing can read
+        // one out of the payload.
+        assert_eq!(title_from_payload(&item.payload), None);
+        // Custom titles lead the title block, above every curated one.
+        assert!(item.sort_order < 4200);
+    }
+}
+
+#[tokio::test]
+async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_title() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "custom-title-buy").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        CUSTOM_TITLE_DAY_PRICE + TITLE_DAY_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
+    let funded = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+
+    purchase_item_by_sku_with_chat_effect(&mut client, user.id, "title_the_insufferable_day", None)
+        .await
+        .expect("rent curated title")
+        .title_rental
+        .expect("activated curated title");
+
+    let row = purchase_item_by_sku_with_custom_title(
+        &mut client,
+        user.id,
+        "title_custom_day",
+        CustomTitle::parse("  the  wrong hour ").expect("valid title"),
+    )
+    .await
+    .expect("rent custom title")
+    .title_rental
+    .expect("activated custom title");
+    assert_eq!(row.effect_kind, TITLE_EFFECT_KIND);
+    assert_eq!(row.room_id, None);
+    assert_eq!(row.source_sku, "title_custom_day");
+
+    // One live title per user: the custom one replaced the curated one, and it
+    // wears the collapsed text the buyer typed.
+    let rows = active_effect_rows(&client, user.id, TITLE_EFFECT_KIND).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, row.id);
+    assert_eq!(
+        title_from_payload(&rows[0].payload).as_deref(),
+        Some("the wrong hour")
+    );
+    assert!(
+        title_from_payload(&rows[0].payload)
+            .unwrap()
+            .chars()
+            .count()
+            <= TITLE_MAX_LEN
+    );
+
+    let balance = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+    assert_eq!(balance, funded - TITLE_DAY_PRICE - CUSTOM_TITLE_DAY_PRICE);
+}
+
+#[tokio::test]
+async fn a_title_sku_that_does_not_match_the_text_it_was_given_charges_nobody() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "custom-title-mismatch").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        CUSTOM_TITLE_MONTH_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
+    let funded = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+
+    // Buyer text handed to a curated SKU: the catalog decides that title, so
+    // the transaction fails rather than wearing text nobody sold.
+    assert!(
+        purchase_item_by_sku_with_custom_title(
+            &mut client,
+            user.id,
+            "title_the_insufferable_day",
+            CustomTitle::parse("the night mayor").expect("valid title"),
+        )
+        .await
+        .is_err()
+    );
+
+    // The custom SKU bought through the plain path carries no text at all.
+    assert!(
+        purchase_item_by_sku_with_chat_effect(&mut client, user.id, "title_custom_day", None)
+            .await
+            .is_err()
+    );
+
+    assert!(
+        active_effect_rows(&client, user.id, TITLE_EFFECT_KIND)
+            .await
+            .is_empty()
+    );
+    let balance = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+    assert_eq!(balance, funded, "a refused title is never charged for");
 }
 
 const USERNAME_GLOW_PRICE: i64 = 200;

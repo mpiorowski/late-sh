@@ -1,6 +1,7 @@
 use super::*;
 
-use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS};
+use crate::app::common::primitives::BannerKind;
+use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS, TITLE_MAX_LEN};
 
 fn make_state() -> ShopState {
     let snapshot = ShopSnapshot {
@@ -19,6 +20,7 @@ fn make_state() -> ShopState {
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -124,6 +126,7 @@ fn glow_item() -> ShopCatalogItem {
         rental_duration_secs: Some(RENTAL_DAY_SECS),
         badge_slot: None,
         title_text: None,
+        custom_title: false,
     }
 }
 
@@ -144,6 +147,7 @@ fn make_state_with_glow_item() -> ShopState {
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -207,6 +211,7 @@ fn visible_items_lead_with_username_effects() {
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     };
     let state = ShopState::for_test_snapshot(snapshot);
     let skus: Vec<&str> = state
@@ -232,6 +237,17 @@ fn title_item() -> ShopCatalogItem {
     }
 }
 
+fn custom_title_item() -> ShopCatalogItem {
+    ShopCatalogItem {
+        sku: "title_custom_day".to_string(),
+        name: "Custom Title".to_string(),
+        price_chips: 2_000,
+        title_text: None,
+        custom_title: true,
+        ..title_item()
+    }
+}
+
 fn snapshot_with(items: Vec<ShopCatalogItem>) -> ShopSnapshot {
     ShopSnapshot {
         user_id: None,
@@ -249,6 +265,7 @@ fn snapshot_with(items: Vec<ShopCatalogItem>) -> ShopSnapshot {
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     }
 }
 
@@ -355,6 +372,7 @@ fn username_effect_picker_carries_the_bought_tier_duration() {
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     };
     let mut state = ShopState::for_test_snapshot(snapshot);
     state.activate_selected(None);
@@ -398,4 +416,69 @@ fn rect_contains_edge_cases() {
     assert!(rect_contains(Rect::new(2, 3, 5, 1), 2, 3));
     assert!(!rect_contains(Rect::new(2, 3, 5, 1), 7, 3));
     assert!(!rect_contains(Rect::new(2, 3, 5, 1), 2, 4));
+}
+
+#[test]
+fn custom_title_enter_arms_a_prompt_that_stops_at_the_render_cap() {
+    let mut state = ShopState::for_test_snapshot(snapshot_with(vec![custom_title_item()]));
+    assert!(state.activate_selected(None).is_some());
+    let pending = state.pending_custom_title().expect("prompt armed");
+    assert_eq!(pending.sku, "title_custom_day");
+    assert_eq!(pending.duration_secs, RENTAL_DAY_SECS);
+    assert_eq!(pending.input, "");
+
+    for ch in "the last honest night clerk".chars() {
+        state.push_custom_title_char(ch);
+    }
+    let pending = state.pending_custom_title().expect("prompt armed");
+    assert_eq!(pending.len(), TITLE_MAX_LEN);
+    assert_eq!(pending.input, "the last honest nigh");
+
+    state.backspace_custom_title();
+    assert_eq!(
+        state.pending_custom_title().expect("prompt armed").input,
+        "the last honest nig"
+    );
+}
+
+#[test]
+fn a_custom_title_is_never_sold_without_a_screen_to_check_it() {
+    let mut snapshot = snapshot_with(vec![custom_title_item()]);
+    snapshot.custom_titles_available = false;
+    let mut state = ShopState::for_test_snapshot(snapshot);
+
+    let banner = state.activate_selected(None).expect("banner");
+    assert!(matches!(banner.kind, BannerKind::Error), "{banner:?}");
+    assert!(
+        state.pending_custom_title().is_none(),
+        "no prompt opens when nothing can screen the text"
+    );
+}
+
+#[test]
+fn a_blank_custom_title_prompt_sends_nothing_and_stays_open() {
+    let mut state = ShopState::for_test_snapshot(snapshot_with(vec![custom_title_item()]));
+    state.activate_selected(None);
+    state.push_custom_title_char(' ');
+    state.push_custom_title_char(' ');
+
+    let banner = state.confirm_pending_custom_title().expect("banner");
+    assert!(matches!(banner.kind, BannerKind::Error), "{banner:?}");
+    assert!(
+        state.pending_custom_title().is_some(),
+        "an unfinished title is not a refusal: the prompt stays up"
+    );
+}
+
+#[test]
+fn the_custom_title_prompt_clears_on_cancel_and_category_switch() {
+    let mut state = ShopState::for_test_snapshot(snapshot_with(vec![custom_title_item()]));
+    state.activate_selected(None);
+    assert!(state.cancel_pending_custom_title().is_some());
+    assert!(state.pending_custom_title().is_none());
+
+    state.activate_selected(None);
+    assert!(state.pending_custom_title().is_some());
+    state.select_next_category();
+    assert!(state.pending_custom_title().is_none());
 }

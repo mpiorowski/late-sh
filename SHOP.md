@@ -212,6 +212,13 @@ denied text is refused uncharged with the bartender-style "never charge
 for a no-op" rule. No AI configured means the custom SKU renders as
 unavailable, never as unscreened.
 
+Status: shipped (migration 150, `late-ssh/src/app/ai/screen.rs`,
+`CustomTitle::parse` in `rental.rs`). Verified 2026-08-25. Follow-up done
+the same day: `ShopService::purchase_custom_title` now refuses (free, no
+call) when the buyer cannot afford the tier or their last screen was
+inside a 10s per-user cooldown, because every screen is a paid API call
+and a refused one costs the buyer nothing.
+
 Acceptance:
 - [x] Curated titles buy, replace, expire, and render after the name in
       chat and the clubhouse for every viewer, including IRC-only rooms if

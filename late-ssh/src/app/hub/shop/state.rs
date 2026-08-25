@@ -20,6 +20,7 @@ use late_core::models::{
     marketplace::{
         AQUARIUM_FOOD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, PET_FOOD_SKU,
     },
+    rental::TITLE_MAX_LEN,
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
 
@@ -33,6 +34,7 @@ pub(crate) struct ShopState {
     selected_index: usize,
     pending_room_effect: Option<PendingRoomEffect>,
     pending_username_effect: Option<PendingUsernameEffect>,
+    pending_custom_title: Option<PendingCustomTitle>,
     category_rects: Cell<[Rect; ShopCategory::ALL.len()]>,
     item_rects: RefCell<Vec<(Rect, usize)>>,
 }
@@ -78,6 +80,32 @@ impl PendingUsernameEffect {
     }
 }
 
+/// The text prompt armed by Enter on a custom title: type up to
+/// `TITLE_MAX_LEN` characters, Enter sends them to be screened and bought.
+/// Same shape as the style picker above, with a line of text where the
+/// swatches are.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingCustomTitle {
+    pub sku: String,
+    pub price_chips: i64,
+    /// How long the bought tier runs, so the prompt quotes the window the
+    /// buyer is actually paying for.
+    pub duration_secs: i64,
+    pub input: String,
+}
+
+impl PendingCustomTitle {
+    /// What the buyer has typed, with the surrounding whitespace gone. Empty
+    /// until there is a title worth screening, which is what gates Enter.
+    pub(crate) fn trimmed(&self) -> &str {
+        self.input.trim()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.input.chars().count()
+    }
+}
+
 /// The pickable styles a username-effect item sells, from its payload
 /// variant. Unknown variants sell nothing (and the picker refuses to arm).
 fn username_effect_options(variant: Option<&str>) -> Vec<UsernameEffect> {
@@ -118,6 +146,7 @@ impl ShopState {
             selected_index: 0,
             pending_room_effect: None,
             pending_username_effect: None,
+            pending_custom_title: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }
@@ -219,6 +248,16 @@ impl ShopState {
 
     pub(crate) fn pending_username_effect(&self) -> Option<&PendingUsernameEffect> {
         self.pending_username_effect.as_ref()
+    }
+
+    pub(crate) fn pending_custom_title(&self) -> Option<&PendingCustomTitle> {
+        self.pending_custom_title.as_ref()
+    }
+
+    /// Whether the Shop can sell a buyer-written title at all. False means no
+    /// screen is configured, and an unscreened title never ships.
+    pub(crate) fn custom_titles_available(&self) -> bool {
+        self.snapshot.custom_titles_available
     }
 
     pub(crate) fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
@@ -345,6 +384,7 @@ impl ShopState {
     pub(crate) fn select_next_category(&mut self) {
         self.pending_room_effect = None;
         self.pending_username_effect = None;
+        self.pending_custom_title = None;
         self.category_index = (self.category_index + 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
     }
@@ -359,12 +399,14 @@ impl ShopState {
             self.selected_index = 0;
             self.pending_room_effect = None;
             self.pending_username_effect = None;
+            self.pending_custom_title = None;
         }
     }
 
     pub(crate) fn select_previous_category(&mut self) {
         self.pending_room_effect = None;
         self.pending_username_effect = None;
+        self.pending_custom_title = None;
         self.category_index =
             (self.category_index + ShopCategory::ALL.len() - 1) % ShopCategory::ALL.len();
         self.selected_index = 0;
@@ -415,6 +457,7 @@ impl ShopState {
             self.selected_index = 0;
             self.pending_room_effect = None;
             self.pending_username_effect = None;
+            self.pending_custom_title = None;
         }
     }
 
@@ -447,6 +490,21 @@ impl ShopState {
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
+        // A custom title has no text until the buyer writes one, so Enter
+        // opens a prompt instead of buying. With no screen configured there is
+        // nothing to sell: an unscreened title never ships.
+        if item.is_custom_title() {
+            if !self.snapshot.custom_titles_available {
+                return Some(Banner::error("Custom titles are closed right now"));
+            }
+            self.pending_custom_title = Some(PendingCustomTitle {
+                duration_secs: item.rental_duration(),
+                sku: item.sku,
+                price_chips: item.price_chips,
+                input: String::new(),
+            });
+            return Some(Banner::success("Write your title"));
         }
         // Rentals are bought outright, every time: there is no picker and no
         // equip step, and a rebuy replaces the live row and resets its clock.
@@ -553,6 +611,42 @@ impl ShopState {
     pub(crate) fn cancel_pending_username_effect(&mut self) -> Option<Banner> {
         let pending = self.pending_username_effect.take()?;
         Some(Banner::success(&format!("Cancelled {}", pending.item_name)))
+    }
+
+    /// Type one character into the title prompt. The cap is the renderers'
+    /// (`TITLE_MAX_LEN`), enforced here so the prompt simply stops accepting
+    /// rather than letting someone type a title the purchase would refuse.
+    pub(crate) fn push_custom_title_char(&mut self, ch: char) {
+        if let Some(pending) = &mut self.pending_custom_title
+            && pending.len() < TITLE_MAX_LEN
+        {
+            pending.input.push(ch);
+        }
+    }
+
+    pub(crate) fn backspace_custom_title(&mut self) {
+        if let Some(pending) = &mut self.pending_custom_title {
+            pending.input.pop();
+        }
+    }
+
+    /// Send the typed title to be screened and bought. A blank prompt is not a
+    /// refusal, it is an unfinished one: the modal stays open and nothing is
+    /// sent.
+    pub(crate) fn confirm_pending_custom_title(&mut self) -> Option<Banner> {
+        let text = self.pending_custom_title.as_ref()?.trimmed().to_string();
+        if text.is_empty() {
+            return Some(Banner::error("Type a title first"));
+        }
+        let pending = self.pending_custom_title.take()?;
+        self.service
+            .purchase_custom_title_task(self.user_id, pending.sku, text);
+        Some(Banner::success("Screening your title"))
+    }
+
+    pub(crate) fn cancel_pending_custom_title(&mut self) -> Option<Banner> {
+        self.pending_custom_title.take()?;
+        Some(Banner::success("Cancelled custom title"))
     }
 
     pub(crate) fn adjust_selected_aquarium_fish(&mut self, delta: i32) -> Option<Banner> {
@@ -662,6 +756,7 @@ impl ShopState {
             selected_index: 0,
             pending_room_effect: None,
             pending_username_effect: None,
+            pending_custom_title: None,
             category_rects: Cell::new([Rect::new(0, 0, 0, 0); ShopCategory::ALL.len()]),
             item_rects: RefCell::new(Vec::new()),
         }

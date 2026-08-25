@@ -126,6 +126,95 @@ pub fn title_from_payload(payload: &Value) -> Option<String> {
         .map(|text| text.chars().take(TITLE_MAX_LEN).collect())
 }
 
+/// Whether this title item sells a text the buyer writes rather than one the
+/// catalog carries. A custom SKU has no `text` key at all: the title does not
+/// exist until someone types it, so nothing can read one out of the payload.
+pub fn is_custom_title(payload: &Value) -> bool {
+    payload
+        .get("custom")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+/// Why a buyer's own title text was refused. Each variant is its own refusal
+/// line, so the prompt says what to change instead of "invalid title".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CustomTitleError {
+    /// Nothing but whitespace.
+    Empty,
+    /// Longer than `TITLE_MAX_LEN` after trimming. Refused rather than
+    /// clamped: the buyer pays for the text they typed, so a title that would
+    /// be silently cut short is not the one they agreed to.
+    TooLong,
+    /// A control, zero-width, or bidi-override character. Those do not render
+    /// as a title, they rewrite the line around it.
+    Unprintable,
+    /// Contains `@`. Titles reach the #lounge feed, whose bodies never carry a
+    /// mention, and a title that reads as a handle impersonates its owner.
+    Mention,
+}
+
+impl CustomTitleError {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Empty => "Type a title first",
+            Self::TooLong => "Titles are capped at 20 characters",
+            Self::Unprintable => "That title has characters chat cannot print",
+            Self::Mention => "Titles cannot contain @",
+        }
+    }
+}
+
+/// A buyer-written title that has passed every rule a rendered title must
+/// obey. The purchase path takes this rather than a `&str`, so there is no way
+/// to charge for text nobody checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomTitle(String);
+
+impl CustomTitle {
+    /// Parse raw buyer input into a title, or say why it cannot be one.
+    /// Surrounding whitespace goes, internal runs collapse to a single space
+    /// (a title renders inline, so a tab or a double space would break the
+    /// row), and everything else is refused rather than repaired.
+    pub fn parse(input: &str) -> Result<Self, CustomTitleError> {
+        if input.contains('@') {
+            return Err(CustomTitleError::Mention);
+        }
+        if input.chars().any(is_unprintable_in_a_title) {
+            return Err(CustomTitleError::Unprintable);
+        }
+        let text = input.split_whitespace().collect::<Vec<_>>().join(" ");
+        match text.chars().count() {
+            0 => Err(CustomTitleError::Empty),
+            len if len > TITLE_MAX_LEN => Err(CustomTitleError::TooLong),
+            _ => Ok(Self(text)),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// Characters a chat row cannot survive: C0/C1 controls (newlines included,
+/// which `split_whitespace` would otherwise fold into a space), zero-width
+/// joins and spaces, the bidi overrides that reverse the text after them, and
+/// the byte-order mark.
+fn is_unprintable_in_a_title(ch: char) -> bool {
+    ch.is_control()
+        || matches!(ch,
+            '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}')
+}
+
 #[cfg(test)]
 #[path = "rental_test.rs"]
 mod rental_test;

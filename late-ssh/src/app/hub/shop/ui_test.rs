@@ -79,6 +79,7 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         rental_duration_secs: None,
         badge_slot: None,
         title_text: None,
+        custom_title: false,
     }
 }
 
@@ -99,6 +100,7 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         chat_label_flag: None,
         legacy_badge_equipped: false,
         legacy_flag_equipped: false,
+        custom_titles_available: true,
     };
     ShopState::for_test_snapshot(snapshot)
 }

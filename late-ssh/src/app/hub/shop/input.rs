@@ -11,6 +11,12 @@ use crate::app::{
 /// confirm cancels and the hub stays up. Returns false when there is nothing
 /// to peel, letting the caller close the hub.
 pub(crate) fn handle_escape(app: &mut App) -> bool {
+    if app.shop_state.pending_custom_title().is_some() {
+        if let Some(banner) = app.shop_state.cancel_pending_custom_title() {
+            app.banner = Some(banner);
+        }
+        return true;
+    }
     if app.shop_state.pending_username_effect().is_some() {
         if let Some(banner) = app.shop_state.cancel_pending_username_effect() {
             app.banner = Some(banner);
@@ -27,6 +33,30 @@ pub(crate) fn handle_escape(app: &mut App) -> bool {
 }
 
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) -> bool {
+    // The title prompt is a text field: every printable key is content, so it
+    // takes the whole event stream and the usual shop bindings do not apply
+    // while it is open.
+    if app.shop_state.pending_custom_title().is_some() {
+        match event {
+            ParsedInput::Byte(b'\r' | b'\n') => {
+                if let Some(banner) = app.shop_state.confirm_pending_custom_title() {
+                    app.banner = Some(banner);
+                }
+            }
+            ParsedInput::Byte(0x1B) => {
+                if let Some(banner) = app.shop_state.cancel_pending_custom_title() {
+                    app.banner = Some(banner);
+                }
+            }
+            ParsedInput::Byte(0x7F | 0x08) => app.shop_state.backspace_custom_title(),
+            ParsedInput::Char(ch) => app.shop_state.push_custom_title_char(*ch),
+            ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
+                app.shop_state.push_custom_title_char(*byte as char);
+            }
+            _ => {}
+        }
+        return true;
+    }
     if app.shop_state.pending_username_effect().is_some() {
         match event {
             ParsedInput::Arrow(b'D')

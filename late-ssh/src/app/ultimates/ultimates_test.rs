@@ -69,6 +69,7 @@ fn item(sku: &str, item_kind: &str, owned: bool) -> ShopCatalogItem {
         rental_duration_secs: None,
         badge_slot: None,
         title_text: None,
+        custom_title: false,
     }
 }
 

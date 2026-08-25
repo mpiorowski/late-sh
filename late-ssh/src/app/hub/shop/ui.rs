@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use late_core::models::rental::{duration_label, duration_tag};
+use late_core::models::rental::{TITLE_MAX_LEN, duration_label, duration_tag};
 use late_core::models::username_effect::UsernameEffect;
 
 use crate::app::{
@@ -22,7 +22,7 @@ use crate::app::{
 
 use super::{
     catalog::ShopCategory,
-    state::{PendingRoomEffect, PendingUsernameEffect, ShopState},
+    state::{PendingCustomTitle, PendingRoomEffect, PendingUsernameEffect, ShopState},
     svc::ShopCatalogItem,
 };
 
@@ -48,6 +48,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ShopState, pet_species
     }
     if let Some(pending) = state.pending_username_effect() {
         draw_username_effect_confirm(frame, area, pending);
+    }
+    if let Some(pending) = state.pending_custom_title() {
+        draw_custom_title_prompt(frame, area, pending);
     }
 }
 
@@ -218,6 +221,14 @@ fn draw_item_detail(
         } else {
             "pick a style"
         }
+    } else if item.is_custom_title() {
+        if !state.custom_titles_available() {
+            "unavailable"
+        } else if rental_active(item, state) {
+            "active"
+        } else {
+            "write your own"
+        }
     } else if item.is_badge_rental() || item.is_title_rental() {
         if rental_active(item, state) {
             "active"
@@ -250,7 +261,9 @@ fn draw_item_detail(
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
-    } else if item.is_aquarium_fish() && !has_aquarium {
+    } else if (item.is_aquarium_fish() && !has_aquarium)
+        || (item.is_custom_title() && !state.custom_titles_available())
+    {
         Style::default()
             .fg(theme::TEXT_DIM())
             .add_modifier(Modifier::BOLD)
@@ -354,6 +367,20 @@ fn draw_item_detail(
                 Style::default().fg(theme::TEXT_DIM()),
             ),
         ]));
+        if item.is_custom_title() {
+            lines.push(Line::from(vec![
+                Span::raw("  write  "),
+                Span::styled(
+                    match state.custom_titles_available() {
+                        true => format!(
+                            "up to {TITLE_MAX_LEN} characters, screened before you are charged"
+                        ),
+                        false => "the house screen is offline, nothing to sell".to_string(),
+                    },
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        }
     }
     if item.is_pet_companion() && item.owned {
         lines.push(Line::from(vec![
@@ -594,6 +621,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "buy one"
     } else if selected.is_some_and(|item| item.is_username_effect()) {
         "pick style"
+    } else if selected.is_some_and(|item| item.is_custom_title()) {
+        "write title"
     } else if selected.is_some_and(|item| item.is_badge_rental() || item.is_title_rental()) {
         "rent"
     } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
@@ -862,6 +891,94 @@ fn draw_username_effect_confirm(frame: &mut Frame, area: Rect, pending: &Pending
     );
 }
 
+/// The text prompt for a buyer-written title: what they have typed so far, a
+/// block cursor, the character budget, and what it costs. The typed text is
+/// shown as it will read in chat, `name, <title>`, so the buyer sees the row
+/// before they pay for it.
+fn draw_custom_title_prompt(frame: &mut Frame, area: Rect, pending: &PendingCustomTitle) {
+    let popup = centered_rect(58, 11, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Write Your Title ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw("  title    "),
+            Span::styled(
+                pending.input.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(theme::AMBER_GLOW())),
+        ]),
+        Line::from(vec![
+            Span::raw("  reads    "),
+            Span::styled(
+                match pending.trimmed() {
+                    "" => "you".to_string(),
+                    title => format!("you, {title}"),
+                },
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  length   "),
+            Span::styled(
+                format!("{}/{TITLE_MAX_LEN}", pending.len()),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  price    "),
+            Span::styled(
+                format!("{} chips", pending.price_chips),
+                Style::default().fg(theme::AMBER()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  lasts    "),
+            Span::styled(
+                duration_label(pending.duration_secs),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  screened "),
+            Span::styled(
+                "refused titles cost nothing",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(
+                " screen and buy    ",
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(theme::BG_CANVAS())),
+        inner,
+    );
+}
+
 fn item_row(
     category: ShopCategory,
     selected: bool,
@@ -885,6 +1002,11 @@ fn item_row(
     } else if item.is_rental() {
         if rental_active(item, state) {
             "active"
+        } else if item.is_custom_title() {
+            match state.custom_titles_available() {
+                true => "write",
+                false => "closed",
+            }
         } else if item.is_username_effect() {
             "buy"
         } else {
