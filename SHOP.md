@@ -223,7 +223,11 @@ all 72 curated rows (`active = false`, never deleted) and renames the
 custom pair "Your Own Title"; it is the only title the Shop sells. The
 same session moved Badges and Flags directly after the Chat tab
 (`ShopCategory::ALL`) and split the Chat list with section rows (Name
-effects / Title / Consumables).
+effects / Title / Consumables). In the Consumables section, migration 152
+retires Hack Room (`chat_pinned_vibe`, live `pinned_vibe` rows
+deactivated, the room-rail styling it drove removed from `chat/ui.rs`)
+and moves Room Bump to the top (`sort_order` 4005), so the section reads
+Room Bump, Room Spark, Room Glow, Room Pulse.
 
 Acceptance:
 - [x] Curated titles buy, replace, expire, and render after the name in
@@ -470,6 +474,11 @@ Owner notes to pick up in a later spitball, kept here so they are not lost:
 
 - Paid music slot (the booth is too quiet to sell against).
 - Live marquee auction (replaced by the crown, which names the loser).
+- Curated title list (36 noir titles, migration 149): never worth the
+  moderation-free shortcut once custom titles were screened. Retired by
+  migration 151; "Your Own Title" is the only title.
+- Hack Room (`chat_pinned_vibe`): never sold, and the only consumable that
+  restyled real room-list rows. Retired by migration 152.
 - Percentage-of-balance pricing (punitive, opaque, and it taxes the one
   category that sells).
 - More one-time badge packs, more 10-second room effects, anything only
