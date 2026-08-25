@@ -14,16 +14,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const NEWS_SEPARATOR: &str = " || ";
 
 /// The flair painted over the bare username inside the author header: the
-/// tavern drunk state as a trailing `(word)` label and/or a bought 24h
-/// username effect as per-character foreground color. `range` is the
+/// tavern drunk state as a trailing `(word)` label, a bought username effect
+/// as per-character foreground color, and a rented title. `range` is the
 /// username's byte range within the prefix string, so badges and flags stay
-/// untouched. `word` pairs the printed state with the dim hue that carries it
-/// (green tipsy through red wasted). The effect fg deliberately overrides the
-/// base author fg (own amber, friend gold, default) while keeping its
-/// modifiers, so a bought effect always wins the color of the name.
+/// untouched; `title_range` is the `, <title>` that follows it, painted in
+/// the dim label color because a title is text, not another name. `word`
+/// pairs the printed drunk state with the dim hue that carries it (green
+/// tipsy through red wasted). The effect fg deliberately overrides the base
+/// author fg (own amber, friend gold, default) while keeping its modifiers,
+/// so a bought effect always wins the color of the name.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
+    pub title_range: Option<(usize, usize)>,
     pub word: Option<(&'static str, Color)>,
     pub name_style: Option<NameStyle>,
 }
@@ -39,8 +42,9 @@ fn drunk_word_span(word: &str, color: Color) -> Span<'static> {
 }
 
 /// The author header's prefix spans: one span when untinted (byte-identical
-/// to the historical output), split when drunk tint and/or a username effect
-/// paints the name. Falls back to the single span on any out-of-bounds range.
+/// to the historical output), split when a drunk tint, a username effect, or
+/// a rented title paints part of it. Falls back to the single span on any
+/// out-of-bounds range.
 ///
 /// A username effect emits one span per character so gradients and shimmer
 /// interpolate across the name; the country-flag emoji inside the range
@@ -53,10 +57,22 @@ fn push_author_prefix_spans(
 ) {
     if let Some(tint) = tint {
         let (start, end) = tint.range;
+        // The title always follows the name directly, so the prefix splits
+        // into at most four runs: badges before, the name, the title, the
+        // rest.
+        let title_end = match tint.title_range {
+            Some((title_start, title_end))
+                if title_start == end && title_end > title_start && title_end <= prefix.len() =>
+            {
+                Some(title_end)
+            }
+            Some(_) | None => None,
+        };
         if start < end
             && end <= prefix.len()
             && prefix.is_char_boundary(start)
             && prefix.is_char_boundary(end)
+            && title_end.is_none_or(|title_end| prefix.is_char_boundary(title_end))
         {
             if start > 0 {
                 spans.push(Span::styled(prefix[..start].to_string(), author_style));
@@ -74,8 +90,18 @@ fn push_author_prefix_spans(
                 }
                 None => spans.push(Span::styled(name.to_string(), author_style)),
             }
-            if end < prefix.len() {
-                spans.push(Span::styled(prefix[end..].to_string(), author_style));
+            let tail_start = match title_end {
+                Some(title_end) => {
+                    spans.push(Span::styled(
+                        prefix[end..title_end].to_string(),
+                        Style::default().fg(theme::TEXT_DIM()),
+                    ));
+                    title_end
+                }
+                None => end,
+            };
+            if tail_start < prefix.len() {
+                spans.push(Span::styled(prefix[tail_start..].to_string(), author_style));
             }
             return;
         }

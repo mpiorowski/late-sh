@@ -11,17 +11,31 @@ fn dashboard_filter_includes_public_activity() {
 }
 
 #[test]
+fn lounge_includes_rented_badges_and_titles() {
+    use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS};
+
+    let badge = ActivityEvent::badge_rented(Uuid::nil(), "mira", "🐱", RENTAL_DAY_SECS);
+    assert!(lounge_includes(&badge));
+    assert_eq!(badge.action, "rented 🐱 (24h)");
+
+    let title =
+        ActivityEvent::title_applied(Uuid::nil(), "mira", "the night clerk", RENTAL_MONTH_SECS);
+    assert!(lounge_includes(&title));
+    assert_eq!(title.action, "is now the night clerk (30d)");
+    // Feed bodies never carry an @.
+    assert!(!badge.action.contains('@') && !title.action.contains('@'));
+}
+
+#[test]
 fn lounge_includes_username_effects() {
-    use late_core::models::username_effect::{
-        GlowColor, USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_MONTH_DURATION_SECS,
-        UsernameEffect,
-    };
+    use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS};
+    use late_core::models::username_effect::{GlowColor, UsernameEffect};
 
     let event = ActivityEvent::username_effect_applied(
         Uuid::nil(),
         "user",
         UsernameEffect::Glow(GlowColor::Gold),
-        USERNAME_EFFECT_DURATION_SECS,
+        RENTAL_DAY_SECS,
     );
 
     assert!(lounge_includes(&event));
@@ -32,7 +46,7 @@ fn lounge_includes_username_effects() {
         Uuid::nil(),
         "user",
         UsernameEffect::Shimmer,
-        USERNAME_EFFECT_MONTH_DURATION_SECS,
+        RENTAL_MONTH_SECS,
     );
 
     assert!(lounge_includes(&month));

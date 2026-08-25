@@ -1,7 +1,10 @@
-use late_core::models::marketplace::{
-    AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_BADGE_SLOT,
-    CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
-    USERNAME_EFFECT_ITEM_KIND,
+use late_core::models::{
+    marketplace::{
+        AQUARIUM_FISH_ITEM_KIND, AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
+        CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU,
+        USERNAME_EFFECT_ITEM_KIND,
+    },
+    rental::TITLE_RENTAL_ITEM_KIND,
 };
 
 use super::svc::ShopCatalogItem;
@@ -47,6 +50,7 @@ impl ShopCategory {
             Self::Chat => {
                 item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
                     || item.item_kind == USERNAME_EFFECT_ITEM_KIND
+                    || item.item_kind == TITLE_RENTAL_ITEM_KIND
             }
             Self::Aquarium => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
             Self::Badges => item.is_chat_badge() && !item.is_flag_badge(),
@@ -62,8 +66,4 @@ pub(crate) fn is_pet_companion_sku(sku: &str) -> bool {
 
 pub(crate) fn is_aquarium_sku(sku: &str) -> bool {
     sku == AQUARIUM_SKU
-}
-
-pub(crate) fn is_chat_badge_slot(slot: Option<&str>) -> bool {
-    matches!(slot, Some(CHAT_BADGE_SLOT | CHAT_FLAG_SLOT))
 }

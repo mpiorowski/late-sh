@@ -166,7 +166,7 @@ pub(crate) fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, equipped badge, equipped flag, then the /brb moon.\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, then the /brb moon. A rented title prints between the name and that stack, as \"name, the night clerk\".\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
@@ -454,7 +454,9 @@ fn chips_help_lines() -> Vec<String> {
         "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, and quests.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
-        "  The Shop (/shop) for badges, flags, effects, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
+        "  The Shop (/shop) for badge, flag, title and name-effect rentals, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
+        "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
+        "  A rebuy replaces whatever is live in that slot and restarts its clock; when a rental lapses the slot simply empties.".to_string(),
         "  @bartender drinks in the Clubhouse.".to_string(),
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
@@ -1078,6 +1080,9 @@ fn overview_lines() -> Vec<String> {
         "  /shop             open the Shop modal from any composer",
         "  Shop              j/k select, h/l subtab, Enter buy with Late Chips",
         "  name effects      Name Glow / Gradient / Shimmer sell by the day or by the month",
+        "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
+        "  titles            a short text after your name in chat, rented the same way",
+        "  x                 clear a permanent badge bought before rentals",
         "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",
         "Jump search",

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
-use crate::app::common::username_effect::{NameStyle, char_color};
+use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
@@ -46,7 +46,7 @@ pub(crate) struct ClubhouseView<'a> {
     pub state: &'a State,
     pub own_username: &'a str,
     /// Resolved 24h username-effect styles; painted over name labels.
-    pub name_styles: &'a std::collections::HashMap<Uuid, NameStyle>,
+    pub name_flair: &'a std::collections::HashMap<Uuid, ResolvedName>,
     pub now_playing: Option<&'a NowPlaying>,
     /// The #lounge tail, for speech bubbles.
     pub lounge_messages: &'a [ChatMessage],
@@ -749,7 +749,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
             style,
             &who.username,
             label_style,
-            view.name_styles.get(&who.user_id).copied(),
+            view.name_flair.get(&who.user_id),
             who.drunk_level,
         );
         anchors.insert(who.user_id, anchor);
@@ -803,7 +803,7 @@ fn place_people(cells: &mut Cells, view: &ClubhouseView<'_>) -> (BubbleAnchors, 
         own_style,
         view.own_username,
         own_label_style,
-        view.name_styles.get(&own_id).copied(),
+        view.name_flair.get(&own_id),
         own_drunk_level,
     );
     anchors.insert(own_id, anchor);
@@ -835,13 +835,20 @@ fn draw_presence(
     style: Style,
     username: &str,
     label_style: Style,
-    name_style: Option<NameStyle>,
+    flair: Option<&ResolvedName>,
     drunk_level: u8,
 ) -> ((u16, u16), (u16, u16, u16, u16)) {
     let passed_out = is_passed_out(drunk_level);
+    let name_style = flair.and_then(|flair| flair.style);
+    // A rented title trails the name here the way it does in chat. The floor
+    // is a crowded character grid, so the title truncates to the same
+    // `LABEL_MAX` the name does: a label is at most a name plus a title, never
+    // wider.
+    let label = clubhouse_label(username, flair);
     // The name label spans this many cells, centered on the avatar (matches
-    // `put_label`), so the clickable box tracks the drawn name width.
-    let label_w = truncate_name(username).chars().count() as u16;
+    // `put_label`), so the clickable box tracks the drawn label width.
+    let label_w = label.chars().count() as u16;
+    let name_len = truncate_name(username).chars().count();
     let label_span = |center: u16| {
         let x0 = center.saturating_sub(label_w / 2);
         (x0, x0 + label_w.saturating_sub(1))
@@ -864,7 +871,8 @@ fn draw_presence(
                 cells,
                 seat.x,
                 label_y,
-                &truncate_name(username),
+                &label,
+                name_len,
                 label_style,
                 name_style,
             );
@@ -892,14 +900,7 @@ fn draw_presence(
                 draw_figure(cells, x, y, head, style);
             }
             let label_y = y.saturating_sub(3).max(1);
-            put_label_styled(
-                cells,
-                x,
-                label_y,
-                &truncate_name(username),
-                label_style,
-                name_style,
-            );
+            put_label_styled(cells, x, label_y, &label, name_len, label_style, name_style);
             let (lx0, lx1) = label_span(x);
             // Figure body is `x-1..=x+1`; the box unions it with the label.
             let hit = (lx0.min(x.saturating_sub(1)), label_y, lx1.max(x + 1), y);
@@ -1455,7 +1456,7 @@ pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen:
                     Line::from(vec![
                         Span::styled("chips buy things. ", text),
                         Span::styled("[/shop] ", key),
-                        Span::styled("badges, flags, 24h name effects,", text),
+                        Span::styled("rented badges, flags, titles, name effects,", text),
                     ]),
                     Line::from(Span::styled(
                         "a pet companion to feed, an aquarium with real fish.",
@@ -1839,16 +1840,18 @@ fn put_if_floor(cells: &mut Cells, x: u16, y: u16, ch: char, color: ratatui::sty
 
 /// Write a name centered on `x_center`, clamped inside the walls.
 fn put_label(cells: &mut Cells, x_center: u16, y: u16, label: &str, style: Style) {
-    put_label_styled(cells, x_center, y, label, style, None);
+    put_label_styled(cells, x_center, y, label, 0, style, None);
 }
 
-/// `put_label` with an optional 24h username effect: per-character fg from
-/// the effect, everything else (drunk bg, modifiers) from `style`.
+/// Paints a floor label. `name_len` is how many leading characters of `label`
+/// are the username: only those take the bought color effect, so a trailing
+/// `, title` stays in the dim label color, exactly as in chat.
 fn put_label_styled(
     cells: &mut Cells,
     x_center: u16,
     y: u16,
     label: &str,
+    name_len: usize,
     style: Style,
     name_style: Option<NameStyle>,
 ) {
@@ -1862,10 +1865,20 @@ fn put_label_styled(
         .clamp(1, max_start.max(1));
     for (i, ch) in label.chars().enumerate() {
         let cell_style = match name_style {
-            Some(name_style) => style.fg(char_color(name_style, i, len)),
-            None => style,
+            Some(name_style) if i < name_len => style.fg(char_color(name_style, i, name_len)),
+            Some(_) | None => style,
         };
         set(cells, start + i as u16, y, ch, cell_style);
+    }
+}
+
+/// The floor label for one patron: the truncated name, plus `, <title>` when
+/// a title is rented, itself truncated to `LABEL_MAX`.
+pub(crate) fn clubhouse_label(username: &str, flair: Option<&ResolvedName>) -> String {
+    let name = truncate_name(username);
+    match flair.and_then(|flair| flair.title.as_deref()) {
+        Some(title) => format!("{name}, {}", truncate_name(title)),
+        None => name,
     }
 }
 

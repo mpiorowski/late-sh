@@ -42,9 +42,8 @@ fn repeat_window_drops_same_shape_and_keeps_distinct() {
 
 #[test]
 fn username_effect_repeat_keys_on_full_style_slug() {
-    use late_core::models::username_effect::{
-        GlowColor, USERNAME_EFFECT_DURATION_SECS, UsernameEffect,
-    };
+    use late_core::models::rental::RENTAL_DAY_SECS;
+    use late_core::models::username_effect::{GlowColor, UsernameEffect};
 
     let mut recent = HashMap::new();
     let user = Uuid::now_v7();
@@ -52,7 +51,7 @@ fn username_effect_repeat_keys_on_full_style_slug() {
         user,
         "mira",
         UsernameEffect::Glow(GlowColor::Ember),
-        USERNAME_EFFECT_DURATION_SECS,
+        RENTAL_DAY_SECS,
     );
     assert!(!is_repeat(&mut recent, &ember));
     // Rebuying the same look inside the window stays quiet...
@@ -63,14 +62,14 @@ fn username_effect_repeat_keys_on_full_style_slug() {
         user,
         "mira",
         UsernameEffect::Glow(GlowColor::Sky),
-        USERNAME_EFFECT_DURATION_SECS,
+        RENTAL_DAY_SECS,
     );
     assert!(!is_repeat(&mut recent, &sky));
     let shimmer = ActivityEvent::username_effect_applied(
         user,
         "mira",
         UsernameEffect::Shimmer,
-        USERNAME_EFFECT_DURATION_SECS,
+        RENTAL_DAY_SECS,
     );
     assert!(!is_repeat(&mut recent, &shimmer));
 }

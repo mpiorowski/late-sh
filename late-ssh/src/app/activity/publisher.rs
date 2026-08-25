@@ -142,6 +142,32 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn badge_rented_task(&self, user_id: Uuid, emoji: String, duration_secs: i64) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::badge_rented(
+                user_id,
+                username,
+                emoji,
+                duration_secs,
+            ));
+        });
+    }
+
+    pub fn title_applied_task(&self, user_id: Uuid, title: String, duration_secs: i64) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::title_applied(
+                user_id,
+                username,
+                title,
+                duration_secs,
+            ));
+        });
+    }
+
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

@@ -111,6 +111,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // A bought username effect: being seen is the whole product, so the
         // purchase is a story by design.
         ActivityKind::UsernameEffectApplied { .. } => true,
+        // Same for the rest of the name-adjacent rentals: a badge and a title
+        // are bought to be read next to the name in every message.
+        ActivityKind::BadgeRented { .. } => true,
+        ActivityKind::TitleApplied { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").

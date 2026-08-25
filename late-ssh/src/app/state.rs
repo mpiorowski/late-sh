@@ -487,10 +487,10 @@ pub struct App {
     /// Per-author drunk levels (1-4) copied from the shared lobby about once
     /// a second; chat author labels tint from this owned map, never the mutex.
     pub(crate) drunk_levels: HashMap<Uuid, u8>,
-    /// Resolved 24h username-effect styles, rebuilt from the flair directory
-    /// about once a second (which also steps shimmer); renderers read this
-    /// owned map, never the directory mutex.
-    pub(crate) name_styles: HashMap<Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Resolved name flair (username-effect style and rented title), rebuilt
+    /// from the flair directory about once a second (which also steps
+    /// shimmer); renderers read this owned map, never the directory mutex.
+    pub(crate) name_flair: HashMap<Uuid, crate::app::common::username_effect::ResolvedName>,
     /// Per-peer `/pomodoro` badges, rebuilt from the pomodoro directory on the
     /// same ~1s cadence; chat author labels read this owned map, never the
     /// directory mutex.
@@ -1319,7 +1319,7 @@ impl App {
             clubhouse_graybeard_id: None,
             clubhouse_bot_id: None,
             drunk_levels: HashMap::new(),
-            name_styles: HashMap::new(),
+            name_flair: HashMap::new(),
             peer_pomodoros: HashMap::new(),
             online_count: active_users
                 .as_ref()

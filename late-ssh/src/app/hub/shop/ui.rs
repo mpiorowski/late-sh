@@ -11,7 +11,8 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use late_core::models::username_effect::{UsernameEffect, duration_label};
+use late_core::models::rental::{duration_label, duration_tag};
+use late_core::models::username_effect::UsernameEffect;
 
 use crate::app::{
     common::theme,
@@ -217,6 +218,12 @@ fn draw_item_detail(
         } else {
             "pick a style"
         }
+    } else if item.is_badge_rental() || item.is_title_rental() {
+        if rental_active(item, state) {
+            "active"
+        } else {
+            "rent"
+        }
     } else if item.is_consumable() {
         consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_aquarium_fish() && !has_aquarium {
@@ -237,8 +244,8 @@ fn draw_item_detail(
         "buy"
     };
     let status = if chat_effect_active
-        || effect_active
-        || (item.owned && !item.is_consumable() && !item.is_username_effect())
+        || rental_active(item, state)
+        || (item.owned && !item.is_consumable() && !item.is_rental())
     {
         Style::default()
             .fg(theme::SUCCESS())
@@ -276,7 +283,7 @@ fn draw_item_detail(
     if item.owned
         && item.quantity > 0
         && item.item_kind != CHAT_CONSUMABLE_ITEM_KIND
-        && !item.is_username_effect()
+        && !item.is_rental()
     {
         lines.push(Line::from(vec![
             Span::raw("  owned  "),
@@ -308,7 +315,41 @@ fn draw_item_detail(
             Span::styled(
                 format!(
                     "{}, rebuy replaces the active style",
-                    duration_label(item.username_effect_duration())
+                    duration_label(item.rental_duration())
+                ),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ]));
+    }
+    if item.is_badge_rental() || item.is_title_rental() {
+        let slot_word = if item.is_title_rental() {
+            "title"
+        } else if item.is_flag_badge() {
+            "flag"
+        } else {
+            "badge"
+        };
+        if let Some(active) = active_rental_for_item(item, state) {
+            lines.push(Line::from(vec![
+                Span::raw("  worn   "),
+                Span::styled(
+                    active.label.clone(),
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("   {}", remaining_label(active.ends_at, chrono::Utc::now())),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+            ]));
+        }
+        lines.push(Line::from(vec![
+            Span::raw("  lasts  "),
+            Span::styled(
+                format!(
+                    "{}, rebuy replaces the active {slot_word}",
+                    duration_label(item.rental_duration())
                 ),
                 Style::default().fg(theme::TEXT_DIM()),
             ),
@@ -553,6 +594,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         "buy one"
     } else if selected.is_some_and(|item| item.is_username_effect()) {
         "pick style"
+    } else if selected.is_some_and(|item| item.is_badge_rental() || item.is_title_rental()) {
+        "rent"
     } else if let Some(item) = selected.filter(|item| item.is_consumable()) {
         consumable_footer_label(item)
     } else if selected.is_some_and(|item| item.owned && item.slot.is_some()) {
@@ -580,6 +623,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: &
         spans.extend([
             Span::styled("  t", key),
             Span::styled(" toggle cat/dog", text),
+        ]);
+    }
+    // The permanent badge SKUs are retired, so their owners would otherwise
+    // have nowhere left to take one off.
+    if state.legacy_badge_equipped_for_category(state.selected_category()) {
+        spans.extend([
+            Span::styled("  x", key),
+            Span::styled(" clear permanent badge", text),
         ]);
     }
     if state.selected_category() == ShopCategory::Aquarium {
@@ -700,6 +751,34 @@ fn username_effect_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
         })
 }
 
+/// The live rental filling this item's slot, whichever SKU bought it. Used by
+/// the detail pane, which shows what is running rather than what is selected.
+fn active_rental_for_item<'a>(
+    item: &ShopCatalogItem,
+    state: &'a ShopState,
+) -> Option<&'a super::svc::ActiveRental> {
+    match item {
+        item if item.is_title_rental() => state.active_title(),
+        item if item.is_flag_badge() => state.active_flag_rental(),
+        item if item.is_badge_rental() => state.active_badge_rental(),
+        _ => None,
+    }
+}
+
+/// Whether this exact item is the rental currently running. Badges and titles
+/// match on the SKU that bought the live row; a username effect matches on the
+/// style family instead, since the buyer picks the color at purchase and any
+/// color of that family counts as the tier being active.
+fn rental_active(item: &ShopCatalogItem, state: &ShopState) -> bool {
+    match item {
+        item if item.is_username_effect() => username_effect_active(item, state),
+        item if item.is_badge_rental() || item.is_title_rental() => {
+            active_rental_for_item(item, state).is_some_and(|active| active.source_sku == item.sku)
+        }
+        _ => false,
+    }
+}
+
 fn draw_username_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingUsernameEffect) {
     let popup = centered_rect(58, 10, area);
     frame.render_widget(Clear, popup);
@@ -803,11 +882,13 @@ fn item_row(
         "classic"
     } else if item.equipped {
         "displaying"
-    } else if item.is_username_effect() {
-        if username_effect_active(item, state) {
+    } else if item.is_rental() {
+        if rental_active(item, state) {
             "active"
-        } else {
+        } else if item.is_username_effect() {
             "buy"
+        } else {
+            "rent"
         }
     } else if item.is_consumable() {
         consumable_row_status(item, state)
@@ -825,13 +906,13 @@ fn item_row(
         && chat_consumable_active(item, state);
     let status_style = if active_chat_consumable
         || item.equipped
-        || username_effect_active(item, state)
+        || rental_active(item, state)
         || bonsai_decay_shield_active(item, state)
     {
         Style::default()
             .fg(theme::SUCCESS())
             .add_modifier(Modifier::BOLD)
-    } else if item.is_consumable() || item.is_username_effect() {
+    } else if item.is_consumable() || item.is_rental() {
         Style::default().fg(theme::AMBER())
     } else if item.owned || (item.is_aquarium_fish() && item.quantity > 0) {
         Style::default().fg(theme::SUCCESS())
@@ -872,10 +953,19 @@ fn item_row(
 }
 
 fn badge_display_name(item: &ShopCatalogItem) -> String {
-    item.badge_emoji
-        .as_deref()
-        .unwrap_or(&item.name)
-        .to_string()
+    let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
+    format!("{emoji}{}", rental_tier_suffix(item))
+}
+
+/// The `  24h` / `  30d` tag that tells a rental's two tiers apart in a list
+/// where they otherwise render identically (a badge row is just its emoji, and
+/// a title's two tiers share their text).
+fn rental_tier_suffix(item: &ShopCatalogItem) -> String {
+    if item.is_badge_rental() || item.is_title_rental() {
+        format!("  {}", duration_tag(item.rental_duration()))
+    } else {
+        String::new()
+    }
 }
 
 fn consumable_action_label(item: &ShopCatalogItem, active: Option<bool>) -> &'static str {
@@ -967,21 +1057,33 @@ fn consumable_use_hint(item: &ShopCatalogItem) -> &'static str {
 }
 
 fn item_detail_title(item: &ShopCatalogItem) -> String {
-    if item.is_flag_badge() {
-        flag_display_name(item)
-    } else {
-        item.name.clone()
+    match item {
+        item if item.is_flag_badge() => flag_display_name(item),
+        item if item.is_badge_rental() => badge_display_name(item),
+        item if item.is_title_rental() => {
+            format!("{}{}", item.name, rental_tier_suffix(item))
+        }
+        _ => item.name.clone(),
     }
 }
 
 fn flag_display_name(item: &ShopCatalogItem) -> String {
+    // A rental's sku is the legacy one plus its tier suffix
+    // (`badge_flag_pl_month`), so the tier comes off before the country label
+    // and back on as the trailing tag.
     let label = item
         .sku
         .strip_prefix("badge_flag_")
+        .map(|suffix| {
+            suffix
+                .strip_suffix("_month")
+                .or_else(|| suffix.strip_suffix("_day"))
+                .unwrap_or(suffix)
+        })
         .map(flag_label)
         .unwrap_or_else(|| item.name.clone());
     let emoji = item.badge_emoji.as_deref().unwrap_or(&item.name);
-    format!("{label} {emoji}")
+    format!("{label} {emoji}{}", rental_tier_suffix(item))
 }
 
 fn flag_label(sku_suffix: &str) -> String {

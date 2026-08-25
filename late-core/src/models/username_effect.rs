@@ -17,31 +17,8 @@ pub const USERNAME_GLOW_MONTH_SKU: &str = "username_glow_month";
 pub const USERNAME_GRADIENT_MONTH_SKU: &str = "username_gradient_month";
 pub const USERNAME_SHIMMER_MONTH_SKU: &str = "username_shimmer_month";
 
-/// Default effect duration when an item payload omits `duration_secs`.
-pub const USERNAME_EFFECT_DURATION_SECS: i64 = 86_400;
-
-/// The month tier's duration: 30 days.
-pub const USERNAME_EFFECT_MONTH_DURATION_SECS: i64 = 2_592_000;
-
-/// Shop copy for how long a bought effect runs: "30 days" once the duration is
-/// a whole number of days past one, "24 hours" for the day tier (which reads in
-/// hours, matching how the shop counts it down).
-pub fn duration_label(duration_secs: i64) -> String {
-    let hours = duration_secs / 3_600;
-    match hours {
-        hours if hours > 24 && hours % 24 == 0 => format!("{} days", hours / 24),
-        hours => format!("{hours} hours"),
-    }
-}
-
-/// The compact tag the purchase banner and the #lounge line carry: "24h", "30d".
-pub fn duration_tag(duration_secs: i64) -> String {
-    let hours = duration_secs / 3_600;
-    match hours {
-        hours if hours > 24 && hours % 24 == 0 => format!("{}d", hours / 24),
-        hours => format!("{hours}h"),
-    }
-}
+// How long each tier runs, and the copy that quotes it, live in
+// `models::rental`: a username effect is one rental among several now.
 
 /// The buyer-picked color for the Name Glow effect. RGB values live in
 /// `late-ssh` (theme territory); this enum only names the choice so the

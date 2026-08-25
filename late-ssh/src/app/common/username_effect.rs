@@ -1,14 +1,19 @@
-//! The 24h username-effect flair: the process-shared directory of live
-//! effects and the pure color math that turns an effect into rendered spans.
+//! Name flair: the process-shared directory of live username effects and
+//! rented titles, plus the pure color math that turns an effect into rendered
+//! spans.
 //!
 //! Distribution deliberately copies the `usernames::UsernameDirectory`
-//! snapshot-swap shape instead of the SharedLobby drunk map: effects change
+//! snapshot-swap shape instead of the SharedLobby drunk map: flair changes
 //! rarely (a purchase or an expiry), so readers clone an `Arc` per second
 //! rather than copying a map under a mutex. Writes are event-driven — the
 //! shop service seeds once at startup, writes through on a local purchase,
 //! and refreshes one user from its `shop_user_changed` LISTEN/NOTIFY loop —
 //! there is no polling task. Expiry is read-time only: entries carry
 //! `ends_at` and consumers skip stale ones, exactly like room effects.
+//!
+//! The color effect and the title are separate purchases with separate
+//! expiries, so one entry holds both independently: buying a title never
+//! clears a live color, and either half can lapse on its own.
 
 use std::{
     collections::HashMap,
@@ -25,14 +30,35 @@ use uuid::Uuid;
 
 use super::theme;
 
-/// One user's live effect plus its expiry; stale entries are skipped at read.
+/// One user's live color effect plus its expiry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NameFlair {
+pub struct FlairEffect {
     pub effect: UsernameEffect,
     pub ends_at: DateTime<Utc>,
 }
 
-/// Snapshot-swap directory of live username effects, shared process-wide.
+/// One user's live rented title plus its expiry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FlairTitle {
+    pub text: String,
+    pub ends_at: DateTime<Utc>,
+}
+
+/// Everything name-adjacent one user has bought; stale halves are skipped at
+/// read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NameFlair {
+    pub effect: Option<FlairEffect>,
+    pub title: Option<FlairTitle>,
+}
+
+impl NameFlair {
+    pub fn is_empty(&self) -> bool {
+        self.effect.is_none() && self.title.is_none()
+    }
+}
+
+/// Snapshot-swap directory of live name flair, shared process-wide.
 pub type NameFlairDirectory = Arc<Mutex<Arc<HashMap<Uuid, NameFlair>>>>;
 
 pub fn new_directory() -> NameFlairDirectory {
@@ -49,18 +75,16 @@ pub fn set_all(directory: &NameFlairDirectory, entries: Vec<(Uuid, NameFlair)>) 
     *directory.lock_recover() = Arc::new(entries.into_iter().collect());
 }
 
-/// Upsert or clear one user's flair (purchase write-through and
-/// LISTEN/NOTIFY refresh).
-pub fn set_user(directory: &NameFlairDirectory, user_id: Uuid, flair: Option<NameFlair>) {
+/// Replace one user's whole flair entry (purchase write-through and
+/// LISTEN/NOTIFY refresh). An entry with neither half is dropped rather than
+/// stored, so the map holds only users who have something to show.
+pub fn set_user(directory: &NameFlairDirectory, user_id: Uuid, flair: NameFlair) {
     let mut guard = directory.lock_recover();
     let entries = Arc::make_mut(&mut *guard);
-    match flair {
-        Some(flair) => {
-            entries.insert(user_id, flair);
-        }
-        None => {
-            entries.remove(&user_id);
-        }
+    if flair.is_empty() {
+        entries.remove(&user_id);
+    } else {
+        entries.insert(user_id, flair);
     }
 }
 
@@ -129,17 +153,44 @@ pub fn resolve(effect: UsernameEffect, phase: usize) -> NameStyle {
     }
 }
 
-/// Resolve every live entry in a directory snapshot into paintable styles,
-/// skipping expired ones. Runs once per second per session in the tick loop.
+/// What the renderers paint for one name: the color style, the title, or
+/// both. Cloned per frame into render contexts, so the title is owned text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedName {
+    pub style: Option<NameStyle>,
+    pub title: Option<String>,
+}
+
+impl ResolvedName {
+    pub fn is_empty(&self) -> bool {
+        self.style.is_none() && self.title.is_none()
+    }
+}
+
+/// Resolve every live entry in a directory snapshot into what renderers
+/// paint, dropping expired halves and entries left with nothing. Runs once
+/// per second per session in the tick loop.
 pub fn resolve_all(
     entries: &HashMap<Uuid, NameFlair>,
     phase: usize,
     now: DateTime<Utc>,
-) -> HashMap<Uuid, NameStyle> {
+) -> HashMap<Uuid, ResolvedName> {
     entries
         .iter()
-        .filter(|(_, flair)| flair.ends_at > now)
-        .map(|(user_id, flair)| (*user_id, resolve(flair.effect, phase)))
+        .filter_map(|(user_id, flair)| {
+            let resolved = ResolvedName {
+                style: flair
+                    .effect
+                    .filter(|effect| effect.ends_at > now)
+                    .map(|effect| resolve(effect.effect, phase)),
+                title: flair
+                    .title
+                    .as_ref()
+                    .filter(|title| title.ends_at > now)
+                    .map(|title| title.text.clone()),
+            };
+            (!resolved.is_empty()).then_some((*user_id, resolved))
+        })
         .collect()
 }
 

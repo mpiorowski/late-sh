@@ -58,43 +58,91 @@ fn directory_set_expire_replace() {
     set_user(
         &directory,
         user,
-        Some(NameFlair {
-            effect: UsernameEffect::Shimmer,
-            ends_at: now + Duration::hours(24),
-        }),
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Shimmer,
+                ends_at: now + Duration::hours(24),
+            }),
+            title: None,
+        },
     );
     set_user(
         &directory,
         other,
-        Some(NameFlair {
-            effect: UsernameEffect::Glow(GlowColor::Ember),
-            ends_at: now - Duration::seconds(1),
-        }),
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Glow(GlowColor::Ember),
+                ends_at: now - Duration::seconds(1),
+            }),
+            title: None,
+        },
     );
 
     let resolved = resolve_all(&snapshot(&directory), 0, now);
-    assert!(resolved.contains_key(&user));
+    assert!(resolved[&user].style.is_some());
     assert!(
         !resolved.contains_key(&other),
         "expired flair must be skipped"
     );
 
-    set_user(&directory, user, None);
-    assert!(snapshot(&directory).is_empty() || !snapshot(&directory).contains_key(&user));
+    set_user(&directory, user, NameFlair::default());
+    assert!(!snapshot(&directory).contains_key(&user));
 
     set_all(
         &directory,
         vec![(
             other,
             NameFlair {
-                effect: UsernameEffect::Gradient(GradientPair::Candy),
-                ends_at: now + Duration::hours(1),
+                effect: Some(FlairEffect {
+                    effect: UsernameEffect::Gradient(GradientPair::Candy),
+                    ends_at: now + Duration::hours(1),
+                }),
+                title: None,
             },
         )],
     );
     let entries = snapshot(&directory);
     assert_eq!(entries.len(), 1);
     assert!(entries.contains_key(&other));
+}
+
+#[test]
+fn title_and_color_resolve_and_expire_independently() {
+    let directory = new_directory();
+    let user = Uuid::now_v7();
+    let now = Utc::now();
+
+    set_user(
+        &directory,
+        user,
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Glow(GlowColor::Sky),
+                ends_at: now + Duration::hours(1),
+            }),
+            title: Some(FlairTitle {
+                text: "the insufferable".to_string(),
+                ends_at: now + Duration::hours(2),
+            }),
+        },
+    );
+
+    let resolved = resolve_all(&snapshot(&directory), 0, now);
+    assert_eq!(
+        resolved[&user].style,
+        Some(NameStyle::Solid(Color::Rgb(120, 180, 255)))
+    );
+    assert_eq!(resolved[&user].title.as_deref(), Some("the insufferable"));
+
+    // The color lapses first: the title outlives it, and the entry stays.
+    let later = now + Duration::minutes(90);
+    let resolved = resolve_all(&snapshot(&directory), 0, later);
+    assert_eq!(resolved[&user].style, None);
+    assert_eq!(resolved[&user].title.as_deref(), Some("the insufferable"));
+
+    // Both lapsed: the user drops out of the resolved map entirely.
+    let much_later = now + Duration::hours(3);
+    assert!(!resolve_all(&snapshot(&directory), 0, much_later).contains_key(&user));
 }
 
 #[test]

@@ -151,6 +151,11 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::UsernameEffectApplied { effect } => {
             format!("username-effect:{}", effect.slug())
         }
+        // Keyed on what is now visible: renewing the same badge or title
+        // inside the window stays quiet, switching to a different one
+        // announces because the name visibly changed.
+        ActivityKind::BadgeRented { emoji } => format!("badge-rented:{emoji}"),
+        ActivityKind::TitleApplied { title } => format!("title-applied:{title}"),
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.
         ActivityKind::CyberspacePosted { title } => {

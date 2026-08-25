@@ -76,7 +76,9 @@ fn bonsai_shield_item() -> ShopCatalogItem {
         requires_room: false,
         daily_limited: false,
         username_effect_variant: None,
-        username_effect_duration_secs: None,
+        rental_duration_secs: None,
+        badge_slot: None,
+        title_text: None,
     }
 }
 
@@ -90,6 +92,13 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: protection,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
     };
     ShopState::for_test_snapshot(snapshot)
 }

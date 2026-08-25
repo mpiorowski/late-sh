@@ -614,13 +614,13 @@ impl App {
             }
             if let Some(directory) = &self.flair_directory {
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
-                let name_styles = crate::app::common::username_effect::resolve_all(
+                let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
                     phase,
                     chrono::Utc::now(),
                 );
-                if self.name_styles != name_styles {
-                    self.name_styles = name_styles;
+                if self.name_flair != name_flair {
+                    self.name_flair = name_flair;
                     self.chat_ctx_epoch += 1;
                 }
             }

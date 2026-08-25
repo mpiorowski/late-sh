@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: the Late Lounge tavern, top-level screen `0`, the landing screen for every session
-- Last updated: 2026-08-11 (the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
+- Last updated: 2026-08-25 (a rented Shop title now trails the name on the floor label, truncated to `LABEL_MAX` like the name and painted in the dim label style; `put_label_styled` takes the name length so only the name takes a color effect. §3. Previous: the forced tour gained two Enter interludes for the features with no page of their own: the music box on Home after the chat stop, pitching the sources plus the two ways to actually hear sound (late.sh/listen, the `late` CLI), and the lobby box on The Arcade after the arcade stop, carrying the Ctrl+G daily-duel and live-table content the arcade box used to cram in)
 - Status: Active
 
 ## 1. Summary
@@ -57,12 +57,19 @@ room is the chat surface, and the full history lives in #lounge on Home.
   label tinting everywhere via `App.drunk_levels` (copied ~1/s in
   `App::tick`). The drunk map is NOT pruned on roster sync, so recent
   drinkers who logged out keep tinting their chat history until they decay.
-- **Username effects:** a bought Name Glow/Gradient/Shimmer, 24h or 30-day tier (see
+- **Name flair:** a bought Name Glow/Gradient/Shimmer, 24h or 30-day tier (see
   `hub/CONTEXT.md`) paints the name-label foreground per character
-  (`put_label_styled` in `ui.rs`, styles from `ClubhouseView.name_styles` =
-  `App.name_styles`, resolved ~1/s in `App::tick` from the process-shared
+  (`put_label_styled` in `ui.rs`, flair from `ClubhouseView.name_flair` =
+  `App.name_flair`, resolved ~1/s in `App::tick` from the process-shared
   flair directory). Composes with the drunk bg tint; does not touch the
   avatar glyph or `SharedLobby`.
+  A rented title rides the same entry and trails the name on the floor
+  (`clubhouse_label`, `mira, the night clerk`). The floor is a crowded
+  character grid, so the title is truncated to `LABEL_MAX` (10) the way the
+  name already is: a label is at most a name plus a title, never wider.
+  `put_label_styled` takes the name's character count so only that prefix
+  takes the color effect; the title stays in the dim label style, as in
+  chat. The click box tracks the whole drawn label.
 
 ## 4. Chat: bubbles, not a panel
 

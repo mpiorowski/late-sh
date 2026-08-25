@@ -11,13 +11,15 @@ use super::{
     catalog::ShopCategory,
     entitlements::ShopEntitlements,
     svc::{
-        ActiveChatRoomEffect, ActiveUsernameEffect, ShopCatalogItem, ShopEvent, ShopService,
-        ShopSnapshot,
+        ActiveChatRoomEffect, ActiveRental, ActiveUsernameEffect, ShopCatalogItem, ShopEvent,
+        ShopService, ShopSnapshot,
     },
 };
 use late_core::models::{
     bonsai_decay_protection::BonsaiDecayProtection,
-    marketplace::{AQUARIUM_FOOD_SKU, CHAT_CONSUMABLE_ITEM_KIND, PET_FOOD_SKU},
+    marketplace::{
+        AQUARIUM_FOOD_SKU, CHAT_BADGE_SLOT, CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, PET_FOOD_SKU,
+    },
     username_effect::{GlowColor, GradientPair, UsernameEffect},
 };
 
@@ -181,9 +183,14 @@ impl ShopState {
             .iter()
             .filter(|item| category.matches_item(item))
             .collect();
-        // Username effects lead the list; stable, so catalog order holds
-        // within each group.
-        items.sort_by_key(|item| !item.is_username_effect());
+        // On the Chat tab the name-adjacent rentals lead: username effects
+        // first, then titles, then the room consumables. Stable, so catalog
+        // order holds inside each group.
+        items.sort_by_key(|item| match item {
+            item if item.is_username_effect() => 0,
+            item if item.is_title_rental() => 1,
+            _ => 2,
+        });
         items
     }
 
@@ -244,24 +251,66 @@ impl ShopState {
         self.snapshot.aquarium_hungry
     }
 
+    pub(crate) fn active_badge_rental(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_badge_rental.as_ref()
+    }
+
+    pub(crate) fn active_flag_rental(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_flag_rental.as_ref()
+    }
+
+    pub(crate) fn active_title(&self) -> Option<&ActiveRental> {
+        self.snapshot.active_title.as_ref()
+    }
+
+    /// Whether a legacy permanent badge still fills `category`'s slot. Its
+    /// SKU is retired, so the tab footer is the only place its owner can
+    /// clear it.
+    pub(crate) fn legacy_badge_equipped_for_category(&self, category: ShopCategory) -> bool {
+        match category {
+            ShopCategory::Badges => self.snapshot.legacy_badge_equipped,
+            ShopCategory::Flags => self.snapshot.legacy_flag_equipped,
+            ShopCategory::Chat
+            | ShopCategory::Companions
+            | ShopCategory::Aquarium
+            | ShopCategory::Ultimates => false,
+        }
+    }
+
+    /// The badge string this user's chat label carries, flag first then badge,
+    /// exactly as `chat_author_badge` joins them for every other viewer. Comes
+    /// straight off the snapshot, which read it from the one query that
+    /// decides rentals over legacy equips.
     pub(crate) fn equipped_chat_badge(&self) -> Option<String> {
-        let mut pieces = Vec::new();
-        pieces.extend(
-            self.snapshot
-                .items
-                .iter()
-                .filter(|item| item.is_flag_badge() && item.equipped)
-                .filter_map(|item| item.badge_emoji.as_deref()),
-        );
-        pieces.extend(
-            self.snapshot
-                .items
-                .iter()
-                .filter(|item| item.is_chat_badge() && !item.is_flag_badge() && item.equipped)
-                .filter_map(|item| item.badge_emoji.as_deref()),
-        );
-        let badge = pieces.join(" ");
+        let badge = [
+            self.snapshot.chat_label_flag.as_deref(),
+            self.snapshot.chat_label_badge.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
         (!badge.is_empty()).then_some(badge)
+    }
+
+    /// Clear the legacy permanent badge or flag still filling this tab's slot.
+    pub(crate) fn clear_legacy_badge(&mut self) -> Option<Banner> {
+        let category = self.selected_category();
+        let slot = match category {
+            ShopCategory::Badges => CHAT_BADGE_SLOT,
+            ShopCategory::Flags => CHAT_FLAG_SLOT,
+            ShopCategory::Chat
+            | ShopCategory::Companions
+            | ShopCategory::Aquarium
+            | ShopCategory::Ultimates => return None,
+        };
+        if !self.legacy_badge_equipped_for_category(category) {
+            return None;
+        }
+        self.service
+            .unequip_slot_task(self.user_id, slot.to_string());
+        Some(Banner::success("Clearing permanent badge"))
     }
 
     pub(crate) fn dynamic_bonsai_enabled(&self) -> bool {
@@ -382,7 +431,7 @@ impl ShopState {
                 return Some(Banner::error("This effect is not available"));
             }
             self.pending_username_effect = Some(PendingUsernameEffect {
-                duration_secs: item.username_effect_duration(),
+                duration_secs: item.rental_duration(),
                 sku: item.sku,
                 item_name: item.name,
                 price_chips: item.price_chips,
@@ -398,6 +447,13 @@ impl ShopState {
             self.service
                 .purchase_item_task(self.user_id, item.sku, current_room_id, None);
             return Some(Banner::success(&format!("Buying {}", item.name)));
+        }
+        // Rentals are bought outright, every time: there is no picker and no
+        // equip step, and a rebuy replaces the live row and resets its clock.
+        if item.is_badge_rental() || item.is_title_rental() {
+            self.service
+                .purchase_item_task(self.user_id, item.sku, None, None);
+            return Some(Banner::success(&format!("Renting {}", item.name)));
         }
         if item.is_consumable() {
             if item.requires_room {
@@ -550,6 +606,21 @@ impl ShopState {
         {
             self.snapshot.active_username_effect = None;
             changed = true;
+        }
+        // The rentals lapse in the detail pane on their own clock, with no
+        // refresh to wait for. `chat_label_*` is deliberately left alone: what
+        // the label falls back to once a rental lapses (a legacy permanent
+        // badge, or nothing) is the label query's call, and it arrives with
+        // the next snapshot.
+        for rental in [
+            &mut self.snapshot.active_badge_rental,
+            &mut self.snapshot.active_flag_rental,
+            &mut self.snapshot.active_title,
+        ] {
+            if rental.as_ref().is_some_and(|rental| rental.ends_at <= now) {
+                *rental = None;
+                changed = true;
+            }
         }
         changed
     }

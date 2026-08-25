@@ -62,17 +62,3 @@ fn slugs_are_unique_across_all_effects() {
         );
     }
 }
-
-#[test]
-fn duration_copy_reads_hours_for_the_day_tier_and_days_for_the_month_tier() {
-    assert_eq!(duration_label(USERNAME_EFFECT_DURATION_SECS), "24 hours");
-    assert_eq!(
-        duration_label(USERNAME_EFFECT_MONTH_DURATION_SECS),
-        "30 days"
-    );
-    assert_eq!(duration_tag(USERNAME_EFFECT_DURATION_SECS), "24h");
-    assert_eq!(duration_tag(USERNAME_EFFECT_MONTH_DURATION_SECS), "30d");
-    // A window that is not a whole number of days keeps reading in hours.
-    assert_eq!(duration_label(36 * 3_600), "36 hours");
-    assert_eq!(duration_tag(36 * 3_600), "36h");
-}

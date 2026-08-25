@@ -64,6 +64,17 @@ pub enum ActivityKind {
     UsernameEffectApplied {
         effect: late_core::models::username_effect::UsernameEffect,
     },
+    /// A rented chat badge or flag went live ("mat rented 🐱 (24h)"). Same
+    /// reasoning as the username effect: it is bought to be seen next to the
+    /// name in every message.
+    BadgeRented {
+        emoji: String,
+    },
+    /// A rented title went live ("mat is now the insufferable (30d)"). The
+    /// most be-seen thing the Shop sells, so it announces.
+    TitleApplied {
+        title: String,
+    },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
     CyberspacePosted {
@@ -96,6 +107,8 @@ impl ActivityKind {
         match self {
             Self::UserJoined
             | Self::UsernameEffectApplied { .. }
+            | Self::BadgeRented { .. }
+            | Self::TitleApplied { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
             | Self::WatchingStream { .. } => ActivityCategory::Session,
@@ -381,7 +394,8 @@ impl ActivityEvent {
         effect: late_core::models::username_effect::UsernameEffect,
         duration_secs: i64,
     ) -> Self {
-        use late_core::models::username_effect::{UsernameEffect, duration_tag};
+        use late_core::models::rental::duration_tag;
+        use late_core::models::username_effect::UsernameEffect;
         let style = match effect {
             UsernameEffect::Glow(_) => "is glowing",
             UsernameEffect::Gradient(_) => "went gradient",
@@ -392,6 +406,45 @@ impl ActivityEvent {
             username,
             ActivityKind::UsernameEffectApplied { effect },
             format!("{style} ({})", duration_tag(duration_secs)),
+        )
+    }
+
+    /// A rented chat badge went live. The line names the emoji, since that is
+    /// exactly what everyone is about to see next to the name, and carries the
+    /// rented window as a tag.
+    pub fn badge_rented(
+        user_id: Uuid,
+        username: impl Into<String>,
+        emoji: impl Into<String>,
+        duration_secs: i64,
+    ) -> Self {
+        use late_core::models::rental::duration_tag;
+        let emoji = emoji.into();
+        let action = format!("rented {emoji} ({})", duration_tag(duration_secs));
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::BadgeRented { emoji },
+            action,
+        )
+    }
+
+    /// A rented title went live. The line reads as the title does in chat:
+    /// "mira is now the insufferable (30d)".
+    pub fn title_applied(
+        user_id: Uuid,
+        username: impl Into<String>,
+        title: impl Into<String>,
+        duration_secs: i64,
+    ) -> Self {
+        use late_core::models::rental::duration_tag;
+        let title = title.into();
+        let action = format!("is now {title} ({})", duration_tag(duration_secs));
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::TitleApplied { title },
+            action,
         )
     }
 

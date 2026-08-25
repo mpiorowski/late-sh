@@ -25,7 +25,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::NameStyle,
+    username_effect::ResolvedName,
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
@@ -123,7 +123,7 @@ pub struct DashboardChatView<'a> {
     pub drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
-    pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    pub name_flair: &'a HashMap<Uuid, ResolvedName>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -1196,7 +1196,7 @@ pub fn draw_dashboard_chat_card(
                 inline_images: view.inline_images,
                 unread_marker: view.unread_marker,
                 drunk_levels: view.drunk_levels,
-                name_styles: view.name_styles,
+                name_flair: view.name_flair,
                 peer_pomodoros: view.peer_pomodoros,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
@@ -1287,7 +1287,7 @@ struct ChatRowsContext<'a> {
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author.
-    name_styles: &'a HashMap<Uuid, NameStyle>,
+    name_flair: &'a HashMap<Uuid, ResolvedName>,
     peer_pomodoros: &'a HashMap<Uuid, String>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
@@ -1621,25 +1621,30 @@ fn ensure_chat_rows_cache(
         if let Some(badge) = ctx.peer_pomodoros.get(&msg.user_id) {
             presence_badges.push(badge);
         }
-        let (prefix, segments, author_range) = build_author_prefix_and_segments_with_chat_badges(
-            is_friend,
-            &author,
-            special_list,
-            &chat_badge_refs,
-            bonsai_opt,
-            profile_award_badges,
-            &presence_badges,
-        );
+        let flair = ctx.name_flair.get(&msg.user_id);
+        let (prefix, segments, author_range, title_range) =
+            build_author_prefix_and_segments_with_chat_badges(
+                is_friend,
+                &author,
+                flair.and_then(|flair| flair.title.as_deref()),
+                special_list,
+                &chat_badge_refs,
+                bonsai_opt,
+                profile_award_badges,
+                &presence_badges,
+            );
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
         });
-        let name_style = ctx.name_styles.get(&msg.user_id).copied();
-        let author_tint = (drunk_word.is_some() || name_style.is_some()).then_some(AuthorTint {
-            range: author_range,
-            word: drunk_word,
-            name_style,
-        });
+        let name_style = flair.and_then(|flair| flair.style);
+        let author_tint = (drunk_word.is_some() || name_style.is_some() || title_range.is_some())
+            .then_some(AuthorTint {
+                range: author_range,
+                title_range,
+                word: drunk_word,
+                name_style,
+            });
 
         let reactions = ctx
             .message_reactions
@@ -2343,8 +2348,9 @@ fn subdivision_flag_prefix(badge: &str) -> Option<(&str, &str)> {
 /// Returned column ranges are relative to the start of the painted
 /// line, where column 0 is the leading pad cell (`" "` or `"│"`) and
 /// the prefix begins at column 1. Badges render in the canonical order:
-/// `[last-month awards]`, special badges, bonsai stage, equipped store
-/// badge, equipped flag, then AFK. Award badges, special badges, the
+/// `[last-month awards]`, special badges, bonsai stage, chat badge, chat
+/// flag, then AFK, with a rented title printed between the name and that
+/// stack. Award badges, special badges, the
 /// bonsai glyph, and the AFK badge map to `HeaderTarget::Profile`;
 /// equipped chat-shop badges map to `HeaderTarget::StoreBadge`, and
 /// equipped chat flags map to `HeaderTarget::StoreFlag`. The trailing
@@ -2364,9 +2370,10 @@ fn build_author_prefix_and_segments(
     if let Some(chat_badge) = chat_badge {
         chat_badges.push((HeaderTarget::StoreBadge, chat_badge));
     }
-    let (prefix, segments, _) = build_author_prefix_and_segments_with_chat_badges(
+    let (prefix, segments, _, _) = build_author_prefix_and_segments_with_chat_badges(
         is_friend,
         author,
+        None,
         special_badges,
         &chat_badges,
         bonsai_glyph,
@@ -2376,15 +2383,25 @@ fn build_author_prefix_and_segments(
     (prefix, segments)
 }
 
+/// Builds the author header prefix. Returns the prefix, the clickable column
+/// segments, the bare username's byte range, and the rented title's byte
+/// range (which always follows the username directly, so the two are
+/// adjacent).
 fn build_author_prefix_and_segments_with_chat_badges(
     is_friend: bool,
     author: &str,
+    title: Option<&str>,
     special_badges: &[&str],
     chat_badges: &[(HeaderTarget, &str)],
     bonsai_glyph: Option<&str>,
     profile_award_badges: Option<&str>,
     presence_badges: &[&str],
-) -> (String, Vec<HeaderSegment>, (usize, usize)) {
+) -> (
+    String,
+    Vec<HeaderSegment>,
+    (usize, usize),
+    Option<(usize, usize)>,
+) {
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
     // The painted line is `[pad (1 cell)][prefix][ stamp]`, so prefix
@@ -2421,6 +2438,22 @@ fn build_author_prefix_and_segments_with_chat_badges(
     prefix.push_str(author);
     let author_range = (author_range_start, prefix.len());
     col += author_w;
+
+    // The rented title reads as an aside on the name (`mira, the
+    // insufferable`), so it sits between the name and the badge stack and is
+    // painted in the dim label color rather than taking the name's effect.
+    // It carries no clickable segment of its own; the name beside it already
+    // opens the profile.
+    let title_range = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(|title| {
+            let title_start = prefix.len();
+            prefix.push_str(", ");
+            prefix.push_str(title);
+            col += UnicodeWidthStr::width(", ") as u16 + UnicodeWidthStr::width(title) as u16;
+            (title_start, prefix.len())
+        });
 
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
         special_badges.len()
@@ -2470,7 +2503,7 @@ fn build_author_prefix_and_segments_with_chat_badges(
         }
     }
 
-    (prefix, segments, author_range)
+    (prefix, segments, author_range, title_range)
 }
 
 /// Legacy badge-suffix formatter. Production code now builds the author
@@ -2678,7 +2711,7 @@ pub struct ChatRenderInput<'a> {
     pub drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
-    pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    pub name_flair: &'a HashMap<Uuid, ResolvedName>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -2834,7 +2867,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub drunk_levels: &'a HashMap<Uuid, u8>,
     /// Resolved 24h username-effect styles per author (see
     /// `common/username_effect.rs`); fg painted over the bare name only.
-    pub name_styles: &'a HashMap<Uuid, NameStyle>,
+    pub name_flair: &'a HashMap<Uuid, ResolvedName>,
     /// Per-peer `/pomodoro` badges (countdown only, resolved once a second in
     /// `tick.rs`); painted as a presence badge after AFK.
     pub peer_pomodoros: &'a HashMap<Uuid, String>,
@@ -2933,7 +2966,7 @@ pub fn draw_embedded_room_chat(
             inline_images: view.inline_images,
             unread_marker: view.unread_marker,
             drunk_levels: view.drunk_levels,
-            name_styles: view.name_styles,
+            name_flair: view.name_flair,
             peer_pomodoros: view.peer_pomodoros,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
@@ -4796,7 +4829,7 @@ fn draw_selected_content(
                     inline_images: view.inline_images,
                     unread_marker: view.room_unread_markers.get(&room.id).copied().flatten(),
                     drunk_levels: view.drunk_levels,
-                    name_styles: view.name_styles,
+                    name_flair: view.name_flair,
                     peer_pomodoros: view.peer_pomodoros,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,

@@ -201,9 +201,12 @@ struct DrawContext<'a> {
     directory_state: &'a crate::app::directory::state::DirectoryState,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
-    /// Resolved 24h username-effect styles for clubhouse name labels.
-    clubhouse_name_styles:
-        &'a std::collections::HashMap<uuid::Uuid, crate::app::common::username_effect::NameStyle>,
+    /// Resolved name flair (color style and rented title) for clubhouse name
+    /// labels.
+    clubhouse_name_flair: &'a std::collections::HashMap<
+        uuid::Uuid,
+        crate::app::common::username_effect::ResolvedName,
+    >,
     /// The #lounge tail for clubhouse speech bubbles; empty off that screen.
     clubhouse_lounge_messages: &'a [late_core::models::chat_message::ChatMessage],
     /// Staff bot ids so their #lounge lines bubble over their sprites.
@@ -568,7 +571,7 @@ impl App {
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
-            name_styles: &self.name_styles,
+            name_flair: &self.name_flair,
             peer_pomodoros: &self.peer_pomodoros,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -722,7 +725,7 @@ impl App {
             chat_badges,
             profile_award_badges,
             drunk_levels: &self.drunk_levels,
-            name_styles: &self.name_styles,
+            name_flair: &self.name_flair,
             peer_pomodoros: &self.peer_pomodoros,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
@@ -807,7 +810,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
-                    name_styles: &self.name_styles,
+                    name_flair: &self.name_flair,
                     peer_pomodoros: &self.peer_pomodoros,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -871,7 +874,7 @@ impl App {
                     chat_badges,
                     profile_award_badges,
                     drunk_levels: &self.drunk_levels,
-                    name_styles: &self.name_styles,
+                    name_flair: &self.name_flair,
                     peer_pomodoros: &self.peer_pomodoros,
                     translations: &self.chat.translations,
                     translation_hidden: &self.chat.translation_hidden,
@@ -1038,7 +1041,7 @@ impl App {
                         directory_state: &self.directory_state,
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
-                        clubhouse_name_styles: &self.name_styles,
+                        clubhouse_name_flair: &self.name_flair,
                         clubhouse_lounge_messages,
                         clubhouse_graybeard_id: self.clubhouse_graybeard_id,
                         clubhouse_bot_id: self.clubhouse_bot_id,
@@ -1545,7 +1548,7 @@ impl App {
                 crate::app::clubhouse::ui::ClubhouseView {
                     state: ctx.clubhouse_state,
                     own_username: ctx.clubhouse_own_username,
-                    name_styles: ctx.clubhouse_name_styles,
+                    name_flair: ctx.clubhouse_name_flair,
                     now_playing: ctx.now_playing,
                     lounge_messages: ctx.clubhouse_lounge_messages,
                     graybeard_user_id: ctx.clubhouse_graybeard_id,

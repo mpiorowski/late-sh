@@ -1,8 +1,6 @@
 use super::*;
 
-use late_core::models::username_effect::{
-    USERNAME_EFFECT_DURATION_SECS, USERNAME_EFFECT_MONTH_DURATION_SECS,
-};
+use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS};
 
 fn make_state() -> ShopState {
     let snapshot = ShopSnapshot {
@@ -14,6 +12,13 @@ fn make_state() -> ShopState {
         aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: None,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -116,7 +121,9 @@ fn glow_item() -> ShopCatalogItem {
         requires_room: false,
         daily_limited: false,
         username_effect_variant: Some("glow".to_string()),
-        username_effect_duration_secs: Some(USERNAME_EFFECT_DURATION_SECS),
+        rental_duration_secs: Some(RENTAL_DAY_SECS),
+        badge_slot: None,
+        title_text: None,
     }
 }
 
@@ -130,6 +137,13 @@ fn make_state_with_glow_item() -> ShopState {
         aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: None,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -174,7 +188,7 @@ fn visible_items_lead_with_username_effects() {
         sku: "chat_confetti".to_string(),
         item_kind: "chat_consumable".to_string(),
         username_effect_variant: None,
-        username_effect_duration_secs: None,
+        rental_duration_secs: None,
         ..glow_item()
     };
     let snapshot = ShopSnapshot {
@@ -186,6 +200,13 @@ fn visible_items_lead_with_username_effects() {
         aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: None,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
     };
     let state = ShopState::for_test_snapshot(snapshot);
     let skus: Vec<&str> = state
@@ -196,13 +217,126 @@ fn visible_items_lead_with_username_effects() {
     assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
 }
 
+fn title_item() -> ShopCatalogItem {
+    ShopCatalogItem {
+        sku: "title_the_night_clerk_day".to_string(),
+        item_kind: "title_rental".to_string(),
+        name: "the night clerk".to_string(),
+        price_chips: 200,
+        consumable_category: None,
+        effect_kind: None,
+        username_effect_variant: None,
+        rental_duration_secs: Some(RENTAL_DAY_SECS),
+        title_text: Some("the night clerk".to_string()),
+        ..glow_item()
+    }
+}
+
+fn snapshot_with(items: Vec<ShopCatalogItem>) -> ShopSnapshot {
+    ShopSnapshot {
+        user_id: None,
+        balance: 10_000,
+        items,
+        entitlements: ShopEntitlements::default(),
+        active_room_effects: HashMap::new(),
+        aquarium_hungry: false,
+        active_username_effect: None,
+        active_bonsai_decay_protection: None,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
+    }
+}
+
+#[test]
+fn visible_chat_items_put_titles_under_username_effects() {
+    let confetti = ShopCatalogItem {
+        sku: "chat_confetti".to_string(),
+        item_kind: "chat_consumable".to_string(),
+        username_effect_variant: None,
+        rental_duration_secs: None,
+        title_text: None,
+        ..glow_item()
+    };
+    let state =
+        ShopState::for_test_snapshot(snapshot_with(vec![confetti, title_item(), glow_item()]));
+    let skus: Vec<&str> = state
+        .visible_items()
+        .iter()
+        .map(|item| item.sku.as_str())
+        .collect();
+    assert_eq!(
+        skus,
+        vec![
+            "username_glow_day",
+            "title_the_night_clerk_day",
+            "chat_confetti"
+        ]
+    );
+}
+
+#[test]
+fn the_own_chat_badge_joins_the_label_query_flag_first() {
+    let mut snapshot = snapshot_with(Vec::new());
+    assert_eq!(
+        ShopState::for_test_snapshot(snapshot.clone()).equipped_chat_badge(),
+        None
+    );
+
+    snapshot.chat_label_badge = Some("🐱".to_string());
+    assert_eq!(
+        ShopState::for_test_snapshot(snapshot.clone()).equipped_chat_badge(),
+        Some("🐱".to_string())
+    );
+
+    snapshot.chat_label_flag = Some("🇵🇱".to_string());
+    assert_eq!(
+        ShopState::for_test_snapshot(snapshot).equipped_chat_badge(),
+        Some("🇵🇱 🐱".to_string())
+    );
+}
+
+#[test]
+fn expired_rentals_prune_and_flag_change() {
+    let past = Utc::now() - chrono::Duration::seconds(1);
+    let future = Utc::now() + chrono::Duration::hours(1);
+    let rental = |ends_at| ActiveRental {
+        label: "🐱".to_string(),
+        source_sku: "badge_cat_day".to_string(),
+        ends_at,
+    };
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.active_badge_rental = Some(rental(past));
+    snapshot.active_flag_rental = Some(rental(future));
+    snapshot.active_title = Some(rental(past));
+
+    let mut state = ShopState::for_test_snapshot(snapshot);
+    let tick = state.tick();
+    assert!(tick.snapshot_changed);
+    assert!(state.active_badge_rental().is_none());
+    assert!(state.active_title().is_none());
+    assert!(
+        state.active_flag_rental().is_some(),
+        "a rental that has not lapsed stays"
+    );
+
+    // Nothing left to prune: a second tick reports no change.
+    assert!(!state.tick().snapshot_changed);
+}
+
 #[test]
 fn username_effect_picker_carries_the_bought_tier_duration() {
     let month = ShopCatalogItem {
         sku: "username_glow_month".to_string(),
         name: "Name Glow Monthly".to_string(),
         price_chips: 6_000,
-        username_effect_duration_secs: Some(USERNAME_EFFECT_MONTH_DURATION_SECS),
+        rental_duration_secs: Some(RENTAL_MONTH_SECS),
+        badge_slot: None,
+        title_text: None,
         ..glow_item()
     };
     let snapshot = ShopSnapshot {
@@ -214,13 +348,20 @@ fn username_effect_picker_carries_the_bought_tier_duration() {
         aquarium_hungry: false,
         active_username_effect: None,
         active_bonsai_decay_protection: None,
+        active_badge_rental: None,
+        active_flag_rental: None,
+        active_title: None,
+        chat_label_badge: None,
+        chat_label_flag: None,
+        legacy_badge_equipped: false,
+        legacy_flag_equipped: false,
     };
     let mut state = ShopState::for_test_snapshot(snapshot);
     state.activate_selected(None);
 
     let pending = state.pending_username_effect().expect("picker armed");
     assert_eq!(pending.sku, "username_glow_month");
-    assert_eq!(pending.duration_secs, USERNAME_EFFECT_MONTH_DURATION_SECS);
+    assert_eq!(pending.duration_secs, RENTAL_MONTH_SECS);
     // Same styles as the day tier: only the window and the price move.
     assert_eq!(pending.options.len(), 6);
 }

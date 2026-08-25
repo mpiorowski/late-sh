@@ -197,6 +197,96 @@ fn effective_chat_scroll_overflow_stops_at_the_newest_row() {
 }
 
 #[test]
+fn a_rented_title_renders_after_the_author_name_in_chat() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let author_id = Uuid::from_u128(3);
+    let created = Utc::now();
+    let message = ChatMessage {
+        id: Uuid::from_u128(10),
+        created,
+        updated: created,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: author_id,
+        body: "rain again".to_string(),
+    };
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (author_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_flair = HashMap::from([(
+        author_id,
+        crate::app::common::username_effect::ResolvedName {
+            style: None,
+            title: Some("the night clerk".to_string()),
+        },
+    )]);
+    let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        inline_images: &inline_images,
+        unread_marker: None,
+        drunk_levels: &drunk_levels,
+        name_flair: &name_flair,
+        peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
+    };
+
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+
+    let rendered: Vec<String> = cache
+        .all_rows
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+
+    // The title reads as an aside on the name and still lets the badge trail
+    // the whole label.
+    assert!(
+        rendered
+            .iter()
+            .any(|row| row.contains("bob, the night clerk 🐱")),
+        "no titled author header in {rendered:#?}"
+    );
+}
+
+#[test]
 fn chat_rows_cache_key_changes_when_theme_changes() {
     let user_id = Uuid::from_u128(2);
     let usernames = HashMap::from([(user_id, "alice".to_string())]);
@@ -210,7 +300,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
-    let name_styles = HashMap::new();
+    let name_flair = HashMap::new();
     let peer_pomodoros = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
@@ -232,7 +322,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
-        name_styles: &name_styles,
+        name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -263,7 +353,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
-    let name_styles = HashMap::new();
+    let name_flair = HashMap::new();
     let peer_pomodoros = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
@@ -291,7 +381,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
-        name_styles: &name_styles,
+        name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -361,7 +451,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
-    let name_styles = HashMap::new();
+    let name_flair = HashMap::new();
     let peer_pomodoros = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
@@ -382,7 +472,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
-        name_styles: &name_styles,
+        name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -570,7 +660,7 @@ fn mentions_and_replies_paint_a_background_wash() {
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
-    let name_styles = HashMap::new();
+    let name_flair = HashMap::new();
     let peer_pomodoros = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
@@ -591,7 +681,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
-        name_styles: &name_styles,
+        name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -651,7 +741,7 @@ fn background_wash_fills_the_whole_row_width() {
     let inline_images = HashMap::new();
     let profile_award_badges = HashMap::new();
     let drunk_levels = HashMap::new();
-    let name_styles = HashMap::new();
+    let name_flair = HashMap::new();
     let peer_pomodoros = HashMap::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
@@ -672,7 +762,7 @@ fn background_wash_fills_the_whole_row_width() {
         inline_images: &inline_images,
         unread_marker: None,
         drunk_levels: &drunk_levels,
-        name_styles: &name_styles,
+        name_flair: &name_flair,
         peer_pomodoros: &peer_pomodoros,
         translations: &translations,
         translation_hidden: &translation_hidden,
@@ -750,7 +840,8 @@ fn chat_view<'a>(
     static ROOM_LAST_MESSAGE_AT: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static ROOM_UNREAD_MARKERS: OnceLock<HashMap<Uuid, Option<DateTime<Utc>>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
-    static NAME_STYLES: OnceLock<HashMap<Uuid, NameStyle>> = OnceLock::new();
+    static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
+        OnceLock::new();
     static PEER_POMODOROS: OnceLock<HashMap<Uuid, String>> = OnceLock::new();
     static ROOM_VERSIONS: OnceLock<HashMap<Uuid, u64>> = OnceLock::new();
 
@@ -839,7 +930,7 @@ fn chat_view<'a>(
         chat_badges,
         profile_award_badges,
         drunk_levels: DRUNK_LEVELS.get_or_init(HashMap::new),
-        name_styles: NAME_STYLES.get_or_init(HashMap::new),
+        name_flair: NAME_STYLES.get_or_init(HashMap::new),
         peer_pomodoros: PEER_POMODOROS.get_or_init(HashMap::new),
         translations: TRANSLATIONS.get_or_init(HashMap::new),
         translation_hidden: TRANSLATION_HIDDEN.get_or_init(HashSet::new),
@@ -2149,21 +2240,65 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         (HeaderTarget::StoreBadge, "🐱"),
         (HeaderTarget::StoreFlag, "US"),
     ];
-    let (prefix, segs, author_range) = build_author_prefix_and_segments_with_chat_badges(
-        false,
-        "bob",
-        &[],
-        &chat_badges,
-        None,
-        None,
-        &[],
-    );
+    let (prefix, segs, author_range, title_range) =
+        build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "bob",
+            None,
+            &[],
+            &chat_badges,
+            None,
+            None,
+            &[],
+        );
     assert_eq!(prefix, "bob 🐱 US");
     assert_eq!(author_range, (0, 3));
+    assert_eq!(title_range, None);
     assert_eq!(segs.len(), 3);
     assert_eq!(segs[0].target, HeaderTarget::Profile);
     assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
     assert_eq!(segs[2].target, HeaderTarget::StoreFlag);
+}
+
+#[test]
+fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
+    let chat_badges = [(HeaderTarget::StoreBadge, "🐱")];
+    let (prefix, segs, author_range, title_range) =
+        build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "bob",
+            Some("the insufferable"),
+            &[],
+            &chat_badges,
+            None,
+            None,
+            &[],
+        );
+    assert_eq!(prefix, "bob, the insufferable 🐱");
+    assert_eq!(author_range, (0, 3));
+    // The title starts where the name ends, so the two runs stay adjacent.
+    assert_eq!(title_range, Some((3, 21)));
+    assert_eq!(&prefix[3..21], ", the insufferable");
+    // The title carries no clickable segment; the badge keeps its own, and
+    // its column has moved past the title.
+    assert_eq!(segs.len(), 2);
+    assert_eq!(segs[0].target, HeaderTarget::Profile);
+    assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
+    assert_eq!(segs[1].start_col, 23);
+
+    // A blank title is not a title: nothing is printed and no range is set.
+    let (prefix, _, _, title_range) = build_author_prefix_and_segments_with_chat_badges(
+        false,
+        "bob",
+        Some("   "),
+        &[],
+        &[],
+        None,
+        None,
+        &[],
+    );
+    assert_eq!(prefix, "bob");
+    assert_eq!(title_range, None);
 }
 
 #[test]
@@ -2172,15 +2307,17 @@ fn header_prefix_orders_all_badge_classes() {
         (HeaderTarget::StoreBadge, "badge"),
         (HeaderTarget::StoreFlag, "flag"),
     ];
-    let (prefix, _segs, _author_range) = build_author_prefix_and_segments_with_chat_badges(
-        false,
-        "alice",
-        &["mod", "developer", "artist"],
-        &chat_badges,
-        Some("bonsai"),
-        Some("AW1 CHIP2"),
-        &["brb"],
-    );
+    let (prefix, _segs, _author_range, _title_range) =
+        build_author_prefix_and_segments_with_chat_badges(
+            false,
+            "alice",
+            None,
+            &["mod", "developer", "artist"],
+            &chat_badges,
+            Some("bonsai"),
+            Some("AW1 CHIP2"),
+            &["brb"],
+        );
 
     assert_eq!(
         prefix,

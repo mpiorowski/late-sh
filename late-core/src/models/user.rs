@@ -575,8 +575,14 @@ impl User {
                               AND dynamic_up.equipped_slot = $3
                               AND dynamic_bonsai.sku = $4
                         ) AS dynamic_bonsai_selected,
-                        flag.payload->>'emoji' AS chat_flag,
-                        badge.payload->>'emoji' AS chat_badge,
+                        COALESCE(
+                            flag_rental.payload->>'emoji',
+                            flag.payload->>'emoji'
+                        ) AS chat_flag,
+                        COALESCE(
+                            badge_rental.payload->>'emoji',
+                            badge.payload->>'emoji'
+                        ) AS chat_badge,
                         award.badges AS profile_award_badges
                  FROM users u
                  LEFT JOIN bonsai_trees t ON t.user_id = u.id
@@ -591,6 +597,33 @@ impl User {
                   AND flag_up.equipped_slot = $5
                  LEFT JOIN marketplace_items flag
                    ON flag.id = flag_up.item_id
+                 -- A live rental wins over the legacy permanent equip above,
+                 -- and expiry is read-time: once `ends_at` passes, the
+                 -- COALESCE falls back to whatever the user owns outright,
+                 -- with no background job to run. The effect kinds are the
+                 -- same two strings as the legacy slots ($2 / $5).
+                 LEFT JOIN LATERAL (
+                    SELECT e.payload
+                    FROM shop_consumable_effects e
+                    WHERE e.user_id = u.id
+                      AND e.room_id IS NULL
+                      AND e.effect_kind = $2
+                      AND e.active = true
+                      AND e.ends_at > current_timestamp
+                    ORDER BY e.ends_at DESC
+                    LIMIT 1
+                 ) badge_rental ON true
+                 LEFT JOIN LATERAL (
+                    SELECT e.payload
+                    FROM shop_consumable_effects e
+                    WHERE e.user_id = u.id
+                      AND e.room_id IS NULL
+                      AND e.effect_kind = $5
+                      AND e.active = true
+                      AND e.ends_at > current_timestamp
+                    ORDER BY e.ends_at DESC
+                    LIMIT 1
+                 ) flag_rental ON true
                  LEFT JOIN LATERAL (
                     SELECT string_agg(
                         CASE category

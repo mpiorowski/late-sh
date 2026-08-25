@@ -283,6 +283,35 @@ impl ShopConsumableEffect {
         Ok(row.map(Self::from))
     }
 
+    /// Every live user-scoped effect of the given kinds for one user, newest
+    /// expiry first per kind. One query for the whole set, so a snapshot that
+    /// needs the username effect, the badge rental, the flag rental and the
+    /// title does not pay four round trips for them.
+    pub async fn active_user_effects_for_user(
+        client: &Client,
+        user_id: Uuid,
+        effect_kinds: &[&str],
+    ) -> Result<Vec<Self>> {
+        if effect_kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let kinds: Vec<String> = effect_kinds.iter().map(|kind| kind.to_string()).collect();
+        let rows = client
+            .query(
+                "SELECT *
+                 FROM shop_consumable_effects
+                 WHERE user_id = $1
+                   AND room_id IS NULL
+                   AND effect_kind = ANY($2)
+                   AND active = true
+                   AND ends_at > current_timestamp
+                 ORDER BY effect_kind, ends_at DESC",
+                &[&user_id, &kinds],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
     pub async fn active_room_effects(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
