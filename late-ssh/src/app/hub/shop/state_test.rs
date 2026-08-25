@@ -69,7 +69,7 @@ fn select_category_by_index_switches_and_resets_selection() {
     state.select_category_by_index(2);
 
     assert_eq!(state.selected_category_index(), 2);
-    assert_eq!(state.selected_category(), ShopCategory::Aquarium);
+    assert_eq!(state.selected_category(), ShopCategory::Flags);
     assert_eq!(state.selected_index, 0);
     assert!(state.pending_room_effect.is_none());
 }
@@ -222,29 +222,21 @@ fn visible_items_lead_with_username_effects() {
     assert_eq!(skus, vec!["username_glow_day", "chat_confetti"]);
 }
 
-fn title_item() -> ShopCatalogItem {
+/// The one title the Shop sells: the buyer writes the text, so the catalog
+/// row carries none.
+fn custom_title_item() -> ShopCatalogItem {
     ShopCatalogItem {
-        sku: "title_the_night_clerk_day".to_string(),
+        sku: "title_custom_day".to_string(),
         item_kind: "title_rental".to_string(),
-        name: "the night clerk".to_string(),
-        price_chips: 200,
+        name: "Your Own Title".to_string(),
+        price_chips: 2_000,
         consumable_category: None,
         effect_kind: None,
         username_effect_variant: None,
         rental_duration_secs: Some(RENTAL_DAY_SECS),
-        title_text: Some("the night clerk".to_string()),
-        ..glow_item()
-    }
-}
-
-fn custom_title_item() -> ShopCatalogItem {
-    ShopCatalogItem {
-        sku: "title_custom_day".to_string(),
-        name: "Custom Title".to_string(),
-        price_chips: 2_000,
         title_text: None,
         custom_title: true,
-        ..title_item()
+        ..glow_item()
     }
 }
 
@@ -279,8 +271,11 @@ fn visible_chat_items_put_titles_under_username_effects() {
         title_text: None,
         ..glow_item()
     };
-    let state =
-        ShopState::for_test_snapshot(snapshot_with(vec![confetti, title_item(), glow_item()]));
+    let state = ShopState::for_test_snapshot(snapshot_with(vec![
+        confetti,
+        custom_title_item(),
+        glow_item(),
+    ]));
     let skus: Vec<&str> = state
         .visible_items()
         .iter()
@@ -288,11 +283,7 @@ fn visible_chat_items_put_titles_under_username_effects() {
         .collect();
     assert_eq!(
         skus,
-        vec![
-            "username_glow_day",
-            "title_the_night_clerk_day",
-            "chat_confetti"
-        ]
+        vec!["username_glow_day", "title_custom_day", "chat_confetti"]
     );
 }
 

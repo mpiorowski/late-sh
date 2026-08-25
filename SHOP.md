@@ -88,8 +88,7 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Badge rental, basic | 100 / 24h, 3,000 / 30d |
 | Badge rental, premium | 250 / 24h, 7,500 / 30d |
 | Flag rental | same as basic badge |
-| Title rental, curated | 200 / 24h, 6,000 / 30d |
-| Title rental, custom | 2,000 / 24h, 60,000 / 30d |
+| Title rental (Your Own Title, the only title on sale) | 2,000 / 24h, 60,000 / 30d |
 | Title max length | 20 characters |
 | Gild tiers | 500 / 5,000 / 50,000 |
 | Gild split | 2/3 to the author (`GildReceived`), 1/3 never re-minted |
@@ -218,6 +217,13 @@ the same day: `ShopService::purchase_custom_title` now refuses (free, no
 call) when the buyer cannot afford the tier or their last screen was
 inside a 10s per-user cooldown, because every screen is a paid API call
 and a refused one costs the buyer nothing.
+
+Decision 2026-08-25: **the curated list is gone.** Migration 151 retires
+all 72 curated rows (`active = false`, never deleted) and renames the
+custom pair "Your Own Title"; it is the only title the Shop sells. The
+same session moved Badges and Flags directly after the Chat tab
+(`ShopCategory::ALL`) and split the Chat list with section rows (Name
+effects / Title / Consumables).
 
 Acceptance:
 - [x] Curated titles buy, replace, expire, and render after the name in
@@ -440,6 +446,25 @@ chips, more than one pot at a time.
   dense): a `chip_user_changed` notify rebuilds the whole `ShopSnapshot`
   today, catalog included; it only needs to update the balance. Not a
   problem at current traffic, noted so the fix is known.
+
+## To discuss (not designed, not scheduled)
+
+Owner notes to pick up in a later spitball, kept here so they are not lost:
+
+- **Rebalance the big games' pricing and payouts.** The door games and the
+  Lobby games pay on their own scales (Lateania crowns 10k, door badge pairs
+  10k/20k, daily chess 500, Tron 50-100, ssHattrick 300, and so on) that were
+  set one at a time. Review them together against the sinks above once the
+  sinks exist, so the faucet side of the economy is one deliberate table.
+- **Lobby game economics.** The `Ctrl+G` Lobby (daily correspondence matches
+  and the house tables) as a chip surface: entry stakes, side stakes, what a
+  win pays, whether a match can carry a wager (the daily CONTEXT already
+  parks "wagers" as a future hook).
+- **A payout for the loser, gated on effort.** A losing player who stayed in
+  a game past some threshold (elapsed time, or a number of moves) gets a
+  small consolation payout, so a long, fought match is never a total loss and
+  people finish games instead of abandoning them. Needs a threshold that
+  cannot be farmed by two accounts trading long games.
 
 ## Dropped
 

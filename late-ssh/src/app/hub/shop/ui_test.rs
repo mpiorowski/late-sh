@@ -135,3 +135,95 @@ fn item_row_hides_the_lifetime_purchase_count_as_stock_for_the_bonsai_shield() {
         "shop list row must not show the lifetime purchase count as unused stock: {text:?}"
     );
 }
+
+/// A Chat tab item of the given kind, nothing owned, nothing active.
+fn chat_item(sku: &str, item_kind: &str) -> ShopCatalogItem {
+    ShopCatalogItem {
+        sku: sku.to_string(),
+        item_kind: item_kind.to_string(),
+        name: sku.to_string(),
+        owned: false,
+        quantity: 0,
+        consumable_category: None,
+        effect_kind: None,
+        ..bonsai_shield_item()
+    }
+}
+
+fn row_labels(rows: &[ItemListRow<'_>]) -> Vec<String> {
+    rows.iter()
+        .map(|row| match row {
+            ItemListRow::Section(label) => format!("[{label}]"),
+            ItemListRow::Item { index, item } => format!("{index}:{}", item.sku),
+        })
+        .collect()
+}
+
+#[test]
+fn chat_tab_rows_open_each_group_with_a_section_label() {
+    use late_core::models::marketplace::USERNAME_EFFECT_ITEM_KIND;
+    use late_core::models::rental::{RENTAL_DAY_SECS, RENTAL_MONTH_SECS, TITLE_RENTAL_ITEM_KIND};
+
+    let glow_day = chat_item("username_glow_day", USERNAME_EFFECT_ITEM_KIND);
+    let glow_month = chat_item("username_glow_month", USERNAME_EFFECT_ITEM_KIND);
+    let title_day = ShopCatalogItem {
+        rental_duration_secs: Some(RENTAL_DAY_SECS),
+        custom_title: true,
+        ..chat_item("title_custom_day", TITLE_RENTAL_ITEM_KIND)
+    };
+    let title_month = ShopCatalogItem {
+        rental_duration_secs: Some(RENTAL_MONTH_SECS),
+        custom_title: true,
+        ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
+    };
+    let spark = chat_item("chat_room_spark", CHAT_CONSUMABLE_ITEM_KIND);
+
+    // Items arrive in `visible_items` order: effects, titles, consumables.
+    let rows = item_list_rows(
+        ShopCategory::Chat,
+        &[&glow_day, &glow_month, &title_day, &title_month, &spark],
+    );
+    assert_eq!(
+        row_labels(&rows),
+        vec![
+            "[Name effects]",
+            "0:username_glow_day",
+            "1:username_glow_month",
+            "[Title]",
+            "2:title_custom_day",
+            "3:title_custom_month",
+            "[Consumables]",
+            "4:chat_room_spark",
+        ]
+    );
+
+    // The tabs without groups list their items bare.
+    let rows = item_list_rows(ShopCategory::Flags, &[&glow_day, &spark]);
+    assert_eq!(
+        row_labels(&rows),
+        vec!["0:username_glow_day", "1:chat_room_spark"]
+    );
+}
+
+#[test]
+fn title_rows_tell_the_two_tiers_apart_with_the_duration_tag() {
+    use late_core::models::rental::{RENTAL_MONTH_SECS, TITLE_RENTAL_ITEM_KIND};
+
+    let state = make_state_with_bonsai_protection(None);
+    let title = ShopCatalogItem {
+        name: "Your Own Title".to_string(),
+        rental_duration_secs: Some(RENTAL_MONTH_SECS),
+        custom_title: true,
+        ..chat_item("title_custom_month", TITLE_RENTAL_ITEM_KIND)
+    };
+    let line = item_row(ShopCategory::Chat, false, &title, &state);
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(
+        text.contains("Your Own Title  30d"),
+        "title row must carry its tier tag: {text:?}"
+    );
+}

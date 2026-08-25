@@ -87,7 +87,7 @@ fn custom_title_payload_flag_marks_the_buyer_written_skus() {
     ));
     assert!(!is_custom_title(&json!({"text": "the night clerk"})));
     assert!(!is_custom_title(&json!({"custom": false})));
-    // A curated SKU carries no `custom` key at all.
+    // A payload without the key (the retired curated rows) is not custom.
     assert!(!is_custom_title(&json!({})));
 }
 

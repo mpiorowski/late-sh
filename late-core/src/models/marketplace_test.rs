@@ -46,8 +46,6 @@ const ROOM_SPARK_PRICE: i64 = 2_000;
 const AQUARIUM_FOOD_PRICE: i64 = 100;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
-const TITLE_DAY_PRICE: i64 = 200;
-const TITLE_MONTH_PRICE: i64 = 6_000;
 const CUSTOM_TITLE_DAY_PRICE: i64 = 2_000;
 const CUSTOM_TITLE_MONTH_PRICE: i64 = 60_000;
 
@@ -196,6 +194,43 @@ async fn seeded_catalog_contains_chat_and_companion_consumables() {
     assert_eq!(aquarium_food.item_kind, COMPANION_CONSUMABLE_ITEM_KIND);
     assert_eq!(aquarium_food.price_chips, AQUARIUM_FOOD_PRICE);
     assert_eq!(aquarium_food.payload["effect_kind"], "aquarium_food");
+}
+
+#[tokio::test]
+async fn hack_room_is_retired_and_room_bump_leads_the_chat_consumables() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // Catalog order is the Chat tab's order: Room Bump first, nothing named
+    // Hack Room anywhere on sale.
+    let items = MarketplaceItem::list_visible(&client)
+        .await
+        .expect("list items");
+    let chat_consumables: Vec<&str> = items
+        .iter()
+        .filter(|item| item.item_kind == CHAT_CONSUMABLE_ITEM_KIND)
+        .map(|item| item.sku.as_str())
+        .collect();
+    assert_eq!(
+        chat_consumables,
+        vec![
+            "chat_room_bump",
+            "chat_room_spark",
+            "chat_room_glow",
+            "chat_room_pulse"
+        ]
+    );
+
+    // Retired, not deleted: the row stays for purchase history, inactive.
+    let active: bool = client
+        .query_one(
+            "SELECT active FROM marketplace_items WHERE sku = 'chat_pinned_vibe'",
+            &[],
+        )
+        .await
+        .expect("hack room row")
+        .get(0);
+    assert!(!active);
 }
 
 #[tokio::test]
@@ -1176,50 +1211,76 @@ async fn a_badge_rental_never_shows_on_another_users_label() {
 }
 
 #[tokio::test]
-async fn seeded_catalog_contains_curated_titles_in_both_tiers() {
+async fn curated_titles_are_retired_and_cannot_be_bought() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "curated-title-retired").await;
+    let mut client = test_db.db.get().await.expect("db client");
 
+    // The only title on sale is the one the buyer writes: nothing visible
+    // carries a text of its own.
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
-    let titles: Vec<&MarketplaceItem> = items
-        .iter()
-        .filter(|item| item.item_kind == TITLE_RENTAL_ITEM_KIND)
-        .filter(|item| !is_custom_title(&item.payload))
-        .collect();
-    // 30 to 40 curated titles, each in a day and a month tier.
-    let day_count = titles
-        .iter()
-        .filter(|item| item.sku.ends_with("_day"))
-        .count();
-    assert!((30..=40).contains(&day_count), "{day_count} curated titles");
-    assert_eq!(titles.len(), day_count * 2);
+    assert!(
+        items
+            .iter()
+            .filter(|item| item.item_kind == TITLE_RENTAL_ITEM_KIND)
+            .all(|item| is_custom_title(&item.payload)),
+        "a curated title is still on sale"
+    );
 
-    for item in &titles {
-        assert_eq!(item.slot, None);
-        let text = title_from_payload(&item.payload).expect("renderable title");
-        assert_eq!(text, item.name);
-        assert!(text.chars().count() <= TITLE_MAX_LEN);
-        let (price, duration) = if item.sku.ends_with("_month") {
-            (TITLE_MONTH_PRICE, RENTAL_MONTH_SECS)
-        } else {
-            (TITLE_DAY_PRICE, RENTAL_DAY_SECS)
-        };
-        assert_eq!(item.price_chips, price);
-        assert_eq!(rental_duration_secs(item), duration);
-    }
+    // Retired, not deleted: the 36 curated titles keep their day and month
+    // rows for purchase history, switched off.
+    let retired: i64 = client
+        .query_one(
+            "SELECT COUNT(*)
+             FROM marketplace_items
+             WHERE item_kind = $1
+               AND active = false
+               AND COALESCE((payload->>'custom')::boolean, false) = false",
+            &[&TITLE_RENTAL_ITEM_KIND],
+        )
+        .await
+        .expect("count retired titles")
+        .get(0);
+    assert_eq!(retired, 72);
 
-    let day = titles
-        .iter()
-        .find(|item| item.sku == "title_the_insufferable_day")
-        .expect("the insufferable, day tier");
-    let month = titles
-        .iter()
-        .find(|item| item.sku == "title_the_insufferable_month")
-        .expect("the insufferable, month tier");
-    assert_eq!(day.name, "the insufferable");
-    assert_eq!(month.sort_order, day.sort_order + 5);
+    // A retired SKU is not for sale, funded or not: the purchase is a no-op
+    // (nothing bought, nothing activated), the same contract the retired
+    // permanent badges follow.
+    UserChips::apply(
+        &**client,
+        user.id,
+        ChipMove::Credit,
+        CUSTOM_TITLE_MONTH_PRICE,
+        None,
+    )
+    .await
+    .expect("fund chips");
+    let funded = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+    let result = purchase_item_by_sku_with_chat_effect(
+        &mut client,
+        user.id,
+        "title_the_insufferable_day",
+        None,
+    )
+    .await
+    .expect("retired sku purchase");
+    assert!(result.purchase.is_none());
+    assert!(result.title_rental.is_none());
+    assert!(
+        active_effect_rows(&client, user.id, TITLE_EFFECT_KIND)
+            .await
+            .is_empty()
+    );
+    let balance = UserChips::ensure(&client, user.id)
+        .await
+        .expect("balance")
+        .balance;
+    assert_eq!(balance, funded, "a retired title is never charged for");
 }
 
 #[tokio::test]
@@ -1231,18 +1292,18 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
         &**client,
         user.id,
         ChipMove::Credit,
-        TITLE_MONTH_PRICE + TITLE_DAY_PRICE + USERNAME_GLOW_PRICE,
+        CUSTOM_TITLE_MONTH_PRICE + CUSTOM_TITLE_DAY_PRICE + USERNAME_GLOW_PRICE,
         None,
     )
     .await
     .expect("fund chips");
 
     let before = chrono::Utc::now();
-    let row = purchase_item_by_sku_with_chat_effect(
+    let row = purchase_item_by_sku_with_custom_title(
         &mut client,
         user.id,
-        "title_the_insufferable_day",
-        None,
+        "title_custom_day",
+        CustomTitle::parse("the insufferable").expect("valid title"),
     )
     .await
     .expect("rent title")
@@ -1250,6 +1311,7 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
     .expect("activated title row");
     assert_eq!(row.effect_kind, TITLE_EFFECT_KIND);
     assert_eq!(row.room_id, None);
+    assert_eq!(row.source_sku, "title_custom_day");
     assert_eq!(
         title_from_payload(&row.payload).as_deref(),
         Some("the insufferable")
@@ -1273,12 +1335,13 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
         1
     );
 
-    // A second title replaces the first; the color effect is still live.
-    let row = purchase_item_by_sku_with_chat_effect(
+    // A second title replaces the first, month over day; the color effect is
+    // still live.
+    let row = purchase_item_by_sku_with_custom_title(
         &mut client,
         user.id,
-        "title_the_night_clerk_month",
-        None,
+        "title_custom_month",
+        CustomTitle::parse("the night clerk").expect("valid title"),
     )
     .await
     .expect("rent second title")
@@ -1287,6 +1350,7 @@ async fn title_rental_replaces_expires_and_leaves_the_username_effect_alone() {
     let rows = active_effect_rows(&client, user.id, TITLE_EFFECT_KIND).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, row.id);
+    assert_eq!(rows[0].source_sku, "title_custom_month");
     assert_eq!(
         title_from_payload(&rows[0].payload).as_deref(),
         Some("the night clerk")
@@ -1342,17 +1406,16 @@ async fn seeded_catalog_contains_custom_title_tiers() {
     assert_eq!(rental_duration_secs(month), RENTAL_MONTH_SECS);
     assert_eq!(month.sort_order, day.sort_order + 5);
     for item in &custom {
+        assert_eq!(item.name, "Your Own Title");
         assert_eq!(item.slot, None);
         // The text does not exist until someone types it, so nothing can read
         // one out of the payload.
         assert_eq!(title_from_payload(&item.payload), None);
-        // Custom titles lead the title block, above every curated one.
-        assert!(item.sort_order < 4200);
     }
 }
 
 #[tokio::test]
-async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_title() {
+async fn custom_title_purchase_wears_the_buyers_collapsed_text() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "custom-title-buy").await;
     let mut client = test_db.db.get().await.expect("db client");
@@ -1360,7 +1423,7 @@ async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_titl
         &**client,
         user.id,
         ChipMove::Credit,
-        CUSTOM_TITLE_DAY_PRICE + TITLE_DAY_PRICE,
+        CUSTOM_TITLE_DAY_PRICE,
         None,
     )
     .await
@@ -1369,12 +1432,6 @@ async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_titl
         .await
         .expect("balance")
         .balance;
-
-    purchase_item_by_sku_with_chat_effect(&mut client, user.id, "title_the_insufferable_day", None)
-        .await
-        .expect("rent curated title")
-        .title_rental
-        .expect("activated curated title");
 
     let row = purchase_item_by_sku_with_custom_title(
         &mut client,
@@ -1390,8 +1447,7 @@ async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_titl
     assert_eq!(row.room_id, None);
     assert_eq!(row.source_sku, "title_custom_day");
 
-    // One live title per user: the custom one replaced the curated one, and it
-    // wears the collapsed text the buyer typed.
+    // The live row wears the collapsed text the buyer typed, inside the cap.
     let rows = active_effect_rows(&client, user.id, TITLE_EFFECT_KIND).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, row.id);
@@ -1411,11 +1467,11 @@ async fn custom_title_purchase_wears_the_buyers_text_and_replaces_a_curated_titl
         .await
         .expect("balance")
         .balance;
-    assert_eq!(balance, funded - TITLE_DAY_PRICE - CUSTOM_TITLE_DAY_PRICE);
+    assert_eq!(balance, funded - CUSTOM_TITLE_DAY_PRICE);
 }
 
 #[tokio::test]
-async fn a_title_sku_that_does_not_match_the_text_it_was_given_charges_nobody() {
+async fn a_custom_title_bought_without_text_charges_nobody() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "custom-title-mismatch").await;
     let mut client = test_db.db.get().await.expect("db client");
@@ -1433,20 +1489,8 @@ async fn a_title_sku_that_does_not_match_the_text_it_was_given_charges_nobody() 
         .expect("balance")
         .balance;
 
-    // Buyer text handed to a curated SKU: the catalog decides that title, so
-    // the transaction fails rather than wearing text nobody sold.
-    assert!(
-        purchase_item_by_sku_with_custom_title(
-            &mut client,
-            user.id,
-            "title_the_insufferable_day",
-            CustomTitle::parse("the night mayor").expect("valid title"),
-        )
-        .await
-        .is_err()
-    );
-
-    // The custom SKU bought through the plain path carries no text at all.
+    // The custom SKU bought through the plain path carries no text at all, so
+    // the transaction fails rather than activating an empty title.
     assert!(
         purchase_item_by_sku_with_chat_effect(&mut client, user.id, "title_custom_day", None)
             .await

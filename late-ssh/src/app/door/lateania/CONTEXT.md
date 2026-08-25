@@ -4,7 +4,7 @@
 - Scope: `late-ssh/src/app/door/lateania` plus Lateania screen lifecycle in `late-ssh/src/app/door`
 - Domain: Lateania, the persistent D&D-style MUD inside late.sh
 - Primary audience: LLM agents changing the Lateania game runtime, content, UI, combat, or persistence
-- Last updated: 2026-08-23 (the coordinate field no longer folds: the Wildbound Waste decodes as reserved blocks via `wildbound_layout` with each gate town anchored on its field's entrance cell, each descent zone has its own z-level, and the town/road wings were re-aimed, all pinned by `zone_interleaves` + `no_zone_presses_against_another_it_has_no_gate_into` and `each_wildbound_gate_sits_directly_above_the_field_cell_it_opens_onto`. The live region filter and `exempt` sets that papered over the folds are removed; the `nearby_foes`/`nearby_players` lists are scoped by the field's cell window alone. `link` panics on an occupied exit and `seed_world` runs synchronously at boot, so bad wiring refuses server startup; `every_walkable_room_is_reachable_from_the_start_room` pins connectivity)
+- Last updated: 2026-08-25 (added the §7 section "Balance: where a character's damage actually comes from": an audit of the 30-60 band finding that ability magnitude never scales with `attack()`, that gear + a maxed pet + a weapon coat supply three class-agnostic damage terms worth more than the class term itself, and that `AUTO_SHARE` and the world-pass grind budget both model a petless character. Findings only, nothing test-enforced yet; a defect list and a set of open questions close the section)
 - Status: Active
 - Parent context: `../../../../../CONTEXT.md`
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change when gameplay/content changes.
@@ -705,10 +705,15 @@ Undead/Haunted lanes): the deliberate buff to today's weakest two.
 The rider in that model is **derived from the engine, never declared**:
 `OIL_PER_TICK` over `TIER_ATTACK_BAR` (both in `svc.rs`, both pinned to a live
 character by `svc_test.rs`), converted through `AUTO_SHARE`. It lands near 14%
-of output. This is the one part of the pass that has already failed once: the
+of output. **That figure is for a character with no
+companion**: `AUTO_SHARE` has no pet term, so a player running a maxed tame sees
+roughly half of it. See "Balance: where a character's damage actually comes
+from" below. This is the one part of the pass that has already failed once: the
 rider was a hardcoded `0.15` while the real coat was worth three to six times
 that, and no assertion in the file could see it. A model that measures a
-constant instead of the game is not a budget.
+constant instead of the game is not a budget. The second half of that lesson is
+still outstanding: the rider is now derived, but the *character* it is a share
+of is not (see the Balance section below).
 
 **Tests** (`world_test.rs`): `every_generated_zone_spawn_wears_its_zone_theme`
 (regulars wear the theme, zone bosses wear its weak and no resist),
@@ -760,6 +765,218 @@ knowledge is reserved as the future Thundersmith Ledger's territory.
 - Defeating the final Frontier boss, the King Who Was Promised Nothing, pays a once-per-account 10,000 chip lifetime payout and grants the `LKN` profile-award badge; repeat kills can still grant normal in-world rewards but not the chip payout again. (It paid 20,000 until migration 144 flattened the four crowns to 10,000 each; claims already banked at the old rate were left alone.)
 - Defeating the final Reaches boss, Yssgar, the Sundering Deep, pays a once-per-account 10,000 chip lifetime payout and grants the `LYS` profile-award badge. Defeating Kaelmyr's last boss, Kaethyr Ascendant, Who Sang the God Awake, does the same for `LKA` (the Unquenched Throne's Kaethyr the Unquenched carries no achievement; only the Ascendant form at the Sundering Wound does). **All four crowns pay the same 10,000** (migration 144): they are the four hardest fights in the game and no ordering between them is worth a chip gradient. `BossAchievement.payout` is still an `Option` so a future badge-only crown stays expressible. Badge codes are named after the boss (Mal'Gareth, King/Nothing, YSsgar, KAethyr Ascendant), and chat author labels collapse to the highest crown (`LKA` > `LYS` > `LKN` > `LMG`).
 - Every mob kill emits a Lateania activity win event (dashboard/quest tier only; excluded from the #lounge feed). Only the **four named realm crowns** — the ones `boss_achievement_for` recognizes (Archdemon Mal'gareth, the Frontier King, Yssgar the Sundering Deep, Kaethyr Ascendant) — publish a structured `BossSlain` event to #lounge; the ~9 regional/zone bosses (`MobSpawn.boss` without an achievement) fall too often and stay dashboard-only. `publish_kill_outcome` therefore gates the `BossSlain` on `outcome.achievement.is_some()`, not on the `boss` flag (the flag was dropped from `KillOutcome`). A player materializing in the world via `join` publishes `GameStarted`, which also ships to #lounge through `app/activity/lounge.rs`. Final-boss kills route through lifetime reward templates; if the chip payout was already claimed, activity still records the defeat without the chip/badge detail.
+
+### Balance: where a character's damage actually comes from [VOLATILE]
+
+An audit of the 30-60 band, the levels most of the game is played at (the 50-100
+half is 75% of the xp curve but end-game grind; see "Where the time goes"
+above). **Status: findings, not a contract.** Everything under "Measured from
+the code" is read straight out of the engine and is safe to rely on. Everything
+under "Modelled" comes from a fight simulator built to mirror the tick loop; the
+ordering is robust but the exact percentages are not, and nothing here is
+test-enforced yet. Treat this section as the shared starting point for balance
+work, and promote a finding into a test before acting on it as truth.
+
+#### Measured from the code
+
+**Ability magnitude never scales with anything.** `svc::spell_damage` is the
+whole of it: `magnitude`, then `+20%` for Mage/Runemaster, then `+25%` for a
+Ranger against a wounded foe, then the archetype's `attack_pct`. It never reads
+`attack()`, gear, or level. The auto-attack does. So gear and level lift the
+auto and leave the ability table frozen, and the ability rosters in
+`abilities.rs` (151KB, 362 records, the largest content file in the folder)
+control a shrinking share of a character as the game goes on.
+
+**Every class's auto-attack is Physical.** `svc.rs`'s combat round resolves it as
+`profile.apply(player_atk, DamageType::Physical)` with no class branch. A Mage
+swings Physical exactly like a Warrior. This is why weapon coats are not a
+martial mechanic (see below).
+
+**The class attack formula is the single biggest class-dependent lever**
+(`classes::stats_at`). Four tiers, and the gap never closes:
+
+| tier | formula | attack at L50 | classes |
+|---|---|---|---|
+| A | `7 + 2l` | 105 | Berserker |
+| A | `6 + 2l` | 104 | Warrior, Rogue, Ranger, Monk, Valewalker |
+| B | `5 + 2l` | 103 | Mage, Necromancer, Warlock, Runemaster, Spiritmaster |
+| C | `6 + 1.5l` | 79 | Skald |
+| C | `5 + 1.5l` | 78 | Cleric, Druid, Bard, Paladin, Beastlord |
+
+C tier is a flat ~25% deficit on the term that carries most of the damage.
+
+**A pet is class-agnostic and enormous.** `Pet::attack()` is
+`base + base * (level - 1) / 4`, so a level-10 companion hits at 3.25x its
+species base: 65 for the shop Emberdrake, ~107 for a tame-49 beast, 182 for the
+Wildbound Worldserpent. Reaching `PET_MAX_LEVEL` costs 900 loyalty at
+`FEED_LOYALTY` 25 and `PET_FEED_COST` 20, so **720 gold total**, trivially
+affordable in this band. The pet does not scale with your class, your level, or
+your gear: it scales with Animal Taming and 720 gold.
+
+**The whole pet package is Physical and no coat can touch it.** Pet bite, Savage
+Bite, Pounce, and Rend all pass `DamageType::Physical`, and the coat block sits
+inside the *player's* auto section and spends a charge only on the player's own
+swing. Against the 14 Physical-wall bosses (which include Aelunor's 12 zone
+bosses at Lv53-69, squarely in this band) a pet build loses half its largest
+damage term with zero counterplay.
+
+**Weapon coats are everyone's lever, not the martial lever.** Nothing on the
+`use_item` -> `oil_school_tier` -> `coat_weapon` path checks class. `weapon_coat`
+is a single `Option`, so a new coat overwrites the old (wasting its charges):
+**oil or poison, never both**. `DotSource::Coat` refreshes one wound rather than
+stacking, so while charges last the coat is a flat `per_tick` every tick, plus
+`POISON_DOT_TICKS` lingering ticks after the last swing.
+
+**Coats out-cover the casters on the resist/weak board.** `OIL_SCHOOLS` is
+Fire/Frost/Holy/Lightning; poison vials add Poison. Against the 16 `ZoneTheme`
+weaknesses:
+
+| kit | weak lanes covered |
+|---|---|
+| any class carrying a full oil kit plus poison vials | **12 / 16** |
+| Mage, in-band damage schools (Fire/Frost/Lightning) | 9 / 16 |
+| Runemaster, in-band (Arcane/Fire/Lightning) | 9 / 16 |
+| any class with no coats | 0 / 16 |
+
+Only the Arcane lanes (Storm, Resonant) and Shadow lanes (Profane, Fae) are out
+of reach. A Rogue with a shopping bag exploits the world pass better than a Mage
+does, because a caster's schools are welded into the 5-25% of output its ability
+table supplies while a coat rides the 40-75% the auto supplies.
+
+**A Cleric cannot afford to attack anywhere in 1-60.** Regen 6 against Smite
+(9/tick), Holy Fire (6.7/tick), Hammer of Faith (9.3/tick). The first
+sustainable offensive ability is **Divine Radiance at L41**, at 5.1 resource per
+tick for 2.6 damage per tick. Judgment at L50 costs exactly the regen (6.0/tick).
+This is a hole, not a trade-off: nothing is bought with the shortfall.
+
+#### Modelled
+
+Damage composition per mob at L55, on a 3-tick fight plus 3-tick walk cycle
+(regen runs through both), with a 107-attack level-10 pet and a tier-5 oil:
+
+| class | auto | abilities | pet | coat |
+|---|---|---|---|---|
+| Rogue | 47% | 17% | 30% | 6% |
+| Warrior | 43% | 12% | 37% | 7% |
+| Mage | 43% | 13% | 37% | 7% |
+| Skald | 37% | 16% | 39% | 8% |
+| Beastlord | 37% | 6% | 50% | 8% |
+| Cleric | 42% | 5% | 44% | 9% |
+
+The same characters with no pet and no coat sit near 70/30 auto to abilities,
+which is where `AUTO_SHARE` was set. **Three of the four terms are identical for
+every class.** Gear attack, the pet, and the coat total roughly 213 damage per
+tick at L55 and do not care who is holding the weapon.
+
+**The consequence is dilution, not balance.** Best-to-worst spread:
+
+| | worst class as a share of best |
+|---|---|
+| no pet, no coat | Cleric at ~50% of Rogue |
+| pet 107 plus tier-5 oil | Cleric at ~68% of Rogue |
+
+The ordering does not change: same first, same last, same sequence throughout.
+The gap closed because the class-dependent share of a character shrank, not
+because the classes converged. A 46% spread between best and worst is still very
+large, and the levers for fixing it now move a third of the number they used to.
+
+**Traits split cleanly into ones that scale and ones that do not.** The
+distinction is whether a trait multiplies a term that grows, or hands over a flat
+amount that the shared terms outgrow:
+
+- **Scale with the game.** `Pack Bond` multiplies the pet (+30%), which is why
+  Beastlord moves from last without a companion to second with a strong one, and
+  keeps climbing as tames improve. `Opportunist` doubles one auto per fight, so
+  it is worth `1/fight_length`, huge on 3-tick trash and near nothing on a boss.
+  `Hunter's Instinct` multiplies both autos and abilities for the back half of
+  every fight. `Reaping Harvest` heals `3 + level/4` per landed auto, free, every
+  tick, which is 50-100% of post-armor incoming damage in this band and the
+  reason Valewalker chain-pulls with no downtime.
+- **Do not.** `Battle Hymn` / `War-Chant` give more of a resource that buys
+  abilities, and abilities are the smallest term; the two classes carrying it pay
+  the C attack tier for it. `Light of the Dawn` amplifies healing on a class that
+  cannot attack. The on-kill restores (Necromancer, Spiritmaster, Warlock) pay
+  nothing inside a fight and nothing at all on a boss. `Unbreakable` is one
+  saved death per life, not throughput.
+- **Gated past the point of use.** `Frenzy` is
+  `(missing_pct - 50).clamp(0, 50)`: nothing above half health, full value only
+  at death's door. It is multiplicative, which is the right shape, but the state
+  it wants is one bad tick from dying, so a Berserker collects roughly none of
+  it. Its real edge is the +1 base attack.
+
+#### Where the world pass's own model diverges
+
+`AUTO_SHARE = 0.75` splits output into auto plus abilities and **has no pet
+term**. The routed grind-rate budget in `world_test.rs` is therefore certifying a
+character with no companion. If a maxed tame is the normal case, the coat rider
+lands near 14% of a petless character and near 7% of a real one, and every
+declared band halves with it: the +-15% per-zone swing, the >=+5%
+best-zone-and-coat meaningfulness floor, and the <=+18% routed ceiling all
+describe a fraction of a character that few players are. The +5% floor in
+particular falls under the noise of a single gear upgrade.
+
+This is the same failure mode the `TIER_ATTACK_BAR` comment already warns about
+(a rider certified at a constant while the real one was three to six times that).
+The bar itself is derived from a live character and is fine; the split it feeds
+is not. **The fix is a pet term in the model, not a re-tune.** Until then, do not
+read the world-pass percentages as what a player experiences.
+
+#### Small defects found while measuring
+
+Each is real and read from the code, none is fixed:
+
+- **`Pack Bond`'s cooldown reduction is a no-op on Savage Bite.**
+  `base_cd - base_cd * BEASTLORD_PET_PCT / 100` on integers: a `cooldown` of 3
+  gives `3 - 0 = 3`. The comment promises "at least one tick off, never below
+  one". cd 4 -> 3, 6 -> 5 and 7 -> 5 all work; only cd 3, the pet's most frequent
+  skill, silently does not.
+- **`Pack Bond` does not make the companion "hardier" in the way the trait text
+  says.** `Pet::max_hp` has no Beastlord branch; the toughness is delivered as a
+  30% cut to the splash in `wound_pet`. Functionally close, but the sheet shows
+  an identical pet HP pool and reads as the trait not working.
+- **Skald is Bard plus 1 attack and 2 HP.** Same resource, same curve, same
+  regen, and the trait is literally the same branch
+  (`matches!(p.class, Some(Class::Bard) | Some(Class::Skald))`) with the same
+  description string. Skald also carries the thinnest roster in the band, 9
+  abilities by L45 against Rogue's 12, with nothing at all between L42 and L50.
+- **Mage and Runemaster are the same class statistically.** Identical
+  `stats_at`, identical primary score and resource, identical archetype shapes,
+  and one shared `if` for both traits. The only real difference is unlock
+  density: Runemaster has dead bands at 28-36 and 42-50 and no Empower between
+  L16 and L75, where Mage fills all of it. Mage leads burst by 13-38% across the
+  band.
+- **Runemaster's fantasy is not implemented.** Its description promises a graven
+  mark "left to smoulder and then detonate"; Detonation Rune is a plain
+  `DamageOverTime`. `svc.rs`'s single `Class::Runemaster` mention is the shared
+  spell-damage `if`, and there is no other Runemaster-aware code.
+- **Four items are Mage-locked and the newer twelve classes have no equivalent.**
+  Apprentice Staff and Runed Battlestaff are `Some(Class::Mage)`, so a Runemaster
+  swings the Rusty Shortsword (attack 4) until the unrestricted Embergate
+  Falchion. Early game only, no effect past ~L15, but a rough first hour.
+- **Duplicate ability names inside one class.** Warrior has two "Earthshaker"
+  (L28 Stun, L30 DoT), Bard has three "Crescendo", Mage two "Blizzard" and two
+  "Meteor", Warlock three "Chaos Bolt". They will render as duplicates in the
+  hotbar and the abilities panel.
+- **Hotbar slots shift on level-up.** `use_ability` indexes
+  `unlocked_for(class, level)` positionally, so every new unlock renumbers every
+  slot after it.
+
+#### Open, worth digging into
+
+- How common is a maxed tame in practice? Everything above hinges on it. If it
+  is rare the class table matters much more; if it is universal the pet is the
+  build.
+- Beastlord's archetype choice looks inverted: DPS applies `attack_pct` to only
+  ~43% of its output, so Wildwarden (tank) costs it roughly 6% damage for +22%
+  mitigation and +12% HP. It may be the only class near the top of the damage
+  table that can take the tank path close to free.
+- Nothing in the engine caps or diminishes the flat terms, so the compression
+  should get worse as tames and coat tiers climb. Worth checking what the
+  composition looks like at L100 with a Worldserpent and a tier-5 oil.
+- The traits that survive dilution are the multiplicative ones. Re-shaping the
+  flat traits (`Battle Hymn`, `Light of the Dawn`, the on-kill restores) to
+  multiply a shared term instead would be the cheapest way to make class choice
+  matter again without nerfing anything.
 
 ---
 

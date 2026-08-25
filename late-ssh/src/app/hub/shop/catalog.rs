@@ -20,12 +20,14 @@ pub(crate) enum ShopCategory {
 }
 
 impl ShopCategory {
+    /// Tab order. The name-adjacent tabs lead (Chat, then the badge and flag
+    /// rentals it stacks with), the unlocks and the burn tier follow.
     pub(crate) const ALL: [Self; 6] = [
         Self::Chat,
-        Self::Companions,
-        Self::Aquarium,
         Self::Badges,
         Self::Flags,
+        Self::Companions,
+        Self::Aquarium,
         Self::Ultimates,
     ];
 

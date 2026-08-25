@@ -107,7 +107,6 @@ pub struct ActiveChatRoomEffect {
     pub room_visibility: String,
     pub room_permanent: bool,
     pub room_slug: Option<String>,
-    pub vibe: Option<String>,
     pub ends_at: DateTime<Utc>,
 }
 
@@ -1008,11 +1007,6 @@ impl ShopService {
                     room_visibility,
                     room_permanent,
                     room_slug,
-                    vibe: effect
-                        .payload
-                        .get("vibe")
-                        .and_then(|value| value.as_str())
-                        .map(ToOwned::to_owned),
                     ends_at: effect.ends_at,
                 });
         }

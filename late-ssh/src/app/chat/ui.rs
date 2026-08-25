@@ -3964,8 +3964,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                     unread: i64,
                     badge: String,
                     active: bool,
-                    jump_key: Option<u8>,
-                    effects: &[ActiveChatRoomEffect]|
+                    jump_key: Option<u8>|
      -> Line<'static> {
         let key_prefix = if view.room_jump_active {
             jump_key
@@ -3974,8 +3973,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         } else {
             String::new()
         };
-        let effect_suffix = room_effect_suffix(effects);
-        let label = format!("{label}{effect_suffix}");
         let key_width = UnicodeWidthStr::width(key_prefix.as_str());
         let label_max = inner_width.saturating_sub(key_width + 4);
         let display_label = if UnicodeWidthStr::width(label.as_str()) > label_max && label_max > 1 {
@@ -4004,14 +4001,12 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         }
         let name_color = if active {
             theme::AMBER()
-        } else if has_room_effect(effects, "pinned_vibe") {
-            theme::AMBER_GLOW()
         } else if unread > 0 {
             theme::TEXT()
         } else {
             theme::TEXT_DIM()
         };
-        let name_modifier = if active || has_room_effect(effects, "pinned_vibe") {
+        let name_modifier = if active {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -4042,7 +4037,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
             let active = cozy_slot_selected(view, slot);
             let (label, unread) = room_slot_label_and_unread(view, slot);
             let badge = room_slot_badge(view, slot, unread);
-            let effects = room_slot_effects(view, slot);
             push_row(
                 item_row(
                     label,
@@ -4050,7 +4044,6 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
                     badge,
                     active,
                     jump_targets.get(&slot).copied(),
-                    effects,
                 ),
                 Some(slot),
                 active,
@@ -4380,36 +4373,10 @@ fn bumped_join_room_slugs(
     slugs
 }
 
-fn room_slot_effects<'a>(
-    view: &'a ChatRoomListView<'_>,
-    slot: RoomSlot,
-) -> &'a [ActiveChatRoomEffect] {
-    match slot {
-        RoomSlot::Room(room_id) => view
-            .active_room_effects
-            .get(&room_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-        _ => &[],
-    }
-}
-
 fn has_room_effect(effects: &[ActiveChatRoomEffect], effect_kind: &str) -> bool {
     effects
         .iter()
         .any(|effect| effect.effect_kind == effect_kind)
-}
-
-fn room_effect_suffix(effects: &[ActiveChatRoomEffect]) -> String {
-    if let Some(vibe) = effects
-        .iter()
-        .find(|effect| effect.effect_kind == "pinned_vibe")
-        .and_then(|effect| effect.vibe.as_deref())
-    {
-        format!(" {vibe}")
-    } else {
-        String::new()
-    }
 }
 
 fn room_display_label(

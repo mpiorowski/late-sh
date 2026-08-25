@@ -150,22 +150,33 @@ enum ItemListRow<'a> {
     },
 }
 
+/// The list rows for one tab: every item, with a section label wherever the
+/// tab groups its items. `items` arrive in `ShopState::visible_items` order,
+/// which already clusters each group, so a label opens each run of items
+/// whose section differs from the row above.
 fn item_list_rows<'a>(
     category: ShopCategory,
     items: &[&'a ShopCatalogItem],
 ) -> Vec<ItemListRow<'a>> {
-    if category != ShopCategory::Badges {
-        return items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| ItemListRow::Item { index, item })
-            .collect();
-    }
+    let section_label: fn(&ShopCatalogItem) -> &'static str = match category {
+        ShopCategory::Chat => chat_section_label,
+        ShopCategory::Badges => badge_section_label,
+        ShopCategory::Flags
+        | ShopCategory::Companions
+        | ShopCategory::Aquarium
+        | ShopCategory::Ultimates => {
+            return items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| ItemListRow::Item { index, item })
+                .collect();
+        }
+    };
 
-    let mut rows = Vec::with_capacity(items.len() + 2);
+    let mut rows = Vec::with_capacity(items.len() + 3);
     let mut current_section = None;
     for (index, item) in items.iter().enumerate() {
-        let section = badge_section_label(item);
+        let section = section_label(item);
         if current_section != Some(section) {
             rows.push(ItemListRow::Section(section));
             current_section = Some(section);
@@ -173,6 +184,18 @@ fn item_list_rows<'a>(
         rows.push(ItemListRow::Item { index, item });
     }
     rows
+}
+
+/// The Chat tab's three groups, in the order `visible_items` sorts them: the
+/// name colors, the title, then the one-shot consumables.
+fn chat_section_label(item: &ShopCatalogItem) -> &'static str {
+    if item.is_username_effect() {
+        "Name effects"
+    } else if item.is_title_rental() {
+        "Title"
+    } else {
+        "Consumables"
+    }
 }
 
 fn badge_section_label(item: &ShopCatalogItem) -> &'static str {
@@ -1047,6 +1070,8 @@ fn item_row(
         flag_display_name(item)
     } else if item.is_chat_badge() {
         badge_display_name(item)
+    } else if item.is_title_rental() {
+        format!("{}{}", item.name, rental_tier_suffix(item))
     } else {
         item.name.clone()
     };
