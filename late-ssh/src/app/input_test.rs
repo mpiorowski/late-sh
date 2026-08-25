@@ -919,3 +919,43 @@ async fn explicit_esc_esc_leave_drops_lateania_off_the_backtick_cycle() {
         "an explicit leave must clear the backtick recency window"
     );
 }
+
+// The reserved chords run ahead of the modal stack, so every opener they
+// reach must close the gild picker the way it already closes the poll modal.
+// Otherwise Ctrl+G paints the Lobby over a picker that still owns the
+// keyboard, and the next Enter buys a gild nobody can see.
+#[tokio::test]
+async fn reserved_chords_close_the_gild_picker_instead_of_burying_it() {
+    use crate::app::chat::gild::state::GildTarget;
+
+    let db = crate::test_helpers::new_test_db().await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), uuid::Uuid::now_v7(), "gild-chord");
+    let target = || GildTarget {
+        message_id: uuid::Uuid::now_v7(),
+        author_username: "mira".to_string(),
+        preview: "worth paying for".to_string(),
+    };
+
+    app.gild_modal_state.open(target());
+    app.show_gild_modal = true;
+    app.handle_input(&[CTRL_G]);
+    assert!(app.show_lobby_modal, "Ctrl+G opens the Lobby");
+    assert!(!app.show_gild_modal, "and the picker is gone, not buried");
+    assert!(app.gild_modal_state.target().is_none());
+    app.banner = None;
+    app.handle_input(b"\r");
+    assert!(
+        app.banner
+            .as_ref()
+            .is_none_or(|banner| banner.message != "Gilding..."),
+        "Enter in the Lobby must not buy a gild"
+    );
+
+    app.show_lobby_modal = false;
+    app.gild_modal_state.open(target());
+    app.show_gild_modal = true;
+    app.handle_input(&[CTRL_O]);
+    assert!(app.show_settings, "Ctrl+O opens settings");
+    assert!(!app.show_gild_modal, "and the picker is gone, not buried");
+    assert!(app.gild_modal_state.target().is_none());
+}

@@ -58,7 +58,10 @@ use super::{
     history_modal, news, notifications,
     notifications::svc::NotificationService,
     showcase,
-    svc::{ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, ReportKind, RoomMemberListItem},
+    svc::{
+        ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GildRefusal, ReportKind,
+        RoomMemberListItem,
+    },
     ui_text::{NewsPayload, parse_news_payload, parse_report_payload},
     work,
 };
@@ -2477,15 +2480,29 @@ impl ChatState {
         None
     }
 
-    /// What the gild picker needs about the selected message. `None` when
-    /// nothing is selected or the selection is the viewer's own message: the
-    /// picker never opens on a message that could only be refused.
-    pub(crate) fn gild_target_in_room(&self, room_id: Uuid) -> Option<GildTarget> {
-        let message = self.selected_message_in_room(room_id)?;
-        if message.user_id == self.user_id {
-            return None;
+    /// What the gild picker needs about the selected message, or the refusal
+    /// the service would answer with anyway. The picker never opens on a
+    /// message that could only be refused: your own message, one in a DM or
+    /// private room, or one in a game or stream chat. Only the rules a room
+    /// list can answer live here; the rest (membership, bots, cooldown,
+    /// balance) stay with the service.
+    pub(crate) fn gild_target_in_room(&self, room_id: Uuid) -> Result<GildTarget, GildRefusal> {
+        let Some(message) = self.selected_message_in_room(room_id) else {
+            return Err(GildRefusal::MessageNotFound);
+        };
+        let Some(room) = self.room_by_id(room_id) else {
+            return Err(GildRefusal::MessageNotFound);
+        };
+        if room.visibility != "public" {
+            return Err(GildRefusal::NotPublic);
         }
-        Some(GildTarget {
+        if room.kind == "game" {
+            return Err(GildRefusal::GameRoom);
+        }
+        if message.user_id == self.user_id {
+            return Err(GildRefusal::SelfGild);
+        }
+        Ok(GildTarget {
             message_id: message.id,
             author_username: self.username_for(message.user_id),
             // One line, always: the picker prints the preview in a single

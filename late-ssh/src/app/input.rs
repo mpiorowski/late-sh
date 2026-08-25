@@ -3318,6 +3318,8 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
@@ -3345,6 +3347,8 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
@@ -3456,6 +3460,8 @@ fn open_bonsai_v2_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_lobby_modal = false;
@@ -3477,6 +3483,8 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_sheet_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
     app.show_bonsai_modal = false;
     app.show_bonsai_v2_modal = false;
     app.show_settings = false;
@@ -3804,6 +3812,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 app.show_sheet_modal = false;
                 app.show_poll_modal = false;
                 app.poll_modal_state.close();
+                app.show_gild_modal = false;
+                app.gild_modal_state.close();
                 app.show_settings = false;
                 app.show_hub_modal = false;
                 app.show_quit_confirm = false;

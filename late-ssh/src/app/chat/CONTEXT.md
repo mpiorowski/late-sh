@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-25 (gilds: `$` on a selected message opens a three-tier picker (Bronze 500 / Silver 5,000 / Gold 50,000) that pays the author two thirds and burns the rest, leaving a permanent marker at the head of the message footer. Public rooms only, never your own message and never a bot's, one of each tier per buyer per message. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
+- Last updated: 2026-08-25 (gilds: `$` on a selected message opens a three-tier picker (Bronze 500 / Silver 5,000 / Gold 50,000) that pays the author two thirds and burns the rest, leaving a permanent marker at the head of the message footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one of each tier per buyer per message. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -396,7 +396,7 @@ Keys:
 - `p` opens the selected author's read-only profile modal.
 - `c` copies the selected message body.
 - `t` toggles the message's translation (see Translation below).
-- `$` opens the gild tier picker (see Gilds below). Consumed whenever a message is selected: on your own message it banners the self-gild refusal instead of opening.
+- `$` opens the gild tier picker (see Gilds below). Consumed whenever a message is selected: on your own message, or one in a DM, a private room, or a game/stream chat, it banners the refusal instead of opening (`ChatState::gild_target_in_room` answers those room rules locally; the rest stay with the service).
 - Enter jumps from a reply to its loaded target.
 - `f` enters reaction leader mode.
 - `f` again while reaction leader is active opens reaction-owner overlay.
@@ -423,8 +423,11 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   earned rather than who has generous friends.
 - **Guards** (`ChatService::gild_message`, one closed `GildRefusal` enum with
   the wording): message gone, not a member, not a public room (so never a DM
-  and never a private room), self-gild, bot author, the 30s per-buyer
-  cooldown, this tier already bought on this message, and the chip floor.
+  and never a private room), a game room (`kind = 'game'`: arcade tables,
+  daily matches and `#user-live` stream chats are public by visibility but
+  not on the Home rail, and the #lounge line must point somewhere people can
+  go), self-gild, bot author, the 30s per-buyer cooldown, this tier already
+  bought on this message, and the chip floor.
   Every refusal is uncharged, and a refusal after the cooldown was stamped
   releases it again.
 - **Transaction** (`ChatService::settle_gild`): `SELECT ... FOR UPDATE` on the
@@ -630,7 +633,7 @@ Cache:
 | `p` | Open selected author's read-only profile |
 | `c` | Copy selected message body |
 | `t` | Translate selected message; press again to collapse, again to reopen. A message already in your target language banners instead of spending a call. |
-| `$` | Open the gild tier picker on the selected message (public rooms only; your own message banners the refusal). In the picker: `j`/`k` or `1`-`3` pick a tier, `Enter` buys, `Esc` cancels. |
+| `$` | Open the gild tier picker on the selected message (your own message, a DM, a private room, or a game/stream chat banners the refusal instead of opening). In the picker: `j`/`k` or `1`-`3` pick a tier, `Enter` buys, `Esc` cancels. |
 | `f` | Favorite/unfavorite the selected real room |
 | `[` / `]` | Move the selected favorite up/down in the room rail |
 | `f` then `1..9` | Quick-react to selected message |
@@ -818,7 +821,7 @@ Existing DB-backed coverage:
 - `work/svc_test.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
 - `state_test.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
 - `state_internal_test.rs`: `t` toggle over a cached translation (pending → ready → collapse → reopen, plus the same-script no-op banner), target-language switching dropping stale translations, auto mode firing without a pending placeholder, and author-shared display (shared row by someone else shows with no auto mode or `t`; private rows and the viewer's own shared row stay hidden). Note the harness gotcha these pinned: snapshots carry rooms with **empty** message vectors, so a test needing a concrete message must pull the room tail (`load_room_tail`), not wait for a snapshot.
-- `svc_test.rs::gild`: the split landing (two ledger rows, author counts), and one test per refusal (self, DM, private room, bot author, non-member, cooldown, short balance), each asserting the ledger stayed empty. `AlreadyGilded` is covered at the model layer instead (`chat_message_gild_test::stacking_tiers_and_the_duplicate_refusal`): at the service layer the 30s cooldown answers first, so a second same-tier buy inside the window never reaches it.
+- `svc_test.rs::gild`: the split landing (two ledger rows, author counts), and one test per refusal (self, DM, private room, game room, bot author, non-member, cooldown, short balance), each asserting the ledger stayed empty. `AlreadyGilded` is covered at the model layer instead (`chat_message_gild_test::stacking_tiers_and_the_duplicate_refusal`): at the service layer the 30s cooldown answers first, so a second same-tier buy inside the window never reaches it.
 - `late-core/src/models/chat_message_gild_test.rs`: tier roster (prices, split, markers), stacking and the duplicate refusal, the self-gild CHECK, owner-scoped counts, page summaries, and that only a committed gild notifies `chat_message_gilded`.
 - `app/ai/translate_test.rs`: cache-hit service path with AI disabled, the failure path clearing single-flight so `t` can retry, and author-shared rows broadcasting their flag (request and sweep alike).
 - `late-core/src/models/message_translation_test.rs`: script detection against each target, language key round-trip, cache upsert/read/cascade-delete, and `author_shared` surviving a later private rewrite.

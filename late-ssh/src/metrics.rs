@@ -262,6 +262,7 @@ mod inner {
             GildRefusal::MessageNotFound => "message_not_found",
             GildRefusal::NotAMember => "not_a_member",
             GildRefusal::NotPublic => "not_public",
+            GildRefusal::GameRoom => "game_room",
             GildRefusal::SelfGild => "self_gild",
             GildRefusal::BotAuthor => "bot_author",
             GildRefusal::OnCooldown => "on_cooldown",

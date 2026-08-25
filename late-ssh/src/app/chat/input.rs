@@ -565,15 +565,14 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         // `$` opens the gild picker on the selected message. Its own key
         // rather than a leader, because the modal is where the money is
         // confirmed and a mistyped leader must not cost chips. With a
-        // message selected the key is always consumed: the one case that
-        // opens nothing is your own message, and that says so.
+        // message selected the key is always consumed: a message the picker
+        // could only refuse (your own, or one outside a public room) banners
+        // the refusal instead of opening.
         b'$' if app.chat.selected_message_id_in_room(room_id).is_some() => {
             match app.chat.gild_target_in_room(room_id) {
-                Some(target) => open_gild_modal(app, target),
-                None => {
-                    app.banner = Some(Banner::error(
-                        crate::app::chat::svc::GildRefusal::SelfGild.message(),
-                    ));
+                Ok(target) => open_gild_modal(app, target),
+                Err(refusal) => {
+                    app.banner = Some(Banner::error(refusal.message()));
                 }
             }
             return true;

@@ -25,13 +25,11 @@ CREATE TABLE chat_message_gilds (
 );
 
 -- One gild per buyer per message per tier: a whale may stack all three, but
--- nobody buys the same tier twice on the same message.
+-- nobody buys the same tier twice on the same message. Leading with
+-- `message_id` also makes this the marker query's index (one pass per page
+-- of messages), so there is no separate index on `message_id`.
 CREATE UNIQUE INDEX chat_message_gilds_once_per_tier
     ON chat_message_gilds (message_id, user_id, tier);
-
--- The marker query: one pass per page of messages, keyed by message.
-CREATE INDEX chat_message_gilds_message_idx
-    ON chat_message_gilds (message_id);
 
 -- The profile query: gilds received, scoped to the profile's owner.
 CREATE INDEX chat_message_gilds_author_idx

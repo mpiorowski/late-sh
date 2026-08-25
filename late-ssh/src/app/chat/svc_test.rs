@@ -4790,6 +4790,52 @@ mod gild {
         assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
     }
 
+    /// Game and stream chats are `kind = 'game'` with `visibility = 'public'`,
+    /// so a visibility check alone would let them through. Gilds are for the
+    /// rooms on the Home rail, and the refusal says so in its own words.
+    #[tokio::test]
+    async fn refuses_a_game_room_uncharged() {
+        let test_db = new_test_db().await;
+        let service = ChatService::new(
+            test_db.db.clone(),
+            NotificationService::new(test_db.db.clone()),
+        );
+        let author = create_test_user(&test_db.db, "gild-game-author").await;
+        let buyer = create_test_user(&test_db.db, "gild-game-buyer").await;
+        let room = {
+            let client = test_db.db.get().await.expect("db client");
+            ChatRoom::get_or_create_game_room(
+                &client,
+                late_core::models::game_room::GameKind::Poker,
+                "gild-game-table",
+            )
+            .await
+            .expect("game room")
+        };
+        assert_eq!(
+            room.visibility, "public",
+            "the fixture must be the public game room shape"
+        );
+        join(&test_db.db, room.id, author.id).await;
+        join(&test_db.db, room.id, buyer.id).await;
+        stake(&test_db.db, buyer.id).await;
+        let message = message_in(&test_db.db, room.id, author.id).await;
+        let fixture = GildFixture {
+            service,
+            db: test_db.db.clone(),
+            buyer: buyer.id,
+            author: author.id,
+            message_id: message.id,
+        };
+
+        let event = gild(&fixture, fixture.buyer, GildTier::Bronze).await;
+        assert_eq!(
+            refusal_message(event),
+            "Gilds do not work in game or stream chats"
+        );
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 0);
+    }
+
     #[tokio::test]
     async fn refuses_a_bot_author_uncharged() {
         let test_db = new_test_db().await;

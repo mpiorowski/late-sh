@@ -171,6 +171,11 @@ pub enum GildRefusal {
     /// DMs and private rooms. A gild is a public mark; paying for one where
     /// two people can see it is not the product.
     NotPublic,
+    /// Arcade tables, daily matches and `#user-live` stream chats. They are
+    /// `kind = 'game'` and mostly `visibility = 'public'`, so a visibility
+    /// check alone would let them through; gilds are for the rooms on the
+    /// Home rail, where the #lounge line can point somewhere people can go.
+    GameRoom,
     /// Your own message. Also a table constraint (migration 154).
     SelfGild,
     /// A ghost bot or the #lounge system author. Chips move between players.
@@ -191,6 +196,7 @@ impl GildRefusal {
             Self::MessageNotFound => "That message is gone",
             Self::NotAMember => "You are not a member of this room",
             Self::NotPublic => "Gilds only work in public rooms",
+            Self::GameRoom => "Gilds do not work in game or stream chats",
             Self::SelfGild => "You cannot gild your own message",
             Self::BotAuthor => "Bots do not take chips",
             Self::OnCooldown => "Gilding is on cooldown",
@@ -3843,14 +3849,31 @@ impl ChatService {
             );
             return Ok(());
         };
-        let client = self.db.get().await?;
-        let summary = ChatMessageGild::summary_for_message(&client, message_id).await?;
+        // A failed lookup is this one marker lagging until the next tail
+        // load, not a reason to drop the LISTEN connection: propagating it
+        // would lose every gild committed during the reconnect window.
+        let summary = match self.load_gild_summary(message_id).await {
+            Ok(summary) => summary,
+            Err(error) => {
+                tracing::warn!(
+                    error = ?error,
+                    message_id = %message_id,
+                    "failed to load gild summary for notification"
+                );
+                return Ok(());
+            }
+        };
         let _ = self.evt_tx.send(ChatEvent::MessageGildsUpdated {
             room_id,
             message_id,
             summary,
         });
         Ok(())
+    }
+
+    async fn load_gild_summary(&self, message_id: Uuid) -> Result<Option<ChatMessageGildSummary>> {
+        let client = self.db.get().await?;
+        ChatMessageGild::summary_for_message(&client, message_id).await
     }
 
     /// Buy a gild on someone else's message. The whole thing is one
@@ -3949,6 +3972,9 @@ impl ChatService {
         };
         if room.visibility != "public" {
             return Err(GildError::Refused(GildRefusal::NotPublic));
+        }
+        if room.kind == "game" {
+            return Err(GildError::Refused(GildRefusal::GameRoom));
         }
         if message.user_id == user_id {
             return Err(GildError::Refused(GildRefusal::SelfGild));

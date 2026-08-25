@@ -954,7 +954,6 @@ fn lobby_help_lines() -> Vec<String> {
         "  j / k             embedded-chat message selection unless game claims the key",
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
-        "  $                 gild the selected chat message (public rooms only)",
         "  t                 translate the selected chat message",
         "  g                 jump to a reply's original even if it has an image",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",

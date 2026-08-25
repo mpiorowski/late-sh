@@ -1,5 +1,6 @@
 use asterion_core::MAX_MAZE_ID;
 
+use crate::app::common::primitives::thousands;
 use crate::app::lobby::house::{
     ssnake::settings::{
         SSNAKE_BONUS_FOOD_MULTIPLIER, SSNAKE_CLEAR_CHIPS, SSNAKE_CRASH_CHIPS,
@@ -60,9 +61,9 @@ fn chip_sections() -> Vec<GuideSection> {
                 "Press $ on someone else's message in a public room to gild it.".to_string(),
                 format!(
                     "Three tiers: Bronze {}, Silver {}, Gold {} chips.",
-                    GildTier::Bronze.price(),
-                    GildTier::Silver.price(),
-                    GildTier::Gold.price()
+                    thousands(GildTier::Bronze.price()),
+                    thousands(GildTier::Silver.price()),
+                    thousands(GildTier::Gold.price())
                 ),
                 "Two thirds reaches the author; the last third is destroyed.".to_string(),
                 "The marker is permanent, and the count shows on the author's profile.".to_string(),
