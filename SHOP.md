@@ -429,6 +429,10 @@ chips, more than one pot at a time.
   action in the bartender schema. About the size of gild. After Phase 5.
 - **Sealed daily bids for the marquee line**: the pot's tables with `max`
   instead of `random`. After the pot.
+- **Split the shop snapshot refresh** (only if chip notifies ever get
+  dense): a `chip_user_changed` notify rebuilds the whole `ShopSnapshot`
+  today, catalog included; it only needs to update the balance. Not a
+  problem at current traffic, noted so the fix is known.
 
 ## Dropped
 
