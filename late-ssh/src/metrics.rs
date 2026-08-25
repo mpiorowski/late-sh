@@ -1,6 +1,8 @@
+use late_core::models::chat_message_gild::GildTier;
 use late_core::models::leaderboard::DoorGame;
 
 use crate::app::activity::event::ActivityGame;
+use crate::app::chat::svc::GildRefusal;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -63,8 +65,8 @@ mod inner {
     };
 
     use super::{
-        ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, SummaryResult,
-        TranslationResult,
+        ActivityGame, DoorGame, GildRefusal, GildTier, OnlineTimeFlushResult, RenderReason,
+        SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -247,6 +249,47 @@ mod inner {
         })
     }
 
+    fn gild_tier_label(tier: GildTier) -> &'static str {
+        match tier {
+            GildTier::Bronze => "bronze",
+            GildTier::Silver => "silver",
+            GildTier::Gold => "gold",
+        }
+    }
+
+    fn gild_refusal_label(refusal: GildRefusal) -> &'static str {
+        match refusal {
+            GildRefusal::MessageNotFound => "message_not_found",
+            GildRefusal::NotAMember => "not_a_member",
+            GildRefusal::NotPublic => "not_public",
+            GildRefusal::SelfGild => "self_gild",
+            GildRefusal::BotAuthor => "bot_author",
+            GildRefusal::OnCooldown => "on_cooldown",
+            GildRefusal::AlreadyGilded => "already_gilded",
+            GildRefusal::InsufficientChips => "insufficient_chips",
+        }
+    }
+
+    fn chat_gilds_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_gilds_total")
+                .with_description("Chat message gilds bought, by tier")
+                .build()
+        })
+    }
+
+    fn chat_gilds_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_gilds_refused_total")
+                .with_description("Chat message gilds refused, by reason (none were charged)")
+                .build()
+        })
+    }
+
     fn game_wins_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -323,6 +366,17 @@ mod inner {
 
     pub fn record_game_win(game: ActivityGame) {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
+    }
+
+    pub fn record_gild_bought(tier: GildTier) {
+        chat_gilds_total().add(1, &[KeyValue::new("tier", gild_tier_label(tier))]);
+    }
+
+    pub fn record_gild_refused(refusal: GildRefusal) {
+        chat_gilds_refused_total().add(
+            1,
+            &[KeyValue::new("reason", gild_refusal_label(refusal))],
+        );
     }
 
     fn translation_result_label(result: TranslationResult) -> &'static str {
@@ -445,8 +499,8 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::{
-        ActivityGame, DoorGame, OnlineTimeFlushResult, RenderReason, SummaryResult,
-        TranslationResult,
+        ActivityGame, DoorGame, GildRefusal, GildTier, OnlineTimeFlushResult, RenderReason,
+        SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -463,6 +517,8 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_gild_bought(_tier: GildTier) {}
+    pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}

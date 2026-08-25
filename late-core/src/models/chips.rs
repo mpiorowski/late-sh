@@ -96,6 +96,12 @@ chip_moves!(
     FloorRestore,
     GiftSent,
     GiftReceived,
+    /// Chips paid to gild someone else's chat message. Floor-guarded like a
+    /// gift; `source_ref` is the gilded message id.
+    GildSent,
+    /// Two thirds of a gild reaching the message's author. The other third
+    /// has no ledger row at all: that gap is the burn.
+    GildReceived,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -153,6 +159,8 @@ impl ChipMove {
             Self::FloorRestore => "floor_restore",
             Self::GiftSent => "chip_gift_sent",
             Self::GiftReceived => "chip_gift_received",
+            Self::GildSent => "chip_gild_sent",
+            Self::GildReceived => "chip_gild_received",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -196,6 +204,7 @@ impl ChipMove {
             | Self::GiftReceived
             | Self::SsnakeArenaEarned
             | Self::SsnakeArenaLost => "user_chips",
+            Self::GildSent | Self::GildReceived => "chat_messages",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -231,6 +240,7 @@ impl ChipMove {
         match self {
             Self::Credit
             | Self::GiftReceived
+            | Self::GildReceived
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -261,7 +271,9 @@ impl ChipMove {
             Self::Bet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
-            Self::GiftSent | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
+            Self::GiftSent | Self::GildSent | Self::DrinkPurchase => {
+                ChipDirection::Debit { floor: CHIP_FLOOR }
+            }
             Self::FloorRestore => ChipDirection::Restore,
         }
     }
@@ -270,10 +282,14 @@ impl ChipMove {
     /// and the permanent monthly award snapshot.
     pub const fn counts_as_earnings(self) -> bool {
         match self {
-            Self::FloorRestore | Self::ShopPurchase => false,
+            // A gild's credit is a tip, not a standing: Top Chips ranks what
+            // a player earned, and buying an author to the top of the board
+            // would make the board about who has generous friends.
+            Self::FloorRestore | Self::ShopPurchase | Self::GildReceived => false,
             Self::Credit
             | Self::Bet
             | Self::GiftSent
+            | Self::GildSent
             | Self::GiftReceived
             | Self::DrinkPurchase
             | Self::QuestReward
@@ -523,6 +539,64 @@ impl UserChips {
             bail!("gift credit returned no row");
         };
         Ok(Some((sender, recipient)))
+    }
+
+    /// A gild's chip movement: the buyer pays `price` under the floor guard,
+    /// the message's author is credited `author_share`, and the difference is
+    /// simply never minted. Same shape as [`Self::transfer_gift`] (both
+    /// statements, so the caller owns the transaction), with the split.
+    /// `message_id` is the `source_ref` on both ledger rows, so the pair is
+    /// auditable from either side. `None` when the buyer cannot pay and keep
+    /// the floor.
+    pub async fn transfer_gild(
+        tx: &Transaction<'_>,
+        sender_id: Uuid,
+        author_id: Uuid,
+        price: i64,
+        author_share: i64,
+        message_id: Uuid,
+    ) -> Result<Option<(Self, Self)>> {
+        ensure!(price > 0, "gild price must be positive");
+        ensure!(
+            author_share > 0 && author_share < price,
+            "gild author share must burn something and pay something"
+        );
+        ensure!(sender_id != author_id, "cannot gild yourself");
+
+        // Both chip rows must exist first, for the same reason gifting needs
+        // it: an author with no row yet would otherwise fail the credit.
+        tx.execute(
+            "INSERT INTO user_chips (user_id, balance)
+             VALUES ($1, $3), ($2, $3)
+             ON CONFLICT (user_id) DO NOTHING",
+            &[&sender_id, &author_id, &INITIAL_CHIP_BALANCE],
+        )
+        .await?;
+
+        let source_ref = message_id.to_string();
+        let Some(sender) = Self::apply(
+            tx,
+            sender_id,
+            ChipMove::GildSent,
+            price,
+            Some(&source_ref),
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let Some(author) = Self::apply(
+            tx,
+            author_id,
+            ChipMove::GildReceived,
+            author_share,
+            Some(&source_ref),
+        )
+        .await?
+        else {
+            bail!("gild credit returned no row");
+        };
+        Ok(Some((sender, author)))
     }
 
     /// All user chip balances (for per-user lookup in leaderboard refresh).

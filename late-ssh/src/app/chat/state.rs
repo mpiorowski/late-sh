@@ -13,6 +13,7 @@ use late_core::{
     models::{
         article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
+        chat_message_gild::ChatMessageGildSummary,
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
@@ -711,6 +712,9 @@ pub struct ChatState {
     pub(crate) chat_badges: HashMap<Uuid, String>,
     pub(crate) profile_award_badges: HashMap<Uuid, String>,
     pub(crate) message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
+    /// Gild markers by message. Only gilded messages have an entry, which is
+    /// almost none of them, so this stays tiny even in a busy room.
+    pub(crate) message_gilds: HashMap<Uuid, ChatMessageGildSummary>,
     pub(crate) voice_channels_by_room_id: HashMap<Uuid, VoiceChannel>,
     /// Translation handle + result feed (`app/ai/translate.rs`). Requests are
     /// fire-and-forget; results land on `translation_rx` and drain in tick.
@@ -1059,6 +1063,7 @@ impl ChatState {
             chat_badges: HashMap::new(),
             profile_award_badges: HashMap::new(),
             message_reactions: HashMap::new(),
+            message_gilds: HashMap::new(),
             voice_channels_by_room_id: HashMap::new(),
             translation_rx: translation_service.subscribe(),
             translation_service,
@@ -5060,6 +5065,10 @@ impl ChatState {
         &self.message_reactions
     }
 
+    pub fn message_gilds(&self) -> &HashMap<Uuid, ChatMessageGildSummary> {
+        &self.message_gilds
+    }
+
     /// Returns true when applying the snapshot changed anything
     /// render-visible. Snapshots arrive on a fixed cadence whether or not
     /// anything changed, so every write below detects real change before
@@ -5353,6 +5362,7 @@ impl ChatState {
                     last_read_at,
                     messages,
                     message_reactions,
+                    message_gilds,
                     usernames,
                     bonsai_glyphs,
                     chat_badges,
@@ -5400,7 +5410,17 @@ impl ChatState {
                             }
                         }
                     }
-                    if reactions_changed {
+                    let mut gilds_changed = false;
+                    for (message_id, gild) in message_gilds {
+                        match self.message_gilds.get(&message_id) {
+                            Some(existing) if *existing == gild => {}
+                            _ => {
+                                self.message_gilds.insert(message_id, gild);
+                                gilds_changed = true;
+                            }
+                        }
+                    }
+                    if reactions_changed || gilds_changed {
                         self.bump_room_version(room_id);
                     }
                     if self.visible_room_id == Some(room_id) {
@@ -5710,6 +5730,52 @@ impl ChatState {
                     self.message_reactions.insert(message_id, reactions);
                     self.bump_room_version(room_id);
                 }
+                ChatEvent::MessageGildsUpdated {
+                    room_id,
+                    message_id,
+                    summary,
+                } => {
+                    // Gilds only exist in public rooms, so there is no
+                    // audience to filter: what one viewer of the room sees,
+                    // every viewer sees.
+                    match summary {
+                        Some(summary) => {
+                            self.message_gilds.insert(message_id, summary);
+                        }
+                        None => {
+                            self.message_gilds.remove(&message_id);
+                        }
+                    }
+                    self.bump_room_version(room_id);
+                }
+                ChatEvent::GildSucceeded {
+                    user_id,
+                    tier,
+                    buyer_balance,
+                    ..
+                } if self.user_id == user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "Gilded {} for {} chips ({buyer_balance} left)",
+                        tier.label(),
+                        tier.price()
+                    )));
+                }
+                ChatEvent::GildSucceeded {
+                    author_user_id,
+                    tier,
+                    buyer_username,
+                    author_balance,
+                    ..
+                } if self.user_id == author_user_id => {
+                    banner = Some(Banner::success(&format!(
+                        "@{buyer_username} gilded your message {} (+{} chips, balance {author_balance})",
+                        tier.marker(),
+                        tier.author_share()
+                    )));
+                }
+                ChatEvent::GildFailed { user_id, message } if self.user_id == user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 ChatEvent::EditSucceeded {
                     user_id,
                     request_id,
@@ -6011,6 +6077,7 @@ impl ChatState {
             messages.truncate(500);
             for message_id in removed_ids {
                 self.message_reactions.remove(&message_id);
+                self.message_gilds.remove(&message_id);
                 // Evicted messages can never render again this session, so
                 // their translation state is dead weight; without this a
                 // long-lived auto-translate session grows unbounded.
@@ -6035,6 +6102,11 @@ impl ChatState {
             changed = messages.len() != before;
         }
         if self.message_reactions.remove(&message_id).is_some() {
+            changed = true;
+        }
+        // The gild rows went with the message (`ON DELETE CASCADE`), so the
+        // marker must go too.
+        if self.message_gilds.remove(&message_id).is_some() {
             changed = true;
         }
         self.forget_translation(message_id);

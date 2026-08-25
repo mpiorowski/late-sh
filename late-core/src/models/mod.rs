@@ -24,6 +24,9 @@ pub mod bonsai_decay_protection;
 mod bonsai_test;
 pub mod character_sheet;
 pub mod chat_message;
+pub mod chat_message_gild;
+#[cfg(test)]
+mod chat_message_gild_test;
 pub mod chat_message_reaction;
 #[cfg(test)]
 mod chat_message_test;

@@ -115,6 +115,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // are bought to be read next to the name in every message.
         ActivityKind::BadgeRented { .. } => true,
         ActivityKind::TitleApplied { .. } => true,
+        // A room paying for something someone said, three times over. Rare by
+        // construction (once per message, at the threshold gild only) and the
+        // line points at a room worth reading.
+        ActivityKind::MessageGilded { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").

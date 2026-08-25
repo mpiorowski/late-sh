@@ -168,6 +168,28 @@ impl ActivityPublisher {
         });
     }
 
+    /// `author_user_id` is whose message was gilded; the line is attributed
+    /// to them, and nobody who paid is resolved at all.
+    pub fn message_gilded_task(
+        &self,
+        author_user_id: Uuid,
+        message_id: Uuid,
+        count: i64,
+        room_slug: Option<String>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(author_user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::message_gilded(
+                author_user_id,
+                username,
+                message_id,
+                count,
+                room_slug,
+            ));
+        });
+    }
+
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

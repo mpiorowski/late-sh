@@ -390,6 +390,17 @@ const OS_KEY: &str = "os";
 const LANGS_KEY: &str = "langs";
 
 impl User {
+    /// Whether this account is one of the app's own actors (the ghost bots,
+    /// the `system` feed author). Set in `settings.bot` when the row is
+    /// ensured. Callers use it to keep player-to-player mechanics between
+    /// players: nobody tips the house.
+    pub fn is_bot(&self) -> bool {
+        self.settings
+            .get("bot")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     pub async fn find_by_fingerprint(client: &Client, fingerprint: &str) -> Result<Option<Self>> {
         let row = client
             .query_opt(

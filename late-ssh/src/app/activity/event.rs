@@ -75,6 +75,17 @@ pub enum ActivityKind {
     TitleApplied {
         title: String,
     },
+    /// A chat message reached the gild threshold. Names the author only: the
+    /// buyers stay out of it, because the story is that a room paid for
+    /// something someone said, not who has chips. `message_id` keys the
+    /// #lounge repeat throttle, the way `DailyResult` keys on its match, so
+    /// two of one author's messages crossing the line in the same half hour
+    /// both post.
+    MessageGilded {
+        message_id: Uuid,
+        count: i64,
+        room_slug: Option<String>,
+    },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
     CyberspacePosted {
@@ -109,6 +120,7 @@ impl ActivityKind {
             | Self::UsernameEffectApplied { .. }
             | Self::BadgeRented { .. }
             | Self::TitleApplied { .. }
+            | Self::MessageGilded { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
             | Self::WatchingStream { .. } => ActivityCategory::Session,
@@ -444,6 +456,34 @@ impl ActivityEvent {
             Some(user_id),
             username,
             ActivityKind::TitleApplied { title },
+            action,
+        )
+    }
+
+    /// A message crossed the gild threshold. Written from the author's side
+    /// ("mira got a message gilded 3 times in #lounge") because the feed line
+    /// is a compliment, not a receipt: nobody who paid is named, and the room
+    /// is, so people can go and read it.
+    pub fn message_gilded(
+        author_id: Uuid,
+        author: impl Into<String>,
+        message_id: Uuid,
+        count: i64,
+        room_slug: Option<String>,
+    ) -> Self {
+        let room = room_slug
+            .as_deref()
+            .map(|slug| format!(" in #{slug}"))
+            .unwrap_or_default();
+        let action = format!("got a message gilded {count} times{room}");
+        Self::new(
+            Some(author_id),
+            author,
+            ActivityKind::MessageGilded {
+                message_id,
+                count,
+                room_slug,
+            },
             action,
         )
     }

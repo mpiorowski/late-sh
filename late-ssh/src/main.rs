@@ -291,7 +291,11 @@ async fn main() -> anyhow::Result<()> {
                 .with_voice(voice_service.clone())
                 .with_stream(stream_service.clone()),
         )
-        .with_chip_service(chip_service.clone());
+        .with_chip_service(chip_service.clone())
+        .with_activity(activity_publisher.clone());
+    // Gild markers cross replicas over Postgres, not over this process's
+    // chat broadcast; see `ChatService::start_gild_listener_task`.
+    let _chat_gild_listener_task = chat_service.start_gild_listener_task(config.db.clone());
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
