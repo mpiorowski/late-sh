@@ -47,7 +47,7 @@ const AQUARIUM_FOOD_PRICE: i64 = 100;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
 const CUSTOM_TITLE_DAY_PRICE: i64 = 2_000;
-const CUSTOM_TITLE_MONTH_PRICE: i64 = 60_000;
+const CUSTOM_TITLE_MONTH_PRICE: i64 = 80_000;
 
 #[tokio::test]
 async fn seeded_catalog_contains_pet_companion_unlock() {
@@ -99,10 +99,10 @@ async fn seeded_catalog_rents_every_badge_and_flag_and_retires_the_permanent_sku
 
     // sku, emoji, slot, day price, month price
     let expectations = [
-        ("badge_cat", "🐱", CHAT_BADGE_SLOT, 100, 3_000),
-        ("badge_lightning", "⚡", CHAT_BADGE_SLOT, 100, 3_000),
-        ("badge_gem", "💎", CHAT_BADGE_SLOT, 250, 7_500),
-        ("badge_flag_pl", "🇵🇱", CHAT_FLAG_SLOT, 100, 3_000),
+        ("badge_cat", "🐱", CHAT_BADGE_SLOT, 100, 4_000),
+        ("badge_lightning", "⚡", CHAT_BADGE_SLOT, 100, 4_000),
+        ("badge_gem", "💎", CHAT_BADGE_SLOT, 250, 10_000),
+        ("badge_flag_pl", "🇵🇱", CHAT_FLAG_SLOT, 100, 4_000),
     ];
     for (legacy_sku, emoji, slot, day_price, month_price) in expectations {
         let day = items
@@ -1512,8 +1512,8 @@ async fn a_custom_title_bought_without_text_charges_nobody() {
 const USERNAME_GLOW_PRICE: i64 = 200;
 const USERNAME_GRADIENT_PRICE: i64 = 500;
 const USERNAME_SHIMMER_PRICE: i64 = 1_000;
-/// The month tier is the day tier's price times thirty, one chip per day.
-const USERNAME_MONTH_PRICE_MULTIPLIER: i64 = 30;
+/// The month tier is 40x the day tier (migration 153): a convenience premium.
+const USERNAME_MONTH_PRICE_MULTIPLIER: i64 = 40;
 
 #[tokio::test]
 async fn seeded_catalog_contains_username_effects() {

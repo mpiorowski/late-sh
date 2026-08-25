@@ -15,7 +15,7 @@ use super::marketplace::{CHAT_BADGE_SLOT, CHAT_FLAG_SLOT};
 /// The day tier: 24 hours.
 pub const RENTAL_DAY_SECS: i64 = 86_400;
 
-/// The month tier: 30 days, priced at 30x the day tier.
+/// The month tier: 30 days, priced at 40x the day tier (migration 153).
 pub const RENTAL_MONTH_SECS: i64 = 2_592_000;
 
 /// `marketplace_items.item_kind` for a rented chat badge or flag. Unlike the

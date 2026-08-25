@@ -84,11 +84,12 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 
 | Dial | Value |
 |---|---|
-| Month tier price | 30x the day tier (existing convention from migration 146) |
-| Badge rental, basic | 100 / 24h, 3,000 / 30d |
-| Badge rental, premium | 250 / 24h, 7,500 / 30d |
+| Month tier price | 40x the day tier (migration 153; a convenience premium, not a discount: the day tier is the daily-login habit, the month tier sells skipping it) |
+| Badge rental, basic | 100 / 24h, 4,000 / 30d |
+| Badge rental, premium | 250 / 24h, 10,000 / 30d |
 | Flag rental | same as basic badge |
-| Title rental (Your Own Title, the only title on sale) | 2,000 / 24h, 60,000 / 30d |
+| Title rental (Your Own Title, the only title on sale) | 2,000 / 24h, 80,000 / 30d |
+| Username effect | 200 / 500 / 1,000 per 24h, 8,000 / 20,000 / 40,000 per 30d |
 | Title max length | 20 characters |
 | Gild tiers | 500 / 5,000 / 50,000 |
 | Gild split | 2/3 to the author (`GildReceived`), 1/3 never re-minted |
@@ -460,6 +461,9 @@ Owner notes to pick up in a later spitball, kept here so they are not lost:
   10k/20k, daily chess 500, Tron 50-100, ssHattrick 300, and so on) that were
   set one at a time. Review them together against the sinks above once the
   sinks exist, so the faucet side of the economy is one deliberate table.
+  Decided direction (2026-08-25): the big games become farmable on purpose,
+  and the month tiers are priced high (40x) to eat what they pay out. Tune
+  faucets up, not sinks down.
 - **Lobby game economics.** The `Ctrl+G` Lobby (daily correspondence matches
   and the house tables) as a chip surface: entry stakes, side stakes, what a
   win pays, whether a match can carry a wager (the daily CONTEXT already
