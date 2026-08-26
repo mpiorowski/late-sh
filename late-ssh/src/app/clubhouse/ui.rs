@@ -849,6 +849,7 @@ fn draw_presence(
     // `put_label`), so the clickable box tracks the drawn label width.
     let label_w = label.chars().count() as u16;
     let name_len = truncate_name(username).chars().count();
+    let crown = flair.is_some_and(|flair| flair.crown);
     let label_span = |center: u16| {
         let x0 = center.saturating_sub(label_w / 2);
         (x0, x0 + label_w.saturating_sub(1))
@@ -873,6 +874,7 @@ fn draw_presence(
                 label_y,
                 &label,
                 name_len,
+                crown,
                 label_style,
                 name_style,
             );
@@ -900,7 +902,16 @@ fn draw_presence(
                 draw_figure(cells, x, y, head, style);
             }
             let label_y = y.saturating_sub(3).max(1);
-            put_label_styled(cells, x, label_y, &label, name_len, label_style, name_style);
+            put_label_styled(
+                cells,
+                x,
+                label_y,
+                &label,
+                name_len,
+                crown,
+                label_style,
+                name_style,
+            );
             let (lx0, lx1) = label_span(x);
             // Figure body is `x-1..=x+1`; the box unions it with the label.
             let hit = (lx0.min(x.saturating_sub(1)), label_y, lx1.max(x + 1), y);
@@ -1840,18 +1851,23 @@ fn put_if_floor(cells: &mut Cells, x: u16, y: u16, ch: char, color: ratatui::sty
 
 /// Write a name centered on `x_center`, clamped inside the walls.
 fn put_label(cells: &mut Cells, x_center: u16, y: u16, label: &str, style: Style) {
-    put_label_styled(cells, x_center, y, label, 0, style, None);
+    put_label_styled(cells, x_center, y, label, 0, false, style, None);
 }
 
 /// Paints a floor label. `name_len` is how many leading characters of `label`
 /// are the username: only those take the bought color effect, so a trailing
-/// `, title` stays in the dim label color, exactly as in chat.
+/// `, title` stays in the dim label color, exactly as in chat. `crown` says
+/// the character right after the name is the crown glyph, painted in the same
+/// amber chat uses (`push_author_prefix_spans`) rather than the name's effect
+/// or the dim label color.
+#[allow(clippy::too_many_arguments)]
 fn put_label_styled(
     cells: &mut Cells,
     x_center: u16,
     y: u16,
     label: &str,
     name_len: usize,
+    crown: bool,
     style: Style,
     name_style: Option<NameStyle>,
 ) {
@@ -1865,6 +1881,7 @@ fn put_label_styled(
         .clamp(1, max_start.max(1));
     for (i, ch) in label.chars().enumerate() {
         let cell_style = match name_style {
+            _ if crown && i == name_len => style.fg(theme::AMBER_GLOW()),
             Some(name_style) if i < name_len => style.fg(char_color(name_style, i, name_len)),
             Some(_) | None => style,
         };

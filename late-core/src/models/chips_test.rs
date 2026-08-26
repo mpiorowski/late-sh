@@ -181,7 +181,12 @@ fn constants() {
 fn earning_exclusions_and_reason_uniqueness() {
     assert_eq!(
         ChipMove::excluded_earning_reasons(),
-        vec!["floor_restore", "chip_gild_received", "shop_purchase"]
+        vec![
+            "floor_restore",
+            "chip_gild_received",
+            "chip_crown_taken",
+            "shop_purchase"
+        ]
     );
     let reasons: HashSet<&str> = ChipMove::ALL.iter().map(|mv| mv.reason()).collect();
     assert_eq!(reasons.len(), ChipMove::ALL.len());

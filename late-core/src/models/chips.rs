@@ -290,13 +290,16 @@ impl ChipMove {
         match self {
             // A gild's credit is a tip, not a standing: Top Chips ranks what
             // a player earned, and buying an author to the top of the board
-            // would make the board about who has generous friends.
-            Self::FloorRestore | Self::ShopPurchase | Self::GildReceived => false,
+            // would make the board about who has generous friends. The crown
+            // is Shop-like vanity spending: a burn that bought a glyph must
+            // not knock the buyer off the earners board.
+            Self::FloorRestore | Self::ShopPurchase | Self::GildReceived | Self::CrownTaken => {
+                false
+            }
             Self::Credit
             | Self::Bet
             | Self::GiftSent
             | Self::GildSent
-            | Self::CrownTaken
             | Self::GiftReceived
             | Self::DrinkPurchase
             | Self::QuestReward

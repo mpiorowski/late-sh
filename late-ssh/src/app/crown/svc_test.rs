@@ -12,7 +12,7 @@ use late_core::test_utils::{create_test_user, expire_crown_hold, roll_crown_reig
 use uuid::Uuid;
 
 use crate::app::crown::svc::{
-    CrownError, CrownRefusal, CrownService, CrownStatus, CrownStatusHolder,
+    CrownError, CrownEvent, CrownHolder, CrownRefusal, CrownService, CrownStatus, CrownStatusHolder,
 };
 use crate::test_helpers::new_test_db;
 
@@ -118,7 +118,10 @@ async fn six_takes_walk_the_ladder_and_burn_every_chip() {
             // out of its hold window first.
             expire_crown_hold(&client).await;
         }
-        let outcome = service.take(taker.id).await.expect("take the crown");
+        let outcome = service
+            .take(taker.id, &taker.username)
+            .await
+            .expect("take the crown");
         paid.push(outcome.price);
     }
     assert_eq!(paid, LADDER);
@@ -151,14 +154,17 @@ async fn a_self_take_and_a_held_reign_are_refused_uncharged() {
             .expect("stake");
     }
 
-    service.take(holder.id).await.expect("first take");
+    service
+        .take(holder.id, &holder.username)
+        .await
+        .expect("first take");
     let after_first = balance(&client, holder.id).await;
 
-    match service.take(holder.id).await {
+    match service.take(holder.id, &holder.username).await {
         Err(CrownError::Refused(CrownRefusal::AlreadyYours)) => {}
         other => panic!("expected a self-take refusal, got {other:?}"),
     }
-    match service.take(challenger.id).await {
+    match service.take(challenger.id, &challenger.username).await {
         Err(CrownError::Refused(CrownRefusal::Held { remaining_secs })) => {
             assert!(remaining_secs > 0, "a held reign must say how long is left");
         }
@@ -192,7 +198,7 @@ async fn a_take_the_buyer_cannot_afford_changes_nothing() {
     let before = balance(&client, pauper.id).await;
     assert!(before < CROWN_MIN_PRICE, "the fixture must be too poor");
 
-    match service.take(pauper.id).await {
+    match service.take(pauper.id, &pauper.username).await {
         Err(CrownError::Refused(CrownRefusal::InsufficientChips { price })) => {
             assert_eq!(price, CROWN_MIN_PRICE);
         }
@@ -224,9 +230,15 @@ async fn the_month_rollover_empties_the_crown_at_the_minimum() {
             .expect("stake");
     }
 
-    service.take(outgoing.id).await.expect("first take");
+    service
+        .take(outgoing.id, &outgoing.username)
+        .await
+        .expect("first take");
     expire_crown_hold(&client).await;
-    let dear = service.take(incoming.id).await.expect("second take");
+    let dear = service
+        .take(incoming.id, &incoming.username)
+        .await
+        .expect("second take");
     assert_eq!(dear.price, 7_500);
 
     roll_crown_reigns_back_a_month(&client).await;
@@ -234,7 +246,7 @@ async fn the_month_rollover_empties_the_crown_at_the_minimum() {
     // Last month's holder is nobody now, so this is a vacant claim at the
     // minimum, not a 1.5x takeover, and #lounge is told nobody was deposed.
     let fresh = service
-        .take(outgoing.id)
+        .take(outgoing.id, &outgoing.username)
         .await
         .expect("take after rollover");
     assert_eq!(fresh.price, CROWN_MIN_PRICE);
@@ -270,12 +282,12 @@ async fn two_concurrent_takes_settle_to_one_debit() {
     let left = tokio::spawn({
         let service = service.clone();
         let id = first.id;
-        async move { service.take(id).await }
+        async move { service.take(id, "racer").await }
     });
     let right = tokio::spawn({
         let service = service.clone();
         let id = second.id;
-        async move { service.take(id).await }
+        async move { service.take(id, "racer").await }
     });
     let outcomes = [left.await.expect("task"), right.await.expect("task")];
 
@@ -300,4 +312,89 @@ async fn two_concurrent_takes_settle_to_one_debit() {
         .expect("count reigns")
         .get("count");
     assert_eq!(reigns, 1, "one reign, however many takes raced for it");
+}
+
+/// The glyph and the deposed holder's banner both cross replicas over the
+/// `crown_changed` notify, so a service that only listens (a second replica)
+/// must end up with the new holder in its watch and a `Deposed` event for the
+/// old one, without ever having run the take itself.
+#[tokio::test]
+async fn a_listening_replica_learns_the_holder_and_tells_the_deposed() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let seller = CrownService::new(test_db.db.clone());
+    let other_replica = CrownService::new(test_db.db.clone());
+    let _listener = other_replica.start_listener_task(test_db.db.config().clone());
+    let mut holder_rx = other_replica.subscribe_holder();
+    let mut events_rx = other_replica.subscribe_events();
+
+    let first = create_test_user(&test_db.db, "crown-replica-first").await;
+    let second = create_test_user(&test_db.db, "crown-replica-second").await;
+    for user in [&first, &second] {
+        UserChips::apply(&**client, user.id, ChipMove::Credit, 100_000, None)
+            .await
+            .expect("stake");
+    }
+
+    // Whether the LISTEN is live before or after this take, the listener's
+    // seed read lands the holder; once it has, the LISTEN is live for the
+    // takeover below.
+    seller
+        .take(first.id, &first.username)
+        .await
+        .expect("first take");
+    let seeded = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let holder = holder_rx.borrow_and_update().map(|holder| holder.user_id);
+            if holder == Some(first.id) {
+                return;
+            }
+            holder_rx.changed().await.expect("holder watch open");
+        }
+    })
+    .await;
+    seeded.expect("the listening replica seeds the first holder");
+
+    expire_crown_hold(&client).await;
+    let taken = seller
+        .take(second.id, &second.username)
+        .await
+        .expect("second take");
+
+    let deposed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match events_rx.recv().await.expect("events open") {
+                CrownEvent::Deposed {
+                    user_id,
+                    taker_username,
+                    price,
+                } => return (user_id, taker_username, price),
+                CrownEvent::Status { .. }
+                | CrownEvent::Taken { .. }
+                | CrownEvent::Failed { .. } => {}
+            }
+        }
+    })
+    .await
+    .expect("the deposed holder is told on the other replica");
+    assert_eq!(deposed, (first.id, second.username.clone(), taken.price));
+
+    let holder = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let holder = *holder_rx.borrow_and_update();
+            if holder.map(|holder| holder.user_id) == Some(second.id) {
+                return holder;
+            }
+            holder_rx.changed().await.expect("holder watch open");
+        }
+    })
+    .await
+    .expect("the glyph moves on the other replica");
+    assert_eq!(
+        holder,
+        Some(CrownHolder {
+            user_id: second.id,
+            month: late_core::models::crown::crown_month(chrono::Utc::now()),
+        })
+    );
 }

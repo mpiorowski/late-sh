@@ -387,7 +387,23 @@ the design above, each deliberate:
   surface" promise literally.
 - The deposed holder gets a banner naming who took it. Not in the design,
   but a glyph vanishing off your own name with no explanation reads as a
-  bug.
+  bug. It rides the `crown_changed` notify payload (`CrownChange`: taker
+  name, price, deposed id), not the in-process broadcast, so it reaches
+  them on whichever replica they are connected to, the same way the glyph
+  does.
+- `CrownTaken` is `counts_as_earnings = false`, like `ShopPurchase`. The
+  design never said; the choice is that a burn which bought a glyph must not
+  knock the buyer off Top Chips, or nobody with a standing would ever take
+  it. Gilds sent still count, since a gild is a tip to another player.
+- The reign's `month` is stamped in SQL from the same `current_timestamp` as
+  `taken_at`, not from the app clock captured before the pool checkout and
+  the advisory-lock wait. Otherwise a take blocked across midnight on the
+  last of the month is born with a month that is already over: chips
+  burned, crown vacant, and last month's award handed to the wrong person.
+- The month rollover closes nothing. A reign left open across it keeps
+  `ended_at IS NULL` until the next take, so `ended_at` is "when the row was
+  replaced", not "when the reign stopped counting"; a future history page
+  reads `LEAST(ended_at, month + 1 month)`.
 
 Acceptance:
 - [x] Two concurrent takes settle to exactly one debit and one reign

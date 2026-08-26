@@ -6,8 +6,8 @@ use tokio_postgres::{AsyncMessage, NoTls};
 
 use crate::{
     models::crown::{
-        CROWN_CHANGED_CHANNEL, CROWN_MIN_PRICE, CrownReign, crown_month, listen_for_crown_changes,
-        next_price,
+        CROWN_CHANGED_CHANNEL, CROWN_MIN_PRICE, CrownChange, CrownReign, crown_month,
+        listen_for_crown_changes, next_price,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -99,11 +99,10 @@ async fn a_second_take_waits_and_sees_the_reign_the_first_one_opened() {
     let mut second_client = test_db.db.get().await.expect("db client");
     let first_taker = create_test_user(&test_db.db, "crown-race-first").await;
     let second_taker = create_test_user(&test_db.db, "crown-race-second").await;
-    let month = crown_month(Utc::now());
 
     let first = first_client.transaction().await.expect("tx");
     assert_eq!(CrownReign::lock_open(&first).await.expect("lock"), None);
-    let opened = CrownReign::open_in_tx(&first, month, first_taker.id, CROWN_MIN_PRICE)
+    let opened = CrownReign::open_in_tx(&first, first_taker.id, CROWN_MIN_PRICE)
         .await
         .expect("open");
 
@@ -139,19 +138,13 @@ async fn only_one_reign_is_ever_open() {
     let mut client = test_db.db.get().await.expect("db client");
     let holder = create_test_user(&test_db.db, "crown-single-holder").await;
     let challenger = create_test_user(&test_db.db, "crown-single-challenger").await;
-    let month = crown_month(Utc::now());
 
     let tx = client.transaction().await.expect("tx");
-    let first = CrownReign::open_in_tx(&tx, month, holder.id, CROWN_MIN_PRICE)
+    let first = CrownReign::open_in_tx(&tx, holder.id, CROWN_MIN_PRICE)
         .await
         .expect("open");
-    let beside = CrownReign::open_in_tx(
-        &tx,
-        month,
-        challenger.id,
-        next_price(Some(first.paid_chips)),
-    )
-    .await;
+    let beside =
+        CrownReign::open_in_tx(&tx, challenger.id, next_price(Some(first.paid_chips))).await;
     assert!(
         beside.is_err(),
         "a second open reign must be rejected by the table"
@@ -159,18 +152,13 @@ async fn only_one_reign_is_ever_open() {
     drop(tx);
 
     let tx = client.transaction().await.expect("tx");
-    let first = CrownReign::open_in_tx(&tx, month, holder.id, CROWN_MIN_PRICE)
+    let first = CrownReign::open_in_tx(&tx, holder.id, CROWN_MIN_PRICE)
         .await
         .expect("open");
     CrownReign::close_in_tx(&tx, first.id).await.expect("close");
-    let second = CrownReign::open_in_tx(
-        &tx,
-        month,
-        challenger.id,
-        next_price(Some(first.paid_chips)),
-    )
-    .await
-    .expect("open after close");
+    let second = CrownReign::open_in_tx(&tx, challenger.id, next_price(Some(first.paid_chips)))
+        .await
+        .expect("open after close");
     tx.commit().await.expect("commit");
 
     let client = test_db.db.get().await.expect("db client");
@@ -181,6 +169,9 @@ async fn only_one_reign_is_ever_open() {
     assert_eq!(open.id, second.id);
     assert_eq!(open.holder_user_id, challenger.id);
     assert_eq!(open.paid_chips, 7_500);
+    // Stamped by the database, from the clock `taken_at` comes from.
+    assert_eq!(open.month, crown_month(open.taken_at));
+    assert_eq!(open.month, crown_month(Utc::now()));
 }
 
 /// The glyph only reaches a second replica over Postgres, so the take
@@ -190,7 +181,11 @@ async fn taking_the_crown_notifies_every_replica() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
     let holder = create_test_user(&test_db.db, "crown-notify-holder").await;
-    let month = crown_month(Utc::now());
+    let change = CrownChange {
+        taker_username: "crown-notify-holder".to_string(),
+        price: CROWN_MIN_PRICE,
+        deposed_user_id: None,
+    };
 
     let cfg = test_db.db.config();
     let mut listener_config = tokio_postgres::Config::new();
@@ -222,19 +217,21 @@ async fn taking_the_crown_notifies_every_replica() {
     // A rolled-back take must tell nobody, so this transaction is dropped
     // without committing before the one that counts.
     let rolled_back = client.transaction().await.expect("tx");
-    CrownReign::open_in_tx(&rolled_back, month, holder.id, CROWN_MIN_PRICE)
+    CrownReign::open_in_tx(&rolled_back, holder.id, CROWN_MIN_PRICE)
         .await
         .expect("open");
-    CrownReign::notify_changed(&rolled_back)
+    CrownReign::notify_changed(&rolled_back, &change)
         .await
         .expect("notify");
     drop(rolled_back);
 
     let tx = client.transaction().await.expect("tx");
-    CrownReign::open_in_tx(&tx, month, holder.id, CROWN_MIN_PRICE)
+    CrownReign::open_in_tx(&tx, holder.id, CROWN_MIN_PRICE)
         .await
         .expect("open");
-    CrownReign::notify_changed(&tx).await.expect("notify");
+    CrownReign::notify_changed(&tx, &change)
+        .await
+        .expect("notify");
     tx.commit().await.expect("commit");
 
     let mut seen = 0usize;
@@ -251,6 +248,11 @@ async fn taking_the_crown_notifies_every_replica() {
             && notification.channel() == CROWN_CHANGED_CHANNEL
         {
             seen += 1;
+            assert_eq!(
+                CrownChange::parse(notification.payload()).expect("payload parses"),
+                change,
+                "the payload is what the deposed holder's replica needs"
+            );
         }
     }
     assert_eq!(seen, 1, "only the committed take notifies");

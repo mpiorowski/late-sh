@@ -21,7 +21,8 @@ use late_core::{
     models::{
         chips::{ChipMove, UserChips},
         crown::{
-            CROWN_CHANGED_CHANNEL, CrownReign, crown_month, listen_for_crown_changes, next_price,
+            CROWN_CHANGED_CHANNEL, CrownChange, CrownReign, crown_month, listen_for_crown_changes,
+            next_price,
         },
         profile::fetch_username,
         user::User,
@@ -154,26 +155,34 @@ pub struct CrownTakeOutcome {
     pub reign_id: Uuid,
     pub price: i64,
     pub taker_balance: i64,
-    /// The deposed holder, absent when the crown was vacant.
-    pub from: Option<(Uuid, String)>,
+    /// The deposed holder's username, absent when the crown was vacant.
+    pub from: Option<String>,
 }
 
 /// The answer to one session's command, or the news that someone else took
-/// the crown. Broadcast to every session; each one picks out what is
-/// addressed to it.
+/// the crown. Broadcast to every session in this process; each one picks
+/// out what is addressed to it.
 #[derive(Clone, Debug)]
 pub enum CrownEvent {
     /// `/crown`, answered for the session that asked.
     Status { user_id: Uuid, line: String },
-    /// A take landed. The taker gets a receipt; the deposed holder is told
-    /// they lost it, because a glyph vanishing off your name with no
-    /// explanation reads as a bug.
+    /// A take landed: the taker's receipt. Sent by the replica that ran the
+    /// take, which is the one the taker is connected to.
     Taken {
         taker_id: Uuid,
-        taker_username: String,
         taker_balance: i64,
         price: i64,
-        from: Option<(Uuid, String)>,
+        /// The deposed holder's username, absent when the crown was vacant.
+        from: Option<String>,
+    },
+    /// Someone took the crown off this user. Raised from the
+    /// `crown_changed` notify rather than from the take itself, so it
+    /// reaches the deposed holder whichever replica they are on: a glyph
+    /// vanishing off your own name with no explanation reads as a bug.
+    Deposed {
+        user_id: Uuid,
+        taker_username: String,
+        price: i64,
     },
     /// `/crown take` was refused or failed. Nothing was charged either way.
     Failed { user_id: Uuid, message: String },
@@ -309,11 +318,35 @@ impl CrownService {
         if notification.channel() != CROWN_CHANGED_CHANNEL {
             return;
         }
-        // A failed re-read is this replica's glyph lagging until the next
-        // take, not a reason to drop the LISTEN connection: propagating it
-        // would lose every take committed during the reconnect window.
+        self.apply_change(notification.payload()).await;
+    }
+
+    /// One `crown_changed` notify, on every replica including the one that
+    /// sent it: re-read the holder for the glyph, then tell the deposed
+    /// holder who took it if they are connected here.
+    ///
+    /// A failed re-read is this replica's glyph lagging until the next
+    /// take, not a reason to drop the LISTEN connection: propagating it
+    /// would lose every take committed during the reconnect window. A
+    /// payload that does not parse is logged for the same reason; the
+    /// re-read does not depend on it.
+    pub(super) async fn apply_change(&self, payload: &str) {
         if let Err(error) = self.refresh_holder().await {
             tracing::warn!(error = ?error, "failed to refresh the crown holder");
+        }
+        let change = match CrownChange::parse(payload) {
+            Ok(change) => change,
+            Err(error) => {
+                tracing::warn!(error = ?error, payload, "unreadable crown_changed payload");
+                return;
+            }
+        };
+        if let Some(user_id) = change.deposed_user_id {
+            let _ = self.evt_tx.send(CrownEvent::Deposed {
+                user_id,
+                taker_username: change.taker_username,
+                price: change.price,
+            });
         }
     }
 
@@ -358,8 +391,8 @@ impl CrownService {
         let span = info_span!("crown.take_task", user_id = %user_id);
         tokio::spawn(
             async move {
-                match service.take(user_id).await {
-                    Ok(outcome) => service.announce(user_id, username, outcome),
+                match service.take(user_id, &username).await {
+                    Ok(outcome) => service.announce(user_id, outcome),
                     Err(CrownError::Refused(refusal)) => {
                         metrics::record_crown_take_refused(refusal);
                         let _ = service.evt_tx.send(CrownEvent::Failed {
@@ -384,27 +417,20 @@ impl CrownService {
         );
     }
 
-    /// Everything a settled take has to tell: the buyer, the deposed holder,
-    /// every session's glyph, and #lounge.
-    fn announce(&self, user_id: Uuid, username: String, outcome: CrownTakeOutcome) {
+    /// Everything a settled take has to tell: the buyer and #lounge. The
+    /// glyph and the deposed holder's banner both move off the Postgres
+    /// notify (see `take` and `apply_change`), including in this process,
+    /// so what is sent here is only what the buyer is told.
+    fn announce(&self, user_id: Uuid, outcome: CrownTakeOutcome) {
         metrics::record_crown_taken(outcome.price);
-        // The glyph itself moves off the Postgres notify (see `take`),
-        // including in this process, so what is sent here is only what the
-        // two people involved are told.
         let _ = self.evt_tx.send(CrownEvent::Taken {
             taker_id: user_id,
-            taker_username: username,
             taker_balance: outcome.taker_balance,
             price: outcome.price,
             from: outcome.from.clone(),
         });
         if let Some(activity) = &self.activity {
-            activity.crown_taken_task(
-                user_id,
-                outcome.reign_id,
-                outcome.price,
-                outcome.from.map(|(_, username)| username),
-            );
+            activity.crown_taken_task(user_id, outcome.reign_id, outcome.price, outcome.from);
         }
     }
 
@@ -465,7 +491,11 @@ impl CrownService {
     /// The one transaction: serialize every take, read the reign, close it,
     /// open the new one, burn the chips. Every early return drops the
     /// transaction, which rolls it back, so a refusal here is uncharged too.
-    pub(super) async fn take(&self, user_id: Uuid) -> Result<CrownTakeOutcome, CrownError> {
+    pub(super) async fn take(
+        &self,
+        user_id: Uuid,
+        taker_username: &str,
+    ) -> Result<CrownTakeOutcome, CrownError> {
         let now = Utc::now();
         let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
@@ -489,7 +519,7 @@ impl CrownService {
         if let Some(open) = &open {
             CrownReign::close_in_tx(&tx, open.id).await?;
         }
-        let reign = CrownReign::open_in_tx(&tx, crown_month(now), user_id, price).await?;
+        let reign = CrownReign::open_in_tx(&tx, user_id, price).await?;
         let Some(chips) = UserChips::apply(
             &*tx,
             user_id,
@@ -503,10 +533,18 @@ impl CrownService {
                 price,
             }));
         };
-        // The glyph moves over Postgres, not over this process's broadcast,
-        // so both replicas learn about it the same way and there is exactly
-        // one code path that draws it.
-        CrownReign::notify_changed(&tx).await?;
+        // The glyph and the deposed holder's banner move over Postgres, not
+        // over this process's broadcast, so every replica learns about them
+        // the same way and there is exactly one code path for each.
+        CrownReign::notify_changed(
+            &tx,
+            &CrownChange {
+                taker_username: taker_username.to_string(),
+                price,
+                deposed_user_id: deposed,
+            },
+        )
+        .await?;
         tx.commit().await.map_err(anyhow::Error::from)?;
         drop(client);
 
@@ -517,7 +555,7 @@ impl CrownService {
         // as the truth.
         let from = match deposed {
             None => None,
-            Some(deposed) => Some((deposed, self.deposed_username(deposed).await)),
+            Some(deposed) => Some(self.deposed_username(deposed).await),
         };
         Ok(CrownTakeOutcome {
             reign_id: reign.id,

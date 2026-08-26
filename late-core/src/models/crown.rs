@@ -9,17 +9,39 @@
 //! This module owns every read and write of `crown_reigns`. The chips move
 //! through `chips.rs`; the transaction that does both belongs to the caller.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
+use serde::{Deserialize, Serialize};
 use tokio_postgres::{Client, Row, Transaction};
 use uuid::Uuid;
 
 /// Cross-process refresh channel. A take lands on whichever replica the
 /// buyer is connected to; every other replica learns about it here. The
-/// payload is empty on purpose: a listener re-reads the open reign rather
-/// than trusting a serialized copy of it.
+/// payload is a [`CrownChange`]: what the deposed holder has to be told,
+/// wherever they are connected. The new holder is not in it on purpose; a
+/// listener re-reads the open reign rather than trusting a serialized copy.
 pub const CROWN_CHANGED_CHANNEL: &str = "crown_changed";
+
+/// What rides the notify. Everything a replica other than the buyer's
+/// needs in order to tell the deposed holder who took the crown off them;
+/// the glyph itself comes from re-reading the table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrownChange {
+    pub taker_username: String,
+    pub price: i64,
+    /// The deposed holder, absent when the crown was vacant.
+    pub deposed_user_id: Option<Uuid>,
+}
+
+impl CrownChange {
+    /// Parse a notify payload. A payload this cannot read is a bug on the
+    /// sending side, not a reason to skip the re-read, so the caller logs it
+    /// and refreshes anyway.
+    pub fn parse(payload: &str) -> Result<Self> {
+        serde_json::from_str(payload).context("parsing crown_changed payload")
+    }
+}
 
 pub async fn listen_for_crown_changes(client: &Client) -> Result<()> {
     client
@@ -72,10 +94,18 @@ pub fn crown_month(now: DateTime<Utc>) -> NaiveDate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrownReign {
     pub id: Uuid,
+    /// The first of the UTC month the reign was taken in, stamped by the
+    /// database from the same clock as `taken_at` so the two can never
+    /// disagree about which month a take landed in.
     pub month: NaiveDate,
     pub holder_user_id: Uuid,
     pub paid_chips: i64,
     pub taken_at: DateTime<Utc>,
+    /// When the row was closed, which is the next take, not the moment the
+    /// reign stopped counting: a reign left open across the month rollover
+    /// keeps `ended_at IS NULL` until someone takes the vacant crown, days or
+    /// weeks later. Anything reading this as history (a future crown page)
+    /// wants `LEAST(ended_at, month + interval '1 month')`.
     pub ended_at: Option<DateTime<Utc>>,
 }
 
@@ -162,21 +192,29 @@ impl CrownReign {
         Ok(())
     }
 
-    /// Open a reign for `holder_user_id` in `month` at the price they paid.
-    /// The caller closes the previous reign first; the unique index is what
-    /// catches it if they forget.
+    /// Open a reign for `holder_user_id` at the price they paid. The month
+    /// is derived in SQL from the same `current_timestamp` that stamps
+    /// `taken_at`: computing it on the app clock before the pool checkout
+    /// and the advisory-lock wait could stamp a take that crossed midnight
+    /// on the last of the month with a month that is already over, and a
+    /// reign born stale burns the chips for nothing. The caller closes the
+    /// previous reign first; the unique index is what catches it if they
+    /// forget.
     pub async fn open_in_tx(
         tx: &Transaction<'_>,
-        month: NaiveDate,
         holder_user_id: Uuid,
         paid_chips: i64,
     ) -> Result<Self> {
         let row = tx
             .query_one(
                 "INSERT INTO crown_reigns (month, holder_user_id, paid_chips)
-                 VALUES ($1, $2, $3)
+                 VALUES (
+                    date_trunc('month', current_timestamp AT TIME ZONE 'UTC')::date,
+                    $1,
+                    $2
+                 )
                  RETURNING *",
-                &[&month, &holder_user_id, &paid_chips],
+                &[&holder_user_id, &paid_chips],
             )
             .await?;
         Ok(Self::from(row))
@@ -184,9 +222,13 @@ impl CrownReign {
 
     /// Tell every replica the crown moved. Sent inside the take transaction,
     /// so Postgres delivers it on commit and never for a rolled-back take.
-    pub async fn notify_changed(tx: &Transaction<'_>) -> Result<()> {
-        tx.execute("SELECT pg_notify($1, '')", &[&CROWN_CHANGED_CHANNEL])
-            .await?;
+    pub async fn notify_changed(tx: &Transaction<'_>, change: &CrownChange) -> Result<()> {
+        let payload = serde_json::to_string(change).context("encoding crown_changed payload")?;
+        tx.execute(
+            "SELECT pg_notify($1, $2)",
+            &[&CROWN_CHANGED_CHANNEL, &payload],
+        )
+        .await?;
         Ok(())
     }
 }

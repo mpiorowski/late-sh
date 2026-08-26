@@ -470,6 +470,7 @@ fn chips_help_lines() -> Vec<String> {
         "  It empties at the end of every UTC month: the crown goes back to vacant, and whoever wore it".to_string(),
         "  when the month ended keeps the permanent [CRWN] badge for that month.".to_string(),
         "  Every takeover posts to #lounge, naming both players.".to_string(),
+        "  Like Shop spending, the crown does not count against Top Chips.".to_string(),
         "".to_string(),
         "8. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
@@ -493,7 +494,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Gifts you send.".to_string(),
         "  Gilds you buy on other people's messages.".to_string(),
         "  The crown (/crown take), which burns the whole price.".to_string(),
-        "  Monthly Top Chips ranks net chip delta, so Shop spending never lowers your rank; betting losses do.".to_string(),
+        "  Monthly Top Chips ranks net chip delta, so Shop and crown spending never lower your rank; betting losses do.".to_string(),
     ]
 }
 

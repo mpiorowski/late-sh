@@ -503,7 +503,10 @@ its own domain; only the command and the glyph are chat's.
 - **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
-  absence of a credit rather than a transfer to a house wallet.
+  absence of a credit rather than a transfer to a house wallet. It is
+  `counts_as_earnings = false` like `ShopPurchase`: taking the crown never
+  lowers the buyer's Top Chips standing (pinned by
+  `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
   wording): you already wear it, the reign is inside its 30 minute hold
   (`CROWN_HOLD_MINUTES`; the hold is the throttle on the #lounge line, since
@@ -521,18 +524,26 @@ its own domain; only the command and the glyph are chat's.
   the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
   is a table fact.
 - **Month rollover has no sweeper.** A reign carries the first of the UTC
-  month it was taken in, and `CrownReign::is_current` requires that month to
-  still be the current one. At the boundary the crown simply reads as vacant
-  at the minimum, the glyph stops resolving on the next 1Hz tick, and the
-  next take closes the stale row on its way past. Same read-time expiry the
-  rentals use.
+  month it was taken in (stamped in SQL from the same clock as `taken_at`,
+  so a take blocked across midnight cannot be born stale), and
+  `CrownReign::is_current` requires that month to still be the current one.
+  At the boundary the crown simply reads as vacant at the minimum, the glyph
+  stops resolving on the next 1Hz tick, and the next take closes the stale
+  row on its way past. Same read-time expiry the rentals use. That makes
+  `ended_at` the moment the row was replaced, not the moment the reign
+  stopped counting; a history reader wants `LEAST(ended_at, month + 1
+  month)`.
 - **Distribution.** `CrownService` holds a process-shared
   `watch<Option<CrownHolder>>` (user id plus month), seeded by the listener
   and refreshed on the `crown_changed` notify
   (`start_listener_task`, one connection per process, wired in `main.rs`,
-  reconnecting and re-seeding after 5s). The selling replica is not
-  special-cased: it learns about its own take the same way a second replica
-  does.
+  reconnecting and re-seeding after 5s). The notify payload is a
+  `CrownChange` (taker name, price, deposed id): the holder is re-read from
+  the table, and the deposed holder's banner is raised from the payload as a
+  `CrownEvent::Deposed`, so it lands on whichever replica they are on. The
+  selling replica is not special-cased: it learns about its own take, and
+  tells its own deposed holder, the same way a second replica does
+  (`svc_test::a_listening_replica_learns_the_holder_and_tells_the_deposed`).
 - **Rendering.** `App::tick` reads the watch on the same once-a-second edge
   as the flair directory, filters it through `CrownHolder::if_current`, and
   passes the holder into
@@ -545,13 +556,14 @@ its own domain; only the command and the glyph are chat's.
   painted in `AMBER_GLOW` rather than taking the name's effect
   (`ui.rs::build_author_prefix_and_segments_with_chat_badges` builds the
   range, `ui_text.rs::push_author_prefix_spans` paints it). The Clubhouse
-  floor label does the same (`clubhouse/ui.rs::clubhouse_label`).
+  floor label does the same (`clubhouse/ui.rs::clubhouse_label` glues the
+  glyph on, `put_label_styled` paints the cell at `name_len` amber).
 - **Commands.** `/crown` and `/crown take` are parsed in `submit_composer`
   and drained by `App::tick_crown`. Both answers arrive as banners off
   `CrownEvent`, because the crown service is not `ChatService` and has its
   own broadcast (the `StreamService` shape). The deposed holder is told who
-  took it: a glyph vanishing off your own name with no explanation reads as
-  a bug.
+  took it (`CrownEvent::Deposed`, off the notify): a glyph vanishing off
+  your own name with no explanation reads as a bug.
 - **Feed.** `ActivityKind::CrownTaken` fires on every takeover and names both
   players: "tom took the crown from mira for 57,000", or "tom claimed the
   vacant crown for 5,000". Keyed on the reign id in the lounge repeat

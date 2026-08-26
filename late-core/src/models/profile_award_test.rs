@@ -1,6 +1,4 @@
-use chrono::Utc;
-
-use crate::models::crown::{CrownReign, crown_month};
+use crate::models::crown::CrownReign;
 use crate::models::profile_award::{
     CROWN_AWARD_CATEGORY, DARKROOM_BEACON_AWARD_CATEGORY, LATEANIA_ARCHDEMON_AWARD_CATEGORY,
     LATEANIA_FRONTIER_KING_AWARD_CATEGORY, LATEANIA_KAETHYR_ASCENDANT_AWARD_CATEGORY,
@@ -126,16 +124,15 @@ async fn the_months_last_crown_holder_gets_the_badge_once() {
     let mut client = test_db.db.get().await.expect("db client");
     let first = create_test_user(&test_db.db, "crown-award-first").await;
     let last = create_test_user(&test_db.db, "crown-award-last").await;
-    let month = crown_month(Utc::now());
 
     let tx = client.transaction().await.expect("tx");
-    let opened = CrownReign::open_in_tx(&tx, month, first.id, 5_000)
+    let opened = CrownReign::open_in_tx(&tx, first.id, 5_000)
         .await
         .expect("open");
     CrownReign::close_in_tx(&tx, opened.id)
         .await
         .expect("close");
-    CrownReign::open_in_tx(&tx, month, last.id, 7_500)
+    CrownReign::open_in_tx(&tx, last.id, 7_500)
         .await
         .expect("open");
     tx.commit().await.expect("commit");

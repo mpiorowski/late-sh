@@ -3103,13 +3103,12 @@ impl App {
                     taker_balance,
                     price,
                     ref from,
-                    ..
                 } if taker_id == self.user_id => {
                     changed = true;
                     let cost = thousands(price);
                     let balance = thousands(taker_balance);
                     self.banner = Some(Banner::success(&match from {
-                        Some((_, from)) => format!(
+                        Some(from) => format!(
                             "The crown is yours, taken from {from} for {cost} chips (balance {balance})"
                         ),
                         None => format!(
@@ -3119,13 +3118,13 @@ impl App {
                 }
                 // The deposed holder: a glyph vanishing off your own name
                 // with no explanation reads as a bug, so they are told who
-                // has it now.
-                CrownEvent::Taken {
+                // has it now. This arrives off the Postgres notify, so it
+                // lands whichever replica they are connected to.
+                CrownEvent::Deposed {
+                    user_id,
                     ref taker_username,
                     price,
-                    from: Some((deposed_id, _)),
-                    ..
-                } if deposed_id == self.user_id => {
+                } if user_id == self.user_id => {
                     changed = true;
                     self.banner = Some(Banner::error(&format!(
                         "{taker_username} took the crown from you for {} chips",
@@ -3134,7 +3133,8 @@ impl App {
                 }
                 CrownEvent::Status { .. }
                 | CrownEvent::Failed { .. }
-                | CrownEvent::Taken { .. } => {}
+                | CrownEvent::Taken { .. }
+                | CrownEvent::Deposed { .. } => {}
             }
         }
 
