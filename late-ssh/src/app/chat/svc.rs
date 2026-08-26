@@ -1036,6 +1036,8 @@ pub enum ChatEvent {
     ReactionOwnersListed {
         user_id: Uuid,
         message_id: Uuid,
+        /// Who gilded the message, best tier first; shown above the reactions.
+        gilds: Vec<ChatMessageGild>,
         owners: Vec<ChatMessageReactionOwners>,
         usernames: HashMap<Uuid, String>,
     },
@@ -4130,9 +4132,10 @@ impl ChatService {
         tokio::spawn(
             async move {
                 let event = match service.list_reaction_owners(user_id, message_id).await {
-                    Ok((owners, usernames)) => ChatEvent::ReactionOwnersListed {
+                    Ok((gilds, owners, usernames)) => ChatEvent::ReactionOwnersListed {
                         user_id,
                         message_id,
+                        gilds,
                         owners,
                         usernames,
                     },
@@ -4147,11 +4150,18 @@ impl ChatService {
         );
     }
 
+    /// The `ff` overlay: who gilded the message and who reacted, with the
+    /// usernames for both. Room membership is the auth boundary, as for the
+    /// reactions alone.
     async fn list_reaction_owners(
         &self,
         user_id: Uuid,
         message_id: Uuid,
-    ) -> Result<(Vec<ChatMessageReactionOwners>, HashMap<Uuid, String>)> {
+    ) -> Result<(
+        Vec<ChatMessageGild>,
+        Vec<ChatMessageReactionOwners>,
+        HashMap<Uuid, String>,
+    )> {
         let client = self.db.get().await?;
         let message = ChatMessage::get(&client, message_id)
             .await?
@@ -4160,15 +4170,17 @@ impl ChatService {
         if !is_member {
             anyhow::bail!("You are not a member of this room");
         }
+        let gilds = ChatMessageGild::list_for_message(&client, message_id).await?;
         let owners = ChatMessageReaction::list_owners_for_message(&client, message_id).await?;
         let mut owner_ids: Vec<Uuid> = owners
             .iter()
             .flat_map(|reaction| reaction.user_ids.iter().copied())
+            .chain(gilds.iter().map(|gild| gild.user_id))
             .collect();
         owner_ids.sort();
         owner_ids.dedup();
         let usernames = User::list_usernames_by_ids(&client, &owner_ids).await?;
-        Ok((owners, usernames))
+        Ok((gilds, owners, usernames))
     }
 
     pub fn list_public_rooms_task(&self, user_id: Uuid) {

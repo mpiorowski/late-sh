@@ -331,6 +331,18 @@ async fn counts_are_scoped_to_the_author() {
     place(&tx, theirs.id, other.id, buyer_a.id, GildTier::Silver).await;
     tx.commit().await.expect("commit");
 
+    let listed = ChatMessageGild::list_for_message(&client, ours.id)
+        .await
+        .expect("list");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|gild| (gild.user_id, gild.tier))
+            .collect::<Vec<_>>(),
+        [(buyer_a.id, GildTier::Gold), (buyer_b.id, GildTier::Bronze)],
+        "best tier first, one row per buyer"
+    );
+
     let counts = ChatMessageGild::counts_for_author(&client, author.id)
         .await
         .expect("counts");

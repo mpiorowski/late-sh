@@ -321,6 +321,23 @@ impl ChatMessageGild {
         Ok(row.get("count"))
     }
 
+    /// Every gild on one message, best tier first and earliest buyer first
+    /// within a tier: the "who gilded this" list behind `ff`.
+    pub async fn list_for_message(
+        client: &impl GenericClient,
+        message_id: Uuid,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT * FROM chat_message_gilds
+                 WHERE message_id = $1
+                 ORDER BY tier DESC, created, id",
+                &[&message_id],
+            )
+            .await?;
+        rows.into_iter().map(Self::try_from).collect()
+    }
+
     /// Markers for one page of messages: one query, never one per row (the
     /// shape of `ChatMessageReaction::list_summaries_for_messages`). Messages
     /// with no gilds are simply absent.

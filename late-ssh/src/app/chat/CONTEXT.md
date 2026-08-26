@@ -465,6 +465,9 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   only the author: "mira got a message gilded 3 times in #lounge". Never per
   gild, and never on a raise, which adds no buyer. Keyed on the message id
   in the lounge repeat throttle.
+- **Who gilded.** `ff` on the message (the reaction-owners overlay) lists the
+  gilds above the reactions, one block per tier held with the buyers under
+  it. Same event, same membership check (§10).
 - **Profile.** `ChatMessageGild::counts_for_author` (owner-scoped in the
   query, off the denormalized `author_user_id`) fills `ProfileSnapshot.gild_counts`
   and renders as a "Gilds received" section, hidden entirely when empty.
@@ -490,7 +493,7 @@ Reactions:
 - Quick reaction keys `1..9` map to the default emoji set; `0` opens the full icon picker.
 - UI appends reaction footer chips under the message body or news card.
 - Reaction summaries live in `message_reactions: HashMap<Uuid, Vec<ChatMessageReactionSummary>>`.
-- Reaction-owner overlay waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`.
+- Reaction-owner overlay (`ff`) waits for a matching `ReactionOwnersListed` event keyed by `pending_reaction_owners_message_id`. The event also carries the message's gilds (`ChatMessageGild::list_for_message`, best tier first), which `reaction_owner_lines` lists above the reactions as one block per tier held (`◆◆◆ 1 Gold gild`, buyers under it), sharing the reaction blocks' name capping.
 
 Ignores:
 - `users.settings.ignored_user_ids` stores UUIDs, not usernames.

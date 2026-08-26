@@ -11,6 +11,7 @@ use late_core::models::user::{RightSidebarMode, RoomListMode};
 use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
+    chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
     chat_message_reaction::ChatMessageReaction,
     chat_room::ChatRoom,
     chat_room_member::ChatRoomMember,
@@ -1017,6 +1018,19 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     ChatMessageReaction::toggle(&client, message.id, thinking.id, "🤔")
         .await
         .expect("thinking reaction");
+    // Two gilds at different tiers: the overlay lists them above the
+    // reactions, best tier first, with the buyer under each.
+    {
+        let mut gild_client = test_db.db.get().await.expect("db client");
+        let tx = gild_client.transaction().await.expect("tx");
+        for (buyer, tier) in [(&thinking, GildTier::Bronze), (&thumbs_1, GildTier::Gold)] {
+            let placed = ChatMessageGild::place_in_tx(&tx, message.id, author.id, buyer.id, tier)
+                .await
+                .expect("place gild");
+            assert!(matches!(placed, GildPlacement::Placed(_)), "{placed:?}");
+        }
+        tx.commit().await.expect("commit gilds");
+    }
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-owners-flow-it");
     wait_for_render_contains(&mut app, "owner reaction target").await;
@@ -1029,7 +1043,20 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     wait_for_render_contains(&mut app, "👍 6 reactions").await;
     wait_for_render_contains(&mut app, "[+2 more]").await;
     wait_for_render_contains(&mut app, "@f-owners-thinking").await;
+    wait_for_render_contains(&mut app, "◆◆◆ 1 Gold gild").await;
+    wait_for_render_contains(&mut app, "◆ 1 Bronze gild").await;
     let plain = render_plain(&mut app);
+    let gold_at = plain.find("◆◆◆ 1 Gold gild").expect("gold block");
+    let bronze_at = plain.find("◆ 1 Bronze gild").expect("bronze block");
+    let thumbs_at = plain.find("👍 6 reactions").expect("reaction block");
+    assert!(
+        gold_at < bronze_at && bronze_at < thumbs_at,
+        "gilds lead, best tier first, then reactions: {plain:?}"
+    );
+    assert!(
+        plain[gold_at..bronze_at].contains("@f-owners-thumbs-1"),
+        "the gold buyer sits under the gold block: {plain:?}"
+    );
     assert!(
         !plain.contains("1 👍"),
         "reaction picker should be dismissed under owner modal: {plain:?}"

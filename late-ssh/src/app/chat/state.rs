@@ -13,7 +13,7 @@ use late_core::{
     models::{
         article::{ArticleFeedItem, NEWS_MARKER},
         chat_message::ChatMessage,
-        chat_message_gild::{ChatMessageGildSummary, GildTier},
+        chat_message_gild::{ChatMessageGild, ChatMessageGildSummary, GildTier},
         chat_message_reaction::{ChatMessageReactionOwners, ChatMessageReactionSummary},
         chat_poll::ActiveChatPoll,
         chat_room::ChatRoom,
@@ -3000,12 +3000,43 @@ impl ChatState {
         ));
     }
 
-    fn reaction_owner_lines(&self, owners: &[ChatMessageReactionOwners]) -> Vec<String> {
-        if owners.is_empty() {
+    /// The `ff` overlay: gilds first, one block per tier held (best tier
+    /// first, since that is what the buyers paid for), then one block per
+    /// reaction icon. Gilds are per buyer, so a tier block's names are the
+    /// people holding exactly that tier on this message.
+    fn reaction_owner_lines(
+        &self,
+        gilds: &[ChatMessageGild],
+        owners: &[ChatMessageReactionOwners],
+    ) -> Vec<String> {
+        if gilds.is_empty() && owners.is_empty() {
             return vec!["No reactions yet".to_string()];
         }
 
         let mut lines = Vec::new();
+        for tier in GildTier::ALL.iter().rev() {
+            let buyers: Vec<Uuid> = gilds
+                .iter()
+                .filter(|gild| gild.tier == *tier)
+                .map(|gild| gild.user_id)
+                .collect();
+            if buyers.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            let count = buyers.len();
+            let noun = if count == 1 { "gild" } else { "gilds" };
+            lines.push(format!(
+                "{} {} {} {}",
+                tier.marker(),
+                count,
+                tier.label(),
+                noun
+            ));
+            lines.extend(self.owner_name_rows(&buyers));
+        }
         for reaction in owners {
             if !lines.is_empty() {
                 lines.push(String::new());
@@ -3018,31 +3049,35 @@ impl ChatState {
                 lines.push("  unknown".to_string());
                 continue;
             }
-            let mut labels: Vec<String> = reaction
-                .user_ids
-                .iter()
-                .take(REACTION_OWNER_DISPLAY_LIMIT)
-                .map(|user_id| {
-                    self.usernames
-                        .get(user_id)
-                        .map(|name| name.trim())
-                        .filter(|name| !name.is_empty())
-                        .map(|name| format!("@{name}"))
-                        .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
-                })
-                .collect();
-            let hidden_count = reaction
-                .user_ids
-                .len()
-                .saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
-            if hidden_count > 0 {
-                labels.push(format!("[+{hidden_count} more]"));
-            }
-            for row in labels.chunks(REACTION_OWNER_COLUMNS) {
-                lines.push(format!("  {}", row.join(" ")));
-            }
+            lines.extend(self.owner_name_rows(&reaction.user_ids));
         }
         lines
+    }
+
+    /// `@name` labels for one block of the `ff` overlay, capped at
+    /// `REACTION_OWNER_DISPLAY_LIMIT` with a `[+N more]` tail, wrapped
+    /// `REACTION_OWNER_COLUMNS` per row.
+    fn owner_name_rows(&self, user_ids: &[Uuid]) -> Vec<String> {
+        let mut labels: Vec<String> = user_ids
+            .iter()
+            .take(REACTION_OWNER_DISPLAY_LIMIT)
+            .map(|user_id| {
+                self.usernames
+                    .get(user_id)
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| format!("@<unknown:{}>", short_user_id(*user_id)))
+            })
+            .collect();
+        let hidden_count = user_ids.len().saturating_sub(REACTION_OWNER_DISPLAY_LIMIT);
+        if hidden_count > 0 {
+            labels.push(format!("[+{hidden_count} more]"));
+        }
+        labels
+            .chunks(REACTION_OWNER_COLUMNS)
+            .map(|row| format!("  {}", row.join(" ")))
+            .collect()
     }
 
     fn ignore_list_lines(&self) -> Vec<String> {
@@ -5947,6 +5982,7 @@ impl ChatState {
                 ChatEvent::ReactionOwnersListed {
                     user_id,
                     message_id,
+                    gilds,
                     owners,
                     usernames,
                 } if self.user_id == user_id
@@ -5954,7 +5990,7 @@ impl ChatState {
                 {
                     self.pending_reaction_owners_message_id = None;
                     self.extend_usernames(usernames);
-                    let lines = self.reaction_owner_lines(&owners);
+                    let lines = self.reaction_owner_lines(&gilds, &owners);
                     self.overlay = Some(Overlay::dismissible("Reactions", lines));
                 }
                 ChatEvent::ReactionOwnersListFailed { user_id, message }
