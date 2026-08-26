@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Screen;
 use crate::app::common::theme;
-use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
+use crate::app::common::username_effect::{CROWN_GLYPH, NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
@@ -1872,14 +1872,19 @@ fn put_label_styled(
     }
 }
 
-/// The floor label for one patron: the truncated name, plus `, <title>` when
-/// a title is rented, itself truncated to `LABEL_MAX`.
+/// The floor label for one patron: the truncated name, the crown glyph when
+/// they wear it, then `, <title>` when a title is rented, itself truncated to
+/// `LABEL_MAX`. The glyph is glued to the name exactly as it is in chat, so
+/// the two surfaces read the same.
 pub(crate) fn clubhouse_label(username: &str, flair: Option<&ResolvedName>) -> String {
-    let name = truncate_name(username);
-    match flair.and_then(|flair| flair.title.as_deref()) {
-        Some(title) => format!("{name}, {}", truncate_name(title)),
-        None => name,
+    let mut label = truncate_name(username);
+    if flair.is_some_and(|flair| flair.crown) {
+        label.push_str(CROWN_GLYPH);
     }
+    if let Some(title) = flair.and_then(|flair| flair.title.as_deref()) {
+        label.push_str(&format!(", {}", truncate_name(title)));
+    }
+    label
 }
 
 pub(crate) fn truncate_name(name: &str) -> String {

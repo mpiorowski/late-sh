@@ -358,15 +358,46 @@ Behavior:
   "tom took the crown from mira for 57,000" or "tom claimed the vacant
   crown for 5,000". Every takeover ships; the hold window is the throttle.
 
+Status: shipped 2026-08-26 (migration 156,
+`late-core/src/models/crown.rs`, `late-ssh/src/app/crown/`). Deviations from
+the design above, each deliberate:
+- The take transaction takes a **`pg_advisory_xact_lock` before** the
+  `SELECT ... FOR UPDATE`. A take from a vacant crown has no row to lock, so
+  `FOR UPDATE` alone cannot serialize the first two takers: they would both
+  insert and one would die on the partial unique index with a raw constraint
+  violation instead of a hold refusal. Both locks stay; neither replaces the
+  other.
+- The shared value is a `watch<Option<CrownHolder>>` carrying the holder
+  **and the reign's month**, not a bare `watch<Option<Uuid>>`. The month
+  rollover has no sweeper and no notify to wake anyone up, so the month has
+  to travel with the holder for the tick to expire it at read, the way
+  rentals expire.
+- The glyph rides `ResolvedName` in the existing flair map rather than a
+  second lookup threaded through every render context. `resolve_all` takes
+  the holder and gives them an entry even when they have bought nothing
+  else, so every surface that already reads `name_flair` gets the crown for
+  free and the ~1s comparison that repaints titles repaints the crown too.
+- The `crown` award is monthly but **rankless**, which split a property that
+  used to be one: `profile_award::is_rankless_award` (no rank digit) now
+  covers the milestones plus the crown, while `MILESTONE_AWARD_CATEGORIES`
+  (shown in chat labels whatever month they were earned) stays milestones
+  only. `CRWN1` would have been noise for a slot with one holder.
+- `/crown` answers in a **banner**, not an overlay: the crown is three facts
+  and the command reads like `/gift`. That keeps the phase's "no new UI
+  surface" promise literally.
+- The deposed holder gets a banner naming who took it. Not in the design,
+  but a glyph vanishing off your own name with no explanation reads as a
+  bug.
+
 Acceptance:
-- [ ] Two concurrent takes settle to exactly one debit and one reign
+- [x] Two concurrent takes settle to exactly one debit and one reign
       (test with two transactions against the same open reign).
-- [ ] Price ladder asserted for the first six takes from vacant.
-- [ ] Hold window and self-take refused uncharged.
-- [ ] Glyph visible to every viewer on every replica after one notify.
-- [ ] Month rollover: reign closed, award granted once, crown vacant at
+- [x] Price ladder asserted for the first six takes from vacant.
+- [x] Hold window and self-take refused uncharged.
+- [x] Glyph visible to every viewer on every replica after one notify.
+- [x] Month rollover: reign closed, award granted once, crown vacant at
       5,000.
-- [ ] Tests beside the model and the service; help copy; `chat/CONTEXT.md`
+- [x] Tests beside the model and the service; help copy; `chat/CONTEXT.md`
       and `leaderboard/CONTEXT.md` (award category).
 
 Out of scope: crown history page, multiple crowns, buying the crown from

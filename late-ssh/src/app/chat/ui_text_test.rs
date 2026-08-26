@@ -408,6 +408,7 @@ fn wrap_message_empty_body() {
 #[test]
 fn wrap_message_author_tint_splits_only_the_username() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (4, 9), // "alice" inside "★ alice 🌱" ("★" is 3 bytes)
         title_range: None,
         word: None,
@@ -446,6 +447,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
 #[test]
 fn wrap_message_author_tint_ignores_bad_ranges() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 99),
         title_range: None,
         word: None,
@@ -468,6 +470,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
 #[test]
 fn wrap_message_name_style_paints_per_char_over_author_style() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: None,
@@ -505,6 +508,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
 #[test]
 fn wrap_message_prints_drunk_word_between_name_and_stamp() {
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: Some(("wasted", Color::Rgb(120, 40, 35))),
@@ -540,6 +544,7 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
 fn wrap_message_omits_drunk_word_when_absent() {
     // A name_style-only tint with no drunk word: header stays lean.
     let tint = AuthorTint {
+        crown_range: None,
         range: (0, 5),
         title_range: None,
         word: None,

@@ -296,6 +296,12 @@ async fn main() -> anyhow::Result<()> {
     // Gild markers cross replicas over Postgres, not over this process's
     // chat broadcast; see `ChatService::start_gild_listener_task`.
     let _chat_gild_listener_task = chat_service.start_gild_listener_task(config.db.clone());
+    // The crown's glyph crosses replicas over Postgres, not over any
+    // in-process broadcast; the listener also seeds this replica's holder on
+    // every (re)connect. See `app/crown/svc.rs`.
+    let crown_service = late_ssh::app::crown::svc::CrownService::new(db.clone())
+        .with_activity(activity_publisher.clone());
+    let _crown_listener_task = crown_service.start_listener_task(config.db.clone());
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
@@ -395,6 +401,7 @@ async fn main() -> anyhow::Result<()> {
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
         pomodoro_directory: late_ssh::app::common::pomodoro::new_directory(),
+        crown_service: crown_service.clone(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

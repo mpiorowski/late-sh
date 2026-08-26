@@ -169,6 +169,7 @@ pub struct State {
     /// that own them, resolved per session in the tick loop). In-memory only:
     /// a countdown dies with its session, so there is nothing to persist.
     pub pomodoro_directory: crate::app::common::pomodoro::PomodoroDirectory,
+    pub crown_service: crate::app::crown::svc::CrownService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,
     pub now_playing_rx: watch::Receiver<HashMap<String, NowPlaying>>,
     pub radio_meta_rx:

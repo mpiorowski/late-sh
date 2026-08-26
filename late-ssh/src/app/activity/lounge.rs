@@ -160,6 +160,11 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // message forever, and keying on the author alone would swallow a
         // second message of theirs crossing the line in the same half hour.
         ActivityKind::MessageGilded { message_id, .. } => format!("gilded:{message_id}"),
+        // Keyed on the reign: one line per takeover, and the 30 minute hold
+        // already makes two of them by the same person inside the window
+        // impossible. Keying on the user alone would swallow a re-take after
+        // someone else briefly held it.
+        ActivityKind::CrownTaken { reign_id, .. } => format!("crown-taken:{reign_id}"),
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.
         ActivityKind::CyberspacePosted { title } => {

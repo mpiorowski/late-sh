@@ -1,10 +1,12 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 use crate::app::common::primitives::thousands;
 use crate::app::common::qr::{Barcode, HalfBlock};
+use crate::app::common::username_effect::CROWN_GLYPH;
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
+    crown::{CROWN_HOLD_MINUTES, CROWN_MIN_PRICE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 use qrcodegen::{QrCode, QrCodeEcc};
@@ -458,7 +460,18 @@ fn chips_help_lines() -> Vec<String> {
         "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
         "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
         "".to_string(),
-        "7. Gifts".to_string(),
+        "7. The crown".to_string(),
+        format!("  One slot, one holder, one {CROWN_GLYPH} after their name in every message they send."),
+        "  /crown shows who wears it and what taking it costs. /crown take buys it.".to_string(),
+        format!("  A vacant crown costs {}. After that it costs 1.5x whatever the holder paid, rounded up,", thousands(CROWN_MIN_PRICE)),
+        "  so the price ratchets on its own and nobody sets it.".to_string(),
+        "  Every chip is destroyed: the crown pays nobody, and none of it comes back into the economy.".to_string(),
+        format!("  A fresh reign cannot be taken for {CROWN_HOLD_MINUTES} minutes, and you cannot take a crown you already wear."),
+        "  It empties at the end of every UTC month: the crown goes back to vacant, and whoever wore it".to_string(),
+        "  when the month ended keeps the permanent [CRWN] badge for that month.".to_string(),
+        "  Every takeover posts to #lounge, naming both players.".to_string(),
+        "".to_string(),
+        "8. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
@@ -479,6 +492,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
         "  Gilds you buy on other people's messages.".to_string(),
+        "  The crown (/crown take), which burns the whole price.".to_string(),
         "  Monthly Top Chips ranks net chip delta, so Shop spending never lowers your rank; betting losses do.".to_string(),
     ]
 }
@@ -517,6 +531,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /dm @user          open a direct message",
         "  /active            list active users",
         "  /gift @user <n>    send chips, with an optional note after the amount",
+        "  /crown             who wears the crown; /crown take buys it",
         "  /friends           list friends",
         "  /friend [@user]    list friends, or mark a user as a friend",
         "  /unfriend [@user]  list friends, or remove a friend mark",
@@ -905,6 +920,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  [LA]      Lateris (Tetris)",
         "  [24#]     2048",
         "  [SN]      Snake",
+        "  [CRWN]    The Crown, to whoever wore it when the month ended.",
+        "            It is the one monthly badge with no rank digit: the crown has one holder.",
         "  The door badges are one-off feats, shown with no rank digit. Each pays its chips once",
         "  per account, on the first grant; the full guide is on the Leaderboards page.",
         "  [LMG]     Lateania Archdemon             10,000 chips",

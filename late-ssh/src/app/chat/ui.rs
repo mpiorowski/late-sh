@@ -26,7 +26,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::ResolvedName,
+    username_effect::{CROWN_GLYPH, ResolvedName},
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
@@ -1630,10 +1630,12 @@ fn ensure_chat_rows_cache(
             prefix,
             segments,
             author_range,
+            crown_range,
             title_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
             is_friend,
             author: &author,
+            crown: flair.is_some_and(|flair| flair.crown),
             title: flair.and_then(|flair| flair.title.as_deref()),
             special_badges: special_list,
             chat_badges: &chat_badge_refs,
@@ -1646,13 +1648,17 @@ fn ensure_chat_rows_cache(
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
         });
         let name_style = flair.and_then(|flair| flair.style);
-        let author_tint = (drunk_word.is_some() || name_style.is_some() || title_range.is_some())
-            .then_some(AuthorTint {
-                range: author_range,
-                title_range,
-                word: drunk_word,
-                name_style,
-            });
+        let author_tint = (drunk_word.is_some()
+            || name_style.is_some()
+            || crown_range.is_some()
+            || title_range.is_some())
+        .then_some(AuthorTint {
+            range: author_range,
+            crown_range,
+            title_range,
+            word: drunk_word,
+            name_style,
+        });
 
         let reactions = ctx
             .message_reactions
@@ -2383,6 +2389,7 @@ fn build_author_prefix_and_segments(
     let built = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend,
         author,
+        crown: false,
         title: None,
         special_badges,
         chat_badges: &chat_badges,
@@ -2399,6 +2406,8 @@ fn build_author_prefix_and_segments(
 struct AuthorPrefixInput<'a> {
     is_friend: bool,
     author: &'a str,
+    /// Whether this author currently wears the crown.
+    crown: bool,
     title: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
@@ -2408,13 +2417,15 @@ struct AuthorPrefixInput<'a> {
 }
 
 /// The built author header prefix: the string, the clickable column
-/// segments, the bare username's byte range, and the rented title's byte
-/// range (which always follows the username directly, so the two are
-/// adjacent).
+/// segments, the bare username's byte range, and the byte ranges of the two
+/// decorations that trail it. The crown follows the username directly and
+/// the title follows the crown, so all three runs are adjacent and the
+/// painter can walk them in order.
 struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
+    crown_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
 }
 
@@ -2423,6 +2434,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let AuthorPrefixInput {
         is_friend,
         author,
+        crown,
         title,
         special_badges,
         chat_badges,
@@ -2466,6 +2478,17 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     prefix.push_str(author);
     let author_range = (author_range_start, prefix.len());
     col += author_w;
+
+    // The crown is glued to the name with no separator: it is a mark on the
+    // person, not another badge in the stack, and it must not be mistaken
+    // for one. It carries no clickable segment of its own; the name beside
+    // it already opens the profile.
+    let crown_range = crown.then(|| {
+        let crown_start = prefix.len();
+        prefix.push_str(CROWN_GLYPH);
+        col += UnicodeWidthStr::width(CROWN_GLYPH) as u16;
+        (crown_start, prefix.len())
+    });
 
     // The rented title reads as an aside on the name (`mira, the
     // insufferable`), so it sits between the name and the badge stack and is
@@ -2535,6 +2558,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         prefix,
         segments,
         author_range,
+        crown_range,
         title_range,
     }
 }

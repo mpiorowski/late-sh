@@ -190,6 +190,25 @@ impl ActivityPublisher {
         });
     }
 
+    /// `from` is the deposed holder's username, already resolved by the
+    /// crown service: it reads the previous reign inside the take
+    /// transaction, so there is nothing left here to look up.
+    pub fn crown_taken_task(
+        &self,
+        taker_id: Uuid,
+        reign_id: Uuid,
+        price: i64,
+        from: Option<String>,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(taker_id).await;
+            let _ = publisher.tx.send(ActivityEvent::crown_taken(
+                taker_id, username, reign_id, price, from,
+            ));
+        });
+    }
+
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

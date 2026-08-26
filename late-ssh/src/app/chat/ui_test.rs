@@ -235,6 +235,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         crate::app::common::username_effect::ResolvedName {
             style: None,
             title: Some("the night clerk".to_string()),
+            crown: false,
         },
     )]);
     let peer_pomodoros = HashMap::new();
@@ -285,6 +286,99 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
             .iter()
             .any(|row| row.contains("bob, the night clerk 🐱")),
         "no titled author header in {rendered:#?}"
+    );
+}
+
+/// The crown is glued to the name, ahead of a rented title and ahead of the
+/// badge stack, and it never displaces either.
+#[test]
+fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
+    theme::set_current_by_id("late");
+
+    let room_id = Uuid::from_u128(1);
+    let current_user_id = Uuid::from_u128(2);
+    let author_id = Uuid::from_u128(3);
+    let created = Utc::now();
+    let message = ChatMessage {
+        id: Uuid::from_u128(10),
+        created,
+        updated: created,
+        reply_to_message_id: None,
+        reply_to_user_id: None,
+        room_id,
+        user_id: author_id,
+        body: "mine now".to_string(),
+    };
+
+    let usernames = HashMap::from([
+        (current_user_id, "alice".to_string()),
+        (author_id, "bob".to_string()),
+    ]);
+    let countries = HashMap::new();
+    let bonsai_glyphs = HashMap::new();
+    let chat_badges = HashMap::from([(author_id, "🐱".to_string())]);
+    let friend_user_ids = HashSet::new();
+    let afk_user_ids = HashSet::new();
+    let live_user_ids = HashSet::new();
+    let message_reactions = HashMap::new();
+    let message_gilds = HashMap::new();
+    let inline_images = HashMap::new();
+    let profile_award_badges = HashMap::new();
+    let drunk_levels = HashMap::new();
+    let name_flair = HashMap::from([(
+        author_id,
+        crate::app::common::username_effect::ResolvedName {
+            style: None,
+            title: Some("the night clerk".to_string()),
+            crown: true,
+        },
+    )]);
+    let peer_pomodoros = HashMap::new();
+    let translations = HashMap::new();
+    let translation_hidden = HashSet::new();
+    let username_lookup = UsernameLookup::new(&usernames, None);
+    let ctx = ChatRowsContext {
+        versions: ChatRowsVersions::default(),
+        current_user_id,
+        afk_user_ids: &afk_user_ids,
+        live_user_ids: &live_user_ids,
+        show_flag_fallback: false,
+        usernames: &username_lookup,
+        countries: &countries,
+        friend_user_ids: &friend_user_ids,
+        bonsai_glyphs: &bonsai_glyphs,
+        chat_badges: &chat_badges,
+        profile_award_badges: &profile_award_badges,
+        message_reactions: &message_reactions,
+        message_gilds: &message_gilds,
+        inline_images: &inline_images,
+        unread_marker: None,
+        drunk_levels: &drunk_levels,
+        name_flair: &name_flair,
+        peer_pomodoros: &peer_pomodoros,
+        translations: &translations,
+        translation_hidden: &translation_hidden,
+    };
+
+    let mut cache = ChatRowsCache::default();
+    ensure_chat_rows_cache(&mut cache, vec![&message], 60, ctx);
+
+    let rendered: Vec<String> = cache
+        .all_rows
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+
+    assert!(
+        rendered
+            .iter()
+            .any(|row| row.contains("bob\u{2654}, the night clerk 🐱")),
+        "no crowned author header in {rendered:#?}"
     );
 }
 
@@ -2306,10 +2400,12 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         prefix,
         segments: segs,
         author_range,
+        crown_range: _,
         title_range,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend: false,
         author: "bob",
+        crown: false,
         title: None,
         special_badges: &[],
         chat_badges: &chat_badges,
@@ -2333,10 +2429,12 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
         prefix,
         segments: segs,
         author_range,
+        crown_range: _,
         title_range,
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend: false,
         author: "bob",
+        crown: false,
         title: Some("the insufferable"),
         special_badges: &[],
         chat_badges: &chat_badges,
@@ -2364,6 +2462,7 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend: false,
         author: "bob",
+        crown: false,
         title: Some("   "),
         special_badges: &[],
         chat_badges: &[],
@@ -2384,6 +2483,7 @@ fn header_prefix_orders_all_badge_classes() {
     let prefix = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend: false,
         author: "alice",
+        crown: false,
         title: None,
         special_badges: &["mod", "developer", "artist"],
         chat_badges: &chat_badges,

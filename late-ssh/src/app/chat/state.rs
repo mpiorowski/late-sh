@@ -290,6 +290,31 @@ fn parse_golive_command(body: &str) -> Option<GoLiveCommand> {
 /// Longest `/golive` title kept; the rest is cut at the parse boundary.
 const GOLIVE_TITLE_MAX_CHARS: usize = 80;
 
+/// The crown, requested from the composer. `App` owns the crown service, so
+/// the composer just records the intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CrownCommand {
+    /// `/crown`: who wears it, for how long, and what taking it costs.
+    Status,
+    /// `/crown take`: buy it at whatever the ladder says right now.
+    Take,
+}
+
+/// `Some(Some(command))` on `/crown` or `/crown take`, `Some(None)` on
+/// anything else after `/crown` (usage banner), `None` when the line is not
+/// a crown command at all.
+fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
+    let rest = body.trim().strip_prefix("/crown")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(match rest.trim() {
+        "" => Some(CrownCommand::Status),
+        "take" => Some(CrownCommand::Take),
+        _ => None,
+    })
+}
+
 /// An aquarium control requested from the composer (`/aquarium`,
 /// `/aquarium feed`). `App` owns the tray state and entitlements, so the
 /// composer just records the intent and `App` carries it out.
@@ -829,6 +854,7 @@ pub struct ChatState {
     requested_voice_command: Option<VoiceCommand>,
     /// Set by /golive; consumed by `App` (which owns the stream service).
     requested_golive: Option<GoLiveCommand>,
+    requested_crown: Option<CrownCommand>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -1132,6 +1158,7 @@ impl ChatState {
             requested_quit: false,
             requested_voice_command: None,
             requested_golive: None,
+            requested_crown: None,
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
@@ -1812,6 +1839,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_golive(&mut self) -> Option<GoLiveCommand> {
         self.requested_golive.take()
+    }
+
+    pub(crate) fn take_requested_crown(&mut self) -> Option<CrownCommand> {
+        self.requested_crown.take()
     }
 
     pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
@@ -3329,6 +3360,15 @@ impl ChatState {
         if let Some(parsed) = parse_golive_command(&body) {
             self.clear_composer_after_submit();
             self.requested_golive = Some(parsed);
+            return None;
+        }
+
+        if let Some(parsed) = parse_crown_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error("Usage: /crown, or /crown take"));
+            };
+            self.requested_crown = Some(command);
             return None;
         }
 

@@ -119,6 +119,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // construction (once per message, at the threshold gild only) and the
         // line points at a room worth reading.
         ActivityKind::MessageGilded { .. } => true,
+        // One slot, one holder, and every takeover names both players. Rare
+        // by price and throttled by the 30 minute hold, so this is the story
+        // the crown exists to ship.
+        ActivityKind::CrownTaken { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").

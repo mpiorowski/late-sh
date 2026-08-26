@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 2,000 / Gold 10,000) that pays the author two thirds and burns the rest, leaving a permanent tier-colored bar down the message and a `◆`-glyph marker at the head of its footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one slot per buyer per message that only ever goes up. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
+- Last updated: 2026-08-26 (the crown: one slot, one holder, one ♔ glued to their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(5,000, ceil(paid x 1.5))`, burned whole, with a 30 minute hold on a fresh reign and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -64,7 +64,7 @@ late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cur
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`chat_message_gild.rs`,
+`chat_message_gild.rs`, `crown.rs`,
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
@@ -296,6 +296,7 @@ User commands:
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
+- `/crown` prints who wears the crown, how long they have, and what taking it costs; `/crown take` buys it. Parsed in `submit_composer` (`parse_crown_command`) and drained by `App::tick_crown`, which owns the crown service and both banners. §9c.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
 - `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, can run for 10, 20, or 30 minutes, and are limited to one active poll per room. Active polls render at the top of the room message pane; while one is visible, `va`, `vb`, and `vc` vote for poll options. `v1`, `v2`, and `v3` remain music stream/station selectors. Failed starts show the remaining active wait in the banner.
 - `/pomodoro [minutes] [label...]` starts a session-local focus countdown (default 25 minutes, cap 180, label control-stripped and capped at 24 display cells); a leading integer is the duration, so `/pomodoro deep work` is a default-length block named `deep work`. `/pomodoro stop` cancels it, a second start replaces the running one, and the label is echoed in the banner. Parsed in `submit_composer`, drained via `take_requested_pomodoro` in `handle_post_submit_requests`; the timer itself is `App::pomodoro` (in-memory, no DB, dropped on disconnect) because `tick.rs` fires it and the status HUD draws it on every screen. Expiry rides the shared 1Hz edge: it banners and pushes a `GameEvents` desktop notification, and a running timer dirties that edge so the `MM:SS` badge in the top border counts down. The badge is the only width-degrading segment in `status_hud_title`: the right-aligned HUD paints over the left title, so the newcomer sheds its label and then itself when the border is tight (an 80-col terminal with unread mentions + voice + chips has no room for it) rather than eating the page tabs. Expiry still banners and notifies with the badge hidden. Peers see a presence badge instead: every session that changes its timer (start, stop, tick expiry, disconnect teardown in `ssh.rs`) publishes through `App::publish_pomodoro` into the process-shared `common/pomodoro.rs` snapshot-swap directory (same shape as the flair directory), which stores only `ends_at`, never the label; `tick.rs` resolves it once a second into `App::peer_pomodoros` and chat author labels paint the rounded-up whole-minute countdown as a presence badge after AFK. The badge string only changes on minute rollovers, so the chat-row epoch bump is 1/60th the resolve cadence.
@@ -482,6 +483,90 @@ The tier picker is `chat/gild/` (`state.rs` selection only, `input.rs`
 j/k/1-3/Enter/Esc, `ui.rs` the popup). It reads `App.chip_balance` at draw
 time rather than caching a balance of its own, and dims tiers the balance
 cannot cover; the floor guard in the chip move is what actually decides.
+
+---
+
+## 9c. The Crown
+
+One slot, one holder, one ♔ after their name. The crown is not a rental and
+not a Shop item: it is a single row you take off whoever has it by paying
+more than they did, and every chip is destroyed.
+`late-core/src/models/crown.rs` owns the table (migration 156) and the price
+ladder; `late-ssh/src/app/crown/svc.rs` owns the transaction, the refusals,
+the telemetry, and the #lounge line. It lives outside `chat/` because it is
+its own domain; only the command and the glyph are chat's.
+
+- **Price.** `next_price(paid)` = `max(5,000, ceil(paid * 1.5))`, and a
+  vacant crown is always 5,000. The ladder from empty is 5,000 / 7,500 /
+  11,250 / 16,875 / 25,313 / 37,970. Nobody tunes it: it ratchets with
+  whoever last paid.
+- **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
+  `source_ref` = the reign id, and there is no matching credit reason
+  anywhere. The whole price leaves the money supply, so the burn is the
+  absence of a credit rather than a transfer to a house wallet.
+- **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
+  wording): you already wear it, the reign is inside its 30 minute hold
+  (`CROWN_HOLD_MINUTES`; the hold is the throttle on the #lounge line, since
+  every takeover posts), and the chip floor. Every refusal is uncharged, and
+  a refusal drops the transaction, so nothing is left behind.
+- **Transaction** (`CrownReign::lock_open` then close, open, debit, notify).
+  Two locks, and neither replaces the other: `pg_advisory_xact_lock` is what
+  serializes a take from a *vacant* crown (there is no row to take
+  `FOR UPDATE`, so without it two first takes would both insert and one
+  would die on the partial unique index), and the `FOR UPDATE` keeps the
+  read-then-write on an existing reign exact. A second racing take therefore
+  reads the reign the first one opened and comes back as a hold refusal, not
+  a constraint violation.
+- **One open reign, ever.** `crown_reigns_single_open` is a unique index on
+  the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
+  is a table fact.
+- **Month rollover has no sweeper.** A reign carries the first of the UTC
+  month it was taken in, and `CrownReign::is_current` requires that month to
+  still be the current one. At the boundary the crown simply reads as vacant
+  at the minimum, the glyph stops resolving on the next 1Hz tick, and the
+  next take closes the stale row on its way past. Same read-time expiry the
+  rentals use.
+- **Distribution.** `CrownService` holds a process-shared
+  `watch<Option<CrownHolder>>` (user id plus month), seeded by the listener
+  and refreshed on the `crown_changed` notify
+  (`start_listener_task`, one connection per process, wired in `main.rs`,
+  reconnecting and re-seeding after 5s). The selling replica is not
+  special-cased: it learns about its own take the same way a second replica
+  does.
+- **Rendering.** `App::tick` reads the watch on the same once-a-second edge
+  as the flair directory, filters it through `CrownHolder::if_current`, and
+  passes the holder into
+  `common/username_effect.rs::resolve_all`, which sets `ResolvedName.crown`.
+  Every surface that already reads `name_flair` therefore gets the crown for
+  free and no render ever queries for it; a holder who has bought nothing
+  else gets an entry of their own. The glyph is glued to the name with no
+  separator (`bob♔, the night clerk 🐱`): it sits ahead of a rented title and
+  ahead of the badge stack, carries no clickable segment of its own, and is
+  painted in `AMBER_GLOW` rather than taking the name's effect
+  (`ui.rs::build_author_prefix_and_segments_with_chat_badges` builds the
+  range, `ui_text.rs::push_author_prefix_spans` paints it). The Clubhouse
+  floor label does the same (`clubhouse/ui.rs::clubhouse_label`).
+- **Commands.** `/crown` and `/crown take` are parsed in `submit_composer`
+  and drained by `App::tick_crown`. Both answers arrive as banners off
+  `CrownEvent`, because the crown service is not `ChatService` and has its
+  own broadcast (the `StreamService` shape). The deposed holder is told who
+  took it: a glyph vanishing off your own name with no explanation reads as
+  a bug.
+- **Feed.** `ActivityKind::CrownTaken` fires on every takeover and names both
+  players: "tom took the crown from mira for 57,000", or "tom claimed the
+  vacant crown for 5,000". Keyed on the reign id in the lounge repeat
+  throttle. Unlike the gild line this one names the loser on purpose: the
+  crown is a single slot, so the takeover *is* the story.
+- **Award.** The month's last holder gets a `profile_awards` row, category
+  `crown`, granted by the existing monthly snapshot
+  (`snapshot_previous_month_profile_awards`, a `crown_holder` CTE reading
+  last month's latest reign). The badge is `CRWN` with no rank digit
+  (`profile_award::is_rankless_award`), and it is *not* a milestone, so it
+  shows for the month after and then makes way for the next holder's.
+- **IRC sees nothing, and cannot play.** The glyph is a TUI author-header
+  span, so IRC clients get the message body and nothing else, and `/crown`
+  is composer-parsed (`submit_composer`), which the ircd send path never
+  reaches.
 
 ---
 

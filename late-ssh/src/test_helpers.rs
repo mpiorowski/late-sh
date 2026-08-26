@@ -295,6 +295,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         pomodoro_directory: crate::app::common::pomodoro::new_directory(),
+        crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
         config,
         db: db.clone(),
         audio_service: crate::app::audio::svc::AudioService::new(
@@ -630,6 +631,7 @@ fn make_app_with_chat_service_and_permissions(
         username_directory: None,
         flair_directory: None,
         pomodoro_directory: None,
+        crown_service: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,
@@ -848,6 +850,7 @@ pub fn make_app_with_paired_client(
         username_directory: None,
         flair_directory: None,
         pomodoro_directory: None,
+        crown_service: None,
         activity_feed_rx: None,
         initial_announcements: None,
         is_new_user: false,

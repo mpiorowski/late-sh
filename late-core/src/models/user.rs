@@ -651,6 +651,10 @@ impl User {
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           WHEN 'darkroom_escape' THEN 'ADE'
                           WHEN 'darkroom_beacon' THEN 'ADB'
+                          -- Monthly like the boards below, rankless like the
+                          -- milestones above: one holder, so no rank digit
+                          -- (`profile_award::is_rankless_award`).
+                          WHEN 'crown' THEN 'CRWN'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -667,6 +671,7 @@ impl User {
                                  CASE category
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
+                                   WHEN 'crown' THEN 5
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4

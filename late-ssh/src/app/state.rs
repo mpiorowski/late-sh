@@ -370,6 +370,9 @@ pub struct SessionConfig {
     /// Running `/pomodoro` countdowns, shared process-wide (snapshot-swap; see
     /// `common/pomodoro.rs`).
     pub pomodoro_directory: Option<PomodoroDirectory>,
+    /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
+    /// build an app without one; the glyph then simply never appears.
+    pub crown_service: Option<crate::app::crown::svc::CrownService>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
@@ -514,6 +517,12 @@ pub struct App {
     pub(super) last_username_directory: Option<Arc<HashMap<Uuid, String>>>,
     pub(super) flair_directory: Option<crate::app::common::username_effect::NameFlairDirectory>,
     pub(super) pomodoro_directory: Option<PomodoroDirectory>,
+    pub(super) crown_service: Option<crate::app::crown::svc::CrownService>,
+    /// The process-shared crown holder, read on the ~1s edge and folded into
+    /// `name_flair`, so no render ever queries for the glyph.
+    pub(super) crown_holder_rx:
+        Option<watch::Receiver<Option<crate::app::crown::svc::CrownHolder>>>,
+    pub(super) crown_events_rx: Option<broadcast::Receiver<crate::app::crown::svc::CrownEvent>>,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -1335,6 +1344,15 @@ impl App {
             last_username_directory: None,
             flair_directory: config.flair_directory,
             pomodoro_directory: config.pomodoro_directory,
+            crown_holder_rx: config
+                .crown_service
+                .as_ref()
+                .map(crate::app::crown::svc::CrownService::subscribe_holder),
+            crown_events_rx: config
+                .crown_service
+                .as_ref()
+                .map(crate::app::crown::svc::CrownService::subscribe_events),
+            crown_service: config.crown_service,
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -3020,6 +3038,103 @@ impl App {
                 | StreamEvent::GoLiveObsReady { .. }
                 | StreamEvent::GoLiveFailed { .. }
                 | StreamEvent::ViewerJoined { .. } => {}
+            }
+        }
+
+        changed
+    }
+
+    /// The crown's two commands and the answers to them. The glyph itself is
+    /// not handled here: it rides `name_flair`, resolved on the ~1s edge in
+    /// `tick.rs` from the process-shared holder, so a takeover on another
+    /// replica moves it with no event of any kind.
+    pub(crate) fn tick_crown(&mut self) -> bool {
+        let mut changed = false;
+
+        if let Some(command) = self.chat.take_requested_crown() {
+            changed = true;
+            match &self.crown_service {
+                // Only a test harness builds an app without one; saying so
+                // beats a command that silently does nothing.
+                None => {
+                    self.banner = Some(Banner::error("The crown is not available here."));
+                }
+                Some(service) => match command {
+                    crate::app::chat::state::CrownCommand::Status => {
+                        service.status_task(self.user_id);
+                    }
+                    crate::app::chat::state::CrownCommand::Take => {
+                        service.take_task(self.user_id, self.username.clone());
+                        self.banner = Some(Banner::success("Reaching for the crown..."));
+                    }
+                },
+            }
+        }
+
+        let mut events = Vec::new();
+        if let Some(rx) = &mut self.crown_events_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        self.crown_events_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for event in events {
+            use crate::app::common::primitives::thousands;
+            use crate::app::crown::svc::CrownEvent;
+            match event {
+                CrownEvent::Status { user_id, line } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::info(&line));
+                }
+                CrownEvent::Failed { user_id, message } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::error(&message));
+                }
+                CrownEvent::Taken {
+                    taker_id,
+                    taker_balance,
+                    price,
+                    ref from,
+                    ..
+                } if taker_id == self.user_id => {
+                    changed = true;
+                    let cost = thousands(price);
+                    let balance = thousands(taker_balance);
+                    self.banner = Some(Banner::success(&match from {
+                        Some((_, from)) => format!(
+                            "The crown is yours, taken from {from} for {cost} chips (balance {balance})"
+                        ),
+                        None => format!(
+                            "The crown is yours, claimed vacant for {cost} chips (balance {balance})"
+                        ),
+                    }));
+                }
+                // The deposed holder: a glyph vanishing off your own name
+                // with no explanation reads as a bug, so they are told who
+                // has it now.
+                CrownEvent::Taken {
+                    ref taker_username,
+                    price,
+                    from: Some((deposed_id, _)),
+                    ..
+                } if deposed_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::error(&format!(
+                        "{taker_username} took the crown from you for {} chips",
+                        thousands(price)
+                    )));
+                }
+                CrownEvent::Status { .. }
+                | CrownEvent::Failed { .. }
+                | CrownEvent::Taken { .. } => {}
             }
         }
 

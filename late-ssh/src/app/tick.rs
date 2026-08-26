@@ -234,6 +234,7 @@ impl App {
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
+        changed |= self.tick_crown();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
@@ -613,11 +614,21 @@ impl App {
                 self.chat_ctx_epoch += 1;
             }
             if let Some(directory) = &self.flair_directory {
+                let now = chrono::Utc::now();
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
+                // The crown rides the same map, and lapses the same way: an
+                // entry from a finished UTC month resolves to nobody, which
+                // is what empties the slot at the rollover with no sweeper.
+                let crown_holder = self
+                    .crown_holder_rx
+                    .as_mut()
+                    .and_then(|rx| *rx.borrow_and_update())
+                    .and_then(|holder| holder.if_current(now));
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
+                    crown_holder,
                     phase,
-                    chrono::Utc::now(),
+                    now,
                 );
                 if self.name_flair != name_flair {
                     self.name_flair = name_flair;

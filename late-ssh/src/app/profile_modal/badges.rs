@@ -69,7 +69,8 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled("Monthly awards", heading)),
         Line::from(Span::styled(
             "Snapshotted at month end from last month's totals on the boards to the left. Top 3 only, \
-             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own.",
+             rank digit 1-3 (AW1 is that month's #1). Prestige only, no chips of their own. The \
+             crown is the exception: one holder, so no digit.",
             dim,
         )),
         Line::from(""),
@@ -88,6 +89,11 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         ("LA", "Lateris", "best Tetris score last month"),
         ("24#", "2048", "best 2048 score last month"),
         ("SN", "Snake", "best Snake score last month"),
+        (
+            "CRWN",
+            "The Crown",
+            "wore the crown when last month ended (/crown)",
+        ),
     ] {
         lines.push(entry_line(item_code, name, source, code, text, dim));
     }

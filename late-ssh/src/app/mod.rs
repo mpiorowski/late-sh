@@ -11,6 +11,7 @@ pub(crate) mod bonsai_v2;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;
+pub mod crown;
 pub mod dashboard;
 #[cfg(test)]
 mod dashboard_flow_test;

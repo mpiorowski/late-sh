@@ -1006,6 +1006,7 @@ impl russh::server::Handler for ClientHandler {
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
             pomodoro_directory: Some(self.state.pomodoro_directory.clone()),
+            crown_service: Some(self.state.crown_service.clone()),
             activity_feed_rx: self.activity_feed_rx.take(),
             initial_announcements,
             user_id,

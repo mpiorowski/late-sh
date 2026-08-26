@@ -78,7 +78,7 @@ fn directory_set_expire_replace() {
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
     assert!(resolved[&user].style.is_some());
     assert!(
         !resolved.contains_key(&other),
@@ -127,7 +127,7 @@ fn title_and_color_resolve_and_expire_independently() {
         },
     );
 
-    let resolved = resolve_all(&snapshot(&directory), 0, now);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
     assert_eq!(
         resolved[&user].style,
         Some(NameStyle::Solid(Color::Rgb(120, 180, 255)))
@@ -136,13 +136,53 @@ fn title_and_color_resolve_and_expire_independently() {
 
     // The color lapses first: the title outlives it, and the entry stays.
     let later = now + Duration::minutes(90);
-    let resolved = resolve_all(&snapshot(&directory), 0, later);
+    let resolved = resolve_all(&snapshot(&directory), None, 0, later);
     assert_eq!(resolved[&user].style, None);
     assert_eq!(resolved[&user].title.as_deref(), Some("the insufferable"));
 
     // Both lapsed: the user drops out of the resolved map entirely.
     let much_later = now + Duration::hours(3);
-    assert!(!resolve_all(&snapshot(&directory), 0, much_later).contains_key(&user));
+    assert!(!resolve_all(&snapshot(&directory), None, 0, much_later).contains_key(&user));
+}
+
+/// The crown is not a rental, so it has no directory entry of its own: a
+/// holder who has never bought anything still has to reach the renderers,
+/// and losing the crown must not take a live effect down with it.
+#[test]
+fn the_crown_resolves_for_a_holder_with_nothing_else_bought() {
+    let directory = new_directory();
+    let bare_holder = Uuid::now_v7();
+    let decorated = Uuid::now_v7();
+    let now = Utc::now();
+
+    set_user(
+        &directory,
+        decorated,
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Glow(GlowColor::Gold),
+                ends_at: now + Duration::hours(1),
+            }),
+            title: None,
+        },
+    );
+
+    // A holder with an empty wallet's worth of flair still gets an entry.
+    let resolved = resolve_all(&snapshot(&directory), Some(bare_holder), 0, now);
+    assert!(resolved[&bare_holder].crown);
+    assert_eq!(resolved[&bare_holder].style, None);
+    assert!(!resolved[&decorated].crown);
+
+    // The crown is additive: taking it never disturbs a live effect.
+    let resolved = resolve_all(&snapshot(&directory), Some(decorated), 0, now);
+    assert!(resolved[&decorated].crown);
+    assert!(resolved[&decorated].style.is_some());
+    assert!(!resolved.contains_key(&bare_holder));
+
+    // A vacant crown leaves nobody wearing it, and nobody else changed.
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    assert!(!resolved[&decorated].crown);
+    assert!(resolved[&decorated].style.is_some());
 }
 
 #[test]
