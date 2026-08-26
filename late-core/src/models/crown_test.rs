@@ -24,7 +24,7 @@ fn the_price_ladder_climbs_from_a_vacant_crown() {
         prices.push(price);
         paid = Some(price);
     }
-    assert_eq!(prices, vec![5_000, 7_500, 11_250, 16_875, 25_313, 37_970]);
+    assert_eq!(prices, vec![500, 750, 1_125, 1_688, 2_532, 3_798]);
     assert_eq!(prices[0], CROWN_MIN_PRICE);
 }
 
@@ -64,29 +64,6 @@ fn a_reign_stops_counting_when_its_month_does() {
         ..reign
     };
     assert!(!closed.is_current(same_month));
-}
-
-/// The hold is what keeps a takeover war out of #lounge: for its first half
-/// hour a reign refuses every take, and the refusal can say how long is left.
-#[test]
-fn a_fresh_reign_is_held_for_half_an_hour() {
-    let taken_at = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
-    let reign = CrownReign {
-        id: uuid::Uuid::now_v7(),
-        month: crown_month(taken_at),
-        holder_user_id: uuid::Uuid::now_v7(),
-        paid_chips: 5_000,
-        taken_at,
-        ended_at: None,
-    };
-
-    let ten_minutes_in = taken_at + chrono::Duration::minutes(10);
-    assert!(reign.is_held(ten_minutes_in));
-    assert_eq!(reign.hold_remaining_secs(ten_minutes_in), 20 * 60);
-
-    let half_hour_in = taken_at + chrono::Duration::minutes(30);
-    assert!(!reign.is_held(half_hour_in));
-    assert_eq!(reign.hold_remaining_secs(half_hour_in), 0);
 }
 
 /// Two takes racing for a vacant crown must not both land. The advisory lock
@@ -168,7 +145,7 @@ async fn only_one_reign_is_ever_open() {
         .expect("a reign is open");
     assert_eq!(open.id, second.id);
     assert_eq!(open.holder_user_id, challenger.id);
-    assert_eq!(open.paid_chips, 7_500);
+    assert_eq!(open.paid_chips, 750);
     // Stamped by the database, from the clock `taken_at` comes from.
     assert_eq!(open.month, crown_month(open.taken_at));
     assert_eq!(open.month, crown_month(Utc::now()));

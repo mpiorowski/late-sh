@@ -94,9 +94,9 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Gild tiers | 500 / 2,000 / 10,000 (an hour, a day, a week of completionist arcade play; Gold is also the most one buyer can put on a message, so it must be reachable) |
 | Gild split | 2/3 to the author (`GildReceived`), 1/3 never re-minted |
 | Gild feed threshold | a message's 3rd gild, once |
-| Crown minimum price | 5,000 |
-| Crown ratchet | next price = max(5,000, ceil(paid x 1.5)), 100% burned |
-| Crown hold | 30 minutes before a fresh reign can be taken |
+| Crown minimum price | 500 (lowered from 5,000 on 2026-08-26 so the month's race starts on day one; a fresh account can claim it, and the ratchet, not the floor, is what makes it dear) |
+| Crown ratchet | next price = max(500, ceil(paid x 1.5)), 100% burned: 500 / 750 / 1,125 / 1,688 / 2,532 / 3,798 / 5,697 / 8,546 from empty |
+| Crown hold | none (removed 2026-08-26: a hold turned month end into a clock game around the hold window; without it the last take before midnight wins, and the 1.5x ladder is the only throttle) |
 | Crown reset | UTC month boundary; month-end holder gets a `profile_awards` row |
 | Burn milestones | 100,000 / 500,000 / 1,000,000 |
 | Pot ticket | 100 chips |
@@ -336,8 +336,7 @@ Behavior:
   unique index enforces at most one.
 - `/crown` prints holder, held-for, and the price to take it. `/crown take`
   runs one transaction: `SELECT ... FOR UPDATE` on the current reign,
-  refuse if `taken_at` is inside the hold window or the caller already
-  holds it, price = `max(5000, ceil(paid_chips * 1.5))` (5,000 when vacant),
+  refuse if the caller already holds it, price = `max(500, ceil(paid_chips * 1.5))` (500 when vacant),
   debit `ChipMove::CrownTaken` (floor-guarded, 100% burn, no credit row),
   close the old reign, insert the new one, `NOTIFY crown_changed`.
 - Rendering: a crown glyph immediately after the holder's name in chat
@@ -355,8 +354,8 @@ Behavior:
   category to the guide lines and the help modal; the badge coverage test
   in `app/profile_modal/badges_test.rs` will name it if forgotten.
 - Feed: `ActivityKind::CrownTaken { from: Option<username>, price }`:
-  "tom took the crown from mira for 57,000" or "tom claimed the vacant
-  crown for 5,000". Every takeover ships; the hold window is the throttle.
+  "tom stole the crown from mira for 57,000" or "tom claimed the vacant
+  crown for 500". Every takeover ships; the 1.5x ladder is the throttle.
 
 Status: shipped 2026-08-26 (migration 156,
 `late-core/src/models/crown.rs`, `late-ssh/src/app/crown/`). Deviations from
@@ -365,7 +364,7 @@ the design above, each deliberate:
   `SELECT ... FOR UPDATE`. A take from a vacant crown has no row to lock, so
   `FOR UPDATE` alone cannot serialize the first two takers: they would both
   insert and one would die on the partial unique index with a raw constraint
-  violation instead of a hold refusal. Both locks stay; neither replaces the
+  violation instead of paying the next rung. Both locks stay; neither replaces the
   other.
 - The shared value is a `watch<Option<CrownHolder>>` carrying the holder
   **and the reign's month**, not a bare `watch<Option<Uuid>>`. The month
@@ -400,6 +399,19 @@ the design above, each deliberate:
   the advisory-lock wait. Otherwise a take blocked across midnight on the
   last of the month is born with a month that is already over: chips
   burned, crown vacant, and last month's award handed to the wrong person.
+- Every takeover also posts a **headline**: a real `system` chat message in
+  #lounge with no ticker prefix ("👑 tom stole the crown from mira for
+  1,688 chips. Next price: 2,532 chips."), on top of the ticker line. The
+  ticker is glanceable and gone; the crown changing hands deserves a row in
+  history. `filter::lounge_headline` is the exhaustive twin of
+  `lounge_includes`, and the crown is its only arm today.
+- **No hold.** The design's 30 minute hold is gone. With the `CRWN` badge
+  going to whoever holds the crown at 00:00 UTC, a hold made the month end
+  a clock game (take inside the last hold window and you are untouchable)
+  instead of an auction; the 1.5x ladder throttles a war on its own, and a
+  war in #lounge is the point. Accepted cost: two takes racing for one
+  crown both land, the second at the rung the first just set rather than
+  the price `/crown` quoted.
 - The month rollover closes nothing. A reign left open across it keeps
   `ended_at IS NULL` until the next take, so `ended_at` is "when the row was
   replaced", not "when the reign stopped counting"; a future history page
@@ -412,7 +424,7 @@ Acceptance:
 - [x] Hold window and self-take refused uncharged.
 - [x] Glyph visible to every viewer on every replica after one notify.
 - [x] Month rollover: reign closed, award granted once, crown vacant at
-      5,000.
+      the minimum.
 - [x] Tests beside the model and the service; help copy; `chat/CONTEXT.md`
       and `leaderboard/CONTEXT.md` (award category).
 

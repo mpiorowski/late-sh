@@ -3127,7 +3127,7 @@ impl App {
                 } if user_id == self.user_id => {
                     changed = true;
                     self.banner = Some(Banner::error(&format!(
-                        "{taker_username} took the crown from you for {} chips",
+                        "{taker_username} stole the crown from you for {} chips",
                         thousands(price)
                     )));
                 }

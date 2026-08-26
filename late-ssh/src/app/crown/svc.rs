@@ -65,9 +65,6 @@ pub enum CrownRefusal {
     /// You already hold it. Paying yourself 1.5x for a glyph you are already
     /// wearing is not a purchase, it is a mistake.
     AlreadyYours,
-    /// The reign is inside its 30 minute hold. The hold is what keeps a
-    /// bidding war between two rich players out of #lounge.
-    Held { remaining_secs: i64 },
     /// The price would take the caller below the chip floor.
     InsufficientChips { price: i64 },
 }
@@ -77,12 +74,6 @@ impl CrownRefusal {
     pub fn message(self) -> String {
         match self {
             Self::AlreadyYours => "You already wear the crown".to_string(),
-            Self::Held { remaining_secs } => {
-                format!(
-                    "The crown is still warm, takeable in {}",
-                    short_duration(remaining_secs)
-                )
-            }
             Self::InsufficientChips { price } => {
                 format!("Taking the crown costs {} chips", thousands(price))
             }
@@ -120,8 +111,6 @@ pub struct CrownStatusHolder {
     /// Whether the caller is the one wearing it.
     pub is_you: bool,
     pub held_for_secs: i64,
-    /// Seconds left on the hold, zero once it is takeable.
-    pub hold_remaining_secs: i64,
 }
 
 impl CrownStatus {
@@ -138,13 +127,7 @@ impl CrownStatus {
             false => format!("{} has worn the crown", holder.username),
         };
         let held = short_duration(holder.held_for_secs);
-        match holder.hold_remaining_secs {
-            0 => format!("{who} for {held}. /crown take costs {price} chips."),
-            remaining => format!(
-                "{who} for {held}. Takeable in {} for {price} chips.",
-                short_duration(remaining)
-            ),
-        }
+        format!("{who} for {held}. /crown take costs {price} chips.")
     }
 }
 
@@ -430,7 +413,13 @@ impl CrownService {
             from: outcome.from.clone(),
         });
         if let Some(activity) = &self.activity {
-            activity.crown_taken_task(user_id, outcome.reign_id, outcome.price, outcome.from);
+            activity.crown_taken_task(
+                user_id,
+                outcome.reign_id,
+                outcome.price,
+                next_price(Some(outcome.price)),
+                outcome.from,
+            );
         }
     }
 
@@ -465,7 +454,6 @@ impl CrownService {
                 username,
                 is_you: current.holder_user_id == user_id,
                 held_for_secs: (now - current.taken_at).num_seconds().max(0),
-                hold_remaining_secs: current.hold_remaining_secs(now),
             }),
             price: next_price(Some(current.paid_chips)),
         })
@@ -504,15 +492,14 @@ impl CrownService {
         // crown reads as vacant at the minimum price, and the row below is
         // closed on the way past.
         let current = open.as_ref().filter(|reign| reign.is_current(now));
-        if let Some(current) = current {
-            if current.holder_user_id == user_id {
-                return Err(CrownError::Refused(CrownRefusal::AlreadyYours));
-            }
-            if current.is_held(now) {
-                return Err(CrownError::Refused(CrownRefusal::Held {
-                    remaining_secs: current.hold_remaining_secs(now),
-                }));
-            }
+        // No hold: a reign is takeable the moment it exists, at the next
+        // rung. Two takes racing for one crown both land, the second at 1.5x
+        // the first, which is the auction working as designed; the price
+        // ladder, not a timer, is what throttles a war.
+        if let Some(current) = current
+            && current.holder_user_id == user_id
+        {
+            return Err(CrownError::Refused(CrownRefusal::AlreadyYours));
         }
         let price = next_price(current.map(|reign| reign.paid_chips));
         let deposed = current.map(|reign| reign.holder_user_id);

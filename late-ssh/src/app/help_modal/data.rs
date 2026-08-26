@@ -6,7 +6,7 @@ use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
-    crown::{CROWN_HOLD_MINUTES, CROWN_MIN_PRICE},
+    crown::CROWN_MIN_PRICE,
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 use qrcodegen::{QrCode, QrCodeEcc};
@@ -466,7 +466,7 @@ fn chips_help_lines() -> Vec<String> {
         format!("  A vacant crown costs {}. After that it costs 1.5x whatever the holder paid, rounded up,", thousands(CROWN_MIN_PRICE)),
         "  so the price ratchets on its own and nobody sets it.".to_string(),
         "  Every chip is destroyed: the crown pays nobody, and none of it comes back into the economy.".to_string(),
-        format!("  A fresh reign cannot be taken for {CROWN_HOLD_MINUTES} minutes, and you cannot take a crown you already wear."),
+        "  There is no cooldown: anyone can take it off you the moment you have it, at 1.5x. You cannot take a crown you already wear.".to_string(),
         "  It empties at the end of every UTC month: the crown goes back to vacant, and whoever wore it".to_string(),
         "  when the month ended keeps the permanent [CRWN] badge for that month.".to_string(),
         "  Every takeover posts to #lounge, naming both players.".to_string(),

@@ -28,7 +28,7 @@ use crate::usernames::UsernameDirectory;
 
 use super::channel::ActivityReceiver;
 use super::event::{ActivityEvent, ActivityKind};
-use super::filter::lounge_includes;
+use super::filter::{lounge_headline, lounge_includes};
 
 /// The system feed's author row. Same lazily-ensured bot pattern as the
 /// ghost users; `settings.system` additionally marks it for the unread-count
@@ -102,6 +102,18 @@ pub fn start_lounge_feed_task(
                 join_if_needed: true,
                 failure_log: "failed to post lounge system line",
             });
+            // A headline is a real message from `system`, not a ticker
+            // line: no prefix, so it renders as a chat row and stays in
+            // history. Same repeat gate as the line above.
+            if let Some(body) = lounge_headline(&event) {
+                chat.send_lounge_message_task(SendLoungeMessageTask {
+                    user_id: system_user_id,
+                    body,
+                    request_id: None,
+                    join_if_needed: true,
+                    failure_log: "failed to post lounge headline",
+                });
+            }
         }
     })
 }
@@ -160,10 +172,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // message forever, and keying on the author alone would swallow a
         // second message of theirs crossing the line in the same half hour.
         ActivityKind::MessageGilded { message_id, .. } => format!("gilded:{message_id}"),
-        // Keyed on the reign: one line per takeover, and the 30 minute hold
-        // already makes two of them by the same person inside the window
-        // impossible. Keying on the user alone would swallow a re-take after
-        // someone else briefly held it.
+        // Keyed on the reign: one line per takeover, however fast they come.
+        // A war is the story, and the 1.5x ladder is what ends it. Keying on
+        // the user alone would swallow a re-take after someone else briefly
+        // held it.
         ActivityKind::CrownTaken { reign_id, .. } => format!("crown-taken:{reign_id}"),
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.

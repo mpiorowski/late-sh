@@ -120,8 +120,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // line points at a room worth reading.
         ActivityKind::MessageGilded { .. } => true,
         // One slot, one holder, and every takeover names both players. Rare
-        // by price and throttled by the 30 minute hold, so this is the story
-        // the crown exists to ship.
+        // by price (each take is 1.5x the last), so this is the story the
+        // crown exists to ship.
         ActivityKind::CrownTaken { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
@@ -141,5 +141,58 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // death after N dry days belongs in the public feed.
         ActivityKind::BonsaiWatered => false,
         ActivityKind::BonsaiLost { .. } => false,
+    }
+}
+
+/// The few events that are a story worth a real chat message, on top of the
+/// one-row ticker line every `lounge_includes` survivor gets. The ticker is
+/// glanceable and gone; a headline is a message from `system` that sits in
+/// #lounge history like anything a person said, so it is reserved for the
+/// rare, public, everyone-cares moments. The body carries no
+/// `SYSTEM_LINE_PREFIX`, which is exactly what keeps it out of the ticker
+/// diversion and in the message list. Same shape as `lounge_includes`: every
+/// kind is matched, so a new event has to decide here whether it headlines.
+pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
+    use crate::app::common::primitives::thousands;
+    use crate::app::common::username_effect::CROWN_GLYPH;
+    match &event.kind {
+        // One slot changed hands in public. Both names, what it cost, and
+        // what unseating the new holder costs now: the whole contest in one
+        // line, for the people who were not watching the ticker.
+        ActivityKind::CrownTaken {
+            price,
+            next_price,
+            from,
+            ..
+        } => {
+            let taker = &event.username;
+            let paid = thousands(*price);
+            let next = thousands(*next_price);
+            Some(match from {
+                Some(from) => format!(
+                    "{CROWN_GLYPH} {taker} stole the crown from {from} for {paid} chips. Next price: {next} chips."
+                ),
+                None => format!(
+                    "{CROWN_GLYPH} {taker} claimed the vacant crown for {paid} chips. Next price: {next} chips."
+                ),
+            })
+        }
+        ActivityKind::UserJoined { .. }
+        | ActivityKind::GameStarted { .. }
+        | ActivityKind::GameWon { .. }
+        | ActivityKind::GameScored { .. }
+        | ActivityKind::GameEvent { .. }
+        | ActivityKind::BossSlain { .. }
+        | ActivityKind::SatDown { .. }
+        | ActivityKind::DailyResult { .. }
+        | ActivityKind::BonsaiWatered { .. }
+        | ActivityKind::BonsaiLost { .. }
+        | ActivityKind::UsernameEffectApplied { .. }
+        | ActivityKind::BadgeRented { .. }
+        | ActivityKind::TitleApplied { .. }
+        | ActivityKind::MessageGilded { .. }
+        | ActivityKind::CyberspacePosted { .. }
+        | ActivityKind::WentLive { .. }
+        | ActivityKind::WatchingStream { .. } => None,
     }
 }

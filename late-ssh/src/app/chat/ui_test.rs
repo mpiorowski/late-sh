@@ -377,7 +377,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
     assert!(
         rendered
             .iter()
-            .any(|row| row.contains("bob\u{2654}, the night clerk 🐱")),
+            .any(|row| row.contains("bob \u{1F451}, the night clerk 🐱")),
         "no crowned author header in {rendered:#?}"
     );
 }

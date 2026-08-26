@@ -198,13 +198,14 @@ impl ActivityPublisher {
         taker_id: Uuid,
         reign_id: Uuid,
         price: i64,
+        next_price: i64,
         from: Option<String>,
     ) {
         let publisher = self.clone();
         tokio::spawn(async move {
             let username = publisher.username_for(taker_id).await;
             let _ = publisher.tx.send(ActivityEvent::crown_taken(
-                taker_id, username, reign_id, price, from,
+                taker_id, username, reign_id, price, next_price, from,
             ));
         });
     }

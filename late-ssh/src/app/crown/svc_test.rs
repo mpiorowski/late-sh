@@ -8,7 +8,7 @@ use late_core::models::{
     chips::{CHIP_FLOOR, ChipMove, INITIAL_CHIP_BALANCE, UserChips},
     crown::{CROWN_MIN_PRICE, CrownReign},
 };
-use late_core::test_utils::{create_test_user, expire_crown_hold, roll_crown_reigns_back_a_month};
+use late_core::test_utils::{create_test_user, roll_crown_reigns_back_a_month};
 use uuid::Uuid;
 
 use crate::app::crown::svc::{
@@ -16,10 +16,10 @@ use crate::app::crown::svc::{
 };
 use crate::test_helpers::new_test_db;
 
-/// The ladder starts at 5,000 and every rung is 1.5x the last: 5,000 /
-/// 7,500 / 11,250 / 16,875 / 25,313 / 37,970. Six takes need six wallets big
+/// The ladder starts at 500 and every rung is 1.5x the last, rounded up:
+/// 500 / 750 / 1,125 / 1,688 / 2,532 / 3,798. Six takes need six wallets big
 /// enough to pay their rung.
-const LADDER: [i64; 6] = [5_000, 7_500, 11_250, 16_875, 25_313, 37_970];
+const LADDER: [i64; 6] = [500, 750, 1_125, 1_688, 2_532, 3_798];
 
 /// Every ledger row this user has for the crown, most recent first.
 async fn crown_debits(client: &tokio_postgres::Client, user_id: Uuid) -> Vec<i64> {
@@ -45,44 +45,42 @@ async fn balance(client: &tokio_postgres::Client, user_id: Uuid) -> i64 {
         .unwrap_or(INITIAL_CHIP_BALANCE)
 }
 
-/// The one line `/crown` prints, in its three shapes. It is the only place
+/// The one line `/crown` prints, in its two shapes. It is the only place
 /// the price is quoted to a player, so the wording is pinned here.
 #[test]
-fn the_status_line_reads_the_three_shapes_the_crown_has() {
+fn the_status_line_reads_the_two_shapes_the_crown_has() {
     let vacant = CrownStatus {
         holder: None,
         price: CROWN_MIN_PRICE,
     };
     assert_eq!(
         vacant.line(),
-        "The crown is vacant. /crown take claims it for 5,000 chips."
+        "The crown is vacant. /crown take claims it for 500 chips."
     );
 
-    let held = CrownStatus {
+    let theirs = CrownStatus {
         holder: Some(CrownStatusHolder {
             username: "mira".to_string(),
             is_you: false,
             held_for_secs: 12 * 60,
-            hold_remaining_secs: 18 * 60,
         }),
         price: 25_313,
     };
     assert_eq!(
-        held.line(),
-        "mira has worn the crown for 12m. Takeable in 18m for 25,313 chips."
+        theirs.line(),
+        "mira has worn the crown for 12m. /crown take costs 25,313 chips."
     );
 
-    let takeable = CrownStatus {
+    let yours = CrownStatus {
         holder: Some(CrownStatusHolder {
             username: "mira".to_string(),
             is_you: true,
             held_for_secs: 3 * 3_600 + 12 * 60,
-            hold_remaining_secs: 0,
         }),
         price: 37_970,
     };
     assert_eq!(
-        takeable.line(),
+        yours.line(),
         "You have worn the crown for 3h12m. /crown take costs 37,970 chips."
     );
 }
@@ -112,12 +110,7 @@ async fn six_takes_walk_the_ladder_and_burn_every_chip() {
     }
 
     let mut paid = Vec::new();
-    for (index, taker) in takers.iter().enumerate() {
-        if index > 0 {
-            // Each rung is a real takeover, so the previous reign has to be
-            // out of its hold window first.
-            expire_crown_hold(&client).await;
-        }
+    for taker in &takers {
         let outcome = service
             .take(taker.id, &taker.username)
             .await
@@ -136,23 +129,19 @@ async fn six_takes_walk_the_ladder_and_burn_every_chip() {
         .expect("find open")
         .expect("a reign is open");
     assert_eq!(reign.holder_user_id, takers[5].id);
-    assert_eq!(reign.paid_chips, 37_970);
+    assert_eq!(reign.paid_chips, 3_798);
 }
 
-/// Both no-op takes cost nothing: taking a crown you already wear, and
-/// taking one whose reign is still inside its 30 minute hold.
+/// Taking a crown you already wear costs nothing and changes nothing.
 #[tokio::test]
-async fn a_self_take_and_a_held_reign_are_refused_uncharged() {
+async fn a_self_take_is_refused_uncharged() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let service = CrownService::new(test_db.db.clone());
-    let holder = create_test_user(&test_db.db, "crown-hold-holder").await;
-    let challenger = create_test_user(&test_db.db, "crown-hold-challenger").await;
-    for user in [&holder, &challenger] {
-        UserChips::apply(&**client, user.id, ChipMove::Credit, 100_000, None)
-            .await
-            .expect("stake");
-    }
+    let holder = create_test_user(&test_db.db, "crown-self-holder").await;
+    UserChips::apply(&**client, holder.id, ChipMove::Credit, 100_000, None)
+        .await
+        .expect("stake");
 
     service
         .take(holder.id, &holder.username)
@@ -164,20 +153,13 @@ async fn a_self_take_and_a_held_reign_are_refused_uncharged() {
         Err(CrownError::Refused(CrownRefusal::AlreadyYours)) => {}
         other => panic!("expected a self-take refusal, got {other:?}"),
     }
-    match service.take(challenger.id, &challenger.username).await {
-        Err(CrownError::Refused(CrownRefusal::Held { remaining_secs })) => {
-            assert!(remaining_secs > 0, "a held reign must say how long is left");
-        }
-        other => panic!("expected a hold refusal, got {other:?}"),
-    }
 
     assert_eq!(balance(&client, holder.id).await, after_first);
     assert_eq!(
         crown_debits(&client, holder.id).await,
         vec![-CROWN_MIN_PRICE]
     );
-    assert!(crown_debits(&client, challenger.id).await.is_empty());
-    // And the refusals left the reign exactly where it was.
+    // And the refusal left the reign exactly where it was.
     let reign = CrownReign::find_open(&client)
         .await
         .expect("find open")
@@ -195,8 +177,22 @@ async fn a_take_the_buyer_cannot_afford_changes_nothing() {
     let service = CrownService::new(test_db.db.clone());
     let pauper = create_test_user(&test_db.db, "crown-pauper").await;
     UserChips::ensure(&client, pauper.id).await.expect("chips");
+    // A fresh account can afford a vacant crown, so bet the stake away
+    // first: what is left is the floor, and the floor cannot pay.
+    UserChips::apply(
+        &**client,
+        pauper.id,
+        ChipMove::Bet,
+        INITIAL_CHIP_BALANCE - CHIP_FLOOR,
+        None,
+    )
+    .await
+    .expect("lose the stake");
     let before = balance(&client, pauper.id).await;
-    assert!(before < CROWN_MIN_PRICE, "the fixture must be too poor");
+    assert!(
+        before < CROWN_MIN_PRICE + CHIP_FLOOR,
+        "the fixture must be too poor"
+    );
 
     match service.take(pauper.id, &pauper.username).await {
         Err(CrownError::Refused(CrownRefusal::InsufficientChips { price })) => {
@@ -234,12 +230,11 @@ async fn the_month_rollover_empties_the_crown_at_the_minimum() {
         .take(outgoing.id, &outgoing.username)
         .await
         .expect("first take");
-    expire_crown_hold(&client).await;
     let dear = service
         .take(incoming.id, &incoming.username)
         .await
         .expect("second take");
-    assert_eq!(dear.price, 7_500);
+    assert_eq!(dear.price, 750);
 
     roll_crown_reigns_back_a_month(&client).await;
 
@@ -264,10 +259,13 @@ async fn the_month_rollover_empties_the_crown_at_the_minimum() {
     );
 }
 
-/// Two takes racing for the same vacant crown settle to exactly one debit
-/// and one reign: the loser is told the crown is held, and pays nothing.
+/// Two takes racing for the same vacant crown both land, in some order: the
+/// advisory lock serializes them, so the second reads the reign the first
+/// opened and pays the next rung rather than colliding on the unique index
+/// or paying the vacant price twice. There is no hold, so nobody is refused;
+/// the ladder is the only throttle.
 #[tokio::test]
-async fn two_concurrent_takes_settle_to_one_debit() {
+async fn two_concurrent_takes_both_land_and_walk_the_ladder() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let service = CrownService::new(test_db.db.clone());
@@ -291,27 +289,39 @@ async fn two_concurrent_takes_settle_to_one_debit() {
     });
     let outcomes = [left.await.expect("task"), right.await.expect("task")];
 
-    let winners: Vec<_> = outcomes.iter().filter(|outcome| outcome.is_ok()).collect();
-    assert_eq!(winners.len(), 1, "exactly one take may land: {outcomes:?}");
-    for outcome in &outcomes {
-        if let Err(CrownError::Failed(error)) = outcome {
-            panic!("a losing take must be a refusal, not a failure: {error:?}");
-        }
-    }
+    let mut prices: Vec<i64> = outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            Ok(outcome) => outcome.price,
+            Err(error) => panic!("both racing takes must land: {error:?}"),
+        })
+        .collect();
+    prices.sort_unstable();
+    assert_eq!(
+        prices,
+        vec![CROWN_MIN_PRICE, 750],
+        "vacant, then the next rung"
+    );
 
-    let debits = [
+    let mut paid: Vec<i64> = [
         crown_debits(&client, first.id).await,
         crown_debits(&client, second.id).await,
-    ];
-    let paid: Vec<i64> = debits.iter().flatten().copied().collect();
-    assert_eq!(paid, vec![-CROWN_MIN_PRICE], "one debit, at the minimum");
+    ]
+    .concat();
+    paid.sort_unstable();
+    assert_eq!(paid, vec![-750, -CROWN_MIN_PRICE], "one debit each");
 
     let reigns: i64 = client
         .query_one("SELECT COUNT(*)::bigint AS count FROM crown_reigns", &[])
         .await
         .expect("count reigns")
         .get("count");
-    assert_eq!(reigns, 1, "one reign, however many takes raced for it");
+    assert_eq!(reigns, 2, "two reigns, one closed by the other");
+    let open = CrownReign::find_open(&client)
+        .await
+        .expect("find open")
+        .expect("a reign is open");
+    assert_eq!(open.paid_chips, 750, "the second take holds the crown");
 }
 
 /// The glyph and the deposed holder's banner both cross replicas over the
@@ -355,7 +365,6 @@ async fn a_listening_replica_learns_the_holder_and_tells_the_deposed() {
     .await;
     seeded.expect("the listening replica seeds the first holder");
 
-    expire_crown_hold(&client).await;
     let taken = seller
         .take(second.id, &second.username)
         .await

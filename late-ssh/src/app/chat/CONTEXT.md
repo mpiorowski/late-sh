@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-26 (the crown: one slot, one holder, one ♔ glued to their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(5,000, ceil(paid x 1.5))`, burned whole, with a 30 minute hold on a fresh reign and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
+- Last updated: 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -488,7 +488,7 @@ cannot cover; the floor guard in the chip move is what actually decides.
 
 ## 9c. The Crown
 
-One slot, one holder, one ♔ after their name. The crown is not a rental and
+One slot, one holder, one 👑 after their name. The crown is not a rental and
 not a Shop item: it is a single row you take off whoever has it by paying
 more than they did, and every chip is destroyed.
 `late-core/src/models/crown.rs` owns the table (migration 156) and the price
@@ -496,10 +496,11 @@ ladder; `late-ssh/src/app/crown/svc.rs` owns the transaction, the refusals,
 the telemetry, and the #lounge line. It lives outside `chat/` because it is
 its own domain; only the command and the glyph are chat's.
 
-- **Price.** `next_price(paid)` = `max(5,000, ceil(paid * 1.5))`, and a
-  vacant crown is always 5,000. The ladder from empty is 5,000 / 7,500 /
-  11,250 / 16,875 / 25,313 / 37,970. Nobody tunes it: it ratchets with
-  whoever last paid.
+- **Price.** `next_price(paid)` = `max(500, ceil(paid * 1.5))`, and a
+  vacant crown is always 500, a Bronze gild's price, so the month's race
+  starts on day one. The ladder from empty is 500 / 750 / 1,125 / 1,688 /
+  2,532 / 3,798 / 5,697 / 8,546. Nobody tunes it: it ratchets with whoever
+  last paid, and the ratchet, not the floor, is what makes it dear.
 - **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
   `source_ref` = the reign id, and there is no matching credit reason
   anywhere. The whole price leaves the money supply, so the burn is the
@@ -508,18 +509,23 @@ its own domain; only the command and the glyph are chat's.
   lowers the buyer's Top Chips standing (pinned by
   `chips_test::earning_exclusions_and_reason_uniqueness`).
 - **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
-  wording): you already wear it, the reign is inside its 30 minute hold
-  (`CROWN_HOLD_MINUTES`; the hold is the throttle on the #lounge line, since
-  every takeover posts), and the chip floor. Every refusal is uncharged, and
-  a refusal drops the transaction, so nothing is left behind.
+  wording): you already wear it, and the chip floor. That is all: there is
+  **no hold or cooldown**. A reign is takeable the moment it exists, at the
+  next rung, so the month end is a real auction (the last take before
+  midnight wins the badge) rather than a clock game around a hold window.
+  The 1.5x ladder is the only throttle on a war, and a war is the story.
+  Known cost: a take that races another one pays the rung the other just
+  set, not the price `/crown` quoted a moment earlier; the receipt banner
+  says what was paid. Every refusal is uncharged, and a refusal drops the
+  transaction, so nothing is left behind.
 - **Transaction** (`CrownReign::lock_open` then close, open, debit, notify).
   Two locks, and neither replaces the other: `pg_advisory_xact_lock` is what
   serializes a take from a *vacant* crown (there is no row to take
   `FOR UPDATE`, so without it two first takes would both insert and one
   would die on the partial unique index), and the `FOR UPDATE` keeps the
   read-then-write on an existing reign exact. A second racing take therefore
-  reads the reign the first one opened and comes back as a hold refusal, not
-  a constraint violation.
+  reads the reign the first one opened and pays the next rung, not a
+  constraint violation.
 - **One open reign, ever.** `crown_reigns_single_open` is a unique index on
   the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
   is a table fact.
@@ -550,14 +556,19 @@ its own domain; only the command and the glyph are chat's.
   `common/username_effect.rs::resolve_all`, which sets `ResolvedName.crown`.
   Every surface that already reads `name_flair` therefore gets the crown for
   free and no render ever queries for it; a holder who has bought nothing
-  else gets an entry of their own. The glyph is glued to the name with no
-  separator (`bob♔, the night clerk 🐱`): it sits ahead of a rented title and
+  else gets an entry of their own. The glyph follows the name after one
+  space (`bob 👑, the night clerk 🐱`): it sits ahead of a rented title and
   ahead of the badge stack, carries no clickable segment of its own, and is
   painted in `AMBER_GLOW` rather than taking the name's effect
   (`ui.rs::build_author_prefix_and_segments_with_chat_badges` builds the
-  range, `ui_text.rs::push_author_prefix_spans` paints it). The Clubhouse
-  floor label does the same (`clubhouse/ui.rs::clubhouse_label` glues the
-  glyph on, `put_label_styled` paints the cell at `name_len` amber).
+  range, `ui_text.rs::push_author_prefix_spans` paints it). The glyph is an
+  emoji, two cells wide; chat measures it with `unicode_width`. The
+  Clubhouse floor label does the same (`clubhouse/ui.rs::clubhouse_label`
+  glues the glyph on, `put_label_styled` paints the char at `name_len`
+  amber), and since the floor is one char per cell it spends two cells on
+  it: the emoji plus a `WIDE_TAIL` sentinel the row flush skips, so the
+  walls stay aligned. It is the only wide char a floor label can hold;
+  names and titles are folded to single width.
 - **Commands.** `/crown` and `/crown take` are parsed in `submit_composer`
   and drained by `App::tick_crown`. Both answers arrive as banners off
   `CrownEvent`, because the crown service is not `ChatService` and has its
@@ -565,10 +576,17 @@ its own domain; only the command and the glyph are chat's.
   took it (`CrownEvent::Deposed`, off the notify): a glyph vanishing off
   your own name with no explanation reads as a bug.
 - **Feed.** `ActivityKind::CrownTaken` fires on every takeover and names both
-  players: "tom took the crown from mira for 57,000", or "tom claimed the
-  vacant crown for 5,000". Keyed on the reign id in the lounge repeat
-  throttle. Unlike the gild line this one names the loser on purpose: the
-  crown is a single slot, so the takeover *is* the story.
+  players. It is the one event with two #lounge surfaces: the usual ticker
+  line ("tom stole the crown from mira for 1,688", `· `-prefixed, diverted
+  into the one-row ticker like every system line) and a **headline**, a
+  real message from `system` with no prefix, so it renders as a chat row
+  and stays in history: "👑 tom stole the crown from mira for 1,688 chips.
+  Next price: 2,532 chips." (`activity/filter.rs::lounge_headline`, the
+  exhaustive twin of `lounge_includes`; posted by the lounge feed task right
+  after the ticker line, behind the same repeat gate, keyed on the reign
+  id). The event carries `next_price` so the headline quotes the ladder
+  without re-deriving it. Unlike the gild line this one names the loser on
+  purpose: the crown is a single slot, so the takeover *is* the story.
 - **Award.** The month's last holder gets a `profile_awards` row, category
   `crown`, granted by the existing monthly snapshot
   (`snapshot_previous_month_profile_awards`, a `crown_holder` CTE reading

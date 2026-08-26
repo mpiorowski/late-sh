@@ -371,24 +371,6 @@ pub async fn create_test_user(db: &Db, username: &str) -> User {
     .expect("create user")
 }
 
-/// Test-only clock control for the crown: push the open reign's `taken_at`
-/// back far enough that its 30 minute hold has expired. Tests must not
-/// hand-roll this UPDATE; this helper is the one place that fudges a reign's
-/// clock, and it never touches `month`, so a reign stays inside the month it
-/// was taken in.
-pub async fn expire_crown_hold(client: &tokio_postgres::Client) {
-    let updated = client
-        .execute(
-            "UPDATE crown_reigns
-             SET taken_at = taken_at - interval '31 minutes'
-             WHERE ended_at IS NULL",
-            &[],
-        )
-        .await
-        .expect("expire crown hold");
-    assert!(updated > 0, "expire_crown_hold matched no open reign");
-}
-
 /// Test-only clock control: move every crown reign back one UTC month, as if
 /// the month had rolled over under it. The reign stays open on purpose: the
 /// crown emptying at the boundary is a read-time rule with no sweeper behind

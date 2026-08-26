@@ -276,7 +276,6 @@ mod inner {
     fn crown_refusal_label(refusal: CrownRefusal) -> &'static str {
         match refusal {
             CrownRefusal::AlreadyYours => "already_yours",
-            CrownRefusal::Held { .. } => "held",
             CrownRefusal::InsufficientChips { .. } => "insufficient_chips",
         }
     }

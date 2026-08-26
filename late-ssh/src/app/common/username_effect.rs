@@ -153,10 +153,12 @@ pub fn resolve(effect: UsernameEffect, phase: usize) -> NameStyle {
     }
 }
 
-/// The crown holder's glyph, painted immediately after their name. One
-/// character wide, and additive: it never takes the name's color and never
-/// displaces a title.
-pub const CROWN_GLYPH: &str = "\u{2654}";
+/// The crown holder's glyph, painted immediately after their name. An
+/// emoji, so two cells wide (the chess-piece `\u{2654}` was too small to
+/// read as a prize); every surface that draws it measures it with
+/// `unicode_width` rather than counting chars. Additive: it never takes the
+/// name's color and never displaces a title.
+pub const CROWN_GLYPH: &str = "\u{1F451}";
 
 /// What the renderers paint for one name: the color style, the title, the
 /// crown, or any combination. Cloned per frame into render contexts, so the

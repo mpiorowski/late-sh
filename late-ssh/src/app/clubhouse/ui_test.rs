@@ -170,19 +170,24 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
     let text: String = row.iter().map(|(ch, _)| *ch).collect();
     let crown_at = text
         .chars()
-        .position(|ch| ch == '\u{2654}')
+        .position(|ch| ch == '\u{1F451}')
         .unwrap_or_else(|| panic!("no crown on the floor label: {text:?}"));
-    assert_eq!(row[crown_at - 1].0, 'b');
+    assert_eq!(row[crown_at - 2].0, 'b');
     assert_eq!(
-        row[crown_at - 1].1,
+        row[crown_at - 2].1,
         dim,
         "a name without an effect stays dim"
     );
+    assert_eq!(row[crown_at - 1].0, ' ', "one space between name and crown");
     assert_eq!(
         row[crown_at].1.fg,
         Some(theme::AMBER_GLOW()),
         "the crown must be amber, as in chat"
     );
-    assert_eq!(row[crown_at + 1].0, ',');
-    assert_eq!(row[crown_at + 1].1, dim, "the title after it stays dim");
+    // The emoji is two columns wide: it owns the next cell too, so the
+    // title starts one cell later than a char count would put it and the
+    // rest of the row stays aligned to the walls.
+    assert_eq!(row[crown_at + 1].0, WIDE_TAIL);
+    assert_eq!(row[crown_at + 2].0, ',');
+    assert_eq!(row[crown_at + 2].1, dim, "the title after it stays dim");
 }

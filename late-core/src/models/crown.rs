@@ -10,7 +10,7 @@
 //! through `chips.rs`; the transaction that does both belongs to the caller.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Client, Row, Transaction};
@@ -51,17 +51,11 @@ pub async fn listen_for_crown_changes(client: &Client) -> Result<()> {
 }
 
 /// What a vacant crown costs, and the floor every ratchet is clamped to.
-/// Decided in SHOP.md's fixed-numbers table.
-pub const CROWN_MIN_PRICE: i64 = 5_000;
-
-/// How long a fresh reign is untakeable. The hold is the whole throttle on
-/// the #lounge line: every takeover posts, so without it two people with
-/// chips could turn the feed into a ticker.
-pub const CROWN_HOLD_MINUTES: i64 = 30;
-
-pub fn crown_hold() -> Duration {
-    Duration::minutes(CROWN_HOLD_MINUTES)
-}
+/// Decided in SHOP.md's fixed-numbers table: a Bronze gild's price, low
+/// enough that the month's race starts on day one (a fresh account can
+/// claim it), because the 1.5x ratchet, not the floor, is what makes the
+/// crown expensive.
+pub const CROWN_MIN_PRICE: i64 = 500;
 
 /// What the next taker owes, given what the current holder paid. `None` is a
 /// vacant crown (nobody holds it, or the month rolled over), which always
@@ -132,16 +126,6 @@ impl CrownReign {
         self.ended_at.is_none() && self.month == crown_month(now)
     }
 
-    /// Whether a fresh reign is still inside its untakeable window.
-    pub fn is_held(&self, now: DateTime<Utc>) -> bool {
-        now < self.taken_at + crown_hold()
-    }
-
-    /// Seconds until this reign can be taken, zero once the hold is over.
-    pub fn hold_remaining_secs(&self, now: DateTime<Utc>) -> i64 {
-        (self.taken_at + crown_hold() - now).num_seconds().max(0)
-    }
-
     /// The open reign, whatever month it belongs to. Callers decide what a
     /// stale one means through [`Self::is_current`]; this stays a plain read
     /// so `/crown` and the take path see the same row.
@@ -159,7 +143,7 @@ impl CrownReign {
     /// advisory lock is what makes a take from a *vacant* crown exact: there
     /// is no row to take `FOR UPDATE`, so without it two concurrent first
     /// takes would both insert and one would die on the partial unique index
-    /// with a raw constraint violation instead of a hold refusal. The
+    /// with a raw constraint violation instead of paying the next rung. The
     /// `FOR UPDATE` then keeps the read-then-write on an existing reign
     /// exact for anything that reaches the row outside this path.
     pub async fn lock_open(tx: &Transaction<'_>) -> Result<Option<Self>> {

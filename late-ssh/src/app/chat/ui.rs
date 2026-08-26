@@ -2479,14 +2479,16 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let author_range = (author_range_start, prefix.len());
     col += author_w;
 
-    // The crown is glued to the name with no separator: it is a mark on the
-    // person, not another badge in the stack, and it must not be mistaken
-    // for one. It carries no clickable segment of its own; the name beside
-    // it already opens the profile.
+    // The crown follows the name after one space, ahead of the title and
+    // the badge stack: a mark on the person, not another badge. It carries
+    // no clickable segment of its own; the name beside it already opens the
+    // profile. The range starts at the space so it stays adjacent to the
+    // name for the painter, which walks the trailing runs in order.
     let crown_range = crown.then(|| {
         let crown_start = prefix.len();
+        prefix.push(' ');
         prefix.push_str(CROWN_GLYPH);
-        col += UnicodeWidthStr::width(CROWN_GLYPH) as u16;
+        col += 1 + UnicodeWidthStr::width(CROWN_GLYPH) as u16;
         (crown_start, prefix.len())
     });
 
