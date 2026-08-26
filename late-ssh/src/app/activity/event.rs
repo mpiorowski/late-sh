@@ -75,6 +75,13 @@ pub enum ActivityKind {
     TitleApplied {
         title: String,
     },
+    /// Someone burned a six-figure sum for a permanent glyph ("mira burned
+    /// 150,000 chips for the Fuse"). The badge is the receipt, so the line
+    /// names the price: everyone watching is the product.
+    BurnMilestone {
+        name: String,
+        price: i64,
+    },
     /// A chat message reached the gild threshold. Names the author only: the
     /// buyers stay out of it, because the story is that a room paid for
     /// something someone said, not who has chips. `message_id` keys the
@@ -133,6 +140,7 @@ impl ActivityKind {
             | Self::UsernameEffectApplied { .. }
             | Self::BadgeRented { .. }
             | Self::TitleApplied { .. }
+            | Self::BurnMilestone { .. }
             | Self::MessageGilded { .. }
             | Self::CrownTaken { .. }
             | Self::CyberspacePosted { .. }
@@ -470,6 +478,31 @@ impl ActivityEvent {
             Some(user_id),
             username,
             ActivityKind::TitleApplied { title },
+            action,
+        )
+    }
+
+    /// A burn milestone was unlocked. The emoji rides the action so the line
+    /// shows exactly what is about to appear next to the name, and the price
+    /// is spelled out with separators because six digits run together
+    /// otherwise.
+    pub fn burn_milestone(
+        user_id: Uuid,
+        username: impl Into<String>,
+        name: impl Into<String>,
+        emoji: impl Into<String>,
+        price: i64,
+    ) -> Self {
+        let name = name.into();
+        let emoji = emoji.into();
+        let action = format!(
+            "burned {} chips for the {name} {emoji}",
+            crate::app::common::primitives::thousands(price)
+        );
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::BurnMilestone { name, price },
             action,
         )
     }

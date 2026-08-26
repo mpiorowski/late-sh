@@ -91,6 +91,9 @@ mod mention_feed_read_test;
 pub mod message_translation;
 #[cfg(test)]
 mod message_translation_test;
+pub mod milestone;
+#[cfg(test)]
+mod milestone_test;
 pub mod minesweeper;
 #[cfg(test)]
 mod minesweeper_test;

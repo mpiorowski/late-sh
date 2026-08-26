@@ -153,6 +153,7 @@ fn the_crown_glyph_on_the_floor_is_painted_amber_not_dim() {
         style: None,
         title: Some("the night clerk".to_string()),
         crown: true,
+        milestone: None,
     };
     let dim = Style::default().fg(ratatui::style::Color::DarkGray);
     draw_presence(

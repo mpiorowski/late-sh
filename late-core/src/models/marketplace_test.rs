@@ -41,7 +41,9 @@ const AQUARIUM_PRICE: i64 = 10_000;
 const AQUARIUM_FISH_PRICE: i64 = 1_000;
 const AQUARIUM_MEDIUM_FISH_PRICE: i64 = 2_500;
 const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
-const ULTIMATE_SPELL_PRICE: i64 = 10_000_000;
+/// Lowered from 10,000,000 by migration 157: at ten million neither spell
+/// ever sold, and the burn milestones ladder up to half of the new ceiling.
+const ULTIMATE_SPELL_PRICE: i64 = 1_000_000;
 const ROOM_SPARK_PRICE: i64 = 2_000;
 const AQUARIUM_FOOD_PRICE: i64 = 100;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;

@@ -236,6 +236,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
             style: None,
             title: Some("the night clerk".to_string()),
             crown: false,
+            milestone: None,
         },
     )]);
     let peer_pomodoros = HashMap::new();
@@ -331,6 +332,7 @@ fn the_crown_glyph_renders_between_the_author_name_and_their_title() {
             style: None,
             title: Some("the night clerk".to_string()),
             crown: true,
+            milestone: None,
         },
     )]);
     let peer_pomodoros = HashMap::new();
@@ -2407,6 +2409,7 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         author: "bob",
         crown: false,
         title: None,
+        milestone: None,
         special_badges: &[],
         chat_badges: &chat_badges,
         bonsai_glyph: None,
@@ -2420,6 +2423,69 @@ fn header_segments_split_chat_flag_from_regular_badge() {
     assert_eq!(segs[0].target, HeaderTarget::Profile);
     assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
     assert_eq!(segs[2].target, HeaderTarget::StoreFlag);
+}
+
+/// The whole point of a burn milestone: a hundred-chip rental cannot cover
+/// it. Badge, flag, and milestone all show at once, in that order, and the
+/// milestone clicks through to the tab that sells it rather than to Badges.
+#[test]
+fn header_segments_show_a_burn_milestone_on_top_of_a_rented_badge_and_flag() {
+    let chat_badges = [
+        (HeaderTarget::StoreBadge, "\u{1F431}"),
+        (HeaderTarget::StoreFlag, "US"),
+    ];
+    let AuthorPrefix {
+        prefix,
+        segments: segs,
+        author_range: _,
+        crown_range: _,
+        title_range: _,
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "bob",
+        crown: false,
+        title: None,
+        milestone: Some("\u{1F30B}"),
+        special_badges: &[],
+        chat_badges: &chat_badges,
+        bonsai_glyph: None,
+        profile_award_badges: None,
+        presence_badges: &[],
+    });
+    assert_eq!(prefix, "bob \u{1F431} US \u{1F30B}");
+    assert_eq!(segs.len(), 4);
+    assert_eq!(segs[0].target, HeaderTarget::Profile);
+    assert_eq!(segs[1].target, HeaderTarget::StoreBadge);
+    assert_eq!(segs[2].target, HeaderTarget::StoreFlag);
+    assert_eq!(segs[3].target, HeaderTarget::StoreMilestone);
+}
+
+/// A milestone owner who rents nothing still wears it, and it never displaces
+/// the crown or a title: those are marks on the name, this is a badge.
+#[test]
+fn header_prefix_wears_a_milestone_with_no_rentals_at_all() {
+    let AuthorPrefix {
+        prefix,
+        segments: segs,
+        author_range: _,
+        crown_range,
+        title_range: _,
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "bob",
+        crown: true,
+        title: Some("the night clerk"),
+        milestone: Some("\u{1F9E8}"),
+        special_badges: &[],
+        chat_badges: &[],
+        bonsai_glyph: None,
+        profile_award_badges: None,
+        presence_badges: &[],
+    });
+    assert_eq!(prefix, "bob \u{1F451}, the night clerk \u{1F9E8}");
+    assert!(crown_range.is_some());
+    assert_eq!(segs.len(), 2);
+    assert_eq!(segs[1].target, HeaderTarget::StoreMilestone);
 }
 
 #[test]
@@ -2436,6 +2502,7 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
         author: "bob",
         crown: false,
         title: Some("the insufferable"),
+        milestone: None,
         special_badges: &[],
         chat_badges: &chat_badges,
         bonsai_glyph: None,
@@ -2464,6 +2531,7 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
         author: "bob",
         crown: false,
         title: Some("   "),
+        milestone: None,
         special_badges: &[],
         chat_badges: &[],
         bonsai_glyph: None,
@@ -2485,6 +2553,7 @@ fn header_prefix_orders_all_badge_classes() {
         author: "alice",
         crown: false,
         title: None,
+        milestone: None,
         special_badges: &["mod", "developer", "artist"],
         chat_badges: &chat_badges,
         bonsai_glyph: Some("bonsai"),

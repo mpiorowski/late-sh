@@ -115,6 +115,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // are bought to be read next to the name in every message.
         ActivityKind::BadgeRented { .. } => true,
         ActivityKind::TitleApplied { .. } => true,
+        // The dearest thing anyone buys, and it buys nothing but being seen
+        // buying it. Once per rung per account forever, so it cannot repeat.
+        ActivityKind::BurnMilestone { .. } => true,
         // A room paying for something someone said, three times over. Rare by
         // construction (once per message, at the threshold gild only) and the
         // line points at a room worth reading.
@@ -190,6 +193,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
         | ActivityKind::TitleApplied { .. }
+        | ActivityKind::BurnMilestone { .. }
         | ActivityKind::MessageGilded { .. }
         | ActivityKind::CyberspacePosted { .. }
         | ActivityKind::WentLive { .. }

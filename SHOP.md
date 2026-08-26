@@ -98,7 +98,8 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Crown ratchet | next price = max(500, ceil(paid x 1.5)), 100% burned: 500 / 750 / 1,125 / 1,688 / 2,532 / 3,798 / 5,697 / 8,546 from empty |
 | Crown hold | none (removed 2026-08-26: a hold turned month end into a clock game around the hold window; without it the last take before midnight wins, and the 1.5x ladder is the only throttle) |
 | Crown reset | UTC month boundary; month-end holder gets a `profile_awards` row |
-| Burn milestones | 100,000 / 500,000 / 1,000,000 |
+| Burn milestones | 🕯️ Wick 50,000 / 🧨 Fuse 150,000 / 🌋 Furnace 500,000 (lowered from 100,000 / 500,000 / 1,000,000 on 2026-08-26, when the ultimates came down to 1M and took the ceiling) |
+| Ultimate spell | 1,000,000 (lowered from 10,000,000 on 2026-08-26: at ten million neither spell ever sold, and the shop's ceiling belongs on a thing people can actually reach) |
 | Pot ticket | 100 chips |
 | Pot per-user cap | 50 tickets per pot |
 | Pot payout | 80% of ticket sum to one ticket-weighted winner; 20% never re-minted |
@@ -433,29 +434,94 @@ the Shop modal.
 
 ## Phase 4: burn milestones
 
-Goal: fill the empty price band between 5k and 10M with three permanent
-badges that only those prices buy.
+Goal: fill the empty price band above the rentals with three permanent
+badges that only those prices buy, and bring the shop's ceiling down to
+somewhere a whale can actually reach.
 
 Behavior:
-- Migration seeds three permanent items at 100,000 / 500,000 / 1,000,000
-  in the Ultimates tab (rename the tab if "Ultimates" no longer fits, the
-  category enum is closed), each with a unique emoji not used by any
-  rental badge, shown in the permanent badge position the legacy path
-  still supports after Phase 0.
+- Migration seeds three permanent items, one emoji each, none of them used
+  by any rental badge, flag, or the crown:
+
+  | SKU | Name | Emoji | Price |
+  |---|---|---|---|
+  | `milestone_wick` | Wick | 🕯️ | 50,000 |
+  | `milestone_fuse` | Fuse | 🧨 | 150,000 |
+  | `milestone_furnace` | Furnace | 🌋 | 500,000 |
+
+  The ladder is heat: the badge is the fire you paid for. Names stay one
+  word so they fit a chat label and a #lounge line without wrapping.
+- The same migration drops `ultimate_wonderland` and `ultimate_thematrix`
+  from 10,000,000 to 1,000,000 (`ON CONFLICT (sku) DO UPDATE`, the shape
+  migration 059 already ships). Nothing else about the spells changes.
 - **Do not seed them as `item_kind = 'badge'`.** Migration 148 ends with
   `UPDATE marketplace_items SET active = false WHERE item_kind = 'badge'`,
   and its header invites re-running its INSERT shape for new badges; a
   permanent milestone seeded as `badge` would be retired by any such
-  re-run. Use a distinct kind (`milestone_badge`) that the chat label
-  query's legacy join reads through the same `equipped_slot` path.
-- Purchase announces through `ActivityKind::BurnMilestone { amount }` with
-  a lounge arm: "mira burned 500,000 chips for the <name>".
+  re-run. Use a distinct kind (`milestone_badge`).
+- **A milestone is a fourth glyph, not a badge slot.** It renders after the
+  rental badge and flag, never in place of either: a player wearing a
+  rented cat and a pride flag who burns 500,000 shows all three. This is
+  the one thing the chat label query must not get wrong, since the whole
+  purchase is the glyph. Add a column to the query in
+  `late-core/src/models/user.rs` (~578) beside `chat_badge` and
+  `chat_flag`; it reads `user_purchases` joined on the milestone kind, with
+  no `equipped_slot` and no rental LATERAL, because a milestone never
+  expires and is never rented over.
+- **Highest owned wins, automatically.** Owning Fuse and Furnace shows the
+  Furnace. No equip flow, no slot column, no new state: the ladder only
+  goes up, so the highest is the one a buyer would pick anyway. The query
+  orders by price and takes one.
+- The Ultimates tab holds all five items, so
+  `ShopCategory::Ultimates => item.is_ultimate_spell()`
+  (`late-ssh/src/app/hub/shop/catalog.rs:60`) becomes an arm that admits
+  the milestone kind too, and `hub/shop/ui.rs:275` stops assuming an
+  ultimate-tab row is castable. The tab label is a free rename if
+  "Ultimates" stops fitting; the variant stays.
+- Purchase announces through `ActivityKind::BurnMilestone { amount, name }`
+  with a lounge arm: "mira burned 150,000 chips for the Fuse".
+
+Status: shipped 2026-08-26 (migration 157,
+`late-core/src/models/milestone.rs`, the flair directory). Deviations from the
+design above, each deliberate:
+- The glyph rides **`NameFlair` / `ResolvedName`**, the crown's map, not a
+  fourth column on the chat label query. The design said to add one beside
+  `chat_badge` and `chat_flag`, but those reach the renderer as a single
+  joined string that `chat_badge_display_parts` splits back apart by
+  detecting flag prefixes; a third value in that string would have to be
+  recovered by matching against the three known emoji. The flair map is
+  already read at every author header, already resolves on the once-a-second
+  edge, and already carries the crown for exactly this reason.
+- `refresh_user_flair` therefore has to read the milestone even though
+  nothing about a purchase expires: that path rebuilds the whole entry, so
+  leaving it out would drop a 500,000-chip glyph the moment its owner rented
+  a badge.
+- The milestone takes its **own click target** (`HeaderTarget::StoreMilestone`
+  -> the Ultimates tab). Sharing `StoreBadge` would have sent a click on the
+  dearest item in the shop to the tab that sells hundred-chip cats.
+- The Ultimates tab gained **section rows** ("Burn milestones" /
+  "Ultimate spells", `ultimates_section_label`). Five items at two unrelated
+  price bands, one of which repaints the server for ten seconds and one of
+  which does nothing at all, should not read as one list.
+- **Not on the profile modal.** The acceptance list said "chat labels and the
+  profile", but the profile modal renders a bare username today: no badge, no
+  flag, no crown, no title. There is no surface to hang a milestone on, and
+  inventing one is a bigger change than the rest of this phase. Left out on
+  purpose; if the profile ever grows a worn-items row, every one of these
+  belongs on it, not just the milestone.
 
 Acceptance:
-- [ ] Migration only, plus the activity hook on the existing purchase
-      path and its filter arm.
-- [ ] A purchased milestone renders in chat labels and the profile.
-- [ ] Help copy and `hub/CONTEXT.md`.
+- [x] Migration seeds the three milestones and reprices both ultimate
+      spells; no other catalog row moves.
+- [x] A purchased milestone renders in chat labels alongside a live rental
+      badge and a live rental flag, all three at once.
+- [x] Owning two milestones shows the dearer one, in one query, for every
+      viewer.
+- [x] The Ultimates tab lists all five and refuses to cast a milestone.
+- [x] Help copy, `hub/CONTEXT.md`, `chat/CONTEXT.md`, root `CONTEXT.md`.
+- [ ] Profile rendering: no surface exists (see the deviation above).
+
+Out of scope: milestone-only chat colors, a fourth rung, retiring the
+ultimate spells, any equip choice between milestones.
 
 ## Phase 5: the pot
 

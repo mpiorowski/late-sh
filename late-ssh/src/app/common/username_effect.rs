@@ -46,15 +46,21 @@ pub struct FlairTitle {
 
 /// Everything name-adjacent one user has bought; stale halves are skipped at
 /// read.
+///
+/// The milestone is the odd member: a permanent `user_purchases` row rather
+/// than a rental, so it carries no expiry and only ever changes when its
+/// owner buys a dearer one. It lives here anyway because this is the map
+/// every name surface already reads, which is the same reason the crown does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NameFlair {
     pub effect: Option<FlairEffect>,
     pub title: Option<FlairTitle>,
+    pub milestone: Option<String>,
 }
 
 impl NameFlair {
     pub fn is_empty(&self) -> bool {
-        self.effect.is_none() && self.title.is_none()
+        self.effect.is_none() && self.title.is_none() && self.milestone.is_none()
     }
 }
 
@@ -172,11 +178,15 @@ pub struct ResolvedName {
     pub style: Option<NameStyle>,
     pub title: Option<String>,
     pub crown: bool,
+    /// The dearest burn milestone this user owns, painted in the badge stack
+    /// rather than beside the name: it is a badge, it just cannot be rented
+    /// over. Never expires, so it has no staleness check here.
+    pub milestone: Option<String>,
 }
 
 impl ResolvedName {
     pub fn is_empty(&self) -> bool {
-        self.style.is_none() && self.title.is_none() && !self.crown
+        self.style.is_none() && self.title.is_none() && !self.crown && self.milestone.is_none()
     }
 }
 
@@ -209,6 +219,7 @@ pub fn resolve_all(
                     .filter(|title| title.ends_at > now)
                     .map(|title| title.text.clone()),
                 crown: false,
+                milestone: flair.milestone.clone(),
             };
             (!resolved.is_empty()).then_some((*user_id, resolved))
         })

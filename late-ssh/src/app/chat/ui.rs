@@ -1321,6 +1321,9 @@ pub(crate) enum HeaderTarget {
     /// The currently equipped chat flag. Resolves to the Hub Shop opened
     /// on the Flags sub-store.
     StoreFlag,
+    /// The dearest burn milestone this author owns. Resolves to the Hub Shop
+    /// opened on the Ultimates sub-store, where the ladder is sold.
+    StoreMilestone,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1637,6 +1640,7 @@ fn ensure_chat_rows_cache(
             author: &author,
             crown: flair.is_some_and(|flair| flair.crown),
             title: flair.and_then(|flair| flair.title.as_deref()),
+            milestone: flair.and_then(|flair| flair.milestone.as_deref()),
             special_badges: special_list,
             chat_badges: &chat_badge_refs,
             bonsai_glyph: bonsai_opt,
@@ -2391,6 +2395,7 @@ fn build_author_prefix_and_segments(
         author,
         crown: false,
         title: None,
+        milestone: None,
         special_badges,
         chat_badges: &chat_badges,
         bonsai_glyph,
@@ -2409,6 +2414,10 @@ struct AuthorPrefixInput<'a> {
     /// Whether this author currently wears the crown.
     crown: bool,
     title: Option<&'a str>,
+    /// The dearest burn milestone this author owns. A badge, not a mark on
+    /// the name, so it joins the badge stack rather than trailing the
+    /// username the way the crown and title do.
+    milestone: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
     bonsai_glyph: Option<&'a str>,
@@ -2436,6 +2445,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         author,
         crown,
         title,
+        milestone,
         special_badges,
         chat_badges,
         bonsai_glyph,
@@ -2511,6 +2521,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
         special_badges.len()
             + chat_badges.len()
+            + milestone.is_some() as usize
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
             + presence_badges.len(),
@@ -2530,6 +2541,12 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     }
     for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
         typed_badges.push((target, s));
+    }
+    // On top of the rentals, never in place of one: a rented badge and flag
+    // cost a hundred chips each and a milestone costs fifty thousand, so
+    // nothing a player rents may hide one.
+    if let Some(s) = milestone.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::StoreMilestone, s));
     }
     for s in presence_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));

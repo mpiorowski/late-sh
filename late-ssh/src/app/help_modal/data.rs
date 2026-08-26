@@ -170,7 +170,7 @@ pub(crate) fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, then the /brb moon. A rented title prints between the name and that stack, as \"name, the night clerk\".\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the /brb moon. The crown prints immediately after the name, and a rented title after that, ahead of the whole stack, as \"name \u{1F451}, the night clerk\".\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He only ever pours for the patron who mentioned him: he never charges a drink onto someone else, and points anyone who wants to buy another user a round or a drink at \"/gift @user <n>\" instead, since gifted chips do not carry the drunk-text effect onto someone who did not choose to drink.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
@@ -472,7 +472,18 @@ fn chips_help_lines() -> Vec<String> {
         "  Every takeover posts to #lounge, naming both players.".to_string(),
         "  Like Shop spending, the crown does not count against Top Chips.".to_string(),
         "".to_string(),
-        "8. Gifts".to_string(),
+        "8. Burn milestones".to_string(),
+        format!("  Three permanent badges in the Shop's Ultimates tab: Wick {} \u{1F56F}\u{FE0F}, Fuse {} \u{1F9E8}, Furnace {} \u{1F30B}.",
+            thousands(50_000),
+            thousands(150_000),
+            thousands(500_000)),
+        "  They buy nothing but the glyph, and every chip is destroyed.".to_string(),
+        "  A milestone never expires and is never equipped: it shows on top of whatever badge and flag you are renting,".to_string(),
+        "  so nothing you rent can hide one. Own two and the dearer one shows.".to_string(),
+        "  Each unlock posts to #lounge, naming the price.".to_string(),
+        "  Like the crown and Shop spending, they do not count against Top Chips.".to_string(),
+        "".to_string(),
+        "9. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
@@ -494,6 +505,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Gifts you send.".to_string(),
         "  Gilds you buy on other people's messages.".to_string(),
         "  The crown (/crown take), which burns the whole price.".to_string(),
+        "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
         "  Monthly Top Chips ranks net chip delta, so Shop and crown spending never lower your rank; betting losses do.".to_string(),
     ]
 }
@@ -1121,6 +1133,8 @@ fn overview_lines() -> Vec<String> {
         "  badges and flags  rented for 24h or 30 days; a rebuy replaces the live one",
         "  title             your own words after your name in chat, 20 characters, rented the same way",
         "                    and screened before you are charged",
+        "  burn milestones   Ultimates tab: permanent glyphs at 50,000 / 150,000 / 500,000,",
+        "                    worn on top of a rented badge and flag, dearest one showing",
         "  x                 clear a permanent badge bought before rentals",
         "  Economy tab       chips, payouts, leaderboards, Arcade, table games",
         "",

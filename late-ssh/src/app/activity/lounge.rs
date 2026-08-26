@@ -168,6 +168,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // announces because the name visibly changed.
         ActivityKind::BadgeRented { emoji } => format!("badge-rented:{emoji}"),
         ActivityKind::TitleApplied { title } => format!("title-applied:{title}"),
+        // Keyed on the rung, which is once per account forever anyway: the
+        // key only has to keep a Wick and a Furnace from throttling each
+        // other when a whale climbs two rungs in one sitting.
+        ActivityKind::BurnMilestone { name, .. } => format!("burn-milestone:{name}"),
         // Keyed on the message: the threshold already makes this once per
         // message forever, and keying on the author alone would swallow a
         // second message of theirs crossing the line in the same half hour.

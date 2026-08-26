@@ -155,6 +155,16 @@ impl ActivityPublisher {
         });
     }
 
+    pub fn burn_milestone_task(&self, user_id: Uuid, name: String, emoji: String, price: i64) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(user_id).await;
+            let _ = publisher.tx.send(ActivityEvent::burn_milestone(
+                user_id, username, name, emoji, price,
+            ));
+        });
+    }
+
     pub fn title_applied_task(&self, user_id: Uuid, title: String, duration_secs: i64) {
         let publisher = self.clone();
         tokio::spawn(async move {

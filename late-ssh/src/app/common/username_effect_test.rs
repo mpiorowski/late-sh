@@ -64,6 +64,7 @@ fn directory_set_expire_replace() {
                 ends_at: now + Duration::hours(24),
             }),
             title: None,
+            milestone: None,
         },
     );
     set_user(
@@ -75,6 +76,7 @@ fn directory_set_expire_replace() {
                 ends_at: now - Duration::seconds(1),
             }),
             title: None,
+            milestone: None,
         },
     );
 
@@ -98,6 +100,7 @@ fn directory_set_expire_replace() {
                     ends_at: now + Duration::hours(1),
                 }),
                 title: None,
+                milestone: None,
             },
         )],
     );
@@ -124,6 +127,7 @@ fn title_and_color_resolve_and_expire_independently() {
                 text: "the insufferable".to_string(),
                 ends_at: now + Duration::hours(2),
             }),
+            milestone: None,
         },
     );
 
@@ -164,6 +168,7 @@ fn the_crown_resolves_for_a_holder_with_nothing_else_bought() {
                 ends_at: now + Duration::hours(1),
             }),
             title: None,
+            milestone: None,
         },
     );
 
@@ -198,4 +203,42 @@ fn styled_name_spans_keeps_base_bg_and_modifiers() {
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(span.style.fg, Some(Color::Rgb(255, 200, 80)));
     }
+}
+
+/// A milestone is permanent, so it survives a resolve that drops every
+/// expired rental, and an owner who has bought nothing else still gets an
+/// entry: without one the dearest purchase in the shop would render nothing.
+#[test]
+fn a_burn_milestone_outlives_the_rentals_beside_it() {
+    let directory = new_directory();
+    let lapsed = Uuid::now_v7();
+    let bare = Uuid::now_v7();
+    let now = Utc::now();
+
+    set_user(
+        &directory,
+        lapsed,
+        NameFlair {
+            effect: Some(FlairEffect {
+                effect: UsernameEffect::Shimmer,
+                ends_at: now - Duration::seconds(1),
+            }),
+            title: None,
+            milestone: Some("\u{1F30B}".to_string()),
+        },
+    );
+    set_user(
+        &directory,
+        bare,
+        NameFlair {
+            effect: None,
+            title: None,
+            milestone: Some("\u{1F9E8}".to_string()),
+        },
+    );
+
+    let resolved = resolve_all(&snapshot(&directory), None, 0, now);
+    assert_eq!(resolved[&lapsed].style, None);
+    assert_eq!(resolved[&lapsed].milestone.as_deref(), Some("\u{1F30B}"));
+    assert_eq!(resolved[&bare].milestone.as_deref(), Some("\u{1F9E8}"));
 }
