@@ -2302,17 +2302,21 @@ fn header_segments_split_chat_flag_from_regular_badge() {
         (HeaderTarget::StoreBadge, "🐱"),
         (HeaderTarget::StoreFlag, "US"),
     ];
-    let (prefix, segs, author_range, title_range) =
-        build_author_prefix_and_segments_with_chat_badges(
-            false,
-            "bob",
-            None,
-            &[],
-            &chat_badges,
-            None,
-            None,
-            &[],
-        );
+    let AuthorPrefix {
+        prefix,
+        segments: segs,
+        author_range,
+        title_range,
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "bob",
+        title: None,
+        special_badges: &[],
+        chat_badges: &chat_badges,
+        bonsai_glyph: None,
+        profile_award_badges: None,
+        presence_badges: &[],
+    });
     assert_eq!(prefix, "bob 🐱 US");
     assert_eq!(author_range, (0, 3));
     assert_eq!(title_range, None);
@@ -2325,17 +2329,21 @@ fn header_segments_split_chat_flag_from_regular_badge() {
 #[test]
 fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
     let chat_badges = [(HeaderTarget::StoreBadge, "🐱")];
-    let (prefix, segs, author_range, title_range) =
-        build_author_prefix_and_segments_with_chat_badges(
-            false,
-            "bob",
-            Some("the insufferable"),
-            &[],
-            &chat_badges,
-            None,
-            None,
-            &[],
-        );
+    let AuthorPrefix {
+        prefix,
+        segments: segs,
+        author_range,
+        title_range,
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "bob",
+        title: Some("the insufferable"),
+        special_badges: &[],
+        chat_badges: &chat_badges,
+        bonsai_glyph: None,
+        profile_award_badges: None,
+        presence_badges: &[],
+    });
     assert_eq!(prefix, "bob, the insufferable 🐱");
     assert_eq!(author_range, (0, 3));
     // The title starts where the name ends, so the two runs stay adjacent.
@@ -2349,16 +2357,18 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
     assert_eq!(segs[1].start_col, 23);
 
     // A blank title is not a title: nothing is printed and no range is set.
-    let (prefix, _, _, title_range) = build_author_prefix_and_segments_with_chat_badges(
-        false,
-        "bob",
-        Some("   "),
-        &[],
-        &[],
-        None,
-        None,
-        &[],
-    );
+    let AuthorPrefix {
+        prefix, title_range, ..
+    } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "bob",
+        title: Some("   "),
+        special_badges: &[],
+        chat_badges: &[],
+        bonsai_glyph: None,
+        profile_award_badges: None,
+        presence_badges: &[],
+    });
     assert_eq!(prefix, "bob");
     assert_eq!(title_range, None);
 }
@@ -2369,17 +2379,17 @@ fn header_prefix_orders_all_badge_classes() {
         (HeaderTarget::StoreBadge, "badge"),
         (HeaderTarget::StoreFlag, "flag"),
     ];
-    let (prefix, _segs, _author_range, _title_range) =
-        build_author_prefix_and_segments_with_chat_badges(
-            false,
-            "alice",
-            None,
-            &["mod", "developer", "artist"],
-            &chat_badges,
-            Some("bonsai"),
-            Some("AW1 CHIP2"),
-            &["brb"],
-        );
+    let prefix = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+        is_friend: false,
+        author: "alice",
+        title: None,
+        special_badges: &["mod", "developer", "artist"],
+        chat_badges: &chat_badges,
+        bonsai_glyph: Some("bonsai"),
+        profile_award_badges: Some("AW1 CHIP2"),
+        presence_badges: &["brb"],
+    })
+    .prefix;
 
     assert_eq!(
         prefix,

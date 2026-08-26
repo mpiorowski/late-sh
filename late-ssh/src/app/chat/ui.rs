@@ -1626,17 +1626,21 @@ fn ensure_chat_rows_cache(
             presence_badges.push(badge);
         }
         let flair = ctx.name_flair.get(&msg.user_id);
-        let (prefix, segments, author_range, title_range) =
-            build_author_prefix_and_segments_with_chat_badges(
-                is_friend,
-                &author,
-                flair.and_then(|flair| flair.title.as_deref()),
-                special_list,
-                &chat_badge_refs,
-                bonsai_opt,
-                profile_award_badges,
-                &presence_badges,
-            );
+        let AuthorPrefix {
+            prefix,
+            segments,
+            author_range,
+            title_range,
+        } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
+            is_friend,
+            author: &author,
+            title: flair.and_then(|flair| flair.title.as_deref()),
+            special_badges: special_list,
+            chat_badges: &chat_badge_refs,
+            bonsai_glyph: bonsai_opt,
+            profile_award_badges,
+            presence_badges: &presence_badges,
+        });
         let drunk_word = ctx.drunk_levels.get(&msg.user_id).and_then(|level| {
             late_core::models::drinks::drunk_label_word(*level)
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
@@ -2376,38 +2380,56 @@ fn build_author_prefix_and_segments(
     if let Some(chat_badge) = chat_badge {
         chat_badges.push((HeaderTarget::StoreBadge, chat_badge));
     }
-    let (prefix, segments, _, _) = build_author_prefix_and_segments_with_chat_badges(
+    let built = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend,
         author,
-        None,
+        title: None,
         special_badges,
-        &chat_badges,
+        chat_badges: &chat_badges,
         bonsai_glyph,
         profile_award_badges,
         presence_badges,
-    );
-    (prefix, segments)
+    });
+    (built.prefix, built.segments)
 }
 
-/// Builds the author header prefix. Returns the prefix, the clickable column
+/// Everything the author header prefix is painted from: one named field per
+/// decoration class, so a call site reads as a list of what the author is
+/// wearing rather than a run of positional arguments.
+struct AuthorPrefixInput<'a> {
+    is_friend: bool,
+    author: &'a str,
+    title: Option<&'a str>,
+    special_badges: &'a [&'a str],
+    chat_badges: &'a [(HeaderTarget, &'a str)],
+    bonsai_glyph: Option<&'a str>,
+    profile_award_badges: Option<&'a str>,
+    presence_badges: &'a [&'a str],
+}
+
+/// The built author header prefix: the string, the clickable column
 /// segments, the bare username's byte range, and the rented title's byte
 /// range (which always follows the username directly, so the two are
 /// adjacent).
-fn build_author_prefix_and_segments_with_chat_badges(
-    is_friend: bool,
-    author: &str,
-    title: Option<&str>,
-    special_badges: &[&str],
-    chat_badges: &[(HeaderTarget, &str)],
-    bonsai_glyph: Option<&str>,
-    profile_award_badges: Option<&str>,
-    presence_badges: &[&str],
-) -> (
-    String,
-    Vec<HeaderSegment>,
-    (usize, usize),
-    Option<(usize, usize)>,
-) {
+struct AuthorPrefix {
+    prefix: String,
+    segments: Vec<HeaderSegment>,
+    author_range: (usize, usize),
+    title_range: Option<(usize, usize)>,
+}
+
+/// Builds the author header prefix.
+fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_>) -> AuthorPrefix {
+    let AuthorPrefixInput {
+        is_friend,
+        author,
+        title,
+        special_badges,
+        chat_badges,
+        bonsai_glyph,
+        profile_award_badges,
+        presence_badges,
+    } = input;
     let mut prefix = String::new();
     let mut segments: Vec<HeaderSegment> = Vec::new();
     // The painted line is `[pad (1 cell)][prefix][ stamp]`, so prefix
@@ -2509,7 +2531,12 @@ fn build_author_prefix_and_segments_with_chat_badges(
         }
     }
 
-    (prefix, segments, author_range, title_range)
+    AuthorPrefix {
+        prefix,
+        segments,
+        author_range,
+        title_range,
+    }
 }
 
 /// Legacy badge-suffix formatter. Production code now builds the author
