@@ -58,7 +58,7 @@ fn chip_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "Gilds",
             body: vec![
-                "Press $ on someone else's message in a public room to gild it.".to_string(),
+                "Press g on someone else's message in a public room to gild it.".to_string(),
                 format!(
                     "Three tiers: Bronze {}, Silver {}, Gold {} chips.",
                     thousands(GildTier::Bronze.price()),

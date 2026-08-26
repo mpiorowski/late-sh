@@ -478,7 +478,6 @@ pub fn selected_chat_key(app: &App, chat_room_id: Uuid, byte: u8) -> bool {
                 | b'c'
                 | b't'
                 | b'T'
-                | b'$'
                 | b'f'
                 | b'F'
                 | b'g'
@@ -562,13 +561,13 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
                 return true;
             }
         }
-        // `$` opens the gild picker on the selected message. Its own key
+        // `g` opens the gild picker on the selected message. Its own key
         // rather than a leader, because the modal is where the money is
         // confirmed and a mistyped leader must not cost chips. With a
         // message selected the key is always consumed: a message the picker
         // could only refuse (your own, or one outside a public room) banners
         // the refusal instead of opening.
-        b'$' if app.chat.selected_message_id_in_room(room_id).is_some() => {
+        b'g' if app.chat.selected_message_id_in_room(room_id).is_some() => {
             match app.chat.gild_target_in_room(room_id) {
                 Ok(target) => open_gild_modal(app, target),
                 Err(refusal) => {
@@ -594,10 +593,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             }
             return true;
         }
-        // `g` always jumps to a reply's referenced message. Enter is overloaded
+        // `G` always jumps to a reply's referenced message. Enter is overloaded
         // (image/News modals take precedence), so a reply that contains an image
-        // can't be followed with Enter alone; `g` reaches the parent regardless.
-        b'g' | b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
+        // can't be followed with Enter alone; `G` reaches the parent regardless.
+        // Lowercase `g` is the gild key above.
+        b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {

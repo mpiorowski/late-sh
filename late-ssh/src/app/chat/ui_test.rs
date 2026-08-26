@@ -1393,7 +1393,7 @@ fn empty_composer_placeholder_names_the_gild_key_for_a_selected_message() {
     view.composing = false;
     view.selected_message = true;
 
-    let expected = "f react · r reply · e edit · d delete · $ gild · p profile · t translate · Enter jump to reply";
+    let expected = "f react · r reply · e edit · d delete · g gild · p profile · t translate · Enter jump to reply";
     let width = expected.chars().count() as u16;
     let placeholder = empty_composer_placeholder(&view, width as usize);
     let backend = TestBackend::new(width, 1);

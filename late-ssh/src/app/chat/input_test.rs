@@ -95,7 +95,7 @@ fn apply_pomodoro_request_reports_stopping_with_no_timer() {
     assert!(timer.is_none());
 }
 
-/// `$` on a message in a DM, a private room, or a game/stream chat refuses
+/// `g` on a message in a DM, a private room, or a game/stream chat refuses
 /// before the picker opens: the service would refuse anyway, but a purchase
 /// modal that can never complete must not open at all. A public topic room
 /// still gets the picker.
@@ -151,8 +151,8 @@ async fn gild_key_refuses_before_opening_the_picker_outside_public_rooms() {
         app.banner = None;
 
         assert!(
-            super::handle_message_action_in_room(&mut app, room_id, b'$'),
-            "`$` is consumed whenever a message is selected ({kind}/{visibility})"
+            super::handle_message_action_in_room(&mut app, room_id, b'g'),
+            "`g` is consumed whenever a message is selected ({kind}/{visibility})"
         );
         assert_eq!(app.show_gild_modal, opens, "{kind}/{visibility}");
         assert_eq!(
