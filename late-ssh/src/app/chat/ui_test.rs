@@ -2358,7 +2358,9 @@ fn header_prefix_puts_a_rented_title_between_the_name_and_the_badges() {
 
     // A blank title is not a title: nothing is printed and no range is set.
     let AuthorPrefix {
-        prefix, title_range, ..
+        prefix,
+        title_range,
+        ..
     } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend: false,
         author: "bob",
