@@ -1385,6 +1385,30 @@ fn empty_composer_placeholder_uses_hint_text_when_not_composing() {
 }
 
 #[test]
+fn empty_composer_placeholder_names_the_gild_key_for_a_selected_message() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let ta = TextArea::default();
+    let mut view = composer_view(&ta);
+    view.composing = false;
+    view.selected_message = true;
+
+    let expected = "f react · r reply · e edit · d delete · $ gild · p profile · t translate · Enter jump to reply";
+    let width = expected.chars().count() as u16;
+    let placeholder = empty_composer_placeholder(&view, width as usize);
+    let backend = TestBackend::new(width, 1);
+    let mut terminal = Terminal::new(backend).expect("term");
+
+    terminal
+        .draw(|f| f.render_widget(placeholder, Rect::new(0, 0, width, 1)))
+        .unwrap();
+
+    let buf = terminal.backend().buffer();
+    let rendered: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert_eq!(rendered, expected);
+}
+
+#[test]
 fn empty_composer_placeholder_contextualizes_selected_news_message() {
     use ratatui::{Terminal, backend::TestBackend};
 

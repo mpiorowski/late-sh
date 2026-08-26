@@ -445,7 +445,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
         ))]
     } else if view.selected_message {
         vec![Line::from(Span::styled(
-            "f react · r reply · e edit · d delete · p profile · c copy · t translate · Enter jump to reply",
+            "f react · r reply · e edit · d delete · $ gild · p profile · t translate · Enter jump to reply",
             dim,
         ))]
     } else {
