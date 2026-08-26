@@ -455,7 +455,7 @@ fn chips_help_lines() -> Vec<String> {
             thousands(GildTier::Silver.author_share()),
             thousands(GildTier::Gold.author_share())),
         "  The marker stays on the message forever. There is no un-gild, and you cannot gild yourself or a bot.".to_string(),
-        "  One gild per tier per message per buyer, so all three can be stacked on one message.".to_string(),
+        "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
         "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
         "".to_string(),
         "7. Gifts".to_string(),

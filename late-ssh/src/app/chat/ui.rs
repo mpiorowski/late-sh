@@ -43,7 +43,7 @@ use super::state::{
     dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_selected_slot,
     visual_order_for_rooms,
 };
-use super::ui_text::{AuthorTint, reaction_label, wrap_chat_entry_to_lines};
+use super::ui_text::{AuthorTint, Gutter, reaction_label, wrap_chat_entry_to_lines};
 
 const REACTION_PICKER_KEYS: [i16; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// The gap between messages and composer: a blank breather row on top so the
@@ -1904,7 +1904,7 @@ fn visible_chat_rows(
         for idx in start..end {
             let row = &mut lines[idx - visible_start];
             if let Some(first_span) = row.spans.first()
-                && (first_span.content == " " || first_span.content == "│")
+                && Gutter::is_glyph(&first_span.content)
             {
                 // Keep the row's whole treatment (the mention or reply wash,
                 // or the highlight inversion), so the marker does not punch

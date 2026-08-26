@@ -18,7 +18,8 @@ use late_core::{
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
         chat_message_gild::{
             CHAT_MESSAGE_GILDED_CHANNEL, ChatMessageGild, ChatMessageGildSummary,
-            GILD_FEED_THRESHOLD, GildTier, listen_for_gild_changes, parse_gilded_payload,
+            GILD_FEED_THRESHOLD, GildPlacement, GildTier, listen_for_gild_changes,
+            parse_gilded_payload,
         },
         chat_message_reaction::{
             ChatMessageReaction, ChatMessageReactionAction, ChatMessageReactionOwners,
@@ -182,9 +183,12 @@ pub enum GildRefusal {
     BotAuthor,
     /// Inside [`GILD_COOLDOWN`] of this buyer's last gild.
     OnCooldown,
-    /// This buyer already holds this tier on this message. The other two
-    /// tiers are still open.
+    /// This buyer already holds exactly this tier on this message. A gild
+    /// only goes up, so the one move left is a higher tier.
     AlreadyGilded,
+    /// This buyer holds a higher tier on this message. A gild never goes
+    /// down, and nobody pays to lower their own marker.
+    HeldHigher,
     /// The tier would take the buyer below the chip floor.
     InsufficientChips,
 }
@@ -201,6 +205,7 @@ impl GildRefusal {
             Self::BotAuthor => "Bots do not take chips",
             Self::OnCooldown => "Gilding is on cooldown",
             Self::AlreadyGilded => "You already gilded this message at that tier",
+            Self::HeldHigher => "Your gild on this message is already higher",
             Self::InsufficientChips => "Not enough chips for that tier",
         }
     }
@@ -220,6 +225,14 @@ impl From<anyhow::Error> for GildError {
     }
 }
 
+/// What `settle_gild` hands back from inside the transaction.
+struct SettledGild {
+    buyer_balance: i64,
+    author_balance: i64,
+    total_gilds: i64,
+    upgraded_from: Option<GildTier>,
+}
+
 /// A settled gild: what the room must repaint, what the buyer is told, and
 /// what the author is told.
 #[derive(Clone, Debug)]
@@ -230,11 +243,24 @@ pub struct GildOutcome {
     pub buyer_balance: i64,
     pub author_user_id: Uuid,
     pub author_balance: i64,
-    /// Gilds this message now holds, counted under the message row lock.
+    /// Buyers this message now holds (one gild each), counted under the
+    /// message row lock.
     pub total_gilds: i64,
+    /// The tier this buyer held before, when the buy raised an existing
+    /// gild instead of adding one.
+    pub upgraded_from: Option<GildTier>,
     /// `#slug` of the room, for the #lounge line. Public rooms always have
     /// one; the option is the schema being honest, not a real case.
     pub room_slug: Option<String>,
+}
+
+impl GildOutcome {
+    /// The #lounge line fires on the buy that made this the threshold buyer,
+    /// and only there. A raise adds no buyer, so it never fires it, however
+    /// many buyers the message already holds.
+    pub fn fires_feed_line(&self) -> bool {
+        self.upgraded_from.is_none() && self.total_gilds == GILD_FEED_THRESHOLD
+    }
 }
 
 #[derive(Clone)]
@@ -3925,6 +3951,7 @@ impl ChatService {
     /// viewer of the room, and (on the threshold gild only) #lounge.
     fn announce_gild(&self, user_id: Uuid, tier: GildTier, outcome: GildOutcome) {
         metrics::record_gild_bought(tier);
+        let fires_feed_line = outcome.fires_feed_line();
         // The marker itself repaints off the Postgres notify (see
         // `settle_gild`), including in this process; what is sent here is
         // only what the two people involved are told.
@@ -3940,9 +3967,7 @@ impl ChatService {
         // The feed line fires on the threshold gild and only there, so the
         // room hears "this message is being paid for" once instead of once
         // per buyer.
-        if outcome.total_gilds == GILD_FEED_THRESHOLD
-            && let Some(activity) = &self.activity
-        {
+        if fires_feed_line && let Some(activity) = &self.activity {
             activity.message_gilded_task(
                 outcome.author_user_id,
                 outcome.message_id,
@@ -3954,7 +3979,7 @@ impl ChatService {
 
     /// Read every guard, then settle. Guards run on a pooled read before the
     /// transaction opens, so a refusal costs one connection and no lock.
-    async fn gild_message(
+    pub(super) async fn gild_message(
         &self,
         user_id: Uuid,
         message_id: Uuid,
@@ -4008,14 +4033,15 @@ impl ChatService {
 
         // A gild that never landed must not spend the buyer's window.
         match self.settle_gild(user_id, &message, author.id, tier).await {
-            Ok((buyer_balance, author_balance, total_gilds)) => Ok(GildOutcome {
+            Ok(settled) => Ok(GildOutcome {
                 message_id,
                 tier,
                 buyer_username: buyer.username,
-                buyer_balance,
+                buyer_balance: settled.buyer_balance,
                 author_user_id: author.id,
-                author_balance,
-                total_gilds,
+                author_balance: settled.author_balance,
+                total_gilds: settled.total_gilds,
+                upgraded_from: settled.upgraded_from,
                 room_slug: room.slug,
             }),
             Err(error) => {
@@ -4025,7 +4051,14 @@ impl ChatService {
         }
     }
 
-    /// The one transaction: lock the message, insert the gild, move the
+    /// Test seam: forget this buyer's cooldown stamp, so a test can walk one
+    /// buyer through several buys without waiting out [`GILD_COOLDOWN`].
+    #[cfg(test)]
+    pub(super) fn lift_gild_cooldown(&self, user_id: Uuid) {
+        self.gild_cooldowns.lock_recover().remove(&user_id);
+    }
+
+    /// The one transaction: lock the message, place the gild, move the
     /// chips, count what the message now holds. Every early return drops the
     /// transaction, which rolls it back, so a refusal here is uncharged too.
     async fn settle_gild(
@@ -4034,11 +4067,11 @@ impl ChatService {
         message: &ChatMessage,
         author_id: Uuid,
         tier: GildTier,
-    ) -> Result<(i64, i64, i64), GildError> {
+    ) -> Result<SettledGild, GildError> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
         // Serializes every gild on this message, which is what makes both the
-        // duplicate-tier check and the threshold count exact.
+        // placement's read-then-write and the threshold count exact.
         let Some(locked_author) = ChatMessageGild::lock_message_author(&tx, message.id).await?
         else {
             return Err(GildError::Refused(GildRefusal::MessageNotFound));
@@ -4048,12 +4081,17 @@ impl ChatService {
                 "message author changed under the gild lock"
             )));
         }
-        if ChatMessageGild::insert_in_tx(&tx, message.id, author_id, user_id, tier)
-            .await?
-            .is_none()
-        {
-            return Err(GildError::Refused(GildRefusal::AlreadyGilded));
-        }
+        let upgraded_from =
+            match ChatMessageGild::place_in_tx(&tx, message.id, author_id, user_id, tier).await? {
+                GildPlacement::Placed(_) => None,
+                GildPlacement::Upgraded { from, .. } => Some(from),
+                GildPlacement::SameTier => {
+                    return Err(GildError::Refused(GildRefusal::AlreadyGilded));
+                }
+                GildPlacement::HeldHigher(_) => {
+                    return Err(GildError::Refused(GildRefusal::HeldHigher));
+                }
+            };
         let Some((buyer_chips, author_chips)) = UserChips::transfer_gild(
             &tx,
             user_id,
@@ -4074,7 +4112,12 @@ impl ChatService {
         tx.commit().await.map_err(anyhow::Error::from)?;
         drop(client);
 
-        Ok((buyer_chips.balance, author_chips.balance, total_gilds))
+        Ok(SettledGild {
+            buyer_balance: buyer_chips.balance,
+            author_balance: author_chips.balance,
+            total_gilds,
+            upgraded_from,
+        })
     }
 
     pub fn list_reaction_owners_task(&self, user_id: Uuid, message_id: Uuid) {

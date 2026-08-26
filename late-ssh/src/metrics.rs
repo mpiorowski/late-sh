@@ -267,6 +267,7 @@ mod inner {
             GildRefusal::BotAuthor => "bot_author",
             GildRefusal::OnCooldown => "on_cooldown",
             GildRefusal::AlreadyGilded => "already_gilded",
+            GildRefusal::HeldHigher => "held_higher",
             GildRefusal::InsufficientChips => "insufficient_chips",
         }
     }

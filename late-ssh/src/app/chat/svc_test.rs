@@ -4702,6 +4702,63 @@ mod gild {
         assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 2);
     }
 
+    /// The per-buyer cooldown is a rate limit, not a rule under test here;
+    /// lift it so one test can walk a buyer through several buys.
+    fn lift_cooldown(fixture: &GildFixture, buyer: Uuid) {
+        fixture.service.lift_gild_cooldown(buyer);
+    }
+
+    /// A buyer has one slot on a message and it only goes up: a higher tier
+    /// raises it at the new tier's full price, the same tier and a lower
+    /// tier are refused uncharged, and a raise adds no buyer so it never
+    /// fires the #lounge line.
+    #[tokio::test]
+    async fn raises_a_held_gild_at_full_price_and_never_lowers_it() {
+        let (_test_db, fixture) = fixture("gild-up").await;
+        let after_bronze = match gild(&fixture, fixture.buyer, GildTier::Bronze).await {
+            ChatEvent::GildSucceeded { buyer_balance, .. } => buyer_balance,
+            other => panic!("expected the first gild to land, got {other:?}"),
+        };
+
+        lift_cooldown(&fixture, fixture.buyer);
+        let raised = fixture
+            .service
+            .gild_message(fixture.buyer, fixture.message_id, GildTier::Gold)
+            .await
+            .expect("the raise lands");
+        assert_eq!(raised.tier, GildTier::Gold);
+        assert_eq!(raised.upgraded_from, Some(GildTier::Bronze));
+        assert_eq!(raised.total_gilds, 1, "a raise adds no buyer");
+        assert!(!raised.fires_feed_line());
+        assert_eq!(
+            after_bronze - raised.buyer_balance,
+            GildTier::Gold.price(),
+            "a raise pays the new tier in full, not the difference"
+        );
+
+        let client = fixture.db.get().await.expect("db client");
+        let counts = ChatMessageGild::counts_for_author(&client, fixture.author)
+            .await
+            .expect("counts");
+        assert_eq!((counts.bronze, counts.gold), (0, 1));
+        // Two buys, each a debit and a credit.
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 4);
+
+        lift_cooldown(&fixture, fixture.buyer);
+        let lower = gild(&fixture, fixture.buyer, GildTier::Silver).await;
+        assert_eq!(
+            refusal_message(lower),
+            "Your gild on this message is already higher"
+        );
+        lift_cooldown(&fixture, fixture.buyer);
+        let same = gild(&fixture, fixture.buyer, GildTier::Gold).await;
+        assert_eq!(
+            refusal_message(same),
+            "You already gilded this message at that tier"
+        );
+        assert_eq!(gild_ledger_total(&fixture.db, fixture.message_id).await, 4);
+    }
+
     #[tokio::test]
     async fn refuses_a_self_gild_uncharged() {
         let (_test_db, fixture) = fixture("gild-self").await;

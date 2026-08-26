@@ -1,7 +1,9 @@
 -- Gilds: paying chips to mark someone else's message, permanently.
 --
--- A gild is a purchase, not a toggle. There is no un-gild and no update path,
--- so the row carries `created` alone: nothing about it can ever change.
+-- A gild is a purchase, not a toggle. There is no un-gild. One row per buyer
+-- per message, and the only write after the insert is raising `tier` (and
+-- `chips`, what the buyer paid last) when the same buyer comes back with a
+-- higher tier: a gild only ever goes up. `created` is the first gild's time.
 --
 -- `author_user_id` is denormalized off `chat_messages` for two reasons. It
 -- makes "no self-gild" a table constraint rather than a service promise (the
@@ -24,12 +26,13 @@ CREATE TABLE chat_message_gilds (
     CONSTRAINT chat_message_gilds_no_self_gild CHECK (user_id <> author_user_id)
 );
 
--- One gild per buyer per message per tier: a whale may stack all three, but
--- nobody buys the same tier twice on the same message. Leading with
--- `message_id` also makes this the marker query's index (one pass per page
--- of messages), so there is no separate index on `message_id`.
-CREATE UNIQUE INDEX chat_message_gilds_once_per_tier
-    ON chat_message_gilds (message_id, user_id, tier);
+-- One gild per buyer per message: a higher tier from the same buyer raises
+-- the row in place, so the marker's count is distinct buyers by
+-- construction. Leading with `message_id` also makes this the marker
+-- query's index (one pass per page of messages), so there is no separate
+-- index on `message_id`.
+CREATE UNIQUE INDEX chat_message_gilds_once_per_buyer
+    ON chat_message_gilds (message_id, user_id);
 
 -- The profile query: gilds received, scoped to the profile's owner.
 CREATE INDEX chat_message_gilds_author_idx

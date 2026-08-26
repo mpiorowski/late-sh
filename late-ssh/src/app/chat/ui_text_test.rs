@@ -251,9 +251,20 @@ fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
         }),
         None,
     );
-    let rendered = lines_to_strings(&single.lines).join("\n");
-    assert!(rendered.contains("$$"), "{rendered:?}");
-    assert!(!rendered.contains("x1"), "{rendered:?}");
+    let rendered = lines_to_strings(&single.lines);
+    assert!(
+        rendered.iter().all(|line| line.starts_with('┃')),
+        "the tier bar runs the full height of the message: {rendered:?}"
+    );
+    assert_eq!(
+        single.lines[0].spans[0].style.fg,
+        Some(theme::BADGE_SILVER()),
+        "the bar is painted in the tier color"
+    );
+    let rendered = rendered.join("\n");
+    assert!(rendered.contains("◆◆"), "{rendered:?}");
+    assert!(!rendered.contains("◆◆◆"), "{rendered:?}");
+    assert!(!rendered.contains("×1"), "{rendered:?}");
 
     let stacked = wrap_chat_entry_to_lines(
         "hello world",
@@ -280,10 +291,10 @@ fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
     let footer = lines_to_strings(&stacked.lines)
         .pop()
         .expect("a footer row");
-    assert!(footer.contains("$$$ x3"), "{footer:?}");
+    assert!(footer.contains("◆◆◆ ×3"), "{footer:?}");
     assert!(footer.contains("[🔥 1]"), "{footer:?}");
     assert!(
-        footer.find("$$$").unwrap() < footer.find("[🔥").unwrap(),
+        footer.find("◆◆◆").unwrap() < footer.find("[🔥").unwrap(),
         "the gild marker leads the footer: {footer:?}"
     );
 }
@@ -350,7 +361,7 @@ fn wrap_message_has_left_padding() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     let strings = lines_to_strings(&lines);
@@ -368,7 +379,7 @@ fn wrap_message_respects_newlines() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     let strings = lines_to_strings(&lines);
@@ -388,7 +399,7 @@ fn wrap_message_empty_body() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines.len(), 1);
@@ -410,7 +421,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + prefix-before + tinted-username + prefix-after + stamp
@@ -426,7 +437,7 @@ fn wrap_message_author_tint_splits_only_the_username() {
         Style::default(),
         None,
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines_to_strings(&lines), lines_to_strings(&untinted));
@@ -448,7 +459,7 @@ fn wrap_message_author_tint_ignores_bad_ranges() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     assert_eq!(lines[0].spans.len(), 3);
@@ -473,7 +484,7 @@ fn wrap_message_name_style_paints_per_char_over_author_style() {
         author_style,
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + 5 per-char spans + stamp
@@ -507,7 +518,7 @@ fn wrap_message_prints_drunk_word_between_name_and_stamp() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + tinted-username + " (wasted)" + " 12:04"
@@ -542,7 +553,7 @@ fn wrap_message_omits_drunk_word_when_absent() {
         Style::default(),
         Some(tint),
         Style::default(),
-        false,
+        Gutter::Plain,
         false,
     );
     // pad + tinted-username + " 12:04" — no aside.

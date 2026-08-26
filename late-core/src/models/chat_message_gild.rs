@@ -10,6 +10,7 @@
 //! themselves move through `chips.rs`; the transaction that does both belongs
 //! to the caller.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -109,17 +110,37 @@ impl GildTier {
         }
     }
 
-    /// What the message row shows once the gild lands.
+    /// What the message row shows once the gild lands: one glyph per tier
+    /// rank, painted in the tier color by the renderer. Glyphs rather than a
+    /// word so the marker reads at a glance in any width.
     pub const fn marker(self) -> &'static str {
         match self {
-            Self::Bronze => "$",
-            Self::Silver => "$$",
-            Self::Gold => "$$$",
+            Self::Bronze => "◆",
+            Self::Silver => "◆◆",
+            Self::Gold => "◆◆◆",
         }
     }
 }
 
-/// One gild row. Immutable by construction: there is no update path.
+/// Where a buy landed on the buyer's slot. Closed so the service lists every
+/// outcome, and the two refusals are data rather than a `None` to guess at.
+#[derive(Debug)]
+pub enum GildPlacement {
+    /// First gild from this buyer on this message.
+    Placed(ChatMessageGild),
+    /// The buyer's gild raised from `from` to the row's new tier.
+    Upgraded {
+        from: GildTier,
+        gild: ChatMessageGild,
+    },
+    /// The buyer already holds exactly this tier.
+    SameTier,
+    /// The buyer holds this higher tier; a gild never goes down.
+    HeldHigher(GildTier),
+}
+
+/// One gild row: a buyer's single slot on a message. The only write after
+/// the insert is a tier raise (see [`ChatMessageGild::place_in_tx`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatMessageGild {
     pub id: Uuid,
@@ -190,8 +211,8 @@ impl GildCounts {
 
 impl ChatMessageGild {
     /// Take the row lock on the gilded message. Every gild on one message
-    /// serializes behind this, which is what makes both the duplicate-tier
-    /// check and the "third gild" count exact under concurrency. `None` means
+    /// serializes behind this, which is what makes both the placement's
+    /// read-then-write and the "third buyer" count exact under concurrency. `None` means
     /// the message is gone (hard-deleted while the buyer was choosing a
     /// tier).
     pub async fn lock_message_author(
@@ -207,33 +228,65 @@ impl ChatMessageGild {
         Ok(row.map(|row| row.get("user_id")))
     }
 
-    /// Insert the gild. `None` means this buyer already holds this tier on
-    /// this message, which is a refusal, not an error. Call under the lock
-    /// from [`Self::lock_message_author`].
-    pub async fn insert_in_tx(
+    /// Land a buy on the buyer's single slot on this message. A gild only
+    /// ever goes up: a first buy inserts, a higher tier raises the row in
+    /// place (the buyer pays the new tier's full price; the ledger keeps
+    /// both payments), and the same or a lower tier is a refusal, not an
+    /// error. Call under the lock from [`Self::lock_message_author`], which
+    /// is what makes the read-then-write here exact.
+    pub async fn place_in_tx(
         tx: &Transaction<'_>,
         message_id: Uuid,
         author_user_id: Uuid,
         user_id: Uuid,
         tier: GildTier,
-    ) -> Result<Option<Self>> {
-        let row = tx
+    ) -> Result<GildPlacement> {
+        let held = tx
             .query_opt(
-                "INSERT INTO chat_message_gilds
-                   (message_id, author_user_id, user_id, tier, chips)
-                 VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (message_id, user_id, tier) DO NOTHING
-                 RETURNING *",
-                &[
-                    &message_id,
-                    &author_user_id,
-                    &user_id,
-                    &tier.rank(),
-                    &tier.price(),
-                ],
+                "SELECT * FROM chat_message_gilds
+                 WHERE message_id = $1 AND user_id = $2",
+                &[&message_id, &user_id],
             )
-            .await?;
-        row.map(Self::try_from).transpose()
+            .await?
+            .map(Self::try_from)
+            .transpose()?;
+        let Some(held) = held else {
+            let row = tx
+                .query_one(
+                    "INSERT INTO chat_message_gilds
+                       (message_id, author_user_id, user_id, tier, chips)
+                     VALUES ($1, $2, $3, $4, $5)
+                     RETURNING *",
+                    &[
+                        &message_id,
+                        &author_user_id,
+                        &user_id,
+                        &tier.rank(),
+                        &tier.price(),
+                    ],
+                )
+                .await?;
+            return Ok(GildPlacement::Placed(Self::try_from(row)?));
+        };
+        match held.tier.cmp(&tier) {
+            Ordering::Equal => Ok(GildPlacement::SameTier),
+            Ordering::Greater => Ok(GildPlacement::HeldHigher(held.tier)),
+            Ordering::Less => {
+                let row = tx
+                    .query_one(
+                        "UPDATE chat_message_gilds
+                         SET tier = $2, chips = $3
+                         WHERE id = $1
+                         RETURNING *",
+                        &[&held.id, &tier.rank(), &tier.price()],
+                    )
+                    .await?;
+                Ok(GildPlacement::Upgraded {
+                    from: held.tier,
+                    gild: Self::try_from(row)?,
+                })
+            }
+        }
     }
 
     /// Tell every replica to repaint this message. Sent inside the gild
@@ -253,8 +306,9 @@ impl ChatMessageGild {
         Ok(())
     }
 
-    /// How many gilds the message holds. Read under the same lock as the
-    /// insert, so the count that decides the #lounge line is exact.
+    /// How many buyers have gilded the message (one row each). Read under
+    /// the same lock as the placement, so the count that decides the #lounge
+    /// line is exact.
     pub async fn count_for_message(tx: &Transaction<'_>, message_id: Uuid) -> Result<i64> {
         let row = tx
             .query_one(

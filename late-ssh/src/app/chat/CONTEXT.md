@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 5,000 / Gold 50,000) that pays the author two thirds and burns the rest, leaving a permanent marker at the head of the message footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one of each tier per buyer per message. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
+- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 5,000 / Gold 50,000) that pays the author two thirds and burns the rest, leaving a permanent tier-colored bar down the message and a `◆`-glyph marker at the head of its footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one slot per buyer per message that only ever goes up. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -168,7 +168,7 @@ Slow modes:
 
 Gilds:
 - `chat_message_gilds` is append-only: no update path, no un-gild, `created` and no `updated`.
-- Unique on `(message_id, user_id, tier)`: one of each tier per buyer per message, so all three can be stacked.
+- Unique on `(message_id, user_id)`: one slot per buyer per message. A higher tier from the same buyer raises the row in place (`ChatMessageGild::place_in_tx`, a closed `GildPlacement`: `Placed` / `Upgraded` / `SameTier` / `HeldHigher`), at the new tier's full price; the same or a lower tier is refused. So `count` is distinct buyers by construction.
 - `author_user_id` is denormalized off `chat_messages` so `chat_message_gilds_no_self_gild CHECK (user_id <> author_user_id)` can exist at all, and so the profile count reads one owner-scoped query.
 - `chips` records what was paid at purchase time; a later reprice never rewrites history.
 - `ON DELETE CASCADE` from both the message and the users.
@@ -426,8 +426,9 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
   and never a private room), a game room (`kind = 'game'`: arcade tables,
   daily matches and `#user-live` stream chats are public by visibility but
   not on the Home rail, and the #lounge line must point somewhere people can
-  go), self-gild, bot author, the 30s per-buyer cooldown, this tier already
-  bought on this message, and the chip floor.
+  go), self-gild, bot author, the 30s per-buyer cooldown, the same tier
+  already held on this message (`AlreadyGilded`), a higher tier already held
+  (`HeldHigher`: a gild never goes down), and the chip floor.
   Every refusal is uncharged, and a refusal after the cooldown was stamped
   releases it again.
 - **Transaction** (`ChatService::settle_gild`): `SELECT ... FOR UPDATE` on the
@@ -447,15 +448,22 @@ session. `late-core/src/models/chat_message_gild.rs` owns the table
 - **Rendering.** `message_gilds: HashMap<Uuid, ChatMessageGildSummary>` on
   `ChatState`, loaded with the room tail and patched by the notify. The
   marker leads the message footer, ahead of the reaction chips
-  (`ui_text.rs::render_message_footer_lines`): `$$` alone, `$$$ x3` once more
-  than one gild is on it, painted in the tier's `BADGE_BRONZE/SILVER/GOLD`.
-  It rides the footer rather than the author header because a message inside
-  a run has no header, and a paid marker that vanishes on the second line of
-  a run is the one thing nobody would accept. Gild changes bump
+  (`ui_text.rs::render_message_footer_lines`): the tier's glyphs
+  (`GildTier::marker`, `◆` / `◆◆` / `◆◆◆`) alone, `◆◆◆ ×3` once more than one
+  gild is on it, bold in the tier's `BADGE_BRONZE/SILVER/GOLD`. The same
+  color runs a heavy bar (`┃`) down the gutter of every line the message
+  renders (`ui_text.rs::Gutter`, the cell the yellow mention bar uses), so a
+  gilded message reads as a block. `Gutter` is a closed enum ranking the two
+  claims on that cell: a mention of you keeps its bar, since the footer chip
+  still spells the gild and the mention bar has no other signal. The selection marker `▸` paints over whichever bar holds the cell (`ui.rs::visible_chat_rows` asks `Gutter::is_glyph`), so selection is always visible. Both ride
+  the footer and gutter rather than the author header because a message
+  inside a run has no header, and a paid marker that vanishes on the second
+  line of a run is the one thing nobody would accept. Gild changes bump
   `room_version`, so the row cache repaints.
 - **Feed.** `ActivityKind::MessageGilded` fires once, on the message's third
-  gild (`GILD_FEED_THRESHOLD`), and names only the author: "mira got a
-  message gilded 3 times in #lounge". Never per gild. Keyed on the message id
+  buyer (`GILD_FEED_THRESHOLD`, `GildOutcome::fires_feed_line`), and names
+  only the author: "mira got a message gilded 3 times in #lounge". Never per
+  gild, and never on a raise, which adds no buyer. Keyed on the message id
   in the lounge repeat throttle.
 - **Profile.** `ChatMessageGild::counts_for_author` (owner-scoped in the
   query, off the denormalized `author_user_id`) fills `ProfileSnapshot.gild_counts`
@@ -821,8 +829,8 @@ Existing DB-backed coverage:
 - `work/svc_test.rs`: profile create/update snapshot behavior, public slug preservation, non-owner update failure, admin delete, unread cursor behavior.
 - `state_test.rs`: placeholder; direct `ChatState` tests need accessors or indirect UI/input tests.
 - `state_internal_test.rs`: `t` toggle over a cached translation (pending → ready → collapse → reopen, plus the same-script no-op banner), target-language switching dropping stale translations, auto mode firing without a pending placeholder, and author-shared display (shared row by someone else shows with no auto mode or `t`; private rows and the viewer's own shared row stay hidden). Note the harness gotcha these pinned: snapshots carry rooms with **empty** message vectors, so a test needing a concrete message must pull the room tail (`load_room_tail`), not wait for a snapshot.
-- `svc_test.rs::gild`: the split landing (two ledger rows, author counts), and one test per refusal (self, DM, private room, game room, bot author, non-member, cooldown, short balance), each asserting the ledger stayed empty. `AlreadyGilded` is covered at the model layer instead (`chat_message_gild_test::stacking_tiers_and_the_duplicate_refusal`): at the service layer the 30s cooldown answers first, so a second same-tier buy inside the window never reaches it.
-- `late-core/src/models/chat_message_gild_test.rs`: tier roster (prices, split, markers), stacking and the duplicate refusal, the self-gild CHECK, owner-scoped counts, page summaries, and that only a committed gild notifies `chat_message_gilded`.
+- `svc_test.rs::gild`: the split landing (two ledger rows, author counts), and one test per refusal (self, DM, private room, game room, bot author, non-member, cooldown, short balance), each asserting the ledger stayed empty; `raises_a_held_gild_at_full_price_and_never_lowers_it` lifts the cooldown to walk one buyer through a raise (full price, no new buyer, no feed line) and both `AlreadyGilded` and `HeldHigher`.
+- `late-core/src/models/chat_message_gild_test.rs`: tier roster (prices, split, markers), the one-slot-per-buyer placement (`a_buyers_gild_only_ever_goes_up`), the self-gild CHECK, owner-scoped counts, page summaries, and that only a committed gild notifies `chat_message_gilded`.
 - `app/ai/translate_test.rs`: cache-hit service path with AI disabled, the failure path clearing single-flight so `t` can retry, and author-shared rows broadcasting their flag (request and sweep alike).
 - `late-core/src/models/message_translation_test.rs`: script detection against each target, language key round-trip, cache upsert/read/cascade-delete, and `author_shared` surviving a later private rewrite.
 

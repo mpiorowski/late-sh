@@ -1135,6 +1135,30 @@ fn visible_rows_paint_background_for_selected_highlighted_message() {
 }
 
 #[test]
+fn selection_marker_takes_the_gutter_over_a_gild_bar() {
+    // A gilded message paints its tier bar in the gutter cell; selecting it
+    // must still show the marker there. Selection always sits on top.
+    let message_id = Uuid::now_v7();
+    let bar = Span::styled("┃", Style::default().fg(theme::BADGE_GOLD()));
+    let mut cache = ChatRowsCache {
+        all_rows: vec![
+            Line::from(vec![bar.clone(), Span::raw("alice [1m]")]),
+            Line::from(vec![bar.clone(), Span::raw("hello")]),
+            Line::from(vec![bar, Span::raw("◆◆◆")]),
+        ],
+        ..Default::default()
+    };
+    cache.selected_ranges.insert(message_id, (0, 3));
+
+    let visible = visible_chat_rows(&cache, Some(message_id), None, 3, None);
+    for (row, line) in visible.lines.iter().enumerate() {
+        let marker = &line.spans[0];
+        assert_eq!(marker.content, "▸", "row {row}: {:?}", marker.content);
+        assert_eq!(marker.style.fg, Some(theme::AMBER()), "row {row}");
+    }
+}
+
+#[test]
 fn selection_marker_keeps_the_highlight_inversion_on_reset_canvas() {
     // On the terminal palette the highlighted row carries no bg, only
     // `REVERSED`; the marker must inherit the row's whole treatment, not

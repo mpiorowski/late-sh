@@ -271,7 +271,8 @@ Behavior:
   a three-row tier picker with prices and the balance, `Enter` confirms,
   `Esc` cancels. Keyboard only, like Shop purchases.
 - Rendering: a marker on the message row that shows the highest tier the
-  message holds and the count (for example `$ x2`, `$$`, `$$$ x3`), loaded
+  message holds and the count (for example `◆ ×2`, `◆◆`, `◆◆◆ ×3`), plus a
+  tier-colored bar down the message gutter, loaded
   the way reaction summaries are (`ChatMessageReaction::list_summaries_for_messages`
   shape: one query per page of messages, never per row). Colors: bronze /
   silver / gold from the theme palette.
@@ -301,8 +302,11 @@ deliberate:
 - The marker crosses processes over a `chat_message_gilded` Postgres
   notify, and the selling replica repaints through the same path rather
   than through its own broadcast, so there is one code path per marker.
-- `AlreadyGilded` is unreachable at the service layer within the cooldown
-  window, so its test lives at the model layer.
+- One slot per buyer per message, and it only goes up: a higher tier from
+  the same buyer raises the row at the new tier's full price, the same or a
+  lower tier is refused (`AlreadyGilded` / `HeldHigher`). The marker's
+  count is therefore distinct buyers, and a raise never fires the #lounge
+  line.
 
 Acceptance:
 - [x] Ledger math: sender pays the tier price, author receives exactly

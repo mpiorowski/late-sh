@@ -113,6 +113,55 @@ fn push_author_prefix_spans(
     spans.push(Span::styled(prefix.to_string(), author_style));
 }
 
+/// The one-cell gutter at the left of every line a message renders: the
+/// header, the body, inline images, the translation block, and the footer.
+/// A closed enum rather than two flags so the two claims on that cell are
+/// ranked in one place. A mention bar names something the reader has to act
+/// on; a gild bar is a permanent decoration whose tier the footer chip also
+/// spells. So a message that is both keeps the mention bar and loses nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Gutter {
+    Plain,
+    Mention,
+    Gild(GildTier),
+}
+
+impl Gutter {
+    pub(super) fn of(mentions_us: bool, gild: Option<ChatMessageGildSummary>) -> Self {
+        match (mentions_us, gild) {
+            (true, _) => Self::Mention,
+            (false, Some(gild)) => Self::Gild(gild.top_tier),
+            (false, None) => Self::Plain,
+        }
+    }
+
+    const fn glyph(self) -> &'static str {
+        match self {
+            Self::Plain => " ",
+            Self::Mention => "│",
+            Self::Gild(_) => "┃",
+        }
+    }
+
+    fn span(self) -> Span<'static> {
+        let style = match self {
+            Self::Plain => Style::default(),
+            Self::Mention => Style::default().fg(theme::MENTION()),
+            Self::Gild(tier) => Style::default().fg(gild_color(tier)),
+        };
+        Span::styled(self.glyph(), style)
+    }
+
+    /// Whether a rendered row's first cell is a gutter this module drew, so
+    /// the selection marker may take it. Selection always paints on top of
+    /// any bar; the row's remaining spans still carry the bar's treatment.
+    pub(super) fn is_glyph(content: &str) -> bool {
+        content == Self::Plain.glyph()
+            || content == Self::Mention.glyph()
+            || content == Self::Gild(GildTier::Bronze).glyph()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_message_to_lines(
     body: &str,
@@ -122,15 +171,11 @@ pub(super) fn wrap_message_to_lines(
     author_style: Style,
     author_tint: Option<AuthorTint>,
     body_style: Style,
-    mentions_us: bool,
+    gutter: Gutter,
     continuation: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    let pad = if mentions_us {
-        Span::styled("│", Style::default().fg(theme::MENTION()))
-    } else {
-        Span::raw(" ")
-    };
+    let pad = gutter.span();
 
     if !continuation {
         let mut spans = vec![pad.clone()];
@@ -171,11 +216,8 @@ pub(super) fn wrap_chat_entry_to_lines(
     gild: Option<ChatMessageGildSummary>,
     translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
-    let pad = if mentions_us {
-        Span::styled("│", Style::default().fg(theme::MENTION()))
-    } else {
-        Span::raw(" ")
-    };
+    let gutter = Gutter::of(mentions_us, gild);
+    let pad = gutter.span();
     let news_payload = system_text
         .is_none()
         .then(|| parse_news_payload(body))
@@ -212,7 +254,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     } else if let Some((kind, text)) = report_payload {
         wrap_report_to_lines(stamp, prefix, width, author_style, kind, text)
     } else if let Some(action) = action_payload {
-        wrap_action_to_lines(action, prefix, width, body_style, mentions_us)
+        wrap_action_to_lines(action, prefix, width, body_style, gutter)
     } else {
         wrap_message_to_lines(
             body,
@@ -222,7 +264,7 @@ pub(super) fn wrap_chat_entry_to_lines(
             author_style,
             author_tint,
             body_style,
-            mentions_us,
+            gutter,
             continuation,
         )
     };
@@ -328,13 +370,9 @@ fn wrap_action_to_lines(
     prefix: &str,
     width: usize,
     body_style: Style,
-    mentions_us: bool,
+    gutter: Gutter,
 ) -> Vec<Line<'static>> {
-    let pad = if mentions_us {
-        Span::styled("│", Style::default().fg(theme::MENTION()))
-    } else {
-        Span::raw(" ")
-    };
+    let pad = gutter.span();
     let style = body_style.add_modifier(Modifier::ITALIC);
     render_body_to_lines(&format!("* {prefix} {action}"), width, pad, style)
 }
@@ -583,15 +621,16 @@ fn wrap_report_to_lines(
 
 // ── Reaction footer ─────────────────────────────────────────
 
-/// The gild marker's chip: the best tier the message holds, and the total
-/// count once more than one person has paid. It leads the footer rather than
-/// riding the author header because a message in a run of messages has no
-/// header at all, and a paid marker that vanishes on the second message of a
-/// run would be the one thing nobody accepts about it.
+/// The gild marker's chip: the best tier's glyphs, and the total count once
+/// more than one person has paid. It leads the footer rather than riding the
+/// author header because a message in a run of messages has no header at
+/// all, and a paid marker that vanishes on the second message of a run would
+/// be the one thing nobody accepts about it. The tier-colored gutter
+/// ([`Gutter::Gild`]) runs the full height of the message for the same reason.
 pub(super) fn gild_chip_text(gild: ChatMessageGildSummary) -> String {
     match gild.count {
         1 => gild.top_tier.marker().to_string(),
-        count => format!("{} x{count}", gild.top_tier.marker()),
+        count => format!("{} ×{count}", gild.top_tier.marker()),
     }
 }
 
