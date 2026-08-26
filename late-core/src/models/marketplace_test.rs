@@ -46,8 +46,8 @@ const ROOM_SPARK_PRICE: i64 = 2_000;
 const AQUARIUM_FOOD_PRICE: i64 = 100;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
-const CUSTOM_TITLE_DAY_PRICE: i64 = 2_000;
-const CUSTOM_TITLE_MONTH_PRICE: i64 = 80_000;
+const CUSTOM_TITLE_DAY_PRICE: i64 = 1_000;
+const CUSTOM_TITLE_MONTH_PRICE: i64 = 40_000;
 
 #[tokio::test]
 async fn seeded_catalog_contains_pet_companion_unlock() {

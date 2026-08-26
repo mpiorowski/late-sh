@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 5,000 / Gold 50,000) that pays the author two thirds and burns the rest, leaving a permanent tier-colored bar down the message and a `◆`-glyph marker at the head of its footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one slot per buyer per message that only ever goes up. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
+- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 2,000 / Gold 10,000) that pays the author two thirds and burns the rest, leaving a permanent tier-colored bar down the message and a `◆`-glyph marker at the head of its footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one slot per buyer per message that only ever goes up. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -412,7 +412,7 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 A gild is chips paid to mark someone else's message, permanently. It is a
 purchase, not a reaction: there is no un-gild, and the row outlives every
 session. `late-core/src/models/chat_message_gild.rs` owns the table
-(migration 154) and `GildTier` (Bronze 500 / Silver 5,000 / Gold 50,000);
+(migration 154) and `GildTier` (Bronze 500 / Silver 2,000 / Gold 10,000);
 `chips.rs::UserChips::transfer_gild` owns the money.
 
 - **Split.** The author receives `floor(price * 2 / 3)` as

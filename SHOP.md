@@ -88,10 +88,10 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Badge rental, basic | 100 / 24h, 4,000 / 30d |
 | Badge rental, premium | 250 / 24h, 10,000 / 30d |
 | Flag rental | same as basic badge |
-| Title rental (Your Own Title, the only title on sale) | 2,000 / 24h, 80,000 / 30d |
+| Title rental (Your Own Title, the only title on sale) | 1,000 / 24h, 40,000 / 30d (migration 155; was 2,000 / 80,000: the title alone ate a full arcade day, now title plus top effect is one day) |
 | Username effect | 200 / 500 / 1,000 per 24h, 8,000 / 20,000 / 40,000 per 30d |
 | Title max length | 20 characters |
-| Gild tiers | 500 / 5,000 / 50,000 |
+| Gild tiers | 500 / 2,000 / 10,000 (an hour, a day, a week of completionist arcade play; Gold is also the most one buyer can put on a message, so it must be reachable) |
 | Gild split | 2/3 to the author (`GildReceived`), 1/3 never re-minted |
 | Gild feed threshold | a message's 3rd gild, once |
 | Crown minimum price | 5,000 |

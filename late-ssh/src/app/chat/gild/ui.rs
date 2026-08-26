@@ -100,7 +100,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &GildModalState, 
     );
 }
 
-/// One tier row: `> $$  Silver     5,000  author gets 3,333`. A tier the
+/// One tier row: `> ◆◆  Silver     2,000  author gets 1,333`. A tier the
 /// balance cannot cover still shows its price (that is the whole point of
 /// having it on screen) but reads as out of reach.
 fn draw_tier_row(

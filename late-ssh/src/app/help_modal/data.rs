@@ -472,7 +472,7 @@ fn chips_help_lines() -> Vec<String> {
         "Where chips go".to_string(),
         "  The Shop (/shop) for badge, flag, title and name-effect rentals, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
         "  Badges, flags, titles, and name effects are rented for 24 hours or 30 days, one live at a time per slot.".to_string(),
-        "  The one title on sale is Your Own Title (2,000 / 24h, 80,000 / 30d): you write it, up to 20 characters.".to_string(),
+        "  The one title on sale is Your Own Title (1,000 / 24h, 40,000 / 30d): you write it, up to 20 characters.".to_string(),
         "  It is screened before the chips move, so a refused title costs you nothing.".to_string(),
         "  A rebuy replaces whatever is live in that slot and restarts its clock; when a rental lapses the slot simply empties.".to_string(),
         "  @bartender drinks in the Clubhouse.".to_string(),

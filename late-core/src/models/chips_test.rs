@@ -123,8 +123,8 @@ async fn transfer_gild_burns_the_last_third() {
         author_chips.balance,
         INITIAL_CHIP_BALANCE + tier.author_share()
     );
-    assert_eq!(tier.author_share(), 3_333);
-    assert_eq!(tier.burn(), 1_667);
+    assert_eq!(tier.author_share(), 1_333);
+    assert_eq!(tier.burn(), 667);
 
     let row = client
         .query_one(

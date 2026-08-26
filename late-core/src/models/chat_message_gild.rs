@@ -81,12 +81,14 @@ impl GildTier {
         }
     }
 
-    /// What the buyer pays. Decided in SHOP.md's fixed-numbers table.
+    /// What the buyer pays. Decided in SHOP.md's fixed-numbers table: an
+    /// hour, a day, a week of completionist arcade play (~2,000 a day), in
+    /// the 4x-5x steps the rest of the Shop ladder uses.
     pub const fn price(self) -> i64 {
         match self {
             Self::Bronze => 500,
-            Self::Silver => 5_000,
-            Self::Gold => 50_000,
+            Self::Silver => 2_000,
+            Self::Gold => 10_000,
         }
     }
 
