@@ -177,7 +177,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 ),
             })
         }
-        ActivityKind::UserJoined { .. }
+        ActivityKind::UserJoined
         | ActivityKind::GameStarted { .. }
         | ActivityKind::GameWon { .. }
         | ActivityKind::GameScored { .. }
@@ -185,7 +185,7 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::BossSlain { .. }
         | ActivityKind::SatDown { .. }
         | ActivityKind::DailyResult { .. }
-        | ActivityKind::BonsaiWatered { .. }
+        | ActivityKind::BonsaiWatered
         | ActivityKind::BonsaiLost { .. }
         | ActivityKind::UsernameEffectApplied { .. }
         | ActivityKind::BadgeRented { .. }
