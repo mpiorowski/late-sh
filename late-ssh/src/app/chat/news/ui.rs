@@ -12,7 +12,7 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use late_core::models::article::ArticleFeedItem;
+use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 
 pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
@@ -42,7 +42,9 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 
     if view.articles.is_empty() {
-        let text = Text::from("No news yet. Press 'i' to share a link.");
+        let text = Text::from(format!(
+            "No news yet. Press 'i' to share a link and earn {NEWS_SHARE_REWARD_CHIPS} chips."
+        ));
         let empty_p = Paragraph::new(text).style(Style::default().fg(theme::TEXT_DIM()));
         frame.render_widget(empty_p, list_area);
     } else {

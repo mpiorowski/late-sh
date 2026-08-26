@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use late_core::models::article::NEWS_SHARE_REWARD_CHIPS;
 use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
@@ -4939,8 +4940,9 @@ fn draw_selected_content(
             .block(hint_block);
             frame.render_widget(hint_text, composer_area);
         } else {
+            let rss_title = format!(" RSS · a share pays {NEWS_SHARE_REWARD_CHIPS} chips ");
             let hint_block = Block::default()
-                .title(" RSS ")
+                .title(rss_title.as_str())
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
@@ -5088,7 +5090,9 @@ fn draw_selected_content(
                 )
             } else {
                 (
-                    " Paste URL (Enter submit, Esc cancel) ".to_string(),
+                    format!(
+                        " Paste URL · Enter submit, Esc cancel · +{NEWS_SHARE_REWARD_CHIPS} chips "
+                    ),
                     Style::default().fg(theme::BORDER_ACTIVE()),
                 )
             };
@@ -5101,8 +5105,9 @@ fn draw_selected_content(
             let text_area = horizontal_inset(news_inner, 1);
             frame.render_widget(view.news_composer, text_area);
         } else {
+            let share_title = format!(" Share URL · +{NEWS_SHARE_REWARD_CHIPS} chips ");
             let hint_block = Block::default()
-                .title(" Share URL ")
+                .title(share_title.as_str())
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(

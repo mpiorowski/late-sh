@@ -3,6 +3,7 @@ use crate::app::common::primitives::thousands;
 use crate::app::common::qr::{Barcode, HalfBlock};
 use crate::app::common::username_effect::CROWN_GLYPH;
 use late_core::models::{
+    article::NEWS_SHARE_REWARD_CHIPS,
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
@@ -472,7 +473,13 @@ fn chips_help_lines() -> Vec<String> {
         "  One gild per message per buyer. Buying a higher tier later raises it at that tier's full price; it never goes down.".to_string(),
         "  Gilds received do NOT count toward Top Chips: the board ranks what you earned, not what you were tipped.".to_string(),
         "".to_string(),
-        "7. The crown".to_string(),
+        "7. Sharing news".to_string(),
+        format!("  Publishing a link to News pays {NEWS_SHARE_REWARD_CHIPS} chips."),
+        "  It pays the same either way: pasting a URL with i in News, or pressing s on an entry in your RSS inbox.".to_string(),
+        "  A link that is already in News cannot be shared again, so a story only ever pays its first sharer.".to_string(),
+        "  You are paid once per link. Deleting your own story and re-sharing it pays nothing the second time.".to_string(),
+        "".to_string(),
+        "8. The crown".to_string(),
         format!("  One slot, one holder, one {CROWN_GLYPH} after their name in every message they send."),
         "  /crown shows who wears it and what taking it costs. /crown take buys it.".to_string(),
         format!("  A vacant crown costs {}. After that it costs 1.5x whatever the holder paid, rounded up,", thousands(CROWN_MIN_PRICE)),
@@ -484,7 +491,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Every takeover posts to #lounge, naming both players.".to_string(),
         "  Like Shop spending, the crown does not count against Top Chips.".to_string(),
         "".to_string(),
-        "8. Burn milestones".to_string(),
+        "9. Burn milestones".to_string(),
         format!("  Three permanent badges in the Shop's Ultimates tab: Wick {} \u{1F56F}\u{FE0F}, Fuse {} \u{1F9E8}, Furnace {} \u{1F30B}.",
             thousands(50_000),
             thousands(150_000),
@@ -495,7 +502,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Each unlock posts to #lounge, naming the price.".to_string(),
         "  Like the crown and Shop spending, they do not count against Top Chips.".to_string(),
         "".to_string(),
-        "9. The pot".to_string(),
+        "10. The pot".to_string(),
         format!("  A raffle, drawn once a week, Monday 21:00 UTC. Tickets cost {} chips each.", thousands(POT_TICKET_PRICE)),
         "  /pot shows the pot, the tickets in it, what you hold and paid, how many more you can buy today, and how long is left.".to_string(),
         "  /pot buy N buys N tickets.".to_string(),
@@ -506,16 +513,16 @@ fn chips_help_lines() -> Vec<String> {
         "  The winner is announced in #lounge, so you can read it when you get back.".to_string(),
         "  Neither the tickets you buy nor the pot you win counts toward Top Chips.".to_string(),
         "".to_string(),
-        "10. Gifts".to_string(),
+        "11. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
         "".to_string(),
         "What does not pay chips".to_string(),
-        "  Chatting, posting News, RSS, showcases, profiles, voice, and the Artboard pay nothing.".to_string(),
+        "  Chatting, showcases, profiles, voice, and the Artboard pay nothing. Sharing a link to News does pay; see 7 above.".to_string(),
         "  Monthly leaderboard awards are prestige only; the door feats above are the exception,".to_string(),
         "  and those pay again every time their gate reopens.".to_string(),
-        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, and quests.".to_string(),
+        "  There is no login bonus, idle income, or daily stipend: chips come from playing, watering, quests, and sharing news.".to_string(),
         "".to_string(),
         "Where chips go".to_string(),
         "  The Shop (/shop) for badge, flag, title and name-effect rentals, Dynamic Bonsai, the pet companion, and the Aquarium.".to_string(),
@@ -1237,47 +1244,63 @@ fn architecture_lines() -> Vec<String> {
 }
 
 fn news_help_lines() -> Vec<String> {
-    [
-        "News processing",
-        "",
-        "The News room is a shared feed for links worth keeping around. It is built for URL drop-ins, AI summaries, and quick scanning from the terminal.",
-        "",
-        "How it works",
-        "  i                 start the URL composer",
-        "  Enter             copy selected link",
-        "  Enter in composer submit link",
-        "  Esc               cancel URL entry",
-        "  j / k             browse stories",
-        "  d                 delete your own story",
-        "  /                 toggle filter to only your stories",
-        "  Enter on news msg open the news item modal",
-        "  Enter in modal    copy link and close",
-        "  N in modal        jump to News with story selected",
-        "",
-        "What happens after submit",
-        "  1. late.sh fetches the article or video page",
-        "  2. AI extracts a compact summary",
-        "  3. ASCII art / preview is generated when possible",
-        "  4. the story lands in the shared feed for everyone",
-        "",
-        "Good inputs",
-        "  tech articles, launch posts, docs, YouTube links, tweets/x links",
-        "  private RSS/Atom entries from the RSS room when you press s there",
-        "",
-        "RSS relationship",
-        "  RSS is a private inbox in the Home room rail.",
-        "  RSS/Atom subscriptions are managed in Settings > RSS.",
-        "  Sharing an RSS entry sends its URL through this News pipeline.",
-        "  Only shared entries become public News articles and #lounge announcements.",
-        "",
-        "Notes",
-        "  summaries are intentionally compact for terminal reading",
-        "  thumbnails only render when they fit the layout",
-        "  the room acts like a curated backlog, not high-speed chat",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    // The payout is the one thing people ask about twice, so it leads rather
+    // than sitting in a footnote. The amount comes from the constant the
+    // service pays out, never from a copy of it.
+    let mut lines = vec![
+        "News processing".to_string(),
+        "".to_string(),
+        "The News room is a shared feed for links worth keeping around. It is built for URL drop-ins, AI summaries, and quick scanning from the terminal.".to_string(),
+        "".to_string(),
+        "What it pays".to_string(),
+        format!(
+            "  Sharing a link pays you {NEWS_SHARE_REWARD_CHIPS} chips, from the composer here or with s in your RSS inbox."
+        ),
+        "  A link already in News cannot be shared again, so only the first sharer is paid.".to_string(),
+        "  You are paid once per link: deleting your own story and re-sharing it pays nothing.".to_string(),
+        "  Full chip rules live in the Chips tab.".to_string(),
+        "".to_string(),
+    ];
+    lines.extend(
+        [
+            "How it works",
+            "  i                 start the URL composer",
+            "  Enter             copy selected link",
+            "  Enter in composer submit link",
+            "  Esc               cancel URL entry",
+            "  j / k             browse stories",
+            "  d                 delete your own story",
+            "  /                 toggle filter to only your stories",
+            "  Enter on news msg open the news item modal",
+            "  Enter in modal    copy link and close",
+            "  N in modal        jump to News with story selected",
+            "",
+            "What happens after submit",
+            "  1. late.sh fetches the article or video page",
+            "  2. AI extracts a compact summary",
+            "  3. ASCII art / preview is generated when possible",
+            "  4. the story lands in the shared feed for everyone",
+            "  5. the chips land in your balance",
+            "",
+            "Good inputs",
+            "  tech articles, launch posts, docs, YouTube links, tweets/x links",
+            "  private RSS/Atom entries from the RSS room when you press s there",
+            "",
+            "RSS relationship",
+            "  RSS is a private inbox in the Home room rail.",
+            "  RSS/Atom subscriptions are managed in Settings > RSS.",
+            "  Sharing an RSS entry sends its URL through this News pipeline.",
+            "  Only shared entries become public News articles and #lounge announcements.",
+            "",
+            "Notes",
+            "  summaries are intentionally compact for terminal reading",
+            "  thumbnails only render when they fit the layout",
+            "  the room acts like a curated backlog, not high-speed chat",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    lines
 }
 
 fn settings_help_lines() -> Vec<String> {

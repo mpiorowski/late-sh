@@ -113,6 +113,12 @@ chip_moves!(
     /// tickets paid in. The other fifth has no ledger row at all, the way a
     /// gild's third has none: that gap is the burn.
     PotWon,
+    /// Publishing a News article, from the News composer or from an RSS
+    /// entry shared with `s`. One flat credit, minted rather than moved.
+    /// `source_ref` is the shared URL, not an article id: the ledger row is
+    /// what caps the reward at one per URL per user, and it has to outlive
+    /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
+    NewsShared,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -175,6 +181,7 @@ impl ChipMove {
             Self::CrownTaken => "chip_crown_taken",
             Self::PotTicket => "pot_ticket",
             Self::PotWon => "pot_won",
+            Self::NewsShared => "news_shared",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -221,6 +228,7 @@ impl ChipMove {
             Self::GildSent | Self::GildReceived => "chat_messages",
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
+            Self::NewsShared => "articles",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -258,6 +266,7 @@ impl ChipMove {
             | Self::GiftReceived
             | Self::GildReceived
             | Self::PotWon
+            | Self::NewsShared
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -322,6 +331,7 @@ impl ChipMove {
             | Self::GildSent
             | Self::GiftReceived
             | Self::DrinkPurchase
+            | Self::NewsShared
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin

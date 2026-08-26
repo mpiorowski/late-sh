@@ -2,6 +2,7 @@ use crate::app::{
     ai::svc::AiService,
     chat::svc::{ChatService, SendLoungeMessageTask},
 };
+use crate::metrics;
 use anyhow::{Context, Result};
 use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_MARKER};
 use late_core::{
@@ -350,11 +351,14 @@ impl ArticleService {
         let announcement =
             build_news_chat_announcement(&extraction.title, &extraction.summary, url, &ascii_art);
 
-        // 4. Save to database — scoped so the client is dropped before helper calls
+        // 4. Save to database and pay the sharer — scoped so the client is
+        //    dropped before helper calls. Both share paths (the News composer
+        //    and an RSS entry shared with `s`) land here, so this is the one
+        //    place a share is rewarded.
         tracing::info!(%url, "saving article to database");
         {
             let db_client = self.db.get().await?;
-            Article::create_by_user_id(
+            let (_, reward) = Article::create_shared(
                 &db_client,
                 user_id,
                 ArticleParams {
@@ -366,6 +370,7 @@ impl ArticleService {
                 },
             )
             .await?;
+            metrics::record_news_shared(reward);
         }
 
         // Post the announcement into #lounge via the same send path as any

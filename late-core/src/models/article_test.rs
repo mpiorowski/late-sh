@@ -1,9 +1,10 @@
 use crate::{
     models::{
-        article::{Article, ArticleParams},
+        article::{Article, ArticleParams, NEWS_SHARE_REWARD_CHIPS},
+        chips::{INITIAL_CHIP_BALANCE, UserChips},
         user::{User, UserParams},
     },
-    test_utils::{bump_created_past_now, test_db},
+    test_utils::{bump_created_past_now, create_test_user, test_db},
 };
 
 #[tokio::test]
@@ -68,4 +69,90 @@ async fn test_list_recent_articles() {
     assert_eq!(recent_all.len(), 2);
     assert_eq!(recent_all[0].id, article2.id);
     assert_eq!(recent_all[1].id, article1.id);
+}
+
+/// Publishing pays the sharer, and pays them exactly once for a link.
+/// Deleting a story frees its URL to be shared again, so without the ledger
+/// check one player could share, delete, and re-share the same link forever.
+#[tokio::test]
+async fn create_shared_pays_the_sharer_once_per_url() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "news-reward-sharer").await;
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row");
+
+    let url = "https://example.com/paid-once";
+    let (article, reward) = Article::create_shared(&client, user.id, share_params(user.id, url))
+        .await
+        .expect("first share");
+    assert_eq!(reward, NEWS_SHARE_REWARD_CHIPS);
+    assert_eq!(
+        balance(&client, user.id).await,
+        INITIAL_CHIP_BALANCE + NEWS_SHARE_REWARD_CHIPS
+    );
+
+    Article::delete(&client, article.id)
+        .await
+        .expect("delete article");
+
+    let (_, second_reward) = Article::create_shared(&client, user.id, share_params(user.id, url))
+        .await
+        .expect("second share");
+    assert_eq!(second_reward, 0);
+    assert_eq!(
+        balance(&client, user.id).await,
+        INITIAL_CHIP_BALANCE + NEWS_SHARE_REWARD_CHIPS
+    );
+}
+
+/// The cap is per person, not per link. `articles.url` is unique, so a
+/// second player can only reach a link once the first one's story is gone,
+/// and when they do the share still pays them.
+#[tokio::test]
+async fn create_shared_pays_a_second_sharer_of_a_freed_url() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let first = create_test_user(&test_db.db, "news-reward-first").await;
+    let second = create_test_user(&test_db.db, "news-reward-second").await;
+    UserChips::ensure(&client, second.id)
+        .await
+        .expect("chips row");
+
+    let url = "https://example.com/shared-twice";
+    let (article, _) = Article::create_shared(&client, first.id, share_params(first.id, url))
+        .await
+        .expect("first share");
+    Article::delete(&client, article.id)
+        .await
+        .expect("delete article");
+
+    let (_, reward) = Article::create_shared(&client, second.id, share_params(second.id, url))
+        .await
+        .expect("second share");
+
+    assert_eq!(reward, NEWS_SHARE_REWARD_CHIPS);
+    assert_eq!(
+        balance(&client, second.id).await,
+        INITIAL_CHIP_BALANCE + NEWS_SHARE_REWARD_CHIPS
+    );
+}
+
+fn share_params(user_id: uuid::Uuid, url: &str) -> ArticleParams {
+    ArticleParams {
+        user_id,
+        url: url.to_string(),
+        title: "Paid Article".to_string(),
+        summary: "A shared link".to_string(),
+        ascii_art: "A".to_string(),
+    }
+}
+
+async fn balance(client: &tokio_postgres::Client, user_id: uuid::Uuid) -> i64 {
+    UserChips::find(client, user_id)
+        .await
+        .expect("chips lookup")
+        .expect("chips row")
+        .balance
 }

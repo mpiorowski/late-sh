@@ -1,5 +1,9 @@
 use chrono::{DateTime, Utc};
-use late_core::models::{article::ArticleEvent, rss_entry::RssEntryView, rss_feed::RssFeed};
+use late_core::models::{
+    article::{ArticleEvent, NEWS_SHARE_REWARD_CHIPS},
+    rss_entry::RssEntryView,
+    rss_feed::RssFeed,
+};
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -204,7 +208,9 @@ impl State {
                     banner = Some(Banner::success("RSS entry dismissed."));
                 }
                 Ok(FeedEvent::EntryShared { user_id }) if user_id == self.user_id => {
-                    banner = Some(Banner::success("RSS entry shared."));
+                    banner = Some(Banner::success(&format!(
+                        "RSS entry shared to news. +{NEWS_SHARE_REWARD_CHIPS} chips"
+                    )));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::TryRecvError::Empty) => break,

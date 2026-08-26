@@ -2,6 +2,13 @@ use anyhow::Result;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::chips::{ChipMove, UserChips};
+
+/// What publishing one article pays its author. Every share path funnels
+/// through [`Article::create_shared`], so the News composer and an RSS entry
+/// shared with `s` pay exactly this, and neither can pay a different amount.
+pub const NEWS_SHARE_REWARD_CHIPS: i64 = 500;
+
 crate::user_scoped_model! {
     table = "articles";
     user_field = user_id;
@@ -26,6 +33,52 @@ impl Article {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Publish an article and pay its author [`NEWS_SHARE_REWARD_CHIPS`],
+    /// once per URL per user for all time. Returns the article and what the
+    /// share actually paid, which is zero on a repeat.
+    ///
+    /// The `articles` row cannot be the record of payment: a delete frees the
+    /// URL to be shared again, so paying on insert alone would let one player
+    /// share, delete, and re-share the same link forever. The `chip_ledger`
+    /// row is the record, keyed on `(user_id, url)`, which is why
+    /// `source_ref` here is the URL rather than the article id. A second
+    /// player sharing the same link later is still paid: the cap is per
+    /// person, not per link.
+    ///
+    /// The plain `create_by_user_id` still exists for fixtures and backfills;
+    /// this is the only path a user-facing share may take, so the reward
+    /// cannot be forgotten at one call site and applied at another.
+    pub async fn create_shared(
+        client: &Client,
+        user_id: Uuid,
+        params: ArticleParams,
+    ) -> Result<(Self, i64)> {
+        let url = params.url.clone();
+        let article = Self::create_by_user_id(client, user_id, params).await?;
+        let paid_before = client
+            .query_opt(
+                "SELECT 1 FROM chip_ledger
+                 WHERE user_id = $1 AND reason = $2 AND source_ref = $3
+                 LIMIT 1",
+                &[&user_id, &ChipMove::NewsShared.reason(), &url],
+            )
+            .await?
+            .is_some();
+        if paid_before {
+            return Ok((article, 0));
+        }
+
+        UserChips::apply(
+            client,
+            user_id,
+            ChipMove::NewsShared,
+            NEWS_SHARE_REWARD_CHIPS,
+            Some(&url),
+        )
+        .await?;
+        Ok((article, NEWS_SHARE_REWARD_CHIPS))
     }
 
     pub async fn find_by_url(client: &Client, url: &str) -> Result<Option<Self>> {

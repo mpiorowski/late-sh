@@ -4,7 +4,9 @@ use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot};
+use late_core::models::article::{
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_SHARE_REWARD_CHIPS,
+};
 
 use super::svc::ArticleService;
 
@@ -357,7 +359,9 @@ impl State {
                         self.composing = false;
                         self.processing = false;
                         self.composer = new_news_textarea();
-                        banner = Some(Banner::success("Article shared!"));
+                        banner = Some(Banner::success(&format!(
+                            "Article shared! +{NEWS_SHARE_REWARD_CHIPS} chips"
+                        )));
                     }
                     ArticleEvent::Failed { user_id, error, .. } if self.user_id == user_id => {
                         self.current_task = None;

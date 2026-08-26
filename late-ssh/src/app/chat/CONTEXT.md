@@ -209,7 +209,7 @@ RSS:
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
 - Feed URLs are user-supplied, so fetches go through the SSRF-guarded downloader (`files::image_upload::download_url_bytes_following_redirects`): private/link-local/reserved resolved IPs rejected, DNS pinned, every redirect hop re-validated (up to 5 hops; feeds legitimately redirect), 1 MB body cap. Do not swap in a plain `reqwest::Client`.
 - The visible entry list is capped per feed (`PER_FEED_ENTRY_LIMIT`, 20) inside the flat `ENTRY_LIMIT` (100) window via `RssEntry::list_visible_for_user`, so a high-volume feed (news site, ~20 posts/day) cannot evict weekly/monthly feeds from the inbox.
-- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement.
+- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article and `#lounge` announcement, and only then does it pay the share reward (see §11 News).
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.
@@ -630,6 +630,9 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 - Backed by persisted `articles`.
 - `ArticleService::process_url` extracts title/summary/image, stores an article, and posts a compact `---NEWS---` announcement into `#lounge`.
+- Publishing pays the sharer `NEWS_SHARE_REWARD_CHIPS` (500) as `ChipMove::NewsShared`. `Article::create_shared` (`late-core/src/models/article.rs`) is the only path a user-facing share may take, so the News composer and an RSS `s` share pay exactly the same. Chips are minted, not moved, and count toward Top Chips.
+- The reward is capped at one per URL per user, and the `chip_ledger` row is what enforces it, keyed on `(user_id, url)` (hence `source_ref` holds the URL, not an article id; migration 163 indexes the lookup). The `articles` row cannot be the record of payment: deleting a story frees its URL, so paying on insert alone would let one player share, delete, and re-share the same link forever. `articles.url` is unique, so while a story is live only its first sharer was paid.
+- A repeat share still succeeds and still posts to `#lounge`; it just pays 0. `Article::create_shared` returns what it actually paid, and `metrics::record_news_shared` records both the share and the chips minted. The success banners quote the reward from the constant, so the rare unpaid repeat reads as if it paid.
 - Announcement payload format is `NEWS_MARKER title || summary || url || ascii`.
 - Rendering/parsing of announcement cards lives in `ui_text.rs`.
 - Delete removes the article and deletes matching news announcements by marker/user/url, then broadcasts silent `MessageRemoved` chat events so active #lounge views drop the generated card without showing a second message-delete banner; article deletion can still succeed if chat cleanup only logs a warning.
