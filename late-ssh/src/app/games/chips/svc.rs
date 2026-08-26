@@ -2,7 +2,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::drinks::UserDrinks;
-use late_core::models::game_payout::{GamePayout, GamePayoutClaim};
+use late_core::models::game_payout::{
+    GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutClaim, GamePayoutKey, GamePayoutMultiGrant,
+};
 use late_core::models::reward::{
     ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_PER_EVENT,
     REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate, daily_puzzle_reward_key,
@@ -15,8 +17,10 @@ use crate::app::activity::{
     event::{ActivityEvent, ActivityGame, ActivityKind},
 };
 
-const LIFETIME_REWARD_PERIOD_KIND: &str = "lifetime";
-const LIFETIME_REWARD_PERIOD_KEY: &str = "once";
+// `period_kind = "lifetime"` is gone from every write path: SHOP.md Phase 6
+// made every door milestone repeatable, so nothing pays once per account for
+// life any more. The rows already banked under it stay as history, and no gate
+// reads them.
 const PER_EVENT_REWARD_PERIOD_KIND: &str = "event";
 
 #[derive(Clone)]
@@ -270,31 +274,6 @@ impl ChipService {
         Ok(reward_grant(template.reward_chips, claim))
     }
 
-    pub async fn credit_lifetime_reward_template(
-        &self,
-        user_id: Uuid,
-        reward_key: &str,
-        chip_move: ChipMove,
-    ) -> anyhow::Result<RewardGrant> {
-        let client = self.db.get().await?;
-        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
-        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
-        let claim = GamePayout::grant_period(
-            &client,
-            late_core::models::game_payout::GamePayoutPeriodGrant {
-                user_id,
-                game: template.game()?,
-                payout_kind: template.payout_kind()?,
-                period_kind: LIFETIME_REWARD_PERIOD_KIND,
-                period_key: LIFETIME_REWARD_PERIOD_KEY,
-                amount: template.reward_chips,
-                chip_move,
-            },
-        )
-        .await?;
-        Ok(reward_grant(template.reward_chips, claim))
-    }
-
     /// Credit a `per_event` reward once per distinct `event_key` (forever).
     /// Unlike the lifetime grant this pays for each event — e.g. every
     /// distinct daily-match win, keyed on the match id — while staying
@@ -317,6 +296,50 @@ impl ChipService {
                 payout_kind: template.payout_kind()?,
                 period_kind: PER_EVENT_REWARD_PERIOD_KIND,
                 period_key: event_key,
+                amount: template.reward_chips,
+                chip_move,
+            },
+        )
+        .await?;
+        Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    /// Credit a `cooldown` reward that also has to be new: it pays once per
+    /// distinct `event_key` (a roguelike run's log line, a Lateania character)
+    /// AND at most once per the template's cooldown window per account. Both
+    /// claims land or neither does, so a milestone gated by the lockout leaves
+    /// no trace and the same event can pay later only if it was never paid.
+    ///
+    /// This is what makes the door milestones repeatable: the event key
+    /// absorbs a log replay, the window spaces the repeats. Claims banked
+    /// under the old lifetime gate carry a different `period_kind` and are
+    /// invisible to both.
+    pub async fn credit_run_cooldown_reward_template(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        event_key: &str,
+        chip_move: ChipMove,
+    ) -> anyhow::Result<RewardGrant> {
+        let mut client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        let cooldown = template.cooldown()?;
+        let claim = GamePayout::grant_multi(
+            &mut client,
+            GamePayoutMultiGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                keys: &[
+                    GamePayoutKey::Unique {
+                        period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                        period_key: event_key,
+                    },
+                    GamePayoutKey::Cooldown {
+                        period_kind: GAME_PAYOUT_PERIOD_COOLDOWN,
+                        window: cooldown,
+                    },
+                ],
                 amount: template.reward_chips,
                 chip_move,
             },

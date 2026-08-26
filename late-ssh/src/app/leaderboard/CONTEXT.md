@@ -137,10 +137,15 @@ that the migrations and a few source comments still point at.
   `arcade_handles` (unique on `lower(handle)`). Handle rows outlive accounts
   with `user_id` NULL and those are skipped, as are the reserved `late`/`late_*`
   shapes (NetHack's legacy `late_<hex>` lines predate handles).
-- **Grants are lifetime-idempotent.** Badges and chips fire from `award.rs` on
-  every win or pickup, guarded by a lifetime payout claim plus a `NOT EXISTS`
-  award insert, so a re-win, a re-ingest, and a crash between fact insert and
-  grant all settle to exactly one payout. That is what makes backfill safe.
+- **Grants are idempotent; the badge is once, the chips repeat.** Badges and
+  chips fire from `award.rs` on every win or pickup. The badge is guarded by a
+  `NOT EXISTS` award insert and lands once per account for life. The chips go
+  through `credit_run_cooldown_reward_template`, an all-or-nothing grant behind
+  two gates at once (SHOP.md Phase 6): the ingested line's own
+  `(source_file, source_offset)` key, so a re-ingest or a crash between fact
+  insert and grant settles to exactly one payout, and a 7-day per-account
+  lockout per milestone, so a lucky week pays once. Both gates refusing writes
+  nothing at all. That is what makes backfill safe.
 - **Feed events are gated twice.** Deaths and wins post to #lounge only when the
   fact row is freshly inserted AND the event is inside a 10-minute recency
   window, so a backfill of years of history never floods the feed. "Started a
@@ -165,8 +170,9 @@ that the migrations and a few source comments still point at.
 
 ### Settled decisions (do not re-litigate)
 
-- **Badge pairs, 10k/20k chips, once per lifetime per game**, mirroring the
-  original NetHack pair. DCSS's Orb *pickup* was chosen over first rune
+- **Badge pairs, 20k/50k chips, one payout per run and one per week per
+  milestone** (SHOP.md Phase 6; they were 10k/20k once per lifetime until
+  migration 158), mirroring the original NetHack pair. DCSS's Orb *pickup* was chosen over first rune
   deliberately: it is the exact twin of the Amulet badge. DCSS and NetHack pairs
   are **stages** (the win back-grants the pickup); Brogue's Escaped/Mastered are
   **alternative endings**, so a mastery grants only itself. The chat-label
@@ -197,7 +203,7 @@ board's standings beyond that tail; a board deeper than the pane clips.
 - Migration 077 adds `profile_awards`, one permanent row per user/category/month placement; 081 enforces top-3.
 - `LeaderboardService::start_profile_award_snapshot_loop` runs once at startup and then daily as catch-up: it creates missing previous-UTC-month rows and leaves existing rows frozen. Awarded categories: `top_chips`, `arcade_wins`, `tetris` (renders as Lateris), `twenty_forty_eight`, `snake`, ranks 1-3, plus `crown`.
 - **The crown (`CRWN`) is monthly but rankless.** The `crown_holder` CTE in `snapshot_previous_month_profile_awards` takes last month's latest `crown_reigns` row (by `taken_at`, whether or not it is still open, since the rollover is a read-time rule with no sweeper) and grants rank 1 with `paid_chips` as the score. One holder means a `#1` on the badge would be noise, so `award_badge` prints it bare. That splits two properties that used to coincide: `is_rankless_award` (no rank digit; milestones plus the crown) and `MILESTONE_AWARD_CATEGORIES` (shown in chat labels whatever month they were earned; milestones only). The crown shows for the month after and then makes way for the next holder's, like every other monthly badge. The full mechanic is `late-ssh/src/app/chat/CONTEXT.md` §9c.
-- One-time rankless milestone awards share the table (granted immediately, shown regardless of award month): Lateania's four crowns (`LMG`, `LKN`, `LYS`, `LKA`, 10k chips each since migration 144), NetHack (`NHA` Amulet, `NHY` ascension), DCSS (`DCO` Orb pickup, `DCW` escape), Brogue (`BRE` escape, `BRM` mastery) — all three door pairs granted by the log pipe's award sink — Green Dragon (`GDS`), and A Dark Room (`ADE` the ascent won, `ADB` the ascent won holding the fleet beacon off the ravaged battleship's command deck; both granted by `door/darkroom/svc.rs::reward_escape`, migrations 143 and 145, 10k chips each, each once per account and claimed separately, and the run's save is deleted on the way out so a replay is a fresh room that pays nothing more). The set of rankless milestone categories is `profile_award.rs::MILESTONE_AWARD_CATEGORIES`, which is what `award_badge` checks for the no-rank-suffix rule and what the chat-label query binds as a parameter rather than respelling in SQL. Chat author labels keep only the highest badge a player holds on each game's ladder (`profile_award.rs::BADGE_LADDERS` is the single ordering, applied by `user.rs::chat_profile_award_badges`); profile views show all, plus the always-appended `Badge Codes` legend. **A new badge has to be added to the Leaderboards guide (`app/profile_modal/badges.rs::guide_lines`) and the help modal (`app/help_modal/data.rs`) by hand** — those are authored prose, not generated, so `app/profile_modal/badges_test.rs` asserts both cover every milestone category (and the crown) and names any that a change forgot. Note the collapse rule is a display convention and does not imply a grant rule: `BRM` collapses `BRE` in chat labels, but a mastery does not back-grant an escape the way `NHY` and `DCW` back-grant their pickups; the same goes for `ADB` over `ADE`, which are two genuinely separate payouts.
+- One-time rankless milestone awards share the table (granted immediately, shown regardless of award month): Lateania's four crowns (`LMG`, `LKN` 10k, `LYS`, `LKA` 20k), NetHack (`NHA` Amulet 20k, `NHY` ascension 50k), DCSS (`DCO` Orb pickup 20k, `DCW` escape 50k), Brogue (`BRE` escape 20k, `BRM` mastery 50k) — all three door pairs granted by the log pipe's award sink — Green Dragon (`GDS`, 20k), and A Dark Room (`ADE` the ascent won 15k, `ADB` the ascent won holding the fleet beacon off the ravaged battleship's command deck 20k; both granted by `door/darkroom/svc.rs::reward_escape`, migrations 143 and 145, claimed separately). **The badge is once per account; the chips repeat** (migration 158, SHOP.md Phase 6): the roguelike doors pay once per ingested run behind a 7-day per-milestone lockout, Lateania once per `mud_characters.id` behind the same lockout, Green Dragon for every kill (the kill resets the character), and A Dark Room for every run that gets out (the ending wipes the save). A badge row therefore says the feat happened, never how many times it paid; `game_payout_claims` and `chip_ledger` say that. The set of rankless milestone categories is `profile_award.rs::MILESTONE_AWARD_CATEGORIES`, which is what `award_badge` checks for the no-rank-suffix rule and what the chat-label query binds as a parameter rather than respelling in SQL. Chat author labels keep only the highest badge a player holds on each game's ladder (`profile_award.rs::BADGE_LADDERS` is the single ordering, applied by `user.rs::chat_profile_award_badges`); profile views show all, plus the always-appended `Badge Codes` legend. **A new badge has to be added to the Leaderboards guide (`app/profile_modal/badges.rs::guide_lines`) and the help modal (`app/help_modal/data.rs`) by hand** — those are authored prose, not generated, so `app/profile_modal/badges_test.rs` asserts both cover every milestone category (and the crown) and names any that a change forgot. Note the collapse rule is a display convention and does not imply a grant rule: `BRM` collapses `BRE` in chat labels, but a mastery does not back-grant an escape the way `NHY` and `DCW` back-grant their pickups; the same goes for `ADB` over `ADE`, which are two genuinely separate payouts.
 - Chat author labels show top-3 last-completed-UTC-month award badges as one bracketed group; Top Chips badges render as `CHIP1`-`CHIP3`.
 
 ## Local seed data
@@ -223,7 +229,7 @@ pass a username to target that enrichment explicitly.
 - The refresh gate (`should_refresh`, pure channel state): `svc_test.rs` — the one sanctioned inert-`Db` test (it makes no DB calls; see the root Test Strategy exception).
 - Query behavior: `late-core/src/models/leaderboard_test.rs` (DB-backed, fixtures through production constructors).
 - Online-time accumulator/retry behavior: `svc_test.rs`; SSH and IRC lifecycle hooks: `ssh_test.rs` and `ircd/serve_test.rs`.
-- The pipe behind the door boards: `app/door/ingest/{dcss,nethack,brogue}_test.rs` (pure parsers against real captured lines, including unknown fields, dead and reserved handles, and truncated last lines), `stream_test.rs` (the stats client against a stub SSH host), `svc_test.rs` (DB-backed: replay idempotency, skipped names, once-per-lifetime grants, cursor advancement).
+- The pipe behind the door boards: `app/door/ingest/{dcss,nethack,brogue}_test.rs` (pure parsers against real captured lines, including unknown fields, dead and reserved handles, and truncated last lines), `stream_test.rs` (the stats client against a stub SSH host), `svc_test.rs` (DB-backed: replay idempotency, skipped names, the per-run payout and its 7-day lockout, a run past the lockout paying again with no second badge, cursor advancement).
 - Seed-on-connect behavior: `app/state_test.rs::leaderboard_seeds_from_the_already_published_snapshot`.
 
 ## Known gaps

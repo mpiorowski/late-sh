@@ -500,11 +500,11 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
     Line::from(spans)
 }
 
-/// What the ending says the account keeps. The amount is the reward
-/// template's (migration 143); it is written out here because the door has no
-/// reason to read the table just to print one line, and "once per account" is
-/// what keeps a second escape from reading as a broken payout.
-const ENDING_REWARD: &str = "10,000 chips and the badge, once per account";
+/// What the landing says the endings pay, both of them at once. The per-
+/// ending line lives on [`Escape::reward_line`]; this is the summary, and the
+/// badge is called out separately because it is the one half that never
+/// repeats.
+const LANDING_REWARD: &str = "15,000 or 20,000 chips every run, and the badge the first time";
 
 /// The two lines that say the run is over for good.
 const ENDING_WIPED: &str = "the save is gone. the room is dark and cold again.";
@@ -571,7 +571,7 @@ fn beat_lines(beat: &EndingBeat) -> Vec<Line<'static>> {
                 ),
             ]),
             Line::from(Span::styled(
-                ENDING_REWARD.to_string(),
+                escape.reward_line().to_string(),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         ],
@@ -644,7 +644,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             ),
             10,
         ),
-        landing::hint("reward", ENDING_REWARD, 10),
+        landing::hint("reward", LANDING_REWARD, 10),
         landing::hint(
             "ending",
             "flying out wipes the save: the room starts dark again",

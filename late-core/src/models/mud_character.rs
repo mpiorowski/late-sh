@@ -34,6 +34,20 @@ impl MudCharacter {
         Ok(row.map(|r| r.get::<_, Value>("data")))
     }
 
+    /// One slot's row id, which is what a per-character payout keys on.
+    /// `delete_slot` drops the row, so a recreated character in the same slot
+    /// comes back with a fresh id and its first crown is a different event
+    /// from the old character's.
+    pub async fn id_for_slot(client: &Client, user_id: Uuid, slot: i16) -> Result<Option<Uuid>> {
+        let row = client
+            .query_opt(
+                "SELECT id FROM mud_characters WHERE user_id = $1 AND slot = $2",
+                &[&user_id, &slot],
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, Uuid>("id")))
+    }
+
     /// Every character slot a user has saved, as (slot, blob) pairs.
     pub async fn list(client: &Client, user_id: Uuid) -> Result<Vec<(i16, Value)>> {
         let rows = client

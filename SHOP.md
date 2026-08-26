@@ -716,23 +716,65 @@ Behavior:
   under an hour means it is the best rate in the app and should drop to
   ~1,000 or take the lockout shape; multi-hour means it stays.
 
+Status: shipped 2026-08-26 (migration 158, `GamePayout::grant_multi` in
+`late-core/src/models/game_payout.rs`, `ChipService::credit_run_cooldown_reward_template`).
+Deviations from the design above, each deliberate:
+- The multi-key grant is `GamePayout::grant_multi` over a closed
+  `GamePayoutKey` enum (`Unique { period_kind, period_key }` /
+  `Cooldown { period_kind, window }`), not a cooldown flag hung off one key.
+  A gate is either an identity or a rate limit, and a match arm per gate reads
+  the way the callers do.
+- **Every claim row in a multi-key grant carries the full amount.** The
+  design said several rows, one payout; the table's
+  `CHECK (amount > 0)` forbids recording a zero on the companion rows, and
+  relaxing an applied migration's CHECK for a bookkeeping nicety was the worse
+  trade. `chip_ledger` takes exactly one row per credited grant and is the
+  money witness; `game_payout_claims.amount` is per-claim record. The ingest
+  test helper that summed claim rows now sums the ledger instead.
+- `grant_cooldown` and `grant_multi` share one advisory lock helper
+  (`lock_payout`), on the same `(user, game, payout_kind, 'cooldown')` key
+  `grant_cooldown` already used, so the two paths can never race each other on
+  one payout even though no template uses both today.
+- Green Dragon's character row id is read in the grant task through a new
+  `GreenDragonCharacter::id_for_user`. The design said "load the id with the
+  character", but every existing load returns the opaque blob and nothing
+  else; threading an id through them all to serve one fire-and-forget task
+  would have touched a dozen call sites for no other reader.
+- A Dark Room's `run_id` is a plain `Uuid` with
+  `#[serde(default = "Uuid::now_v7")]`, not an `Option` upgraded on load. Same
+  behaviour for an old blob (it deserializes with an id of its own rather than
+  a nil one every old save would share), and the in-memory game can never be
+  without one, so the ending has nothing to unwrap.
+- Lateania's character slot is resolved in `publish_kill_outcome` from the
+  service's `live_slot` binding (falling back to `active_slot`, the rule
+  `publish` already uses) rather than added to `KillOutcome`. The world state
+  carries no slot at all: the binding lives on the service, and the read
+  happens one step after the tick that produced the kill.
+- Two copy sites the investigation missed are fixed in the same pass:
+  `door/greendragon/ui.rs` ("the chip payout is a lifetime claim") and
+  `door/lateania/screen.rs`, which still said Yssgar and Kaethyr pay "no
+  chips, only glory" — stale since migration 144 flattened the crowns.
+- The amounts are quoted in the in-door landings, the badge guide, and the
+  help modal because that is what a player reads, and in the CONTEXT.md files
+  that already quoted the old ones. Every one of those points back here.
+
 Checklist:
-- [ ] Migration: `reward_chips`, `claim_policy`, `cooldown_seconds`, and
+- [x] Migration: `reward_chips`, `claim_policy`, `cooldown_seconds`, and
       the description on the thirteen rows. Existing `lifetime` claim rows
       stay as history and must not block the first gated repeat (they have
       a different `period_kind`; add a test that proves it).
-- [ ] Multi-key grant in `game_payout.rs` with tests: all rows or none,
+- [x] Multi-key grant in `game_payout.rs` with tests: all rows or none,
       cooldown honoured, conflict on any key pays nothing, concurrent calls
       serialize under the lock.
-- [ ] Roguelikes: a replayed win line (same natural key) never pays twice;
+- [x] Roguelikes: a replayed win line (same natural key) never pays twice;
       a second distinct win inside 7 days pays nothing and the badge insert
       still no-ops; a win after 7 days pays.
-- [ ] Green Dragon: kill N pays once; a recreated character's kill 1 pays.
-- [ ] A Dark Room: `run_id` survives save/load, differs across runs, and an
+- [x] Green Dragon: kill N pays once; a recreated character's kill 1 pays.
+- [x] A Dark Room: `run_id` survives save/load, differs across runs, and an
       old save without one is upgraded on load.
-- [ ] Lateania: same character twice pays once; a second character inside
+- [x] Lateania: same character twice pays once; a second character inside
       7 days pays nothing; a second character after 7 days pays.
-- [ ] Copy sites above; door CONTEXT.md files, `door/ingest` notes, and the
+- [x] Copy sites above; door CONTEXT.md files, `door/ingest` notes, and the
       chips context updated; this table copied nowhere else (link here).
 
 Out of scope: new milestones, Lobby game stakes and the loser payout

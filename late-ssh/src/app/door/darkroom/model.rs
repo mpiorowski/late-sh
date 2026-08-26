@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::data::{self, Blueprint, Building, Fabricable, Fire, Job, Perk, Resource, Temperature};
 use super::pace::Pace;
@@ -419,6 +420,14 @@ pub struct Game {
     pub pace: Pace,
     /// Unix seconds the sim last settled to. Zero on a fresh save.
     pub last_settled: i64,
+    /// This run's identity, which is what the ending's chip payout is keyed
+    /// on (SHOP.md Phase 6: every run that gets out pays, and the run is the
+    /// gate). The ending wipes the save, so the next run gets a new one. A
+    /// blob written before this field existed deserializes with a fresh id
+    /// rather than a nil one, which is why the default is `now_v7` and not
+    /// `Default`.
+    #[serde(default = "Uuid::now_v7")]
+    pub run_id: Uuid,
 }
 
 /// What lighting the fire did. `drew_builder` marks the one moment the room
@@ -492,6 +501,7 @@ impl Game {
             fire_timer: data::FIRE_COOL_DELAY,
             income_timer: super::pace::slowed(data::INCOME_DELAY),
             veteran,
+            run_id: Uuid::now_v7(),
             ..Self::default()
         }
     }

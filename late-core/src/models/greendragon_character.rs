@@ -33,6 +33,20 @@ impl GreenDragonCharacter {
         Ok(row.map(|r| r.get::<_, Value>("data")))
     }
 
+    /// The character row's own id, which is what a per-character payout keys
+    /// on. Deleting a character (the `dag` hook, or `delete_character`) drops
+    /// the row, so a recreated character comes back with a fresh id and its
+    /// kill 1 is a different event from the old character's kill 1.
+    pub async fn id_for_user(client: &Client, user_id: Uuid) -> Result<Option<Uuid>> {
+        let row = client
+            .query_opt(
+                "SELECT id FROM greendragon_characters WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, Uuid>("id")))
+    }
+
     /// Load every saved character for the warrior roster / Hall of Fame:
     /// `(user_id, blob, last save time)`. The game decodes the blobs and does
     /// its own sorting; the save timestamp feeds the 15-minute online window.
