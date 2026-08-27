@@ -659,11 +659,12 @@ pub(super) const MAX_CONSECUTIVE_FAILURES: u32 = 10;
 /// How one pair-websocket attempt ended, from the retry loop's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PairAttempt {
-    /// The socket never came up, or the server never got our `client_state`.
-    /// This session is still running on its own boot defaults.
+    /// The socket never came up, or the server accepted it and dropped it
+    /// without ever registering this client. This session is still running
+    /// on its own boot defaults.
     NotEstablished,
-    /// The server saw this client's `client_state` and the session then ended
-    /// after `lived`, cleanly or with an error.
+    /// The server registered this client and the session then ended after
+    /// `lived`, cleanly or with an error.
     Ended { lived: Duration },
 }
 
@@ -684,10 +685,11 @@ pub(super) enum ReconnectPlan {
 /// testable; `main` owns the sleeping, logging, and the mute write.
 pub(super) struct PairRetryPolicy {
     consecutive_failures: u32,
-    /// The server has seen this session's `client_state` at least once, so it
-    /// has already applied the stored device audio, or deliberately applied
-    /// nothing because the session already matched. Either way the answer
-    /// arrived and the boot mute is no longer this session's own guess.
+    /// The server has registered this session at least once, so it read the
+    /// `client_state` that was waiting for it and applied the stored device
+    /// audio, or deliberately applied nothing because the session already
+    /// matched. Either way the answer arrived and the boot mute is no longer
+    /// this session's own guess.
     server_saw_session: bool,
     startup_mute_released: bool,
 }
@@ -731,11 +733,11 @@ impl PairRetryPolicy {
 
 /// Open the pair socket and hand the server this client's state.
 ///
-/// The split from [`run_pair_session`] is what makes "the server has seen us"
-/// a fact the retry loop can read instead of a guess: returning `Ok` means the
-/// `client_state` that triggers the server's device-audio alignment is on the
-/// wire. The alignment itself is not observable here, because a session that
-/// already matches the stored value is aligned by sending nothing at all.
+/// Returning `Ok` only means the `client_state` that triggers the server's
+/// device-audio alignment is on the wire. Whether the server ever read it is
+/// [`PairSessionEnd::server_frame_received`]'s call: the server accepts the
+/// upgrade before it checks the per-IP pair limit and the per-token capacity,
+/// so a rejected socket still takes this write and then dies unread.
 pub(super) async fn establish_pair_session(
     api_base_url: &str,
     token: &str,
@@ -755,6 +757,30 @@ pub(super) async fn establish_pair_session(
     Ok(ws)
 }
 
+/// How a pair session ended, from [`run_pair_session`].
+pub(super) struct PairSessionEnd {
+    /// At least one frame arrived from the server. The server sends
+    /// `set_playback_source` right after registering a client and before it
+    /// reads anything, so one frame proves the registration happened and the
+    /// `client_state` waiting in its buffer was read. A socket the server
+    /// accepted and then dropped unread never sends one.
+    pub(super) server_frame_received: bool,
+    pub(super) result: Result<()>,
+}
+
+impl PairSessionEnd {
+    /// What this session was, from the retry loop's point of view. Only a
+    /// session the server registered may count as `Ended`; anything else is
+    /// still running on its boot defaults and must keep the release path open.
+    pub(super) fn attempt(&self, lived: Duration) -> PairAttempt {
+        if self.server_frame_received {
+            PairAttempt::Ended { lived }
+        } else {
+            PairAttempt::NotEstablished
+        }
+    }
+}
+
 pub(super) async fn run_pair_session(
     mut ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -762,12 +788,38 @@ pub(super) async fn run_pair_session(
     client: &PairClientInfo,
     playback: &PlaybackState<'_>,
     runtime: PairRuntime<'_>,
+) -> PairSessionEnd {
+    let mut server_frame_received = false;
+    let result = pair_session_loop(
+        &mut ws,
+        client,
+        playback,
+        runtime,
+        &mut server_frame_received,
+    )
+    .await;
+    PairSessionEnd {
+        server_frame_received,
+        result,
+    }
+}
+
+/// The message loop proper. Split out so every `?` exit still reports
+/// `server_frame_received` through [`run_pair_session`].
+async fn pair_session_loop(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    client: &PairClientInfo,
+    playback: &PlaybackState<'_>,
+    runtime: PairRuntime<'_>,
+    server_frame_received: &mut bool,
 ) -> Result<()> {
     let mut heartbeat = interval(Duration::from_secs(1));
     let mut voice_state_heartbeat = interval(Duration::from_secs(15));
     let mut voice_speaking_poll = interval(Duration::from_millis(250));
     if runtime.voice.joined {
-        send_voice_state(&mut ws, runtime.voice).await?;
+        send_voice_state(ws, runtime.voice).await?;
     }
 
     loop {
@@ -776,7 +828,7 @@ pub(super) async fn run_pair_session(
                 if runtime.voice.joined && runtime.voice.media_disconnected() {
                     warn!("voice media disconnected; leaving voice state");
                     runtime.voice.leave().await;
-                    send_voice_state(&mut ws, runtime.voice).await?;
+                    send_voice_state(ws, runtime.voice).await?;
                 }
                 let payload = json!({
                     "event": "heartbeat",
@@ -794,26 +846,27 @@ pub(super) async fn run_pair_session(
             // paired client, this CLI and the webview helper alike, which is
             // what lets a widget press mute YouTube too.
             Some(command) = runtime.desktop_commands.recv() => {
-                send_desktop_command(&mut ws, command).await?;
+                send_desktop_command(ws, command).await?;
             }
             _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
-                send_voice_state(&mut ws, runtime.voice).await?;
+                send_voice_state(ws, runtime.voice).await?;
             }
             _ = voice_speaking_poll.tick(), if runtime.voice.joined => {
                 if runtime.voice.sync_speaking_from_media() {
-                    send_voice_state(&mut ws, runtime.voice).await?;
+                    send_voice_state(ws, runtime.voice).await?;
                 }
             }
             maybe_msg = ws.next() => {
                 let Some(msg) = maybe_msg else {
                     break;
                 };
+                *server_frame_received = true;
                 match msg? {
                     Message::Text(text) => {
                         let should_send_state =
                             handle_pair_control(
                                 &text,
-                                &mut ws,
+                                ws,
                                 playback,
                                 runtime.webview,
                                 runtime.voice,
@@ -821,7 +874,7 @@ pub(super) async fn run_pair_session(
                             )
                             .await?;
                         if should_send_state {
-                            send_client_state(&mut ws, client, playback).await?;
+                            send_client_state(ws, client, playback).await?;
                         }
                     }
                     Message::Close(_) => break,

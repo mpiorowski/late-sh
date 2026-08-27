@@ -228,3 +228,51 @@ fn flapping_connections_still_reach_the_slow_retry() {
         "a flapping paired session slows down without touching the mute"
     );
 }
+
+/// The server accepts the upgrade before it checks the per-IP pair limit and
+/// the per-token capacity, so a rejected socket still takes our
+/// `client_state` write and then dies unread. That session never registered
+/// and never got its alignment: it must count as not established, so the
+/// boot mute is still released once the budget is spent.
+#[test]
+fn a_socket_the_server_dropped_unread_still_releases_the_boot_mute() {
+    let dropped_unread = PairSessionEnd {
+        server_frame_received: false,
+        result: Err(anyhow::anyhow!(
+            "connection reset without closing handshake"
+        )),
+    };
+    assert_eq!(
+        dropped_unread.attempt(Duration::from_secs(1)),
+        PairAttempt::NotEstablished
+    );
+
+    let mut policy = PairRetryPolicy::new();
+    for _ in 0..MAX_CONSECUTIVE_FAILURES {
+        assert_eq!(
+            policy.note_attempt(dropped_unread.attempt(Duration::from_secs(1))),
+            ReconnectPlan::Soon
+        );
+    }
+    assert_eq!(
+        policy.note_attempt(dropped_unread.attempt(Duration::from_secs(1))),
+        ReconnectPlan::ReleaseStartupMuteThenSlow,
+        "a session the server never registered is still on its boot mute"
+    );
+}
+
+/// The other side of the line: one frame from the server proves the
+/// registration happened, whatever ended the session afterwards.
+#[test]
+fn a_session_that_heard_the_server_is_established() {
+    let registered_then_failed = PairSessionEnd {
+        server_frame_received: true,
+        result: Err(anyhow::anyhow!("broken pipe")),
+    };
+    assert_eq!(
+        registered_then_failed.attempt(Duration::from_secs(5)),
+        PairAttempt::Ended {
+            lived: Duration::from_secs(5)
+        }
+    );
+}

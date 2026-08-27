@@ -11,14 +11,20 @@ fn clicks_select_games_and_ignore_chrome() {
     let body = Rect::new(0, 0, 80, 24);
     // The ` hop hint leads the nav (y=1) and is not selectable, nor is the
     // blank under it (y=2). Then "the house" header (y=3), Lateania (y=4),
-    // A Dark Room (y=5), blank (y=6), "roguelikes" header (y=7), DCSS (y=8).
+    // blank (y=5), "roguelikes" header (y=6), DCSS (y=7), NetHack (y=8),
+    // Brogue (y=9), blank (y=10), "remakes" header (y=11), A Dark Room
+    // (y=12), Green Dragon (y=13).
     assert_eq!(sidebar_hit_test(body, 0, 5, 1), None);
     assert_eq!(sidebar_hit_test(body, 0, 5, 2), None);
     assert_eq!(sidebar_hit_test(body, 0, 5, 3), None);
     assert_eq!(sidebar_hit_test(body, 0, 5, 4), Some(0));
-    assert_eq!(sidebar_hit_test(body, 0, 5, 5), Some(1));
-    assert_eq!(sidebar_hit_test(body, 0, 5, 7), None);
-    assert_eq!(sidebar_hit_test(body, 0, 5, 8), Some(2));
+    assert_eq!(sidebar_hit_test(body, 0, 5, 5), None);
+    assert_eq!(sidebar_hit_test(body, 0, 5, 6), None);
+    assert_eq!(sidebar_hit_test(body, 0, 5, 7), Some(1));
+    assert_eq!(sidebar_hit_test(body, 0, 5, 9), Some(3));
+    assert_eq!(sidebar_hit_test(body, 0, 5, 11), None);
+    assert_eq!(sidebar_hit_test(body, 0, 5, 12), Some(4));
+    assert_eq!(sidebar_hit_test(body, 0, 5, 13), Some(5));
     // Last games: Rebels at y=19, CodeKeep at y=20.
     assert_eq!(sidebar_hit_test(body, 0, 5, 19), Some(9));
     assert_eq!(sidebar_hit_test(body, 0, 5, 20), Some(10));

@@ -323,7 +323,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
             }
             Ok(ws) => {
                 let established = Instant::now();
-                match run_pair_session(
+                let session = run_pair_session(
                     ws,
                     &client,
                     &playback,
@@ -334,14 +334,18 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                         desktop_commands: &mut desktop_commands,
                     },
                 )
-                .await
-                {
+                .await;
+                match &session.result {
                     Err(err) => error!(error = ?err, "pair websocket session failed"),
                     Ok(()) => info!("pair websocket closed by the server"),
                 }
-                PairAttempt::Ended {
-                    lived: established.elapsed(),
+                let attempt = session.attempt(established.elapsed());
+                if attempt == PairAttempt::NotEstablished {
+                    warn!(
+                        "pair websocket accepted but dropped before the server registered this session"
+                    );
                 }
+                attempt
             }
         };
 
