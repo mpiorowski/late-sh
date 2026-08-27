@@ -249,7 +249,7 @@ impl RoomListMode {
 
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 3;
+pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 4;
 
 /// A right-sidebar panel the user can reorder and toggle. The clock is not
 /// listed here — it is always pinned at the top of the sidebar. The
@@ -260,6 +260,7 @@ pub enum RightSidebarComponent {
     Music,
     Bonsai,
     Daily,
+    Pot,
 }
 
 impl RightSidebarComponent {
@@ -269,13 +270,14 @@ impl RightSidebarComponent {
     /// rows. Stale stored keys (e.g. the retired "activity" and "visualizer"
     /// panels) are dropped on read by `from_key`.
     pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] =
-        [Self::Daily, Self::Music, Self::Bonsai];
+        [Self::Daily, Self::Pot, Self::Music, Self::Bonsai];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Music => "music",
             Self::Bonsai => "bonsai",
             Self::Daily => "daily",
+            Self::Pot => "pot",
         }
     }
 
@@ -284,6 +286,7 @@ impl RightSidebarComponent {
             "music" => Some(Self::Music),
             "bonsai" => Some(Self::Bonsai),
             "daily" => Some(Self::Daily),
+            "pot" => Some(Self::Pot),
             _ => None,
         }
     }
@@ -293,6 +296,7 @@ impl RightSidebarComponent {
             Self::Music => "Audio playback",
             Self::Bonsai => "Bonsai",
             Self::Daily => "Lobby",
+            Self::Pot => "Pot",
         }
     }
 
@@ -651,6 +655,10 @@ impl User {
                           WHEN 'greendragon_dragon' THEN 'GDS'
                           WHEN 'darkroom_escape' THEN 'ADE'
                           WHEN 'darkroom_beacon' THEN 'ADB'
+                          -- Monthly like the boards below, rankless like the
+                          -- milestones above: one holder, so no rank digit
+                          -- (`profile_award::is_rankless_award`).
+                          WHEN 'crown' THEN 'CRWN'
                           ELSE (
                             CASE category
                               WHEN 'top_chips' THEN 'CHIP'
@@ -667,6 +675,7 @@ impl User {
                                  CASE category
                                    WHEN 'arcade_wins' THEN 0
                                    WHEN 'top_chips' THEN 1
+                                   WHEN 'crown' THEN 5
                                    WHEN 'tetris' THEN 2
                                    WHEN 'twenty_forty_eight' THEN 3
                                    WHEN 'snake' THEN 4

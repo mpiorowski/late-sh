@@ -161,10 +161,8 @@ fn item_list_rows<'a>(
     let section_label: fn(&ShopCatalogItem) -> &'static str = match category {
         ShopCategory::Chat => chat_section_label,
         ShopCategory::Badges => badge_section_label,
-        ShopCategory::Flags
-        | ShopCategory::Companions
-        | ShopCategory::Aquarium
-        | ShopCategory::Ultimates => {
+        ShopCategory::Ultimates => ultimates_section_label,
+        ShopCategory::Flags | ShopCategory::Companions | ShopCategory::Aquarium => {
             return items
                 .iter()
                 .enumerate()
@@ -195,6 +193,17 @@ fn chat_section_label(item: &ShopCatalogItem) -> &'static str {
         "Title"
     } else {
         "Consumables"
+    }
+}
+
+/// The top tab sells two unrelated things at the top two price bands: a
+/// permanent glyph that does nothing, and a spell that repaints the server.
+/// Nobody should have to read the price to tell them apart.
+fn ultimates_section_label(item: &ShopCatalogItem) -> &'static str {
+    if item.is_milestone_badge() {
+        "Burn milestones"
+    } else {
+        "Ultimate spells"
     }
 }
 
@@ -274,6 +283,8 @@ fn draw_item_detail(
         "buy badge"
     } else if item.is_ultimate_spell() {
         "buy spell"
+    } else if item.is_milestone_badge() {
+        "burn chips"
     } else {
         "buy"
     };

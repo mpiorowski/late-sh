@@ -57,7 +57,9 @@ impl ShopCategory {
             Self::Aquarium => item.item_kind == AQUARIUM_FISH_ITEM_KIND,
             Self::Badges => item.is_chat_badge() && !item.is_flag_badge(),
             Self::Flags => item.is_flag_badge(),
-            Self::Ultimates => item.is_ultimate_spell(),
+            // The two dearest things the shop sells share a tab: the burn
+            // milestones and the spells. Section rows split them in the list.
+            Self::Ultimates => item.is_ultimate_spell() || item.is_milestone_badge(),
         }
     }
 }

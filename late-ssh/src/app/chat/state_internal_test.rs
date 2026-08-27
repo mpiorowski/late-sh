@@ -41,6 +41,49 @@ fn click_global_offset_splits_into_line_and_col() {
     assert_eq!(global_char_to_line_col(text, 5), (1, 2));
 }
 
+/// The pot's composer boundary. Everything downstream trusts the count, so
+/// this is where an unbuyable number has to die: only 1..=cap gets through,
+/// and anything else is a usage banner rather than a refused transaction.
+#[test]
+fn parse_pot_command_only_admits_a_buyable_count() {
+    use late_core::models::pot::POT_MAX_TICKETS_PER_DAY;
+
+    assert_eq!(parse_pot_command("/pot"), Some(Some(PotCommand::Status)));
+    assert_eq!(
+        parse_pot_command("  /pot  "),
+        Some(Some(PotCommand::Status))
+    );
+    assert_eq!(
+        parse_pot_command("/pot buy 5"),
+        Some(Some(PotCommand::Buy { count: 5 }))
+    );
+    assert_eq!(
+        parse_pot_command(&format!("/pot buy {POT_MAX_TICKETS_PER_DAY}")),
+        Some(Some(PotCommand::Buy {
+            count: POT_MAX_TICKETS_PER_DAY
+        }))
+    );
+
+    // Usage banner: a count nobody could buy, and a subcommand that is not
+    // one. `Some(None)` is the "you meant the pot, but not like that" shape.
+    for junk in [
+        "/pot buy 0",
+        "/pot buy -3",
+        &format!("/pot buy {}", POT_MAX_TICKETS_PER_DAY + 1),
+        "/pot buy all",
+        "/pot buy",
+        "/pot sell 3",
+    ] {
+        assert_eq!(parse_pot_command(junk), Some(None), "{junk}");
+    }
+
+    // Not a pot command at all: a longer command that merely starts the same
+    // way must fall through to its own parser.
+    assert_eq!(parse_pot_command("/potato"), None);
+    assert_eq!(parse_pot_command("/pomodoro 25"), None);
+    assert_eq!(parse_pot_command("hello"), None);
+}
+
 #[test]
 fn parse_gift_command_accepts_at_optional_username() {
     assert_eq!(

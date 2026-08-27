@@ -27,6 +27,43 @@ pub struct GamePayoutPeriodGrant<'a> {
     pub chip_move: ChipMove,
 }
 
+/// One gate in a [`GamePayoutMultiGrant`]. Every gate that passes writes its
+/// own `game_payout_claims` row; one gate refusing means no rows, no chips,
+/// and no ledger line at all.
+#[derive(Clone, Copy, Debug)]
+pub enum GamePayoutKey<'a> {
+    /// Refuse when this exact `(period_kind, period_key)` already landed. The
+    /// key is the caller's identity for the thing being paid for: a run, a
+    /// character, a match.
+    Unique {
+        period_kind: &'a str,
+        period_key: &'a str,
+    },
+    /// Refuse when any row of `period_kind` landed inside `window`. The row's
+    /// key is the moment it landed, so the next grant past the window always
+    /// has a free key to take.
+    Cooldown {
+        period_kind: &'a str,
+        window: Duration,
+    },
+}
+
+/// An all-or-nothing payout behind several gates at once: the Lateania crowns
+/// pay once per character AND at most once a week per account, the roguelike
+/// doors once per ingested run AND at most once a week.
+///
+/// Every row carries the full `amount`, because the table's CHECK forbids a
+/// zero and a claim row records what the claim was worth. The money witness is
+/// `chip_ledger`, which takes exactly one row per credited grant.
+pub struct GamePayoutMultiGrant<'a> {
+    pub user_id: Uuid,
+    pub game: &'a str,
+    pub payout_kind: &'a str,
+    pub keys: &'a [GamePayoutKey<'a>],
+    pub amount: i64,
+    pub chip_move: ChipMove,
+}
+
 impl GamePayout {
     pub async fn has_claimed_daily(
         client: &Client,
@@ -175,16 +212,7 @@ impl GamePayout {
         );
 
         let tx = client.transaction().await?;
-        tx.query_one(
-            "SELECT pg_advisory_xact_lock(
-               hashtextextended(
-                 concat_ws(':', ($1::uuid)::text, $2::text, $3::text, $4::text),
-                 0
-               )
-             )",
-            &[&user_id, &game, &payout_kind, &GAME_PAYOUT_PERIOD_COOLDOWN],
-        )
-        .await?;
+        lock_payout(&tx, user_id, game, payout_kind).await?;
 
         let row = tx
             .query_one(
@@ -254,4 +282,210 @@ impl GamePayout {
         tx.commit().await?;
         Ok(claim)
     }
+
+    /// Pay `amount` only when every gate in `keys` passes, writing one claim
+    /// row per gate in the same transaction as the credit. Any gate refusing
+    /// means no rows, no chips, and no ledger line, so a caller can hang a
+    /// per-run identity and a per-account lockout on the same payout and get
+    /// one answer.
+    ///
+    /// Serialized against itself and [`Self::grant_cooldown`] on the same
+    /// `(user, game, payout_kind)` advisory lock, because a cooldown gate is
+    /// read-then-write and two replicas landing the same milestone would
+    /// otherwise both see an empty window.
+    pub async fn grant_multi(
+        client: &mut Client,
+        grant: GamePayoutMultiGrant<'_>,
+    ) -> Result<GamePayoutClaim> {
+        let GamePayoutMultiGrant {
+            user_id,
+            game,
+            payout_kind,
+            keys,
+            amount,
+            chip_move,
+        } = grant;
+        ensure!(amount > 0, "game payout amount must be positive");
+        ensure!(!keys.is_empty(), "game payout multi grant needs a key");
+        for key in keys {
+            match key {
+                GamePayoutKey::Unique { .. } => {}
+                GamePayoutKey::Cooldown { window, .. } => {
+                    let secs = window.as_secs_f64();
+                    ensure!(
+                        secs.is_finite() && secs > 0.0,
+                        "game payout cooldown must be positive"
+                    );
+                }
+            }
+        }
+
+        let tx = client.transaction().await?;
+        lock_payout(&tx, user_id, game, payout_kind).await?;
+
+        for key in keys {
+            let blocked = match key {
+                GamePayoutKey::Unique {
+                    period_kind,
+                    period_key,
+                } => tx
+                    .query_opt(
+                        "SELECT id
+                         FROM game_payout_claims
+                         WHERE user_id = $1
+                           AND game = $2
+                           AND payout_kind = $3
+                           AND period_kind = $4
+                           AND period_key = $5",
+                        &[&user_id, &game, &payout_kind, period_kind, period_key],
+                    )
+                    .await?
+                    .is_some(),
+                GamePayoutKey::Cooldown {
+                    period_kind,
+                    window,
+                } => tx
+                    .query_opt(
+                        "SELECT id
+                         FROM game_payout_claims
+                         WHERE user_id = $1
+                           AND game = $2
+                           AND payout_kind = $3
+                           AND period_kind = $4
+                           AND created > clock_timestamp()
+                                         - make_interval(secs => $5::double precision)
+                         LIMIT 1",
+                        &[
+                            &user_id,
+                            &game,
+                            &payout_kind,
+                            period_kind,
+                            &window.as_secs_f64(),
+                        ],
+                    )
+                    .await?
+                    .is_some(),
+            };
+            if blocked {
+                let balance = balance_of(&tx, user_id).await?;
+                tx.rollback().await?;
+                return Ok(GamePayoutClaim {
+                    credited: false,
+                    balance,
+                });
+            }
+        }
+
+        // Every gate passed, so every row is a plain INSERT: the gates above
+        // already proved there is nothing to conflict with, and the advisory
+        // lock holds until commit.
+        let mut claim_ids = Vec::with_capacity(keys.len());
+        for key in keys {
+            let row = match key {
+                GamePayoutKey::Unique {
+                    period_kind,
+                    period_key,
+                } => {
+                    tx.query_one(
+                        "INSERT INTO game_payout_claims
+                           (created, updated, user_id, game, payout_kind, period_kind, period_key, amount)
+                         VALUES (clock_timestamp(), clock_timestamp(), $1, $2, $3, $4, $5, $6)
+                         RETURNING id",
+                        &[&user_id, &game, &payout_kind, period_kind, period_key, &amount],
+                    )
+                    .await?
+                }
+                GamePayoutKey::Cooldown { period_kind, .. } => {
+                    tx.query_one(
+                        "INSERT INTO game_payout_claims
+                           (created, updated, user_id, game, payout_kind, period_kind, period_key, amount)
+                         VALUES (
+                           clock_timestamp(),
+                           clock_timestamp(),
+                           $1,
+                           $2,
+                           $3,
+                           $4,
+                           to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                           $5
+                         )
+                         RETURNING id",
+                        &[&user_id, &game, &payout_kind, period_kind, &amount],
+                    )
+                    .await?
+                }
+            };
+            claim_ids.push(row.get::<_, Uuid>("id"));
+        }
+
+        // One credit and one ledger row for the whole grant, sourced on the
+        // first gate's claim: the money moved once, whatever the gates cost.
+        let source_ref = claim_ids[0].to_string();
+        let row = tx
+            .query_one(
+                "WITH upserted AS (
+                    INSERT INTO user_chips (user_id, balance)
+                    VALUES ($1, $2)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                      balance = user_chips.balance + $2,
+                      updated = current_timestamp
+                    RETURNING balance
+                 ),
+                 ledger AS (
+                    INSERT INTO chip_ledger (user_id, delta, reason, source_kind, source_ref)
+                    VALUES ($1, $2, $3, $4, $5)
+                 )
+                 SELECT (SELECT balance FROM upserted)::bigint AS balance",
+                &[
+                    &user_id,
+                    &amount,
+                    &chip_move.reason(),
+                    &chip_move.source_kind(),
+                    &source_ref,
+                ],
+            )
+            .await?;
+        let claim = GamePayoutClaim {
+            credited: true,
+            balance: row.get("balance"),
+        };
+        tx.commit().await?;
+        Ok(claim)
+    }
+}
+
+/// Serialize every read-then-write payout path for one `(user, game,
+/// payout_kind)`. Shared by [`GamePayout::grant_cooldown`] and
+/// [`GamePayout::grant_multi`] so the two never race each other on the same
+/// payout, and taken before any claim row is read.
+async fn lock_payout(
+    tx: &tokio_postgres::Transaction<'_>,
+    user_id: Uuid,
+    game: &str,
+    payout_kind: &str,
+) -> Result<()> {
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(
+           hashtextextended(
+             concat_ws(':', ($1::uuid)::text, $2::text, $3::text, $4::text),
+             0
+           )
+         )",
+        &[&user_id, &game, &payout_kind, &GAME_PAYOUT_PERIOD_COOLDOWN],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn balance_of(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {
+    let row = tx
+        .query_one(
+            "SELECT COALESCE(
+               (SELECT balance FROM user_chips WHERE user_id = $1),
+               0
+             )::bigint AS balance",
+            &[&user_id],
+        )
+        .await?;
+    Ok(row.get("balance"))
 }

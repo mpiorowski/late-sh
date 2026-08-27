@@ -246,8 +246,9 @@ const LATEANIA_WORLD_KEY: &str = "lateania";
 struct BossAchievement {
     mob_name: &'static str,
     award_category: &'static str,
-    /// Once-per-account chip payout via a reward template. `None` means the
-    /// profile badge is the whole prize.
+    /// Chip payout via a reward template: once per character, and at most once
+    /// every 7 days per account (SHOP.md Phase 6). `None` means the profile
+    /// badge is the whole prize.
     payout: Option<BossPayout>,
 }
 
@@ -2091,6 +2092,12 @@ impl LateaniaService {
         let chip_svc = self.chip_svc.clone();
         let activity = self.activity.clone();
         let db = self.db.clone();
+        // Which character took the crown. The world does not carry the slot,
+        // so it is read here, one step after the tick that produced the kill,
+        // from the same binding every save resolves against.
+        let slot = self
+            .live_slot(outcome.user_id)
+            .unwrap_or_else(|| self.active_slot(outcome.user_id));
         tokio::spawn(async move {
             // The badge's recorded score is the crown's chip amount; every
             // crown pays now, so the fallback 0 only covers a payout-less
@@ -2098,31 +2105,9 @@ impl LateaniaService {
             let mut badge_score = 0_i64;
             let mut grant_badge = true;
             if let Some(pay) = achievement.payout {
-                let payout = chip_svc
-                    .credit_lifetime_reward_template(outcome.user_id, pay.reward_key, pay.chip_move)
-                    .await;
-                match &payout {
-                    Ok(grant) if !grant.credited => {
-                        tracing::info!(
-                            user_id = %outcome.user_id,
-                            payout = grant.amount,
-                            boss = achievement.mob_name,
-                            "suppressed Lateania boss chips because lifetime payout was already claimed"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::error!(
-                            ?error,
-                            user_id = %outcome.user_id,
-                            boss = achievement.mob_name,
-                            "failed to credit Lateania boss chips"
-                        );
-                    }
-                }
-                match &payout {
-                    Ok(grant) => badge_score = grant.amount,
-                    Err(_) => grant_badge = false,
+                match crown_payout(&db, &chip_svc, outcome.user_id, slot, achievement, pay).await {
+                    Some(amount) => badge_score = amount,
+                    None => grant_badge = false,
                 }
             }
 
@@ -2185,6 +2170,95 @@ impl LateaniaService {
             .map(|((user_id, _), version)| (*user_id, *version))
             .collect();
         let _ = self.snapshot_tx.send(snapshot);
+    }
+}
+
+/// Pay one realm crown, behind two gates at once (SHOP.md Phase 6): the
+/// character persists, so a maxed one would take the easy crowns nightly
+/// without the 7-day account lockout, and `d` deletes the character, so the
+/// lockout alone would be a reroll farm. The character row id is what the
+/// per-character half keys on.
+///
+/// `Some(amount)` is what the profile badge records, whether the gates paid or
+/// refused. `None` means the payout could not be attempted at all, which
+/// suppresses the badge too: a badge whose payout never ran leaves no way to
+/// tell later whether it paid.
+async fn crown_payout(
+    db: &Db,
+    chip_svc: &ChipService,
+    user_id: Uuid,
+    slot: i16,
+    achievement: BossAchievement,
+    pay: BossPayout,
+) -> Option<i64> {
+    let character_id = character_row_id(db, user_id, slot, achievement.mob_name).await?;
+    let grant = chip_svc
+        .credit_run_cooldown_reward_template(
+            user_id,
+            pay.reward_key,
+            &character_id.to_string(),
+            pay.chip_move,
+        )
+        .await;
+    match grant {
+        Ok(grant) if grant.credited => Some(grant.amount),
+        Ok(grant) => {
+            tracing::info!(
+                user_id = %user_id,
+                payout = grant.amount,
+                boss = achievement.mob_name,
+                "suppressed Lateania boss chips: this character already took the crown, or the account is inside the lockout"
+            );
+            Some(grant.amount)
+        }
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                user_id = %user_id,
+                boss = achievement.mob_name,
+                "failed to credit Lateania boss chips"
+            );
+            None
+        }
+    }
+}
+
+/// The character row a crown's payout keys on. `None` means the row is gone or
+/// unreadable.
+async fn character_row_id(db: &Db, user_id: Uuid, slot: i16, boss: &str) -> Option<Uuid> {
+    let client = match db.get().await {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                user_id = %user_id,
+                boss,
+                "no db client for the Lateania crown payout"
+            );
+            return None;
+        }
+    };
+    match MudCharacter::id_for_slot(&client, user_id, slot).await {
+        Ok(Some(id)) => Some(id),
+        Ok(None) => {
+            tracing::error!(
+                user_id = %user_id,
+                slot,
+                boss,
+                "no Lateania character row to key the crown payout on"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                user_id = %user_id,
+                slot,
+                boss,
+                "failed to read the Lateania character id for the crown payout"
+            );
+            None
+        }
     }
 }
 
@@ -6534,20 +6608,19 @@ impl WorldState {
         }
         let achievement = boss_achievement_for(&mob_name);
         if let Some(achievement) = achievement {
-            let prize = if achievement.payout.is_some() {
-                "chips and badge"
-            } else {
-                "badge"
-            };
-            self.log_to(
-                user_id,
-                LogKind::Loot,
-                format!(
-                    "First defeat of {} can award {prize} {} once per account.",
+            let line = match achievement.payout.is_some() {
+                true => format!(
+                    "Defeating {} pays chips once per character, and at most once every 7 days; the {} badge is yours the first time.",
                     achievement.mob_name,
                     award_badge(achievement.award_category, 1)
                 ),
-            );
+                false => format!(
+                    "First defeat of {} can award the {} badge, once per account.",
+                    achievement.mob_name,
+                    award_badge(achievement.award_category, 1)
+                ),
+            };
+            self.log_to(user_id, LogKind::Loot, line);
         }
         self.check_level_up(user_id);
         self.pending_kills.push(KillOutcome {

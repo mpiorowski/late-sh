@@ -258,6 +258,8 @@ struct DrawContext<'a> {
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
+    /// The daily pot as this viewer sees it, resolved on the ~1s tick.
+    pot: &'a crate::app::pot::state::PotView,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -1099,6 +1101,7 @@ impl App {
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
+                        pot: &self.pot_view,
                         login_announcements: if login_announcements_visible {
                             self.login_announcements.as_ref()
                         } else {
@@ -1291,15 +1294,20 @@ impl App {
             unread: ctx.mentions_unread_count,
             voice_badge: ctx.voice_badge.as_deref(),
             pomodoro_badge: ctx.pomodoro_badge.as_deref(),
+            pot: Some(ctx.pot).filter(|view| view.open),
             border_width: area.width,
             title_width,
         }) {
             Some(hud) => {
                 // The right-aligned title's last cell sits just inside the
-                // top-right corner, and the mentions segment leads the line.
+                // top-right corner; the mentions segment sits `mentions_offset`
+                // cells into the line, after the pomodoro and voice badges.
                 let total = hud.line.width() as u16;
                 let rect = (hud.mentions_width > 0).then(|| Rect {
-                    x: area.right().saturating_sub(total + 1),
+                    x: area
+                        .right()
+                        .saturating_sub(total + 1)
+                        .saturating_add(hud.mentions_offset),
                     y: area.y,
                     width: hud.mentions_width,
                     height: 1,
@@ -1612,6 +1620,7 @@ impl App {
                     radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
                     daily: ctx.daily,
+                    pot: ctx.pot,
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
                     active_friend_names: ctx.active_friend_names,
@@ -2355,13 +2364,16 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
-/// The top-border status line plus the width of its leading mentions
-/// segment, so the click hit test can find the mentions text inside the
-/// right-aligned line (the voice/chips text after it is not clickable).
+/// The top-border status line plus where its mentions segment sits, so the
+/// click hit test can find the mentions text inside the right-aligned line
+/// (no other segment is clickable).
 struct StatusHud {
     line: Line<'static>,
     /// Display cells of the mentions segment, 0 when nothing is unread.
     mentions_width: u16,
+    /// Cells between the start of the line and the mentions segment, so the
+    /// hit test still lands on the text behind the badges leading the HUD.
+    mentions_offset: u16,
 }
 
 /// Everything the status HUD needs, named: `voice_badge` and `pomodoro_badge`
@@ -2374,10 +2386,21 @@ struct StatusHudInputs<'a> {
     unread: i64,
     voice_badge: Option<&'a str>,
     pomodoro_badge: Option<&'a str>,
+    /// The open pot, `None` before the first refresh or without a pot
+    /// service. Sits right before the chips so the prize reads against the
+    /// viewer's own balance.
+    pot: Option<&'a crate::app::pot::state::PotView>,
     /// Full width of the bordered frame, corners included.
     border_width: u16,
     /// Width of the left-aligned frame title sharing the top border row.
     title_width: u16,
+}
+
+/// One HUD segment: the spans between two dividers, padding spaces included.
+type HudSegment = Vec<Span<'static>>;
+
+fn hud_segment_width(segment: &HudSegment) -> u16 {
+    segment.iter().map(Span::width).sum::<usize>() as u16
 }
 
 fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
@@ -2386,106 +2409,152 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         unread,
         voice_badge,
         pomodoro_badge,
+        pot,
         border_width,
         title_width,
     } = inputs;
-    if balance.is_none() && unread <= 0 && voice_badge.is_none() && pomodoro_badge.is_none() {
-        return None;
-    }
     // What the right-aligned HUD can use before it starts painting over the
     // left title (both live on the top border row, corners excluded).
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
-    let mut spans = Vec::new();
-    if unread > 0 {
+
+    // The three long-standing segments always render; the order of the line
+    // is pomodoro | voice | mentions | pot | chips, and the two newcomers are
+    // fitted against whatever the fixed three leave, the pot last, so under a
+    // tight border the pot yields before the countdown does.
+    let mentions: Option<HudSegment> = (unread > 0).then(|| {
         let noun = if unread == 1 { "mention" } else { "mentions" };
-        spans.push(Span::styled(
-            format!(" {unread}"),
-            Style::default()
-                .fg(theme::MENTION())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" unread {noun} "),
-            Style::default().fg(theme::TEXT_MUTED()),
-        ));
-    }
-    // Mentions lead the line and everything below appends or inserts behind
-    // them, so the hit-test rect measured here stays correct whatever else the
-    // HUD carries.
-    let mentions_width = spans.iter().map(Span::width).sum::<usize>() as u16;
-    let mentions_spans = spans.len();
-    if let Some(voice_badge) = voice_badge {
-        if !spans.is_empty() {
-            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
-        }
-        spans.push(Span::styled(
+        vec![
+            Span::styled(
+                format!(" {unread}"),
+                Style::default()
+                    .fg(theme::MENTION())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" unread {noun} "),
+                Style::default().fg(theme::TEXT_MUTED()),
+            ),
+        ]
+    });
+    let voice: Option<HudSegment> = voice_badge.map(|voice_badge| {
+        vec![Span::styled(
             voice_badge.to_string(),
             Style::default()
                 .fg(theme::SUCCESS())
                 .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if let Some(balance) = balance {
-        if !spans.is_empty() {
-            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
-        }
-        spans.push(Span::styled(
-            format!(" {balance}"),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " chips ",
-            Style::default().fg(theme::TEXT_MUTED()),
-        ));
-    }
+        )]
+    });
+    let chips: Option<HudSegment> = balance.map(|balance| {
+        vec![
+            Span::styled(
+                format!(" {balance}"),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" chips ", Style::default().fg(theme::TEXT_MUTED())),
+        ]
+    });
+
+    // Width the fixed segments take, dividers between them included, so a
+    // newcomer fits when its own width plus its one divider still fits.
+    let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips].into_iter().flatten().collect();
+    let mut count = fixed.len() as u16;
+    let mut used = fixed
+        .iter()
+        .map(|segment| hud_segment_width(segment))
+        .sum::<u16>()
+        + count.saturating_sub(1);
+    let fits = |used: u16, count: u16, text_width: u16| {
+        // +2 for the spaces padding the badge inside its segment, +1 for the
+        // divider it brings when it is not the only segment.
+        let divider = u16::from(count > 0);
+        used + divider + text_width + 2 <= spare_cols
+    };
+
     // The HUD is a right-aligned title on the same border row as the left
     // title, and ratatui paints it over anything already there: a HUD wider
-    // than `spare_cols` eats the page tabs. The three long-standing segments
-    // keep their existing behavior; the countdown, as the newcomer, is the one
-    // that yields -- full `MM:SS label` when it fits, bare `MM:SS` when only
-    // that does, dropped when neither does. Losing the badge is survivable
-    // because expiry still banners and notifies.
-    if let Some(pomodoro_badge) = pomodoro_badge {
-        // Mentions lead, so the badge goes behind them; the segment after the
-        // insertion point only carries its own divider when mentions built one
-        // first, hence the two placements.
-        let divider_before = mentions_spans > 0;
-        let divider_after = !divider_before && spans.len() > mentions_spans;
-        let used = spans.iter().map(Span::width).sum::<usize>() as u16;
-        let dividers = u16::from(divider_before) + u16::from(divider_after);
+    // than `spare_cols` eats the page tabs. The countdown yields: full
+    // `MM:SS label` when it fits, bare `MM:SS` when only that does, dropped
+    // when neither does. Losing the badge is survivable because expiry still
+    // banners and notifies.
+    let pomodoro: Option<HudSegment> = pomodoro_badge.and_then(|pomodoro_badge| {
         let time_only = pomodoro_badge
             .split_once(' ')
             .map_or(pomodoro_badge, |(time, _)| time);
-        let fitted = [pomodoro_badge, time_only].into_iter().find(|text| {
-            // +2 for the spaces padding the badge inside its segment.
-            used + dividers + UnicodeWidthStr::width(*text) as u16 + 2 <= spare_cols
-        });
-        if let Some(text) = fitted {
-            let divider = || Span::styled("|", Style::default().fg(theme::BORDER_DIM()));
-            let mut segment = Vec::new();
-            if divider_before {
-                segment.push(divider());
-            }
-            segment.push(Span::styled(
-                format!(" {text} "),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ));
-            if divider_after {
-                segment.push(divider());
-            }
-            spans.splice(mentions_spans..mentions_spans, segment);
-        }
+        let text = [pomodoro_badge, time_only]
+            .into_iter()
+            .find(|text| fits(used, count, UnicodeWidthStr::width(*text) as u16))?;
+        Some(vec![Span::styled(
+            format!(" {text} "),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )])
+    });
+    if let Some(pomodoro) = &pomodoro {
+        used += hud_segment_width(pomodoro) + u16::from(count > 0);
+        count += 1;
     }
-    if spans.is_empty() {
+
+    // The pot: `pot 84,200 · 3h12m` when it fits, `pot 84,200` when only
+    // that does, nothing when neither does. It is ambient, so it is the
+    // first thing the border sheds; `/pot` and the #lounge lines still
+    // carry it.
+    let pot: Option<HudSegment> = pot.and_then(|view| {
+        let size = crate::app::common::primitives::thousands(view.size);
+        let label = " pot ".to_string();
+        let with_clock = format!(" · {} ", view.draws_in);
+        let without_clock = " ".to_string();
+        let tail = [with_clock, without_clock].into_iter().find(|tail| {
+            let width = UnicodeWidthStr::width(label.as_str())
+                + UnicodeWidthStr::width(size.as_str())
+                + UnicodeWidthStr::width(tail.as_str());
+            // The padding is already inside the label and the tail.
+            fits(used, count, width.saturating_sub(2) as u16)
+        })?;
+        Some(vec![
+            Span::styled(label, Style::default().fg(theme::TEXT_MUTED())),
+            Span::styled(
+                size,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(tail, Style::default().fg(theme::TEXT_MUTED())),
+        ])
+    });
+
+    // Mentions sit behind the pomodoro and the voice badge, so the hit test
+    // needs how far into the line they start: every segment before them, each
+    // with the divider it brings.
+    let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
+    let mentions_offset: u16 = match &mentions {
+        Some(_) => [&pomodoro, &voice]
+            .into_iter()
+            .flatten()
+            .map(|segment| hud_segment_width(segment) + 1)
+            .sum(),
+        None => 0,
+    };
+    let segments: Vec<HudSegment> = [pomodoro, voice, mentions, pot, chips]
+        .into_iter()
+        .flatten()
+        .collect();
+    if segments.is_empty() {
         return None;
+    }
+    let mut spans = Vec::new();
+    for (index, segment) in segments.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("|", Style::default().fg(theme::BORDER_DIM())));
+        }
+        spans.extend(segment);
     }
     Some(StatusHud {
         line: Line::from(spans).right_aligned(),
         mentions_width,
+        mentions_offset,
     })
 }
 

@@ -3,7 +3,7 @@
 ## Metadata
 - Domain: late.sh SSH chat, synthetic chat entries, and dashboard/room chat surfaces
 - Primary audience: LLM agents working in `late-ssh/src/app/chat`
-- Last updated: 2026-08-25 (gilds: `g` on a selected message opens a three-tier picker (Bronze 500 / Silver 2,000 / Gold 10,000) that pays the author two thirds and burns the rest, leaving a permanent tier-colored bar down the message and a `◆`-glyph marker at the head of its footer. Public topic, lounge and language rooms only (never a DM, a private room, or a game/stream chat), never your own message and never a bot's, one slot per buyer per message that only ever goes up. The marker crosses replicas over the `chat_message_gilded` notify rather than the chat broadcast, and #lounge hears about a message once, on its third gild. §9b Gilds.)
+- Last updated: 2026-08-26 (burn milestones: a permanent Shop glyph that renders after the rented badge and flag in the author label and can never be hidden by either, resolved off `ResolvedName.milestone` like the crown; see `hub/CONTEXT.md` for the catalog side.) Previously 2026-08-26 (the crown: one slot, one holder, one 👑 after their name in every chat author header and on the Clubhouse floor. `/crown` prints who wears it and what taking it costs; `/crown take` buys it at `max(500, ceil(paid x 1.5))`, burned whole, with no hold or cooldown and no self-take. It empties at the UTC month rollover, and the month's last holder keeps the `CRWN` profile award. The glyph rides the `name_flair` map (resolved on the same once-a-second edge as titles and effects) off a process-shared holder that the `crown_changed` Postgres notify keeps in step; the domain is `late-ssh/src/app/crown/`. §9c The Crown.)
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
 
@@ -64,7 +64,7 @@ late-ssh/src/app/announcements_test.rs   # Login #announcements loading/read-cur
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`chat_message_gild.rs`,
+`chat_message_gild.rs`, `crown.rs`,
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_feed_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
@@ -296,9 +296,11 @@ User commands:
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
+- `/crown` prints who wears the crown, how long they have, and what taking it costs; `/crown take` buys it. Parsed in `submit_composer` (`parse_crown_command`) and drained by `App::tick_crown`, which owns the crown service and both banners. §9c.
+- `/pot` prints the weekly pot's size, the tickets in it, what you hold and what it cost, how many more you may buy today, and the time to the draw; `/pot buy N` buys N tickets. Parsed in `submit_composer` (`parse_pot_command`, which is also the boundary that rejects any count outside `1..=10`, the daily cap) and drained by `App::tick_pot`, which owns the pot service and the banners. The status line is answered straight from the process-shared snapshot, so `/pot` costs no query; the domain contract is `late-ssh/src/app/pot/CONTEXT.md`.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
 - `/poll` opens a modal for the currently visible real room. Polls are room-scoped, support two or three options, can run for 10, 20, or 30 minutes, and are limited to one active poll per room. Active polls render at the top of the room message pane; while one is visible, `va`, `vb`, and `vc` vote for poll options. `v1`, `v2`, and `v3` remain music stream/station selectors. Failed starts show the remaining active wait in the banner.
-- `/pomodoro [minutes] [label...]` starts a session-local focus countdown (default 25 minutes, cap 180, label control-stripped and capped at 24 display cells); a leading integer is the duration, so `/pomodoro deep work` is a default-length block named `deep work`. `/pomodoro stop` cancels it, a second start replaces the running one, and the label is echoed in the banner. Parsed in `submit_composer`, drained via `take_requested_pomodoro` in `handle_post_submit_requests`; the timer itself is `App::pomodoro` (in-memory, no DB, dropped on disconnect) because `tick.rs` fires it and the status HUD draws it on every screen. Expiry rides the shared 1Hz edge: it banners and pushes a `GameEvents` desktop notification, and a running timer dirties that edge so the `MM:SS` badge in the top border counts down. The badge is the only width-degrading segment in `status_hud_title`: the right-aligned HUD paints over the left title, so the newcomer sheds its label and then itself when the border is tight (an 80-col terminal with unread mentions + voice + chips has no room for it) rather than eating the page tabs. Expiry still banners and notifies with the badge hidden. Peers see a presence badge instead: every session that changes its timer (start, stop, tick expiry, disconnect teardown in `ssh.rs`) publishes through `App::publish_pomodoro` into the process-shared `common/pomodoro.rs` snapshot-swap directory (same shape as the flair directory), which stores only `ends_at`, never the label; `tick.rs` resolves it once a second into `App::peer_pomodoros` and chat author labels paint the rounded-up whole-minute countdown as a presence badge after AFK. The badge string only changes on minute rollovers, so the chat-row epoch bump is 1/60th the resolve cadence.
+- `/pomodoro [minutes] [label...]` starts a session-local focus countdown (default 25 minutes, cap 180, label control-stripped and capped at 24 display cells); a leading integer is the duration, so `/pomodoro deep work` is a default-length block named `deep work`. `/pomodoro stop` cancels it, a second start replaces the running one, and the label is echoed in the banner. Parsed in `submit_composer`, drained via `take_requested_pomodoro` in `handle_post_submit_requests`; the timer itself is `App::pomodoro` (in-memory, no DB, dropped on disconnect) because `tick.rs` fires it and the status HUD draws it on every screen. Expiry rides the shared 1Hz edge: it banners and pushes a `GameEvents` desktop notification, and a running timer dirties that edge so the `MM:SS` badge in the top border counts down. The badge is one of the two width-degrading segments in `status_hud_title` (the pot badge is the other, and it sheds first): the right-aligned HUD paints over the left title, so the newcomer sheds its label and then itself when the border is tight (an 80-col terminal with unread mentions + voice + chips has no room for it) rather than eating the page tabs. Expiry still banners and notifies with the badge hidden. Peers see a presence badge instead: every session that changes its timer (start, stop, tick expiry, disconnect teardown in `ssh.rs`) publishes through `App::publish_pomodoro` into the process-shared `common/pomodoro.rs` snapshot-swap directory (same shape as the flair directory), which stores only `ends_at`, never the label; `tick.rs` resolves it once a second into `App::peer_pomodoros` and chat author labels paint the rounded-up whole-minute countdown as a presence badge after AFK. The badge string only changes on minute rollovers, so the chat-row epoch bump is 1/60th the resolve cadence.
 - `/roll [NdM ...]` rolls dice into the current room; bare `/roll` defaults to `d20`, caps are 100 dice per group and 1000 sides.
 - `/search [query]` opens the Ctrl+/ modal in message-search mode, pre-filled with `?query`. Parsed in `submit_composer`, drained via `take_requested_message_search` in `handle_post_submit_requests` (the modal is App-owned).
 - `/summary` asks the AI for a catch-up of the visible public room, at least the last 24h and widened by an older read marker, or exactly the window you type (`/summary 6h`, `/summary 90m`, up to 48h); see §14 Summary. `/history` opens the scroll-back modal, at the first unread message when the unread marker is set; see §14 History Modal.
@@ -485,6 +487,120 @@ cannot cover; the floor guard in the chip move is what actually decides.
 
 ---
 
+## 9c. The Crown
+
+One slot, one holder, one 👑 after their name. The crown is not a rental and
+not a Shop item: it is a single row you take off whoever has it by paying
+more than they did, and every chip is destroyed.
+`late-core/src/models/crown.rs` owns the table (migration 156) and the price
+ladder; `late-ssh/src/app/crown/svc.rs` owns the transaction, the refusals,
+the telemetry, and the #lounge line. It lives outside `chat/` because it is
+its own domain; only the command and the glyph are chat's.
+
+- **Price.** `next_price(paid)` = `max(500, ceil(paid * 1.5))`, and a
+  vacant crown is always 500, a Bronze gild's price, so the month's race
+  starts on day one. The ladder from empty is 500 / 750 / 1,125 / 1,688 /
+  2,532 / 3,798 / 5,697 / 8,546. Nobody tunes it: it ratchets with whoever
+  last paid, and the ratchet, not the floor, is what makes it dear.
+- **Burn.** `ChipMove::CrownTaken` is a floor-guarded debit with
+  `source_ref` = the reign id, and there is no matching credit reason
+  anywhere. The whole price leaves the money supply, so the burn is the
+  absence of a credit rather than a transfer to a house wallet. It is
+  `counts_as_earnings = false` like `ShopPurchase`: taking the crown never
+  lowers the buyer's Top Chips standing (pinned by
+  `chips_test::earning_exclusions_and_reason_uniqueness`).
+- **Guards** (`CrownService::take`, one closed `CrownRefusal` enum with the
+  wording): you already wear it, and the chip floor. That is all: there is
+  **no hold or cooldown**. A reign is takeable the moment it exists, at the
+  next rung, so the month end is a real auction (the last take before
+  midnight wins the badge) rather than a clock game around a hold window.
+  The 1.5x ladder is the only throttle on a war, and a war is the story.
+  Known cost: a take that races another one pays the rung the other just
+  set, not the price `/crown` quoted a moment earlier; the receipt banner
+  says what was paid. Every refusal is uncharged, and a refusal drops the
+  transaction, so nothing is left behind.
+- **Transaction** (`CrownReign::lock_open` then close, open, debit, notify).
+  Two locks, and neither replaces the other: `pg_advisory_xact_lock` is what
+  serializes a take from a *vacant* crown (there is no row to take
+  `FOR UPDATE`, so without it two first takes would both insert and one
+  would die on the partial unique index), and the `FOR UPDATE` keeps the
+  read-then-write on an existing reign exact. A second racing take therefore
+  reads the reign the first one opened and pays the next rung, not a
+  constraint violation.
+- **One open reign, ever.** `crown_reigns_single_open` is a unique index on
+  the constant `(ended_at IS NULL)` filtered to open rows, so "at most one"
+  is a table fact.
+- **Month rollover has no sweeper.** A reign carries the first of the UTC
+  month it was taken in (stamped in SQL from the same clock as `taken_at`,
+  so a take blocked across midnight cannot be born stale), and
+  `CrownReign::is_current` requires that month to still be the current one.
+  At the boundary the crown simply reads as vacant at the minimum, the glyph
+  stops resolving on the next 1Hz tick, and the next take closes the stale
+  row on its way past. Same read-time expiry the rentals use. That makes
+  `ended_at` the moment the row was replaced, not the moment the reign
+  stopped counting; a history reader wants `LEAST(ended_at, month + 1
+  month)`.
+- **Distribution.** `CrownService` holds a process-shared
+  `watch<Option<CrownHolder>>` (user id plus month), seeded by the listener
+  and refreshed on the `crown_changed` notify
+  (`start_listener_task`, one connection per process, wired in `main.rs`,
+  reconnecting and re-seeding after 5s). The notify payload is a
+  `CrownChange` (taker name, price, deposed id): the holder is re-read from
+  the table, and the deposed holder's banner is raised from the payload as a
+  `CrownEvent::Deposed`, so it lands on whichever replica they are on. The
+  selling replica is not special-cased: it learns about its own take, and
+  tells its own deposed holder, the same way a second replica does
+  (`svc_test::a_listening_replica_learns_the_holder_and_tells_the_deposed`).
+- **Rendering.** `App::tick` reads the watch on the same once-a-second edge
+  as the flair directory, filters it through `CrownHolder::if_current`, and
+  passes the holder into
+  `common/username_effect.rs::resolve_all`, which sets `ResolvedName.crown`.
+  Every surface that already reads `name_flair` therefore gets the crown for
+  free and no render ever queries for it; a holder who has bought nothing
+  else gets an entry of their own. The glyph follows the name after one
+  space (`bob 👑, the night clerk 🐱`): it sits ahead of a rented title and
+  ahead of the badge stack, carries no clickable segment of its own, and is
+  painted in `AMBER_GLOW` rather than taking the name's effect
+  (`ui.rs::build_author_prefix_and_segments_with_chat_badges` builds the
+  range, `ui_text.rs::push_author_prefix_spans` paints it). The glyph is an
+  emoji, two cells wide; chat measures it with `unicode_width`. The
+  Clubhouse floor label does the same (`clubhouse/ui.rs::clubhouse_label`
+  glues the glyph on, `put_label_styled` paints the char at `name_len`
+  amber), and since the floor is one char per cell it spends two cells on
+  it: the emoji plus a `WIDE_TAIL` sentinel the row flush skips, so the
+  walls stay aligned. It is the only wide char a floor label can hold;
+  names and titles are folded to single width.
+- **Commands.** `/crown` and `/crown take` are parsed in `submit_composer`
+  and drained by `App::tick_crown`. Both answers arrive as banners off
+  `CrownEvent`, because the crown service is not `ChatService` and has its
+  own broadcast (the `StreamService` shape). The deposed holder is told who
+  took it (`CrownEvent::Deposed`, off the notify): a glyph vanishing off
+  your own name with no explanation reads as a bug.
+- **Feed.** `ActivityKind::CrownTaken` fires on every takeover and names both
+  players. It is the one event with two #lounge surfaces: the usual ticker
+  line ("tom stole the crown from mira for 1,688", `· `-prefixed, diverted
+  into the one-row ticker like every system line) and a **headline**, a
+  real message from `system` with no prefix, so it renders as a chat row
+  and stays in history: "👑 tom stole the crown from mira for 1,688 chips.
+  Next price: 2,532 chips." (`activity/filter.rs::lounge_headline`, the
+  exhaustive twin of `lounge_includes`; posted by the lounge feed task right
+  after the ticker line, behind the same repeat gate, keyed on the reign
+  id). The event carries `next_price` so the headline quotes the ladder
+  without re-deriving it. Unlike the gild line this one names the loser on
+  purpose: the crown is a single slot, so the takeover *is* the story.
+- **Award.** The month's last holder gets a `profile_awards` row, category
+  `crown`, granted by the existing monthly snapshot
+  (`snapshot_previous_month_profile_awards`, a `crown_holder` CTE reading
+  last month's latest reign). The badge is `CRWN` with no rank digit
+  (`profile_award::is_rankless_award`), and it is *not* a milestone, so it
+  shows for the month after and then makes way for the next holder's.
+- **IRC sees nothing, and cannot play.** The glyph is a TUI author-header
+  span, so IRC clients get the message body and nothing else, and `/crown`
+  is composer-parsed (`submit_composer`), which the ircd send path never
+  reaches.
+
+---
+
 ## 10. Reactions, Ignores
 
 Reactions:
@@ -601,7 +717,7 @@ Message rendering:
 - Highlighted reply targets get background styling across the whole row range.
 - Message wrapping is word-aware and uses Unicode display width, not codepoint count; hard splits are only valid for a single word longer than width.
 - Display author labels are plain usernames without leading `@`; mention syntax still uses `@username`.
-- Author labels render as `username[, title] [profile awards] [special...] [bonsai] [badge] [flag] [brb]`. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Profile award badges come from `profile_award_badges` keyed by user_id: top-3 last-completed-UTC-month leaderboard awards plus the best rankless Lateania boss achievement badge (`LAD` unless `LFK` is also present, then `LFK`), ordered by rank and then category priority, rendered as one bracketed group. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away. Two Shop-driven decorations share the bare-username range in `AuthorTint`, on different style axes so they compose instead of colliding: the bartender drink tint paints the background, and a bought username effect (Name Glow/Gradient/Shimmer, 24h or 30-day tier, see `hub/CONTEXT.md`) paints the foreground per character via `App.name_flair`: the effect fg deliberately overrides own-amber/friend-gold/default author fg while keeping bg and modifiers. A rented title is the third Shop decoration and deliberately claims its own range instead of the name's: `build_author_prefix_and_segments_with_chat_badges` returns a `title_range` for the `, <title>` it writes between the name and the badge stack, `AuthorTint` carries it, and `push_author_prefix_spans` paints it in `TEXT_DIM`: a title is text, so it never takes the name's color effect, and it carries no clickable segment of its own (the name beside it already opens the profile). The badge segments' columns shift past it. Resolved `ResolvedName` changes (style or title) bump `App::chat_ctx_epoch` (1Hz value compare in `tick.rs`), so shimmer repaints at most once a second. Migration 104's retired Bot Username Color remains the cautionary tale: it was per-viewer; these are globally visible. Do not add a third decoration on the author label without retiring one of these.
+- Author labels render as `username[ 👑][, title] [profile awards] [special...] [bonsai] [badge] [flag] [milestone] [brb]`. The crown and the title are marks on the name and lead; everything after the first space is the badge stack, in that order. Special badges come from a hardcoded per-username allowlist in `chat/special_badges.rs` and must stay in `mod`, `developer`, `artist` order. The bonsai glyph comes from `bonsai_glyphs` keyed by user_id. Profile award badges come from `profile_award_badges` keyed by user_id: top-3 last-completed-UTC-month leaderboard awards plus the best rankless Lateania boss achievement badge (`LAD` unless `LFK` is also present, then `LFK`), ordered by rank and then category priority, rendered as one bracketed group. Equipped store badge and flag are split for separate hit targets and rendered badge before flag. A burn milestone (`milestone_badge`, see `hub/CONTEXT.md`) follows both of them and never displaces either: rentals cost a hundred chips and a milestone costs at least fifty thousand, so nothing anyone rents may hide one. It rides `ResolvedName.milestone` off the same flair map as the crown (so no render queries for it), takes `HeaderTarget::StoreMilestone` for its own hit target (the Ultimates tab, where the ladder is sold), and is a plain badge otherwise: no color of its own, no clickable name behavior, no expiry. The `/brb` moon badge is derived from shared `ActiveSession.afk`, not message metadata, so it is visible to all viewers while the author is away. Two Shop-driven decorations share the bare-username range in `AuthorTint`, on different style axes so they compose instead of colliding: the bartender drink tint paints the background, and a bought username effect (Name Glow/Gradient/Shimmer, 24h or 30-day tier, see `hub/CONTEXT.md`) paints the foreground per character via `App.name_flair`: the effect fg deliberately overrides own-amber/friend-gold/default author fg while keeping bg and modifiers. A rented title is the third Shop decoration and deliberately claims its own range instead of the name's: `build_author_prefix_and_segments_with_chat_badges` returns a `title_range` for the `, <title>` it writes between the name and the badge stack, `AuthorTint` carries it, and `push_author_prefix_spans` paints it in `TEXT_DIM`: a title is text, so it never takes the name's color effect, and it carries no clickable segment of its own (the name beside it already opens the profile). The badge segments' columns shift past it. Resolved `ResolvedName` changes (style, title, crown, or milestone) bump `App::chat_ctx_epoch` (1Hz value compare in `tick.rs`), so shimmer repaints at most once a second. Migration 104's retired Bot Username Color remains the cautionary tale: it was per-viewer; these are globally visible. Do not add a third decoration on the author label without retiring one of these.
 - Author badge glyphs are separated by `AUTHOR_BADGE_SEPARATOR` (` `). The separator was intentionally returned to a plain space after dot separators failed to prevent terminal-cell drift.
 - Investigation note: if a known author glyph is missing on a newly rendered message but appears after terminal resize, first suspect Ratatui/crossterm diff rendering of wide emoji cells, not author metadata. Sent-message events reload author metadata before `push_message`, chat row cache counters cover `bonsai_glyphs`, `chat_badges`, `profile_award_badges`, and AFK state, and resize forces a full terminal clear/redraw. A prior workaround forced full repaint on message-selection scroll, but it was removed because it caused visible flicker; prefer a targeted ratatui/backend fix for wide/VS16 emoji cell drift.
 - Ratatui wide/VS16 investigation detail: Ratatui owns the buffer diff model: it renders widgets into a buffer, diffs current vs previous, then writes only changed cells to the backend. Official docs describe that flow at `https://ratatui.rs/concepts/rendering/under-the-hood/`. In this app's failure mode, `ratatui-core` emits extra trailing-cell updates for wide VS16 emoji, while `ratatui-crossterm` prints `cell.symbol()` but tracks the last position as if every printed symbol advances exactly 1 cell. A glyph like `🛡️` is one visible grapheme but 2 terminal cells wide, so the backend's "next update is adjacent, no `MoveTo` needed" optimization can become wrong after wide glyphs. This should be treated first as a Ratatui backend/diff issue, not a `crossterm` crate issue: crossterm is printing what Ratatui asks it to print, while Ratatui's backend decides when cursor moves are needed.

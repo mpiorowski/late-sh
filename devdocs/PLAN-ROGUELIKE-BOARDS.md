@@ -327,9 +327,14 @@ one union query per window regardless of roster size — so the last bullet's
 
 ## Badges and payouts — SHIPPED for all three doors
 
-The design below is what exists. The sink is `app/door/ingest/award.rs`
-(`DoorAwards`/`DoorBadge`); the one behavioral delta from this design is that
-Brogue's pair does not back-grant (see decision 2's correction).
+The design below is what shipped in 2026-08. The sink is
+`app/door/ingest/award.rs` (`DoorAwards`/`DoorBadge`). Two things have moved
+since, and SHOP.md Phase 6 is the current word on both: the amounts are
+20,000 / 50,000 and the chips repeat (once per ingested line, at most once
+every 7 days per milestone per account; the badge stays once per account),
+and **no pair back-grants any more**, not just Brogue's: every line grants
+only its own milestone, and a pickup the milestone stream missed is an ingest
+bug to surface rather than pay off the win line.
 
 - Reward templates (migration, lifetime claim policy like
   `nethack_amulet`/`nethack_ascension`): `dcss_orb` 10,000, `dcss_win` 20,000,

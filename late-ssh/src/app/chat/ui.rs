@@ -26,7 +26,7 @@ use crate::app::common::{
     overlay::{Overlay, draw_overlay},
     primitives::row_with_hint,
     theme,
-    username_effect::ResolvedName,
+    username_effect::{CROWN_GLYPH, ResolvedName},
 };
 use crate::app::files::{
     inline_image::InlineImagePreview,
@@ -1321,6 +1321,9 @@ pub(crate) enum HeaderTarget {
     /// The currently equipped chat flag. Resolves to the Hub Shop opened
     /// on the Flags sub-store.
     StoreFlag,
+    /// The dearest burn milestone this author owns. Resolves to the Hub Shop
+    /// opened on the Ultimates sub-store, where the ladder is sold.
+    StoreMilestone,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1630,11 +1633,14 @@ fn ensure_chat_rows_cache(
             prefix,
             segments,
             author_range,
+            crown_range,
             title_range,
         } = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
             is_friend,
             author: &author,
+            crown: flair.is_some_and(|flair| flair.crown),
             title: flair.and_then(|flair| flair.title.as_deref()),
+            milestone: flair.and_then(|flair| flair.milestone.as_deref()),
             special_badges: special_list,
             chat_badges: &chat_badge_refs,
             bonsai_glyph: bonsai_opt,
@@ -1646,13 +1652,17 @@ fn ensure_chat_rows_cache(
                 .map(|word| (word, theme::DRUNK_WORD_FG(*level)))
         });
         let name_style = flair.and_then(|flair| flair.style);
-        let author_tint = (drunk_word.is_some() || name_style.is_some() || title_range.is_some())
-            .then_some(AuthorTint {
-                range: author_range,
-                title_range,
-                word: drunk_word,
-                name_style,
-            });
+        let author_tint = (drunk_word.is_some()
+            || name_style.is_some()
+            || crown_range.is_some()
+            || title_range.is_some())
+        .then_some(AuthorTint {
+            range: author_range,
+            crown_range,
+            title_range,
+            word: drunk_word,
+            name_style,
+        });
 
         let reactions = ctx
             .message_reactions
@@ -2383,7 +2393,9 @@ fn build_author_prefix_and_segments(
     let built = build_author_prefix_and_segments_with_chat_badges(AuthorPrefixInput {
         is_friend,
         author,
+        crown: false,
         title: None,
+        milestone: None,
         special_badges,
         chat_badges: &chat_badges,
         bonsai_glyph,
@@ -2399,7 +2411,13 @@ fn build_author_prefix_and_segments(
 struct AuthorPrefixInput<'a> {
     is_friend: bool,
     author: &'a str,
+    /// Whether this author currently wears the crown.
+    crown: bool,
     title: Option<&'a str>,
+    /// The dearest burn milestone this author owns. A badge, not a mark on
+    /// the name, so it joins the badge stack rather than trailing the
+    /// username the way the crown and title do.
+    milestone: Option<&'a str>,
     special_badges: &'a [&'a str],
     chat_badges: &'a [(HeaderTarget, &'a str)],
     bonsai_glyph: Option<&'a str>,
@@ -2408,13 +2426,15 @@ struct AuthorPrefixInput<'a> {
 }
 
 /// The built author header prefix: the string, the clickable column
-/// segments, the bare username's byte range, and the rented title's byte
-/// range (which always follows the username directly, so the two are
-/// adjacent).
+/// segments, the bare username's byte range, and the byte ranges of the two
+/// decorations that trail it. The crown follows the username directly and
+/// the title follows the crown, so all three runs are adjacent and the
+/// painter can walk them in order.
 struct AuthorPrefix {
     prefix: String,
     segments: Vec<HeaderSegment>,
     author_range: (usize, usize),
+    crown_range: Option<(usize, usize)>,
     title_range: Option<(usize, usize)>,
 }
 
@@ -2423,7 +2443,9 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let AuthorPrefixInput {
         is_friend,
         author,
+        crown,
         title,
+        milestone,
         special_badges,
         chat_badges,
         bonsai_glyph,
@@ -2467,6 +2489,19 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let author_range = (author_range_start, prefix.len());
     col += author_w;
 
+    // The crown follows the name after one space, ahead of the title and
+    // the badge stack: a mark on the person, not another badge. It carries
+    // no clickable segment of its own; the name beside it already opens the
+    // profile. The range starts at the space so it stays adjacent to the
+    // name for the painter, which walks the trailing runs in order.
+    let crown_range = crown.then(|| {
+        let crown_start = prefix.len();
+        prefix.push(' ');
+        prefix.push_str(CROWN_GLYPH);
+        col += 1 + UnicodeWidthStr::width(CROWN_GLYPH) as u16;
+        (crown_start, prefix.len())
+    });
+
     // The rented title reads as an aside on the name (`mira, the
     // insufferable`), so it sits between the name and the badge stack and is
     // painted in the dim label color rather than taking the name's effect.
@@ -2486,6 +2521,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     let mut typed_badges: Vec<(HeaderTarget, &str)> = Vec::with_capacity(
         special_badges.len()
             + chat_badges.len()
+            + milestone.is_some() as usize
             + bonsai_glyph.is_some() as usize
             + profile_award_badges.is_some() as usize
             + presence_badges.len(),
@@ -2505,6 +2541,12 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
     }
     for (target, s) in chat_badges.iter().copied().filter(|(_, s)| !s.is_empty()) {
         typed_badges.push((target, s));
+    }
+    // On top of the rentals, never in place of one: a rented badge and flag
+    // cost a hundred chips each and a milestone costs fifty thousand, so
+    // nothing a player rents may hide one.
+    if let Some(s) = milestone.filter(|s| !s.is_empty()) {
+        typed_badges.push((HeaderTarget::StoreMilestone, s));
     }
     for s in presence_badges.iter().copied().filter(|s| !s.is_empty()) {
         typed_badges.push((HeaderTarget::Profile, s));
@@ -2535,6 +2577,7 @@ fn build_author_prefix_and_segments_with_chat_badges(input: AuthorPrefixInput<'_
         prefix,
         segments,
         author_range,
+        crown_range,
         title_range,
     }
 }

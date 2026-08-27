@@ -75,6 +75,13 @@ pub enum ActivityKind {
     TitleApplied {
         title: String,
     },
+    /// Someone burned a six-figure sum for a permanent glyph ("mira burned
+    /// 150,000 chips for the Fuse"). The badge is the receipt, so the line
+    /// names the price: everyone watching is the product.
+    BurnMilestone {
+        name: String,
+        price: i64,
+    },
     /// A chat message reached the gild threshold. Names the author only: the
     /// buyers stay out of it, because the story is that a room paid for
     /// something someone said, not who has chips. `message_id` keys the
@@ -85,6 +92,29 @@ pub enum ActivityKind {
         message_id: Uuid,
         count: i64,
         room_slug: Option<String>,
+    },
+    /// Someone took the crown. Both players are named because that is the
+    /// whole story: a takeover is one person outbidding another in public.
+    /// `reign_id` keys the #lounge repeat throttle, so back-to-back
+    /// takeovers each post (the 1.5x price ladder is the real throttle).
+    CrownTaken {
+        reign_id: Uuid,
+        price: i64,
+        /// What the next take costs, so the #lounge headline can quote it
+        /// without every reader re-deriving the ladder.
+        next_price: i64,
+        /// The deposed holder, absent when the crown was vacant.
+        from: Option<String>,
+    },
+    /// The weekly pot drew. Names the winner and the odds they beat, because
+    /// the odds are the story: a three-ticket win off three hundred reads
+    /// very differently from a fifty-ticket one. `pot_id` keys the #lounge
+    /// repeat throttle; there is one of these a week anyway.
+    PotDrawn {
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
     },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
@@ -120,7 +150,10 @@ impl ActivityKind {
             | Self::UsernameEffectApplied { .. }
             | Self::BadgeRented { .. }
             | Self::TitleApplied { .. }
+            | Self::BurnMilestone { .. }
             | Self::MessageGilded { .. }
+            | Self::CrownTaken { .. }
+            | Self::PotDrawn { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
             | Self::WatchingStream { .. } => ActivityCategory::Session,
@@ -460,6 +493,31 @@ impl ActivityEvent {
         )
     }
 
+    /// A burn milestone was unlocked. The emoji rides the action so the line
+    /// shows exactly what is about to appear next to the name, and the price
+    /// is spelled out with separators because six digits run together
+    /// otherwise.
+    pub fn burn_milestone(
+        user_id: Uuid,
+        username: impl Into<String>,
+        name: impl Into<String>,
+        emoji: impl Into<String>,
+        price: i64,
+    ) -> Self {
+        let name = name.into();
+        let emoji = emoji.into();
+        let action = format!(
+            "burned {} chips for the {name} {emoji}",
+            crate::app::common::primitives::thousands(price)
+        );
+        Self::new(
+            Some(user_id),
+            username,
+            ActivityKind::BurnMilestone { name, price },
+            action,
+        )
+    }
+
     /// A message crossed the gild threshold. Written from the author's side
     /// ("mira got a message gilded 3 times in #lounge") because the feed line
     /// is a compliment, not a receipt: nobody who paid is named, and the room
@@ -483,6 +541,68 @@ impl ActivityEvent {
                 message_id,
                 count,
                 room_slug,
+            },
+            action,
+        )
+    }
+
+    /// A takeover. Unlike the gild line this one names the loser on purpose:
+    /// the crown is a single slot, so "stole it from mira" is the event, and
+    /// nothing about it is a private embarrassment. A vacant crown reads
+    /// "claimed the vacant crown for 500". This is the ticker line; the
+    /// full #lounge headline is `filter::lounge_headline`.
+    pub fn crown_taken(
+        taker_id: Uuid,
+        taker: impl Into<String>,
+        reign_id: Uuid,
+        price: i64,
+        next_price: i64,
+        from: Option<String>,
+    ) -> Self {
+        let price_text = crate::app::common::primitives::thousands(price);
+        let action = match &from {
+            Some(from) => format!("stole the crown from {from} for {price_text}"),
+            None => format!("claimed the vacant crown for {price_text}"),
+        };
+        Self::new(
+            Some(taker_id),
+            taker,
+            ActivityKind::CrownTaken {
+                reign_id,
+                price,
+                next_price,
+                from,
+            },
+            action,
+        )
+    }
+
+    /// The pot drew. The line quotes what the winner actually received (the
+    /// fifth that was burned is not theirs to be congratulated for) and the
+    /// odds behind it.
+    pub fn pot_drawn(
+        winner_id: Uuid,
+        winner: impl Into<String>,
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
+    ) -> Self {
+        use crate::app::common::primitives::thousands;
+        let action = format!(
+            "won {} chips from the pot on {} of {} tickets",
+            thousands(payout),
+            thousands(winner_tickets),
+            thousands(total_tickets)
+        );
+        Self::new(
+            Some(winner_id),
+            winner,
+            ActivityKind::PotDrawn {
+                pot_id,
+                payout,
+                winner_tickets,
+                total_tickets,
             },
             action,
         )

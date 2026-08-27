@@ -233,6 +233,37 @@ fn visible_components_drops_by_priority_not_position() {
     );
 }
 
+/// The pot sits just above the music stage in the shrink order: two rows for
+/// a countdown you can still act on, so it outlives the bonsai and the lobby
+/// but never the stage.
+#[test]
+fn visible_components_keeps_the_pot_above_everything_but_music() {
+    let components = [
+        on(RightSidebarComponent::Bonsai),
+        on(RightSidebarComponent::Daily),
+        on(RightSidebarComponent::Pot),
+        on(RightSidebarComponent::Music),
+    ];
+    // Room for the music stage, the pot, and nothing else.
+    let height = TIME_HEIGHT + RULE_HEIGHT + MUSIC_STAGE_HEIGHT + RULE_HEIGHT + POT_HEIGHT;
+    assert_eq!(
+        visible_components(&components, height),
+        // Survivors render in the user's display order, not the shrink one.
+        vec![RightSidebarComponent::Pot, RightSidebarComponent::Music]
+    );
+
+    // Given the whole rail, everything renders in the stored order.
+    assert_eq!(
+        visible_components(&components, 100),
+        vec![
+            RightSidebarComponent::Bonsai,
+            RightSidebarComponent::Daily,
+            RightSidebarComponent::Pot,
+            RightSidebarComponent::Music,
+        ]
+    );
+}
+
 #[test]
 fn visible_components_skips_unfit_panel_without_stopping() {
     // Music (the biggest panel, now carrying the visualizer strip on top

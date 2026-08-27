@@ -41,6 +41,9 @@ pub mod chat_slow_mode;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
+pub mod crown;
+#[cfg(test)]
+mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
 pub mod darkroom_save;
@@ -88,6 +91,9 @@ mod mention_feed_read_test;
 pub mod message_translation;
 #[cfg(test)]
 mod message_translation_test;
+pub mod milestone;
+#[cfg(test)]
+mod milestone_test;
 pub mod minesweeper;
 #[cfg(test)]
 mod minesweeper_test;
@@ -101,6 +107,9 @@ mod notification_test;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;
+pub mod pot;
+#[cfg(test)]
+mod pot_test;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]

@@ -99,16 +99,16 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         landing::heading("Rewards"),
         landing::stat(
             "Amulet of Yendor",
-            "10,000 chips + NHA badge, once per account",
+            "20,000 chips, and the NHA badge the first time",
             18,
         ),
         landing::stat(
             "Ascension",
-            "20,000 chips + NHY badge, once per account",
+            "50,000 chips, and the NHY badge the first time",
             18,
         ),
         Line::from(Span::styled(
-            "  Play again any time, but these chip payouts are lifetime claims.",
+            "  Each pays again 7 days after the last time it paid. One run, one payout.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(""),

@@ -30,6 +30,7 @@ const NEWS_SEPARATOR: &str = " || ";
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
+    pub crown_range: Option<(usize, usize)>,
     pub title_range: Option<(usize, usize)>,
     pub word: Option<(&'static str, Color)>,
     pub name_style: Option<NameStyle>,
@@ -46,9 +47,9 @@ fn drunk_word_span(word: &str, color: Color) -> Span<'static> {
 }
 
 /// The author header's prefix spans: one span when untinted (byte-identical
-/// to the historical output), split when a drunk tint, a username effect, or
-/// a rented title paints part of it. Falls back to the single span on any
-/// out-of-bounds range.
+/// to the historical output), split when a drunk tint, a username effect, a
+/// crown, or a rented title paints part of it. Falls back to the single span
+/// on any out-of-bounds range.
 ///
 /// A username effect emits one span per character so gradients and shimmer
 /// interpolate across the name; the country-flag emoji inside the range
@@ -59,58 +60,57 @@ fn push_author_prefix_spans(
     author_style: Style,
     tint: Option<AuthorTint>,
 ) {
-    if let Some(tint) = tint {
-        let (start, end) = tint.range;
-        // The title always follows the name directly, so the prefix splits
-        // into at most four runs: badges before, the name, the title, the
-        // rest.
-        let title_end = match tint.title_range {
-            Some((title_start, title_end))
-                if title_start == end && title_end > title_start && title_end <= prefix.len() =>
-            {
-                Some(title_end)
-            }
-            Some(_) | None => None,
-        };
-        if start < end
-            && end <= prefix.len()
-            && prefix.is_char_boundary(start)
-            && prefix.is_char_boundary(end)
-            && title_end.is_none_or(|title_end| prefix.is_char_boundary(title_end))
-        {
-            if start > 0 {
-                spans.push(Span::styled(prefix[..start].to_string(), author_style));
-            }
-            let name = &prefix[start..end];
-            match tint.name_style {
-                Some(style) => {
-                    let len = name.chars().count();
-                    spans.extend(name.chars().enumerate().map(|(index, ch)| {
-                        Span::styled(
-                            ch.to_string(),
-                            author_style.fg(char_color(style, index, len)),
-                        )
-                    }));
-                }
-                None => spans.push(Span::styled(name.to_string(), author_style)),
-            }
-            let tail_start = match title_end {
-                Some(title_end) => {
-                    spans.push(Span::styled(
-                        prefix[end..title_end].to_string(),
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ));
-                    title_end
-                }
-                None => end,
-            };
-            if tail_start < prefix.len() {
-                spans.push(Span::styled(prefix[tail_start..].to_string(), author_style));
-            }
-            return;
-        }
+    let Some(tint) = tint else {
+        spans.push(Span::styled(prefix.to_string(), author_style));
+        return;
+    };
+    let (start, end) = tint.range;
+    if start >= end
+        || end > prefix.len()
+        || !prefix.is_char_boundary(start)
+        || !prefix.is_char_boundary(end)
+    {
+        spans.push(Span::styled(prefix.to_string(), author_style));
+        return;
     }
-    spans.push(Span::styled(prefix.to_string(), author_style));
+
+    if start > 0 {
+        spans.push(Span::styled(prefix[..start].to_string(), author_style));
+    }
+    let name = &prefix[start..end];
+    match tint.name_style {
+        Some(style) => {
+            let len = name.chars().count();
+            spans.extend(name.chars().enumerate().map(|(index, ch)| {
+                Span::styled(
+                    ch.to_string(),
+                    author_style.fg(char_color(style, index, len)),
+                )
+            }));
+        }
+        None => spans.push(Span::styled(name.to_string(), author_style)),
+    }
+
+    // The crown and the rented title trail the name directly, in that order,
+    // each painted in its own color so neither takes the name's effect. A
+    // range that does not sit exactly where the builder put it is left to
+    // the tail rather than trusted.
+    let mut cursor = end;
+    for (range, style) in [
+        (tint.crown_range, Style::default().fg(theme::AMBER_GLOW())),
+        (tint.title_range, Style::default().fg(theme::TEXT_DIM())),
+    ] {
+        let Some((from, to)) = range else { continue };
+        if from != cursor || to <= from || to > prefix.len() || !prefix.is_char_boundary(to) {
+            continue;
+        }
+        spans.push(Span::styled(prefix[from..to].to_string(), style));
+        cursor = to;
+    }
+
+    if cursor < prefix.len() {
+        spans.push(Span::styled(prefix[cursor..].to_string(), author_style));
+    }
 }
 
 /// The one-cell gutter at the left of every line a message renders: the

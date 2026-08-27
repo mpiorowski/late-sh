@@ -1,8 +1,12 @@
 use crate::app::games::chips::svc::ChipService;
 use late_core::{
     models::chips::{ChipMove, UserChips},
+    models::reward::{
+        DARKROOM_ESCAPE_REWARD_KEY, GREENDRAGON_DRAGON_REWARD_KEY, LATEANIA_ARCHDEMON_REWARD_KEY,
+    },
     test_utils::create_test_user,
 };
+use uuid::Uuid;
 
 use crate::test_helpers::new_test_db;
 
@@ -286,4 +290,164 @@ async fn apply_move_settles_a_seat_and_refuses_what_the_balance_cannot_cover() {
         1_250,
         "the declined debit left the balance alone"
     );
+}
+
+// ---- the repeatable door payouts (SHOP.md Phase 6) -----------------------
+
+/// Walk every claim this account holds past a lockout window without sleeping.
+async fn age_claims(db: &late_core::db::Db, user_id: Uuid, days: i32) {
+    let client = db.get().await.expect("db client");
+    client
+        .execute(
+            "UPDATE game_payout_claims
+             SET created = created - make_interval(days => $2)
+             WHERE user_id = $1",
+            &[&user_id, &days],
+        )
+        .await
+        .expect("age claims");
+}
+
+/// The dragon sends the character back to level 1, so the climb is the gate
+/// and every kill pays. The payout is keyed on the character row plus the kill
+/// number, so a retry of the same kill pays once and a recreated character
+/// starts its own count.
+#[tokio::test]
+async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "gd-kills").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row");
+    drop(client);
+    let chips = ChipService::new(test_db.db.clone());
+    let (first_character, second_character) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let kill = |character: Uuid, number: u32| {
+        let chips = chips.clone();
+        async move {
+            chips
+                .credit_per_event_reward_template(
+                    user.id,
+                    GREENDRAGON_DRAGON_REWARD_KEY,
+                    &format!("{character}:{number}"),
+                    ChipMove::GreendragonDragonSlain,
+                )
+                .await
+                .expect("dragon kill payout")
+        }
+    };
+
+    let first = kill(first_character, 1).await;
+    assert!(first.credited);
+    assert_eq!(first.amount, 10_000);
+    assert_eq!(first.balance, 11_000);
+
+    // The same kill, seen twice (a retried fire-and-forget task).
+    assert!(!kill(first_character, 1).await.credited);
+
+    // The next kill on the same character, and the first kill of a character
+    // rolled after this one was deleted: both are their own event.
+    assert!(kill(first_character, 2).await.credited);
+    let fresh_character = kill(second_character, 1).await;
+    assert!(fresh_character.credited);
+    assert_eq!(fresh_character.balance, 31_000);
+}
+
+/// A Dark Room wipes the save on the way out, so a repeat is the whole arc
+/// again and every run that gets out pays. The run id is the whole gate.
+#[tokio::test]
+async fn a_darkroom_escape_pays_every_run() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "adr-runs").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row");
+    drop(client);
+    let chips = ChipService::new(test_db.db.clone());
+
+    let escape = |run: Uuid| {
+        let chips = chips.clone();
+        async move {
+            chips
+                .credit_per_event_reward_template(
+                    user.id,
+                    DARKROOM_ESCAPE_REWARD_KEY,
+                    &run.to_string(),
+                    ChipMove::DarkroomEscape,
+                )
+                .await
+                .expect("escape payout")
+        }
+    };
+
+    let run = Uuid::now_v7();
+    let first = escape(run).await;
+    assert!(first.credited);
+    assert_eq!(first.amount, 15_000);
+    assert!(!escape(run).await.credited, "one run, one payout");
+
+    let second = escape(Uuid::now_v7()).await;
+    assert!(second.credited);
+    assert_eq!(second.balance, 31_000);
+}
+
+/// A Lateania crown is behind two gates at once: the character persists, so a
+/// maxed one would take the easy crowns nightly without the weekly lockout,
+/// and `d` deletes the character, so the lockout has to key on the account.
+#[tokio::test]
+async fn a_lateania_crown_pays_once_per_character_and_once_a_week() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "mud-crowns").await;
+    let client = test_db.db.get().await.expect("db client");
+    UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips row");
+    drop(client);
+    let chips = ChipService::new(test_db.db.clone());
+    let (first_character, second_character) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let crown = |character: Uuid| {
+        let chips = chips.clone();
+        async move {
+            chips
+                .credit_run_cooldown_reward_template(
+                    user.id,
+                    LATEANIA_ARCHDEMON_REWARD_KEY,
+                    &character.to_string(),
+                    ChipMove::LateaniaArchdemonDefeat,
+                )
+                .await
+                .expect("crown payout")
+        }
+    };
+
+    let first = crown(first_character).await;
+    assert!(first.credited);
+    assert_eq!(first.amount, 10_000);
+    assert_eq!(first.balance, 11_000);
+
+    // The same character taking the same crown again: never.
+    assert!(!crown(first_character).await.credited);
+    // A rerolled character inside the week: the lockout answers.
+    assert!(!crown(second_character).await.credited);
+    assert_eq!(balance(&test_db.db, user.id).await, 11_000);
+
+    // Past the week, the second character is paid, and the first still is not.
+    age_claims(&test_db.db, user.id, 8).await;
+    let later = crown(second_character).await;
+    assert!(later.credited);
+    assert_eq!(later.balance, 21_000);
+    assert!(!crown(first_character).await.credited);
+    assert_eq!(balance(&test_db.db, user.id).await, 21_000);
+}
+
+async fn balance(db: &late_core::db::Db, user_id: Uuid) -> i64 {
+    let client = db.get().await.expect("db client");
+    UserChips::ensure(&client, user_id)
+        .await
+        .expect("chips row")
+        .balance
 }

@@ -103,12 +103,16 @@ fn render_landing(frame: &mut Frame, area: Rect, launch: Vec<Line<'static>>) {
         landing::heading("Rewards"),
         landing::stat(
             "Orb of Zot",
-            "10,000 chips + DCO badge, once per account",
+            "20,000 chips, and the DCO badge the first time",
             14,
         ),
-        landing::stat("Escape", "20,000 chips + DCW badge, once per account", 14),
+        landing::stat(
+            "Escape",
+            "50,000 chips, and the DCW badge the first time",
+            14,
+        ),
         Line::from(Span::styled(
-            "  Play again any time, but these chip payouts are lifetime claims.",
+            "  Each pays again 7 days after the last time it paid. One run, one payout.",
             Style::default().fg(theme::TEXT_FAINT()),
         )),
         Line::from(""),

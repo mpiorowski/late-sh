@@ -27,6 +27,7 @@ use late_core::{
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs, unequip_slot,
         },
+        milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
             BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
             TITLE_RENTAL_ITEM_KIND, duration_tag, is_custom_title, title_from_payload,
@@ -210,6 +211,13 @@ impl ShopCatalogItem {
         self.item_kind == ULTIMATE_SPELL_KIND
     }
 
+    /// A burn milestone: permanent, never equipped, and the dearest one owned
+    /// is the one that shows. Shares the Ultimates tab with the spells, so
+    /// the tab has to tell them apart before offering to cast anything.
+    pub fn is_milestone_badge(&self) -> bool {
+        self.item_kind == MILESTONE_BADGE_ITEM_KIND
+    }
+
     pub fn is_username_effect(&self) -> bool {
         self.item_kind == USERNAME_EFFECT_ITEM_KIND
     }
@@ -238,6 +246,13 @@ enum PurchaseStory {
     TitleApplied {
         title: String,
         duration: i64,
+    },
+    /// A burn milestone was unlocked. The line names the price, because the
+    /// price is the whole product: the badge is the receipt.
+    BurnMilestone {
+        name: String,
+        emoji: String,
+        price: i64,
     },
 }
 
@@ -270,6 +285,18 @@ fn purchase_story(
             let row = purchase.title_rental.as_ref()?;
             title_from_payload(&row.payload)
                 .map(|title| PurchaseStory::TitleApplied { title, duration })
+        }
+        MILESTONE_BADGE_ITEM_KIND => {
+            // Read off the item that actually charged, not off a payload the
+            // transaction wrote: a milestone activates nothing, the purchase
+            // row is the whole event.
+            late_core::models::milestone::emoji_from_payload(&result.item.payload).map(|emoji| {
+                PurchaseStory::BurnMilestone {
+                    name: result.item.name.clone(),
+                    emoji,
+                    price: result.item.price_chips,
+                }
+            })
         }
         _ => None,
     }
@@ -425,7 +452,12 @@ impl ShopService {
         let title_rows =
             ShopConsumableEffect::active_user_effects(&client, TITLE_EFFECT_KIND).await?;
 
+        let milestone_rows = MilestoneBadge::highest_for_all(&client).await?;
+
         let mut entries: HashMap<Uuid, NameFlair> = HashMap::new();
+        for (user_id, emoji) in milestone_rows {
+            entries.entry(user_id).or_default().milestone = Some(emoji);
+        }
         for row in effect_rows {
             match UsernameEffect::from_payload(&row.payload) {
                 Some(effect) => {
@@ -470,7 +502,14 @@ impl ShopService {
             &[USERNAME_EFFECT_KIND, TITLE_EFFECT_KIND],
         )
         .await?;
-        let mut flair = NameFlair::default();
+        // The milestone is a purchase, not an effect row, so it is read on
+        // its own here. It has to be read on this path at all because the
+        // whole entry is replaced below: leaving it out would drop a
+        // 500,000-chip glyph the moment its owner rented a badge.
+        let mut flair = NameFlair {
+            milestone: MilestoneBadge::highest_for_user(&client, user_id).await?,
+            ..NameFlair::default()
+        };
         for row in rows {
             // The query orders `ends_at DESC` inside each kind, so the first
             // row of a kind is the live one; a stray older row never wins.
@@ -798,7 +837,12 @@ impl ShopService {
         // through, so a title purchase never drops a live color effect (and
         // vice versa). Other replicas catch up from the purchase's
         // shop_user_changed notify, which lands on the same code path.
-        let flair_changed = purchase.username_effect.is_some() || purchase.title_rental.is_some();
+        let flair_changed = purchase.username_effect.is_some()
+            || purchase.title_rental.is_some()
+            || purchase.purchase.as_ref().is_some_and(|result| {
+                matches!(result.status, PurchaseStatus::Purchased)
+                    && result.item.item_kind == MILESTONE_BADGE_ITEM_KIND
+            });
 
         // The stories that ship to the #lounge ticker. Each names what other
         // people will now see next to this player's name.
@@ -812,6 +856,9 @@ impl ShopService {
                 }
                 (Some(activity), Some(PurchaseStory::TitleApplied { title, duration })) => {
                     activity.title_applied_task(user_id, title, duration);
+                }
+                (Some(activity), Some(PurchaseStory::BurnMilestone { name, emoji, price })) => {
+                    activity.burn_milestone_task(user_id, name, emoji, price);
                 }
                 (None, _) | (_, None) => {}
             }

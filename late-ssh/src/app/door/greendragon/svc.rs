@@ -1320,9 +1320,16 @@ impl GreenDragonService {
     }
 
     /// The dragon-kill reward, fire-and-forget (the Lateania/NetHack milestone
-    /// shape): a feed line for every kill, and — first kill only, deduped by
-    /// the lifetime reward template and the `NOT EXISTS` award insert — a
-    /// once-per-account chip payout plus the rankless GDS profile badge.
+    /// shape): a feed line for every kill, the chip payout, and — first kill
+    /// only, on the `NOT EXISTS` award insert — the rankless GDS profile
+    /// badge.
+    ///
+    /// Every kill pays (SHOP.md Phase 6): the kill resets the character to
+    /// level 1, so climbing back to the dragon is a real 7-10 days under the
+    /// daily turn cap, and that is the whole gate. The payout is keyed on
+    /// `<character row id>:<kill number>`, so a retry pays once and a deleted-
+    /// and-recreated character's kill 1 is a different event from the old
+    /// character's kill 1.
     pub fn reward_dragon_kill(&self, user_id: Uuid, kills: u32) {
         let inner = self.inner.clone();
         tokio::spawn(async move {
@@ -1335,11 +1342,42 @@ impl GreenDragonService {
                 None,
             );
 
+            let character_id = match inner.db.get().await {
+                Ok(client) => match GreenDragonCharacter::id_for_user(&client, user_id).await {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        tracing::error!(
+                            user_id = %user_id,
+                            "no greendragon character row to key the dragon-kill payout on"
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            ?error,
+                            user_id = %user_id,
+                            "failed to read greendragon character id for the dragon-kill payout"
+                        );
+                        return;
+                    }
+                },
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        user_id = %user_id,
+                        "no db client for the greendragon dragon-kill payout"
+                    );
+                    return;
+                }
+            };
+            let event_key = format!("{character_id}:{kills}");
+
             let grant = match inner
                 .chips
-                .credit_lifetime_reward_template(
+                .credit_per_event_reward_template(
                     user_id,
                     GREENDRAGON_DRAGON_REWARD_KEY,
+                    &event_key,
                     ChipMove::GreendragonDragonSlain,
                 )
                 .await
@@ -1354,9 +1392,17 @@ impl GreenDragonService {
                     return;
                 }
             };
-            // Already claimed on an earlier kill — nothing more to do.
+            // This kill already paid: the chips stay suppressed, but the
+            // badge insert below still runs (it is `NOT EXISTS` idempotent),
+            // so a badge insert that failed on the crediting kill heals here
+            // instead of being lost for good. Same rule as award.rs and
+            // darkroom/svc.rs.
             if !grant.credited {
-                return;
+                tracing::info!(
+                    user_id = %user_id,
+                    event_key = %event_key,
+                    "suppressed greendragon dragon-kill chips because this kill already paid"
+                );
             }
 
             let badge = award_badge(GREENDRAGON_DRAGON_AWARD_CATEGORY, 1);

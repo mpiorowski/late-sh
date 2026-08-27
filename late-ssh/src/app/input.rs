@@ -2828,6 +2828,10 @@ pub(crate) enum ChatClickKind {
     /// Click landed on the user's currently-equipped chat flag — opens
     /// the Hub Shop on the Flags sub-store. No double-click verb.
     StoreFlag,
+    /// Click landed on the user's burn milestone — opens the Hub Shop on
+    /// the Ultimates sub-store, where the ladder is sold. No double-click
+    /// verb.
+    StoreMilestone,
     /// Click landed on an inline image preview row — selects the message
     /// and opens the image viewer modal. No double-click verb.
     Image { message_id: Uuid },
@@ -2910,6 +2914,7 @@ fn classify_chat_hit(hit: &ChatRowHit, col: u16) -> Option<ChatClickKind> {
                 Some(HeaderTarget::Profile) => ChatClickKind::ProfileOf { message_id },
                 Some(HeaderTarget::StoreBadge) => ChatClickKind::StoreBadge,
                 Some(HeaderTarget::StoreFlag) => ChatClickKind::StoreFlag,
+                Some(HeaderTarget::StoreMilestone) => ChatClickKind::StoreMilestone,
                 None => ChatClickKind::BodySelect { message_id },
             },
         ),
@@ -2996,6 +3001,11 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
             app.show_hub_modal = true;
             app.shop_state
                 .select_category(crate::app::hub::shop::catalog::ShopCategory::Flags);
+        }
+        ChatClickKind::StoreMilestone => {
+            app.show_hub_modal = true;
+            app.shop_state
+                .select_category(crate::app::hub::shop::catalog::ShopCategory::Ultimates);
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);

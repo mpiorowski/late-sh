@@ -1295,8 +1295,9 @@ next to the bounty-closure hook:
 
 - [x] **Migration 100** seeds the `greendragon_dragon_slain` reward
   template: 10,000 chips (the NetHack-Amulet / Lateania-Archdemon tier),
-  `per_event` claim policy, paid once per account through
-  `credit_lifetime_reward_template`.
+  `per_event` claim policy, paid once per account. Superseded by migration
+  158 and 159 (SHOP.md Phase 6): 10,000 for every kill, keyed on the character row
+  id and the kill number through `credit_per_event_reward_template`.
 - [x] **Profile badge**: the rankless `GDS` ("Green Dragon Slayer") award,
   granted with the chips on the first kill only (double-deduped: the
   lifetime template and the `NOT EXISTS` award insert).

@@ -520,6 +520,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pomodoro_directory: Some(state.pomodoro_directory.clone()),
+        crown_service: Some(state.crown_service.clone()),
+        pot_service: Some(state.pot_service.clone()),
         activity_feed_rx,
         initial_announcements,
         user_id,

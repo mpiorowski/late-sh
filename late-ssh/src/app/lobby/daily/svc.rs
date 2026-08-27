@@ -112,6 +112,9 @@ pub struct DailyFinishedItem {
     /// `None` for draws.
     pub winner_user_id: Option<Uuid>,
     pub result: String,
+    /// What the winner's chips did; `None` for draws and for matches finished
+    /// before the payout gates existed.
+    pub win_payout: Option<DailyWinPayout>,
     pub finished_at: DateTime<Utc>,
     pub challenger_seen: bool,
     pub opponent_seen: bool,
@@ -144,6 +147,60 @@ impl DailyFinishedItem {
     }
 }
 
+/// Half-moves a match has to hold before its win pays. Below this the match was
+/// never played (a post-claim-resign loop, a claim nobody moved on), and paying
+/// it would make the lobby a faucet. Both players' moves count.
+pub const DAILY_WIN_MIN_MOVES: u64 = 5;
+
+/// What the winner's chips did. Decided inline on finish so the banner tells
+/// the truth, stored on the row (`daily_matches.win_payout`) so the lingering
+/// result row can tell an offline winner the same thing; every arm is one
+/// metric label. The amount is not here: `DailyGame::win_payout` is the paid
+/// number by the §6 invariant that it equals the seeded template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DailyWinPayout {
+    Paid,
+    /// Fewer than `DAILY_WIN_MIN_MOVES` half-moves were played.
+    Unplayed,
+    /// A win against this opponent in this game from the same posting day
+    /// already paid (SHOP.md Phase 7's pair-day cap, scoped per roster game).
+    PairDayCapped,
+    /// The credit call failed; logged, the match is finished all the same.
+    Failed,
+}
+
+impl DailyWinPayout {
+    /// The `daily_matches.win_payout` spelling; the column's CHECK lists the
+    /// same four.
+    pub const fn db_str(self) -> &'static str {
+        match self {
+            Self::Paid => "paid",
+            Self::Unplayed => "unplayed",
+            Self::PairDayCapped => "pair_day_capped",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_db_str(value: &str) -> Option<Self> {
+        match value {
+            "paid" => Some(Self::Paid),
+            "unplayed" => Some(Self::Unplayed),
+            "pair_day_capped" => Some(Self::PairDayCapped),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DailyFinishOutcome {
+    Won {
+        user_id: Uuid,
+        payout: DailyWinPayout,
+    },
+    Draw,
+}
+
 #[derive(Clone, Debug)]
 pub enum DailyEvent {
     ChallengePosted {
@@ -168,7 +225,7 @@ pub enum DailyEvent {
         game: DailyGame,
         challenger_id: Uuid,
         opponent_id: Option<Uuid>,
-        winner_user_id: Option<Uuid>,
+        outcome: DailyFinishOutcome,
         result: String,
     },
     Error {
@@ -819,14 +876,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    game,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, game, winner, result, state.revision)
+                    .await;
             }
             None => {
                 let next_turn = state.user_for_color(mover_color.other());
@@ -890,13 +941,13 @@ impl DailyService {
                 label,
             });
             self.finish_events(
-                match_id,
+                &row,
                 DailyGame::Battleship,
-                row.challenger_id,
-                row.opponent_id,
                 Some(user_id),
                 DailyMatch::RESULT_FLEET_SUNK,
-            );
+                state.revision,
+            )
+            .await;
         } else {
             let next_turn = if outcome.hit {
                 user_id
@@ -972,14 +1023,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    DailyGame::ConnectFour,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, DailyGame::ConnectFour, winner, result, state.revision)
+                    .await;
             }
             None => {
                 let next_turn = state.user_of(disc.other());
@@ -1054,14 +1099,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    DailyGame::Reversi,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, DailyGame::Reversi, winner, result, state.revision)
+                    .await;
             }
             None => {
                 // `turn()` already skips a blocked opponent, so this can point
@@ -1141,14 +1180,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    DailyGame::Checkers,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, DailyGame::Checkers, winner, result, state.revision)
+                    .await;
             }
             None => {
                 let next_turn = state.user_of(state.turn());
@@ -1229,14 +1262,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    DailyGame::Backgammon,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, DailyGame::Backgammon, winner, result, state.revision)
+                    .await;
             }
             None => {
                 // `turn()` reflects any recorded passes, so this can point
@@ -1318,14 +1345,8 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                self.finish_events(
-                    match_id,
-                    DailyGame::Briscola,
-                    row.challenger_id,
-                    row.opponent_id,
-                    winner,
-                    result,
-                );
+                self.finish_events(&row, DailyGame::Briscola, winner, result, state.revision)
+                    .await;
             }
             None => {
                 let next_turn = state.turn_user();
@@ -1392,14 +1413,16 @@ impl DailyService {
             )
             .await?;
             if updated == 1 {
+                // A resignation is not a move: the half-moves played are the
+                // revision the board had before it.
                 self.finish_events(
-                    match_id,
+                    &row,
                     game,
-                    row.challenger_id,
-                    row.opponent_id,
                     Some(winner),
                     DailyMatch::RESULT_RESIGN,
-                );
+                    base_revision as u64,
+                )
+                .await;
                 self.publish(&client).await?;
                 return Ok(());
             }
@@ -1422,14 +1445,19 @@ impl DailyService {
                 );
                 continue;
             };
+            let moves_played = row
+                .state
+                .get("revision")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             self.finish_events(
-                row.id,
+                row,
                 game,
-                row.challenger_id,
-                row.opponent_id,
                 row.winner_user_id,
                 DailyMatch::RESULT_TIMEOUT,
-            );
+                moves_played,
+            )
+            .await;
         }
         if !forfeited.is_empty() {
             self.publish(&client).await?;
@@ -1457,71 +1485,136 @@ impl DailyService {
         Ok(())
     }
 
-    fn finish_events(
+    /// The single finish choke point: every decisive or drawn finish (move,
+    /// resign, sweeper) lands here once the row is written. Pays the winner
+    /// behind the two lobby gates, then broadcasts the outcome so the banner
+    /// can say what the chips did, then posts the #lounge line.
+    async fn finish_events(
         &self,
-        match_id: Uuid,
+        row: &DailyMatch,
         game: DailyGame,
-        challenger_id: Uuid,
-        opponent_id: Option<Uuid>,
         winner_user_id: Option<Uuid>,
         result: &str,
+        moves_played: u64,
     ) {
+        let outcome = match winner_user_id {
+            Some(winner) => {
+                let payout = self.pay_winner(row, game, winner, moves_played).await;
+                self.record_win_payout(row.id, payout).await;
+                DailyFinishOutcome::Won {
+                    user_id: winner,
+                    payout,
+                }
+            }
+            None => DailyFinishOutcome::Draw,
+        };
         let _ = self.event_tx.send(DailyEvent::MatchFinished {
-            match_id,
+            match_id: row.id,
             game,
-            challenger_id,
-            opponent_id,
-            winner_user_id,
+            challenger_id: row.challenger_id,
+            opponent_id: row.opponent_id,
+            outcome,
             result: result.to_string(),
         });
-        // Announce the finished match to #lounge — one line per match, whether
+        // Announce the finished match to #lounge, one line per match, whether
         // decisive (win/loss) or a draw. This is the only activity daily games
         // publish; posting/claiming stay silent. `opponent_id` is always set on
         // a finished (claimed) match, but guard rather than assume.
-        if let Some(opponent) = opponent_id {
+        if let Some(opponent) = row.opponent_id {
             self.activity.daily_result_task(
-                match_id,
+                row.id,
                 game.display_name(),
-                challenger_id,
+                row.challenger_id,
                 opponent,
                 winner_user_id,
             );
         }
-        let Some(winner) = winner_user_id else {
-            return;
-        };
-        let chip_svc = self.chip_svc.clone();
-        tokio::spawn(async move {
-            match chip_svc
-                .credit_per_event_reward_template(
+    }
+
+    /// The win payout behind its two gates (SHOP.md Phase 7). Gate 1 is the
+    /// match itself: fewer than `DAILY_WIN_MIN_MOVES` half-moves and nothing is
+    /// even asked of the DB. Gate 2 is the pair: one paid win per opponent per
+    /// game per UTC day the match was posted, enforced inside the grant (the
+    /// claim row carries the template's `game`, so each roster game is its
+    /// own cap). Every outcome is logged and counted here and nowhere else.
+    async fn pay_winner(
+        &self,
+        row: &DailyMatch,
+        game: DailyGame,
+        winner: Uuid,
+        moves_played: u64,
+    ) -> DailyWinPayout {
+        let payout = if moves_played < DAILY_WIN_MIN_MOVES {
+            DailyWinPayout::Unplayed
+        } else {
+            let loser = if winner == row.challenger_id {
+                row.opponent_id
+                    .expect("a finished daily match has an opponent")
+            } else {
+                row.challenger_id
+            };
+            let pair_day_key = format!("{loser}:{}", row.created.date_naive());
+            match self
+                .chip_svc
+                .credit_per_event_pair_day_reward_template(
                     winner,
                     game.reward_key(),
-                    &match_id.to_string(),
+                    &row.id.to_string(),
+                    &pair_day_key,
                     game.chip_move(),
                 )
                 .await
             {
-                Ok(payout) => {
-                    if !payout.credited {
-                        tracing::info!(
-                            user_id = %winner,
-                            match_id = %match_id,
-                            game = game.label(),
-                            payout = payout.amount,
-                            "daily win already paid for this match"
-                        );
-                    }
-                }
+                Ok(grant) if grant.credited => DailyWinPayout::Paid,
+                // The match key cannot collide on a first finish (`finish` is
+                // revision-guarded and the sweeper hands each row out once), so
+                // a refusal here is the pair-day key.
+                Ok(_) => DailyWinPayout::PairDayCapped,
                 Err(error) => {
                     tracing::error!(
                         ?error,
                         user_id = %winner,
+                        match_id = %row.id,
                         game = game.label(),
                         "failed to credit daily win chips"
                     );
+                    DailyWinPayout::Failed
                 }
             }
-        });
+        };
+        match payout {
+            DailyWinPayout::Paid | DailyWinPayout::Failed => {}
+            DailyWinPayout::Unplayed | DailyWinPayout::PairDayCapped => {
+                tracing::info!(
+                    user_id = %winner,
+                    match_id = %row.id,
+                    game = game.label(),
+                    moves_played,
+                    ?payout,
+                    "daily win refused, no chips"
+                );
+            }
+        }
+        crate::metrics::record_daily_win_payout(payout);
+        payout
+    }
+
+    /// Persist the payout outcome on the finished row for the lingering
+    /// result line. A write failure loses only that line (the chips and the
+    /// finish are already durable), so it is logged here and goes no further.
+    async fn record_win_payout(&self, match_id: Uuid, payout: DailyWinPayout) {
+        let written = match self.db.get().await {
+            Ok(client) => DailyMatch::set_win_payout(&client, match_id, payout.db_str()).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = written {
+            tracing::error!(
+                ?error,
+                match_id = %match_id,
+                ?payout,
+                "failed to record daily win payout on the match row"
+            );
+        }
     }
 
     fn send_error(&self, user_id: Uuid, error: &anyhow::Error) {
@@ -1682,8 +1775,14 @@ impl DailyService {
                     opponent_username: usernames.get(&opponent_id).cloned(),
                     winner_user_id: row.winner_user_id,
                     result: row.result,
-                    // `finish`/`forfeit_expired` were the last writers, so
-                    // `updated` is the finish time.
+                    // The column is CHECKed to these four spellings, so an
+                    // unreadable value is a corrupt row, not a case.
+                    win_payout: row.win_payout.as_deref().map(|value| {
+                        DailyWinPayout::from_db_str(value)
+                            .expect("daily_matches.win_payout holds a checked spelling")
+                    }),
+                    // `finish`/`forfeit_expired`/`set_win_payout` were the
+                    // last writers, so `updated` is the finish time.
                     finished_at: row.updated,
                     challenger_seen: row.challenger_result_seen_at.is_some(),
                     opponent_seen: row.opponent_result_seen_at.is_some(),
