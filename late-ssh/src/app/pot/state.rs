@@ -39,7 +39,7 @@ impl PotView {
         Self {
             size: snapshot.size(),
             ticket_count: snapshot.ticket_count,
-            my_tickets: snapshot.tickets_for(user_id),
+            my_tickets: snapshot.holding_for(user_id).tickets,
             draws_in: countdown(draws_at, now),
             open: true,
         }

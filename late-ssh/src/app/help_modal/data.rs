@@ -497,7 +497,7 @@ fn chips_help_lines() -> Vec<String> {
         "".to_string(),
         "9. The pot".to_string(),
         format!("  A raffle, drawn once a week, Monday 21:00 UTC. Tickets cost {} chips each.", thousands(POT_TICKET_PRICE)),
-        "  /pot shows the pot, the tickets in it, what you hold, and how long is left.".to_string(),
+        "  /pot shows the pot, the tickets in it, what you hold and paid, how many more you can buy today, and how long is left.".to_string(),
         "  /pot buy N buys N tickets.".to_string(),
         format!("  One player may buy at most {POT_MAX_TICKETS_PER_DAY} tickets a day (UTC), so a full week is {}: the draw is about showing up, not about bank.", 7 * POT_MAX_TICKETS_PER_DAY),
         "  At the draw one ticket is pulled, weighted by how many each player holds.".to_string(),

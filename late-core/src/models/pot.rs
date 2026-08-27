@@ -189,7 +189,12 @@ impl From<Row> for Pot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PotTicketHolder {
     pub user_id: Uuid,
+    /// The whole holding, what the draw weighs.
     pub tickets: i64,
+    /// The part bought today (UTC), what the daily cap counts. Read at
+    /// query time, so a snapshot straddling midnight is stale until the next
+    /// refresh (the sweeper's minute at most).
+    pub bought_today: i64,
 }
 
 /// A settled draw, computed before anything is written. Every number the
@@ -470,14 +475,21 @@ impl PotTicket {
     }
 
     /// Every holder in a pot, ordered by user id so the seeded draw is a
-    /// function of the tickets alone and not of the planner's mood.
+    /// function of the tickets alone and not of the planner's mood. Carries
+    /// today's part of each holding too, so the snapshot can answer "how many
+    /// more today" without a second query.
     pub async fn holders(
         client: &impl GenericClient,
         pot_id: Uuid,
     ) -> Result<Vec<PotTicketHolder>> {
         let rows = client
             .query(
-                "SELECT user_id, SUM(count)::BIGINT AS tickets
+                "SELECT user_id,
+                        SUM(count)::BIGINT AS tickets,
+                        COALESCE(SUM(count) FILTER (
+                            WHERE (created AT TIME ZONE 'UTC')::date
+                                = (current_timestamp AT TIME ZONE 'UTC')::date
+                        ), 0)::BIGINT AS bought_today
                  FROM pot_tickets
                  WHERE pot_id = $1
                  GROUP BY user_id
@@ -490,6 +502,7 @@ impl PotTicket {
             .map(|row| PotTicketHolder {
                 user_id: row.get("user_id"),
                 tickets: row.get("tickets"),
+                bought_today: row.get("bought_today"),
             })
             .collect())
     }

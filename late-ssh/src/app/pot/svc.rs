@@ -47,8 +47,24 @@ const POT_EVENT_CAP: usize = 32;
 /// to catch a threshold whose buy-time check was lost to a failed refresh.
 const POT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
+/// One player's place in the pot, as the snapshot hands it to that player.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PotHolding {
+    /// The whole holding in this pot.
+    pub tickets: i64,
+    /// The part bought today (UTC), against the daily cap.
+    pub bought_today: i64,
+}
+
+impl PotHolding {
+    /// How many more tickets today's cap allows.
+    pub fn room_today(self) -> i64 {
+        (POT_MAX_TICKETS_PER_DAY - self.bought_today).max(0)
+    }
+}
+
 /// The pot as every session reads it. Public numbers only, plus a private
-/// index of who holds what: [`Self::tickets_for`] is the only way out of it,
+/// index of who holds what: [`Self::holding_for`] is the only way out of it,
 /// so a session can look up its own holding and nothing wider.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PotSnapshot {
@@ -57,7 +73,7 @@ pub struct PotSnapshot {
     pub ticket_count: i64,
     /// `None` until the first refresh finds an open pot.
     pub draws_at: Option<DateTime<Utc>>,
-    holders: HashMap<Uuid, i64>,
+    holders: HashMap<Uuid, PotHolding>,
 }
 
 impl PotSnapshot {
@@ -69,7 +85,15 @@ impl PotSnapshot {
             draws_at: Some(pot.draws_at),
             holders: holders
                 .iter()
-                .map(|holder| (holder.user_id, holder.tickets))
+                .map(|holder| {
+                    (
+                        holder.user_id,
+                        PotHolding {
+                            tickets: holder.tickets,
+                            bought_today: holder.bought_today,
+                        },
+                    )
+                })
                 .collect(),
         }
     }
@@ -81,9 +105,10 @@ impl PotSnapshot {
     }
 
     /// One player's holding. Callers pass their own id; nothing here hands
-    /// out the map.
-    pub fn tickets_for(&self, user_id: Uuid) -> i64 {
-        self.holders.get(&user_id).copied().unwrap_or(0)
+    /// out the map. A player with no tickets has the default holding: none
+    /// held, none bought today, the whole cap left.
+    pub fn holding_for(&self, user_id: Uuid) -> PotHolding {
+        self.holders.get(&user_id).copied().unwrap_or_default()
     }
 }
 
@@ -135,6 +160,8 @@ pub struct PotStatus {
     pub size: i64,
     pub ticket_count: i64,
     pub my_tickets: i64,
+    /// What the viewer may still buy today under the daily cap.
+    pub room_today: i64,
     pub ticket_price: i64,
     /// Seconds to the draw, or `None` when no pot is open yet (a fresh
     /// database between the first boot and the first sweep).
@@ -148,12 +175,22 @@ impl PotStatus {
         let Some(secs) = self.draws_in_secs else {
             return "The pot has not opened yet.".to_string();
         };
+        // The holding and what it cost, then today's room under the cap: the
+        // one thing a player cannot work out from the panel.
         let held = match self.my_tickets {
             0 => "you hold none".to_string(),
-            held => format!("you hold {}", thousands(held)),
+            held => format!(
+                "you hold {} ({} chips)",
+                thousands(held),
+                thousands(held.saturating_mul(self.ticket_price))
+            ),
+        };
+        let today = match self.room_today {
+            0 => "none more today".to_string(),
+            room => format!("{room} more today"),
         };
         format!(
-            "Pot {} on {} tickets, {held}, draws in {}. /pot buy N at {} each.",
+            "Pot {} on {} tickets, {held}, {today}, draws in {}. /pot buy N at {} each.",
             thousands(self.size),
             thousands(self.ticket_count),
             short_duration(secs),
@@ -418,10 +455,12 @@ impl PotService {
     /// already has every number, so the command costs no query at all.
     pub fn status_for(&self, user_id: Uuid) -> PotStatus {
         let snapshot = self.snapshot_tx.borrow().clone();
+        let holding = snapshot.holding_for(user_id);
         PotStatus {
             size: snapshot.size(),
             ticket_count: snapshot.ticket_count,
-            my_tickets: snapshot.tickets_for(user_id),
+            my_tickets: holding.tickets,
+            room_today: holding.room_today(),
             ticket_price: snapshot.ticket_price,
             draws_in_secs: snapshot
                 .draws_at

@@ -66,27 +66,40 @@ fn the_status_line_reads_the_shapes_the_pot_has() {
         size: 84_200,
         ticket_count: 842,
         my_tickets: 5,
+        room_today: 5,
         ticket_price: POT_TICKET_PRICE,
-        draws_in_secs: Some(3 * 3_600 + 12 * 60),
+        draws_in_secs: Some(4 * 86_400 + 12 * 3_600),
     };
     assert_eq!(
         holding.line(),
-        "Pot 84,200 on 842 tickets, you hold 5, draws in 3h12m. /pot buy N at 100 each."
+        "Pot 84,200 on 842 tickets, you hold 5 (500 chips), 5 more today, draws in 4d12h. /pot buy N at 100 each."
     );
 
     let empty_handed = Status {
         my_tickets: 0,
+        room_today: POT_MAX_TICKETS_PER_DAY,
         ..holding
     };
     assert_eq!(
         empty_handed.line(),
-        "Pot 84,200 on 842 tickets, you hold none, draws in 3h12m. /pot buy N at 100 each."
+        "Pot 84,200 on 842 tickets, you hold none, 10 more today, draws in 4d12h. /pot buy N at 100 each."
+    );
+
+    let capped_for_today = Status {
+        my_tickets: 24,
+        room_today: 0,
+        ..holding
+    };
+    assert_eq!(
+        capped_for_today.line(),
+        "Pot 84,200 on 842 tickets, you hold 24 (2,400 chips), none more today, draws in 4d12h. /pot buy N at 100 each."
     );
 
     let before_the_first_sweep = Status {
         size: 0,
         ticket_count: 0,
         my_tickets: 0,
+        room_today: 0,
         ticket_price: 0,
         draws_in_secs: None,
     };
@@ -414,6 +427,15 @@ async fn a_session_only_reads_its_own_holding() {
 
     assert_eq!(service.status_for(mine.id).my_tickets, 2);
     assert_eq!(service.status_for(theirs.id).my_tickets, 7);
+    // Today's room is the cap less what each bought today, each their own.
+    assert_eq!(
+        service.status_for(mine.id).room_today,
+        POT_MAX_TICKETS_PER_DAY - 2
+    );
+    assert_eq!(
+        service.status_for(theirs.id).room_today,
+        POT_MAX_TICKETS_PER_DAY - 7
+    );
     // The public half is the same for both: the field is not a secret, the
     // per-player breakdown is.
     assert_eq!(service.status_for(mine.id).ticket_count, 9);

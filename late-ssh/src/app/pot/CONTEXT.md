@@ -120,9 +120,13 @@ the ~1s tick in `tick.rs` and projected into `App.pot_view`. No render ever
 queries for the pot, and `/pot` is answered straight out of the snapshot with
 no query at all.
 
-`PotSnapshot` holds a private `HashMap<Uuid, i64>` of holdings.
-`tickets_for(user_id)` is the only way out of it, and every caller passes
-their own id: the field breakdown never leaves the service.
+`PotSnapshot` holds a private `HashMap<Uuid, PotHolding>` of holdings (the
+whole holding plus today's part, both from the one `holders` query).
+`holding_for(user_id)` is the only way out of it, and every caller passes
+their own id: the field breakdown never leaves the service. `/pot` reads
+`room_today` off it ("5 more today"), so the daily cap is visible before a
+refused buy; today's part is stamped at query time, so across UTC midnight
+it is stale until the next refresh (the sweeper's minute at most).
 
 ## 7. The sidebar panel
 

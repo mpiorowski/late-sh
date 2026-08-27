@@ -15,7 +15,11 @@ use crate::{
 };
 
 fn holder(user_id: Uuid, tickets: i64) -> PotTicketHolder {
-    PotTicketHolder { user_id, tickets }
+    PotTicketHolder {
+        user_id,
+        tickets,
+        bought_today: tickets,
+    }
 }
 
 /// The whole-state assertion for the draw: fixed tickets plus a fixed seed
@@ -205,6 +209,17 @@ async fn the_daily_cap_is_enforced_by_the_insert() {
             .await
             .expect("today"),
         0
+    );
+    let aged = PotTicket::holders(&*tx, pot.id)
+        .await
+        .expect("holders")
+        .into_iter()
+        .find(|holder| holder.user_id == buyer.id)
+        .expect("the buyer still holds");
+    assert_eq!(
+        (aged.tickets, aged.bought_today),
+        (POT_MAX_TICKETS_PER_DAY, 0),
+        "the holding is the whole pot, today's part is what the cap counts"
     );
     assert_eq!(
         PotTicket::buy_in_tx(
