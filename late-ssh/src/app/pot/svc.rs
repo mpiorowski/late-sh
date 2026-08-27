@@ -179,10 +179,15 @@ pub struct PotBuyOutcome {
 /// it.
 #[derive(Clone, Copy, Debug)]
 pub enum PotSettlement {
-    Drawn { pot_id: Uuid, draw: PotDraw },
+    Drawn {
+        pot_id: Uuid,
+        draw: PotDraw,
+    },
     /// Nobody bought in. No payout, no #lounge line: an empty pot rolling is
     /// not a story.
-    Rolled { pot_id: Uuid },
+    Rolled {
+        pot_id: Uuid,
+    },
 }
 
 /// The answer to one session's command, or the news that this session won.
@@ -190,8 +195,6 @@ pub enum PotSettlement {
 /// addressed to it.
 #[derive(Clone, Debug)]
 pub enum PotEvent {
-    /// `/pot`, answered for the session that asked.
-    Status { user_id: Uuid, line: String },
     /// `/pot buy N` settled: the buyer's receipt. Sent by the replica that
     /// ran the buy, which is the one the buyer is connected to.
     Bought {
@@ -419,10 +422,7 @@ impl PotService {
             size: snapshot.size(),
             ticket_count: snapshot.ticket_count,
             my_tickets: snapshot.tickets_for(user_id),
-            ticket_price: match snapshot.ticket_price {
-                0 => POT_TICKET_PRICE,
-                price => price,
-            },
+            ticket_price: snapshot.ticket_price,
             draws_in_secs: snapshot
                 .draws_at
                 .map(|draws_at| (draws_at - Utc::now()).num_seconds()),
@@ -489,11 +489,7 @@ impl PotService {
     /// The row lock is what makes the cap exact: two buys by the same player
     /// at the same instant serialize on it instead of both reading the same
     /// holding, and a buy can never land in a pot the sweeper is drawing.
-    pub(super) async fn buy(
-        &self,
-        user_id: Uuid,
-        count: i64,
-    ) -> Result<PotBuyOutcome, PotError> {
+    pub(super) async fn buy(&self, user_id: Uuid, count: i64) -> Result<PotBuyOutcome, PotError> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
         let Some(pot) = Pot::lock_open_for_buy(&tx).await? else {

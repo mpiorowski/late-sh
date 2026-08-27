@@ -185,6 +185,11 @@ fn earning_exclusions_and_reason_uniqueness() {
             "floor_restore",
             "chip_gild_received",
             "chip_crown_taken",
+            // The pot is excluded on both sides: a lottery win must not top
+            // the earners board, and excluding only the win would make
+            // buying in a pure negative on a board the winner cannot climb.
+            "pot_ticket",
+            "pot_won",
             "shop_purchase"
         ]
     );

@@ -51,6 +51,8 @@ const MUSIC_QUEUE_HEIGHT: u16 = 3;
 const BONSAI_MIN_HEIGHT: u16 = 10;
 // Daily games: fixed, stable chrome (see `daily/panel.rs`).
 const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
+// The pot: two rows, fixed (see `pot/panel.rs`).
+const POT_HEIGHT: u16 = crate::app::pot::panel::POT_PANEL_HEIGHT;
 
 // The visible credit Nightride asked for; rendered as the last detail row
 // while the radio source is active.
@@ -98,6 +100,8 @@ pub(crate) struct SidebarProps<'a> {
     pub afk: Option<&'a str>,
     /// Daily correspondence games: my matches, lobby activity, glow.
     pub daily: &'a crate::app::lobby::daily::state::DailyState,
+    /// The daily pot, already projected for this viewer on the ~1s tick.
+    pub pot: &'a crate::app::pot::state::PotView,
     /// Unseen-challenge glow for the panel's status row.
     pub lobby_glow: bool,
     /// Humans currently connected (bots excluded), for the core presence row.
@@ -256,6 +260,9 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                     props.lobby_glow,
                 );
             }
+            RightSidebarComponent::Pot => {
+                crate::app::pot::panel::draw_pot_inline(frame, body, props.pot);
+            }
         }
     }
 }
@@ -270,6 +277,7 @@ fn component_height(component: RightSidebarComponent) -> u16 {
         RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
         RightSidebarComponent::Bonsai => BONSAI_MIN_HEIGHT,
         RightSidebarComponent::Daily => DAILY_HEIGHT,
+        RightSidebarComponent::Pot => POT_HEIGHT,
     }
 }
 
@@ -282,6 +290,9 @@ fn shrink_priority(component: RightSidebarComponent) -> u8 {
     match component {
         RightSidebarComponent::Bonsai => 3, // first to go
         RightSidebarComponent::Daily => 2,
+        // Two rows, and the countdown is only useful before the draw: it
+        // survives everything but the music stage.
+        RightSidebarComponent::Pot => 1,
         RightSidebarComponent::Music => 0, // last panel standing
     }
 }
@@ -511,6 +522,7 @@ fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
         RightSidebarComponent::Music => "music",
         RightSidebarComponent::Bonsai => "bonsai",
         RightSidebarComponent::Daily => "lobby",
+        RightSidebarComponent::Pot => "pot",
     }
 }
 

@@ -235,6 +235,7 @@ impl App {
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
         changed |= self.tick_crown();
+        changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
@@ -633,6 +634,22 @@ impl App {
                 if self.name_flair != name_flair {
                     self.name_flair = name_flair;
                     self.chat_ctx_epoch += 1;
+                }
+            }
+            // The pot resolves on the same edge, and for the same reason:
+            // the panel reads owned values, and only a change the viewer can
+            // actually see (a new size, a minute off the countdown) marks the
+            // frame dirty.
+            if let Some(rx) = &mut self.pot_snapshot_rx {
+                let snapshot = rx.borrow_and_update().clone();
+                let pot_view = crate::app::pot::state::PotView::resolve(
+                    &snapshot,
+                    self.user_id,
+                    chrono::Utc::now(),
+                );
+                if self.pot_view != pot_view {
+                    self.pot_view = pot_view;
+                    changed = true;
                 }
             }
             // Peer countdowns resolve on the same edge, and only the minute

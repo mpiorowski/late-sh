@@ -5,6 +5,7 @@ use crate::app::activity::event::ActivityGame;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::lobby::daily::svc::DailyWinPayout;
+use crate::app::pot::svc::PotRefusal;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -68,7 +69,7 @@ mod inner {
 
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        OnlineTimeFlushResult, RenderReason, SummaryResult, TranslationResult,
+        OnlineTimeFlushResult, PotRefusal, RenderReason, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -311,6 +312,74 @@ mod inner {
         })
     }
 
+    fn pot_refusal_label(refusal: PotRefusal) -> &'static str {
+        match refusal {
+            PotRefusal::Closed => "closed",
+            PotRefusal::CapReached { .. } => "cap_reached",
+            PotRefusal::InsufficientChips { .. } => "insufficient_chips",
+        }
+    }
+
+    fn pot_tickets_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_tickets_total")
+                .with_description("Pot tickets bought")
+                .build()
+        })
+    }
+
+    fn pot_chips_in_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_chips_in_total")
+                .with_description("Chips paid into pots for tickets")
+                .build()
+        })
+    }
+
+    fn pot_buys_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_buys_refused_total")
+                .with_description("Pot ticket buys refused, by reason (none were charged)")
+                .build()
+        })
+    }
+
+    fn pot_draws_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_draws_total")
+                .with_description("Pots drawn with a winner")
+                .build()
+        })
+    }
+
+    fn pot_tickets_drawn_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_tickets_drawn_total")
+                .with_description("Tickets in the field at each pot draw")
+                .build()
+        })
+    }
+
+    fn pot_chips_out_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pot_chips_out_total")
+                .with_description("Chips paid out by pot draws; the gap to chips_in is the burn")
+                .build()
+        })
+    }
+
     fn chat_gilds_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -457,6 +526,26 @@ mod inner {
             .add(1, &[KeyValue::new("reason", crown_refusal_label(refusal))]);
     }
 
+    /// A settled buy. Two counters, because the burn is only visible as the
+    /// gap between what went in and what came out.
+    pub fn record_pot_tickets_bought(tickets: i64, chips: i64) {
+        pot_tickets_total().add(tickets.max(0) as u64, &[]);
+        pot_chips_in_total().add(chips.max(0) as u64, &[]);
+    }
+
+    pub fn record_pot_buy_refused(refusal: PotRefusal) {
+        pot_buys_refused_total().add(1, &[KeyValue::new("reason", pot_refusal_label(refusal))]);
+    }
+
+    /// A settled draw with a winner. A pot that rolled empty records nothing:
+    /// no chips moved. The ticket count rides its own counter rather than a
+    /// label, since a per-draw number would be unbounded cardinality.
+    pub fn record_pot_drawn(payout: i64, tickets: i64) {
+        pot_draws_total().add(1, &[]);
+        pot_tickets_drawn_total().add(tickets.max(0) as u64, &[]);
+        pot_chips_out_total().add(payout.max(0) as u64, &[]);
+    }
+
     fn translation_result_label(result: TranslationResult) -> &'static str {
         match result {
             TranslationResult::CacheHit => "cache_hit",
@@ -578,7 +667,7 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        OnlineTimeFlushResult, RenderReason, SummaryResult, TranslationResult,
+        OnlineTimeFlushResult, PotRefusal, RenderReason, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -600,6 +689,9 @@ mod inner {
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
+    pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
+    pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
+    pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}
     pub fn record_chat_translation(_result: TranslationResult) {}
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}

@@ -166,7 +166,10 @@ async fn the_per_user_cap_is_enforced_by_the_insert() {
         Some(5)
     );
     assert_eq!(
-        PotTicket::holders(&*tx, pot.id).await.expect("holders").len(),
+        PotTicket::holders(&*tx, pot.id)
+            .await
+            .expect("holders")
+            .len(),
         2
     );
     tx.commit().await.expect("commit");

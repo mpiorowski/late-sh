@@ -131,6 +131,7 @@ const COMMANDS: &[Command] = &[
     global("petname", "name your pet (/petname Mochi; bare shows)"),
     global("poll", "start a Home room poll (2-3 options)"),
     global("pomodoro", "focus countdown (/pomodoro 50 deep work; stop)"),
+    global("pot", "the daily pot (/pot; /pot buy N for tickets)"),
     global("private", "create a private room (/private #room)"),
     global("profile", "view a profile (/profile @user; bare = you)"),
     global("public", "open/create a public room (/public #room)"),

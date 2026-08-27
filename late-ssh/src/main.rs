@@ -302,6 +302,13 @@ async fn main() -> anyhow::Result<()> {
     let crown_service = late_ssh::app::crown::svc::CrownService::new(db.clone())
         .with_activity(activity_publisher.clone());
     let _crown_listener_task = crown_service.start_listener_task(config.db.clone());
+    // The pot's panel and its winner banner cross replicas over Postgres,
+    // and the draw is settled by a status transition so exactly one replica
+    // pays however many are sweeping. See `app/pot/svc.rs`.
+    let pot_service = late_ssh::app::pot::svc::PotService::new(db.clone())
+        .with_activity(activity_publisher.clone());
+    let _pot_listener_task = pot_service.start_listener_task(config.db.clone());
+    let _pot_sweeper_task = pot_service.start_sweeper_task();
     let leaderboard_service = late_ssh::app::LeaderboardService::new(db.clone());
     let _profile_award_snapshot_task = leaderboard_service
         .clone()
@@ -402,6 +409,7 @@ async fn main() -> anyhow::Result<()> {
         flair_directory: flair_directory.clone(),
         pomodoro_directory: late_ssh::app::common::pomodoro::new_directory(),
         crown_service: crown_service.clone(),
+        pot_service: pot_service.clone(),
         activity_feed: activity_tx,
         now_playing_rx: now_playing_rx.clone(),
         radio_meta_rx: radio_meta_rx.clone(),

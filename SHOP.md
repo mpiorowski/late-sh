@@ -570,18 +570,62 @@ Behavior:
   `pot_changed` notify. No `notifications` row (that table is
   mention-bound).
 
+Status: shipped 2026-08-27 (migration 160, `late-core/src/models/pot.rs`,
+`late-ssh/src/app/pot/`). Deviations from the design above, each deliberate:
+- **`/pot` costs no query.** The design put "the caller's ticket count" in
+  the `watch` snapshot, which a process-wide watch cannot carry. Instead
+  `PotSnapshot` holds a private `HashMap<Uuid, i64>` of holdings and
+  `tickets_for(user_id)` is the only way out of it, so the panel and the
+  status line both read owned memory and no session can widen the read. The
+  snapshot is one aggregate query per refresh, which the draw needs anyway.
+  `PotEvent` therefore has no `Status` variant: the command is answered
+  synchronously in `tick_pot` rather than through a task.
+- **The draw posts a headline as well as a ticker line.** The design's own
+  requirement was that an offline winner reads the result on return, and a
+  `· ` ticker line is diverted out of the TUI message list; only a headline
+  (a real un-prefixed `system` message, `filter::lounge_headline`) is a row
+  they can still read. The crown was that arm's only occupant until now.
+- **`ChipMove::PotTicket` is `counts_as_earnings = false` too.** The design
+  only decided the win. Excluding the win and counting the ticket would make
+  buying into the pot a pure negative on a board the winner cannot climb
+  back up, so both sides are out.
+- **Thresholds are one high-water column**, `pots.announced_threshold`,
+  claimed by `UPDATE ... WHERE announced_threshold < $2 RETURNING id`, not a
+  flag per rung. Same "once each per pot" across replicas and restarts, and a
+  third rung is a constant rather than a migration. A pot that jumps straight
+  past both rungs posts both lines.
+- **`ticket_count`, `payout_chips`, `winner_user_id`, `drawn_at` are
+  nullable**, stamped once at the draw, with one CHECK per status so a
+  half-settled row cannot exist. A drawn pot is told from a rolled one by
+  `ticket_count > 0` rather than by the winner, because the winner's account
+  can be deleted out from under a settled row (`ON DELETE SET NULL`); history
+  keeps what was paid and the ledger keeps who was paid.
+- **The buy holds the pot row `FOR UPDATE`** on top of the in-query cap
+  check. The check alone is not exact: two concurrent buys by one player
+  would read the same sum and both pass. The row lock also means a buy that
+  arrives exactly as the sweeper draws is refused uncharged
+  (`PotRefusal::Closed`) instead of landing in a settled pot.
+- **`ensure_open` is folded into `settle_due`.** The migration seeds no pot,
+  so the sweeper's first pass opens one; that is the same advisory lock and
+  the same transaction that would otherwise have needed a second path.
+- **The panel is two rows of left/right pairs**, not the wide single line the
+  design sketched: the rail is 24 columns and the panel draws into 21, so
+  `pot 84,200 · 312 tickets · draws in 3h12m` was never going to fit. It
+  reads `84,200 / in 3h12m` over `842 tickets / you 5`, and dashes before the
+  first refresh.
+
 Acceptance:
-- [ ] Buy: cap enforced in the query, floor guard, ledger row per buy.
-- [ ] Draw: two replicas sweeping the same pot produce one payout; zero
+- [x] Buy: cap enforced in the query, floor guard, ledger row per buy.
+- [x] Draw: two replicas sweeping the same pot produce one payout; zero
       tickets rolls; the next pot always exists after a draw.
-- [ ] Whole-state test of the draw from a fixed seed and fixed tickets.
-- [ ] Payout math: winner receives `floor(size * 0.8)`, the ledger shows
+- [x] Whole-state test of the draw from a fixed seed and fixed tickets.
+- [x] Payout math: winner receives `floor(size * 0.8)`, the ledger shows
       the 20% gap.
-- [ ] Panel renders on Home and Arcade, shrinks in the right order, and
+- [x] Panel renders on Home and Arcade, shrinks in the right order, and
       the stored panel list of an existing user gains it without a
       settings migration.
-- [ ] Threshold lines fire once each per pot across restarts.
-- [ ] Tests beside the model, the service, the sidebar, and the activity
+- [x] Threshold lines fire once each per pot across restarts.
+- [x] Tests beside the model, the service, the sidebar, and the activity
       filter; help copy; new `late-ssh/src/app/pot/CONTEXT.md` plus the
       root routing table row.
 

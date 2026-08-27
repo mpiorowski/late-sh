@@ -258,6 +258,8 @@ struct DrawContext<'a> {
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
+    /// The daily pot as this viewer sees it, resolved on the ~1s tick.
+    pot: &'a crate::app::pot::state::PotView,
     login_announcements: Option<&'a announcements::LoginAnnouncements>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -1099,6 +1101,7 @@ impl App {
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
+                        pot: &self.pot_view,
                         login_announcements: if login_announcements_visible {
                             self.login_announcements.as_ref()
                         } else {
@@ -1612,6 +1615,7 @@ impl App {
                     radio_now_playing: ctx.radio_now_playing,
                     afk: ctx.afk,
                     daily: ctx.daily,
+                    pot: ctx.pot,
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
                     active_friend_names: ctx.active_friend_names,

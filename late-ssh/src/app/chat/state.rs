@@ -315,6 +315,45 @@ fn parse_crown_command(body: &str) -> Option<Option<CrownCommand>> {
     })
 }
 
+/// The pot, requested from the composer. `App` owns the pot service, so the
+/// composer just records the intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PotCommand {
+    /// `/pot`: size, tickets, your holding, and time to the draw.
+    Status,
+    /// `/pot buy N`: buy N tickets at the flat ticket price.
+    Buy { count: i64 },
+}
+
+/// `Some(Some(command))` on `/pot` or a well-formed `/pot buy N`,
+/// `Some(None)` on anything else after `/pot` (usage banner), `None` when the
+/// line is not a pot command at all.
+///
+/// The count is parsed here rather than in the service: a boundary that only
+/// admits 1..=cap is what lets everything downstream trust the number.
+fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
+    use late_core::models::pot::POT_MAX_TICKETS_PER_USER;
+    let rest = body.trim().strip_prefix("/pot")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Some(Some(PotCommand::Status));
+    }
+    let Some(count) = rest.strip_prefix("buy ") else {
+        return Some(None);
+    };
+    Some(
+        count
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|count| (1..=POT_MAX_TICKETS_PER_USER).contains(count))
+            .map(|count| PotCommand::Buy { count }),
+    )
+}
+
 /// An aquarium control requested from the composer (`/aquarium`,
 /// `/aquarium feed`). `App` owns the tray state and entitlements, so the
 /// composer just records the intent and `App` carries it out.
@@ -855,6 +894,7 @@ pub struct ChatState {
     /// Set by /golive; consumed by `App` (which owns the stream service).
     requested_golive: Option<GoLiveCommand>,
     requested_crown: Option<CrownCommand>,
+    requested_pot: Option<PotCommand>,
     /// Set by /watch @user; consumed by `App`.
     requested_watch: Option<String>,
     /// A stream room this session just opened; consumed by `App`, which
@@ -1159,6 +1199,7 @@ impl ChatState {
             requested_voice_command: None,
             requested_golive: None,
             requested_crown: None,
+            requested_pot: None,
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
@@ -1843,6 +1884,10 @@ impl ChatState {
 
     pub(crate) fn take_requested_crown(&mut self) -> Option<CrownCommand> {
         self.requested_crown.take()
+    }
+
+    pub(crate) fn take_requested_pot(&mut self) -> Option<PotCommand> {
+        self.requested_pot.take()
     }
 
     pub(crate) fn take_requested_watch(&mut self) -> Option<String> {
@@ -3369,6 +3414,18 @@ impl ChatState {
                 return Some(Banner::error("Usage: /crown, or /crown take"));
             };
             self.requested_crown = Some(command);
+            return None;
+        }
+
+        if let Some(parsed) = parse_pot_command(&body) {
+            self.clear_composer_after_submit();
+            let Some(command) = parsed else {
+                return Some(Banner::error(&format!(
+                    "Usage: /pot, or /pot buy N (1 to {})",
+                    late_core::models::pot::POT_MAX_TICKETS_PER_USER
+                )));
+            };
+            self.requested_pot = Some(command);
             return None;
         }
 

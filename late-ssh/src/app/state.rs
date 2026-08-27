@@ -373,6 +373,10 @@ pub struct SessionConfig {
     /// The crown, `/crown` and `/crown take`. `None` in test harnesses that
     /// build an app without one; the glyph then simply never appears.
     pub crown_service: Option<crate::app::crown::svc::CrownService>,
+    /// The pot, `/pot` and `/pot buy N`. `None` in test harnesses that build
+    /// an app without one; the panel then renders dashes and the commands
+    /// say so.
+    pub pot_service: Option<crate::app::pot::svc::PotService>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub initial_announcements: Option<crate::app::announcements::LoginAnnouncements>,
     pub user_id: Uuid,
@@ -523,6 +527,13 @@ pub struct App {
     pub(super) crown_holder_rx:
         Option<watch::Receiver<Option<crate::app::crown::svc::CrownHolder>>>,
     pub(super) crown_events_rx: Option<broadcast::Receiver<crate::app::crown::svc::CrownEvent>>,
+    pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
+    /// The process-shared pot, read on the ~1s edge into `pot_view` so no
+    /// render ever queries for it.
+    pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
+    pub(super) pot_events_rx: Option<broadcast::Receiver<crate::app::pot::svc::PotEvent>>,
+    /// What the sidebar's pot panel draws, projected for this viewer.
+    pub(crate) pot_view: crate::app::pot::state::PotView,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) afk_users: crate::state::AfkUsers,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -1353,6 +1364,16 @@ impl App {
                 .as_ref()
                 .map(crate::app::crown::svc::CrownService::subscribe_events),
             crown_service: config.crown_service,
+            pot_snapshot_rx: config
+                .pot_service
+                .as_ref()
+                .map(crate::app::pot::svc::PotService::subscribe_snapshot),
+            pot_events_rx: config
+                .pot_service
+                .as_ref()
+                .map(crate::app::pot::svc::PotService::subscribe_events),
+            pot_service: config.pot_service,
+            pot_view: crate::app::pot::state::PotView::default(),
             active_users: active_users.clone(),
             afk_users: afk_users.clone(),
             username_directory: config.username_directory,
@@ -3135,6 +3156,98 @@ impl App {
                 | CrownEvent::Failed { .. }
                 | CrownEvent::Taken { .. }
                 | CrownEvent::Deposed { .. } => {}
+            }
+        }
+
+        changed
+    }
+
+    /// The pot's two commands and the answers to them. The panel itself is
+    /// not handled here: it rides `pot_view`, resolved on the ~1s edge in
+    /// `tick.rs` from the process-shared snapshot, so a buy on another
+    /// replica moves it with no event of any kind.
+    pub(crate) fn tick_pot(&mut self) -> bool {
+        let mut changed = false;
+
+        if let Some(command) = self.chat.take_requested_pot() {
+            changed = true;
+            match &self.pot_service {
+                // Only a test harness builds an app without one; saying so
+                // beats a command that silently does nothing.
+                None => {
+                    self.banner = Some(Banner::error("The pot is not available here."));
+                }
+                Some(service) => match command {
+                    // Answered straight from the shared snapshot the panel
+                    // already reads: the status costs no query at all.
+                    crate::app::chat::state::PotCommand::Status => {
+                        let line = service.status_for(self.user_id).line();
+                        self.banner = Some(Banner::info(&line));
+                    }
+                    crate::app::chat::state::PotCommand::Buy { count } => {
+                        service.buy_task(self.user_id, count);
+                    }
+                },
+            }
+        }
+
+        let mut events = Vec::new();
+        if let Some(rx) = &mut self.pot_events_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                        self.pot_events_rx = None;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for event in events {
+            use crate::app::common::primitives::thousands;
+            use crate::app::pot::svc::PotEvent;
+            match event {
+                PotEvent::Bought {
+                    user_id,
+                    tickets,
+                    held,
+                    price,
+                    balance,
+                } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::success(&format!(
+                        "{} tickets for {} chips, you hold {} (balance {})",
+                        thousands(tickets),
+                        thousands(price),
+                        thousands(held),
+                        thousands(balance)
+                    )));
+                }
+                // The winner, wherever they are connected: this arrives off
+                // the Postgres notify, not off the sweeping replica's own
+                // broadcast.
+                PotEvent::Won {
+                    user_id,
+                    payout,
+                    winner_tickets,
+                    total_tickets,
+                } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::success(&format!(
+                        "You won the pot: {} chips on {} of {} tickets",
+                        thousands(payout),
+                        thousands(winner_tickets),
+                        thousands(total_tickets)
+                    )));
+                }
+                PotEvent::Failed { user_id, message } if user_id == self.user_id => {
+                    changed = true;
+                    self.banner = Some(Banner::error(&message));
+                }
+                PotEvent::Bought { .. } | PotEvent::Won { .. } | PotEvent::Failed { .. } => {}
             }
         }
 
