@@ -655,7 +655,7 @@ Decided numbers (one number per milestone, no first/repeat split):
 | NetHack | Amulet / Ascension | 20,000 / 50,000 | run identity + 7-day lockout, each |
 | DCSS | Orb / Escape | 20,000 / 50,000 | run identity + 7-day lockout, each |
 | Brogue | Escape / Mastery | 20,000 / 50,000 | run identity + 7-day lockout, each |
-| Green Dragon | dragon kill | 20,000 | kill number per character row; the daily turn cap makes a kill 7-10 days |
+| Green Dragon | dragon kill | 10,000 (migration 159; was 20,000 in 158) | kill number per character row; the daily turn cap makes a kill 7-10 days |
 | A Dark Room | escape / beacon escape | 15,000 / 20,000 | run id; the run is the gate (~5 days) |
 | Lateania | Archdemon, Frontier King | 10,000 each | once per `mud_characters.id` AND 7-day lockout per crown per account |
 | Lateania | Yssgar, Kaethyr | 20,000 each | same |

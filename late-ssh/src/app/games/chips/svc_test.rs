@@ -341,8 +341,8 @@ async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
 
     let first = kill(first_character, 1).await;
     assert!(first.credited);
-    assert_eq!(first.amount, 20_000);
-    assert_eq!(first.balance, 21_000);
+    assert_eq!(first.amount, 10_000);
+    assert_eq!(first.balance, 11_000);
 
     // The same kill, seen twice (a retried fire-and-forget task).
     assert!(!kill(first_character, 1).await.credited);
@@ -352,7 +352,7 @@ async fn a_dragon_kill_pays_every_kill_and_a_new_character_starts_over() {
     assert!(kill(first_character, 2).await.credited);
     let fresh_character = kill(second_character, 1).await;
     assert!(fresh_character.credited);
-    assert_eq!(fresh_character.balance, 61_000);
+    assert_eq!(fresh_character.balance, 31_000);
 }
 
 /// A Dark Room wipes the save on the way out, so a repeat is the whole arc

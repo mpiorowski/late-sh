@@ -1324,7 +1324,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     lines.push(landing::heading("Rewards"));
     lines.push(landing::stat(
         "Green Dragon slain",
-        "20,000 chips, and the GDS badge the first time",
+        "10,000 chips, and the GDS badge the first time",
         20,
     ));
     lines.push(Line::from(Span::styled(

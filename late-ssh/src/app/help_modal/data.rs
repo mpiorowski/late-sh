@@ -439,7 +439,7 @@ fn chips_help_lines() -> Vec<String> {
         "    Lateania: the King Who Was Promised Nothing   10,000 chips   per character, 7-day gap".to_string(),
         "    Lateania: Yssgar, the Sundering Deep          20,000 chips   per character, 7-day gap".to_string(),
         "    Lateania: Kaethyr Ascendant                   20,000 chips   per character, 7-day gap".to_string(),
-        "    Green Dragon: slay the Green Dragon           20,000 chips   every kill".to_string(),
+        "    Green Dragon: slay the Green Dragon           10,000 chips   every kill".to_string(),
         "    A Dark Room: fly the starship off the rock    15,000 chips   every run".to_string(),
         "    A Dark Room: fly out with the fleet beacon    20,000 chips   every run".to_string(),
         "  \"per run\" means one payout per finished game, so re-reading an old log pays nothing;".to_string(),
@@ -954,7 +954,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  [DCW]     DCSS Escape                    50,000 chips  per run, 7-day gap",
         "  [BRE]     Brogue Escape                  20,000 chips  per run, 7-day gap",
         "  [BRM]     Brogue Mastery                 50,000 chips  per run, 7-day gap",
-        "  [GDS]     Green Dragon Slayer            20,000 chips  every kill",
+        "  [GDS]     Green Dragon Slayer            10,000 chips  every kill",
         "  [ADE]     A Dark Room Escape             15,000 chips  every run",
         "  [ADB]     A Dark Room Homefleet          20,000 chips  every run",
     ]

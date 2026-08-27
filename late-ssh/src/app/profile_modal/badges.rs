@@ -160,7 +160,7 @@ pub(crate) fn guide_lines() -> Vec<Line<'static>> {
         (
             "GDS",
             "Green Dragon Slayer",
-            "slay the green dragon (20,000 chips, every kill)",
+            "slay the green dragon (10,000 chips, every kill)",
         ),
         (
             "ADE",
