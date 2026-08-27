@@ -241,7 +241,11 @@ fn parse_bartender_order_accepts_fenced_json_and_defaults_drink() {
 #[test]
 fn parse_bartender_order_skips_garbage_and_empty_lines() {
     assert_eq!(
-        parse_bartender_order("not json at all", BartenderTab::Paying { spendable: 900 }, "bartender"),
+        parse_bartender_order(
+            "not json at all",
+            BartenderTab::Paying { spendable: 900 },
+            "bartender"
+        ),
         BartenderDecision::Skip
     );
     assert_eq!(

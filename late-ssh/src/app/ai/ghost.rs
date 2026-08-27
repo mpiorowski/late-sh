@@ -179,8 +179,7 @@ const ROUND_ALL_HOLDING_LINE: &str =
 /// The credit the prompt promised was gone by the time the pour landed:
 /// drunk from another session, or expired in between. Uncharged, nothing
 /// poured; the patron orders again on their own tab if they still want one.
-const ROUND_CREDIT_GONE_LINE: &str =
-    "that one's already been drunk, or the round went cold on you. say the word and the next is on your tab.";
+const ROUND_CREDIT_GONE_LINE: &str = "that one's already been drunk, or the round went cold on you. say the word and the next is on your tab.";
 const BARTENDER_PERSONA: &str = "You are @bartender, the keeper of The Late Lounge — the tavern inside late.sh, a cozy terminal clubhouse. \
     You are warm, unhurried, and quietly funny: classic late-night bartender energy. \
     You pour imaginary drinks with terminal-flavored names (a double SIGTERM neat, a Bash Old Fashioned, \
@@ -1337,11 +1336,7 @@ enum BartenderTab {
     Paying { spendable: i64 },
 }
 
-fn parse_bartender_order(
-    raw: &str,
-    tab: BartenderTab,
-    bot_username: &str,
-) -> BartenderDecision {
+fn parse_bartender_order(raw: &str, tab: BartenderTab, bot_username: &str) -> BartenderDecision {
     let cleaned = strip_code_fence(raw);
     let order = match serde_json::from_str::<BartenderOrderRaw>(cleaned) {
         Ok(order) => order,
