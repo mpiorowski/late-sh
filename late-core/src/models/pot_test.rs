@@ -311,46 +311,6 @@ async fn only_one_pot_is_ever_open() {
     );
 }
 
-/// A threshold line fires once per pot, whichever replica gets there first,
-/// and a restart cannot repeat it: the claim is an UPDATE on the row.
-#[tokio::test]
-async fn a_threshold_is_claimed_once_per_pot() {
-    let test_db = test_db().await;
-    let mut client = test_db.db.get().await.expect("db client");
-
-    let tx = client.transaction().await.expect("tx");
-    let pot = Pot::open_in_tx(&tx, next_draw_at(Utc::now()), POT_TICKET_PRICE)
-        .await
-        .expect("open");
-    tx.commit().await.expect("commit");
-
-    let client = test_db.db.get().await.expect("db client");
-    assert!(
-        Pot::claim_threshold(&**client, pot.id, 50_000)
-            .await
-            .expect("claim")
-    );
-    assert!(
-        !Pot::claim_threshold(&**client, pot.id, 50_000)
-            .await
-            .expect("claim again"),
-        "the same rung must not announce twice"
-    );
-    // The next rung up is its own line.
-    assert!(
-        Pot::claim_threshold(&**client, pot.id, 100_000)
-            .await
-            .expect("claim the next rung")
-    );
-    // And a rung below the high-water mark stays quiet, so a pot that jumps
-    // straight past 50,000 to 100,000 never posts the smaller line after.
-    assert!(
-        !Pot::claim_threshold(&**client, pot.id, 50_000)
-            .await
-            .expect("claim a lower rung")
-    );
-}
-
 /// The winner banner only reaches a second replica over Postgres, so the
 /// draw transaction must emit on the channel, and only on commit.
 #[tokio::test]

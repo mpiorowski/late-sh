@@ -42,11 +42,6 @@ pub const POT_MAX_TICKETS_PER_DAY: i64 = 10;
 pub const POT_DRAW_WEEKDAY: Weekday = Weekday::Mon;
 pub const POT_DRAW_HOUR_UTC: u32 = 21;
 
-/// Pot sizes that get a #lounge line, once each per pot, in ascending order.
-/// Claimed through [`Pot::claim_threshold`] so the "once" is a table fact
-/// rather than a flag in one replica's memory.
-pub const POT_THRESHOLDS: &[i64] = &[50_000, 100_000];
-
 /// What the winner takes: 80% of what the tickets paid in, floored. The
 /// remaining fifth is never re-minted, which is the whole point of the
 /// mechanic.
@@ -163,8 +158,6 @@ pub struct Pot {
     pub ticket_count: Option<i64>,
     pub payout_chips: Option<i64>,
     pub drawn_at: Option<DateTime<Utc>>,
-    /// The largest [`POT_THRESHOLDS`] rung already announced.
-    pub announced_threshold: i64,
 }
 
 impl From<Row> for Pot {
@@ -179,7 +172,6 @@ impl From<Row> for Pot {
             ticket_count: row.get("ticket_count"),
             payout_chips: row.get("payout_chips"),
             drawn_at: row.get("drawn_at"),
-            announced_threshold: row.get("announced_threshold"),
         }
     }
 }
@@ -358,26 +350,6 @@ impl Pot {
             )
             .await?;
         Ok(row.map(Self::from))
-    }
-
-    /// Claim one size threshold's #lounge line. `true` for the replica that
-    /// gets the row and nobody else, so the line fires once per pot however
-    /// many replicas are watching and however often they restart.
-    pub async fn claim_threshold(
-        client: &impl GenericClient,
-        pot_id: Uuid,
-        threshold: i64,
-    ) -> Result<bool> {
-        let row = client
-            .query_opt(
-                "UPDATE pots
-                 SET announced_threshold = $2
-                 WHERE id = $1 AND status = 'open' AND announced_threshold < $2
-                 RETURNING id",
-                &[&pot_id, &threshold],
-            )
-            .await?;
-        Ok(row.is_some())
     }
 
     /// Tell every replica the pot moved. Sent inside the acting transaction,

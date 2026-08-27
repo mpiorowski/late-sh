@@ -104,7 +104,7 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Pot per-user cap | 10 tickets per UTC day, 70 a week (was 50 per pot while the pot was daily; decided 2026-08-27) |
 | Pot payout | 80% of ticket sum to one ticket-weighted winner; 20% never re-minted |
 | Pot draw | Monday 21:00 UTC, two constants (weekly since 2026-08-27; the hour is the EU evening / US afternoon overlap) |
-| Pot threshold lines | 50,000 and 100,000, once each per pot |
+| Pot threshold lines | none (removed 2026-08-27, migration 162: the size rides the status HUD on every screen all week, so a mid-week #lounge nudge repeated the border) |
 
 ## Process
 
@@ -605,11 +605,11 @@ Status: shipped 2026-08-27 (migration 160, `late-core/src/models/pot.rs`,
   only decided the win. Excluding the win and counting the ticket would make
   buying into the pot a pure negative on a board the winner cannot climb
   back up, so both sides are out.
-- **Thresholds are one high-water column**, `pots.announced_threshold`,
-  claimed by `UPDATE ... WHERE announced_threshold < $2 RETURNING id`, not a
-  flag per rung. Same "once each per pot" across replicas and restarts, and a
-  third rung is a constant rather than a migration. A pot that jumps straight
-  past both rungs posts both lines.
+- **No threshold lines.** They shipped as a high-water column
+  (`pots.announced_threshold`, claimed by a guarded `UPDATE`) and were
+  removed the same day (migration 162) once the pot moved into the status
+  HUD: the size is on every screen all week, so a mid-week #lounge nudge
+  only repeated what the border said. The draw is the pot's one story.
 - **`ticket_count`, `payout_chips`, `winner_user_id`, `drawn_at` are
   nullable**, stamped once at the draw, with one CHECK per status so a
   half-settled row cannot exist. A drawn pot is told from a rolled one by
@@ -640,7 +640,7 @@ Acceptance:
 - [x] Panel renders on Home and Arcade, shrinks in the right order, and
       the stored panel list of an existing user gains it without a
       settings migration.
-- [x] Threshold lines fire once each per pot across restarts.
+- [x] ~~Threshold lines fire once each per pot across restarts.~~ Removed, see the status block.
 - [x] Tests beside the model, the service, the sidebar, and the activity
       filter; help copy; new `late-ssh/src/app/pot/CONTEXT.md` plus the
       root routing table row.

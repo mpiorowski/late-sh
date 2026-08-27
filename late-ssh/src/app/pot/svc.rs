@@ -23,7 +23,7 @@ use late_core::{
     models::{
         chips::{ChipMove, UserChips},
         pot::{
-            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_THRESHOLDS, POT_TICKET_PRICE, Pot,
+            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot,
             PotChange, PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
             next_draw_at,
         },
@@ -44,7 +44,7 @@ use super::state::short_duration;
 const POT_EVENT_CAP: usize = 32;
 
 /// How often the sweeper wakes: to open the first pot, to draw a due one, and
-/// to catch a threshold whose buy-time check was lost to a failed refresh.
+/// to re-read the snapshot as a backstop for a missed notify.
 const POT_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// One player's place in the pot, as the snapshot hands it to that player.
@@ -313,9 +313,9 @@ impl PotService {
     }
 
     /// The pot's one background loop: settle a due pot (or open the first
-    /// one), republish the snapshot, then post any threshold line the buy
-    /// path missed. Every replica runs it; the status transition in
-    /// [`Self::settle_due`] is what makes exactly one of them pay.
+    /// one), then republish the snapshot. Every replica runs it; the status
+    /// transition in [`Self::settle_due`] is what makes exactly one of them
+    /// pay.
     pub fn start_sweeper_task(&self) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
@@ -342,10 +342,6 @@ impl PotService {
         }
         if let Err(error) = self.refresh().await {
             tracing::warn!(error = ?error, "failed to refresh the pot");
-        }
-        let snapshot = self.snapshot_tx.borrow().clone();
-        if let Some(pot_id) = snapshot.pot_id {
-            self.announce_thresholds(pot_id, snapshot.size()).await;
         }
     }
 
@@ -472,9 +468,9 @@ impl PotService {
     /// in a request/response: the line clears on Enter and the banner arrives
     /// with the answer.
     ///
-    /// This is the orchestration layer: every refusal, every failure, the
-    /// metrics and the threshold line are decided here, and [`Self::buy`]
-    /// below does nothing but the transaction.
+    /// This is the orchestration layer: every refusal, every failure and the
+    /// metrics are decided here, and [`Self::buy`] below does nothing but
+    /// the transaction.
     pub fn buy_task(&self, user_id: Uuid, count: i64) {
         let service = self.clone();
         let span = info_span!("pot.buy_task", user_id = %user_id, count);
@@ -490,12 +486,6 @@ impl PotService {
                             price: outcome.price,
                             balance: outcome.balance,
                         });
-                        // The buy already knows the new size, so the
-                        // threshold line lands with the buy that crossed it
-                        // rather than up to a sweep later.
-                        service
-                            .announce_thresholds(outcome.pot_id, outcome.size)
-                            .await;
                     }
                     Err(PotError::Refused(refusal)) => {
                         metrics::record_pot_buy_refused(refusal);
@@ -657,38 +647,6 @@ impl PotService {
         }
     }
 
-    /// Post any size threshold this pot has crossed and not yet announced.
-    /// The claim is a guarded UPDATE on the pot row, so the line fires once
-    /// per rung per pot however many replicas call this and however often
-    /// they restart.
-    async fn announce_thresholds(&self, pot_id: Uuid, size: i64) {
-        for threshold in POT_THRESHOLDS.iter().copied() {
-            if size < threshold {
-                break;
-            }
-            let claimed = match self.db.get().await {
-                Ok(client) => Pot::claim_threshold(&**client, pot_id, threshold).await,
-                Err(error) => Err(error),
-            };
-            match claimed {
-                Ok(false) => {}
-                Ok(true) => {
-                    if let Some(activity) = &self.activity {
-                        activity.pot_threshold(pot_id, threshold);
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        error = ?error,
-                        %pot_id,
-                        threshold,
-                        "failed to claim a pot threshold line"
-                    );
-                    return;
-                }
-            }
-        }
-    }
 }
 
 /// The draw's seed. The wall clock in nanoseconds, mixed once inside

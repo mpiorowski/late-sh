@@ -181,13 +181,10 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // the user alone would swallow a re-take after someone else briefly
         // held it.
         ActivityKind::CrownTaken { reign_id, .. } => format!("crown-taken:{reign_id}"),
-        // Keyed on the pot: there is one draw a week and one line per
-        // threshold per pot, both already once-only in the table, so the key
-        // only has to keep two pots' lines from throttling each other.
+        // Keyed on the pot: there is one draw a week, already once-only in
+        // the table, so the key only has to keep two pots' lines from
+        // throttling each other.
         ActivityKind::PotDrawn { pot_id, .. } => format!("pot-drawn:{pot_id}"),
-        ActivityKind::PotThreshold { pot_id, threshold } => {
-            format!("pot-threshold:{pot_id}:{threshold}")
-        }
         // Keyed on the title so two distinct entries inside the window both
         // announce, while a retried publish of the same entry collapses.
         ActivityKind::CyberspacePosted { title } => {

@@ -126,11 +126,10 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // by price (each take is 1.5x the last), so this is the story the
         // crown exists to ship.
         ActivityKind::CrownTaken { .. } => true,
-        // The pot's two lines: once a week when it draws, and at most twice
-        // before that when it crosses a size worth looking up for. Both are
-        // invitations, and both are rare by construction.
+        // The pot's one line: once a week when it draws. The size itself
+        // rides the status HUD all week, so there is nothing to nudge about
+        // before that.
         ActivityKind::PotDrawn { .. } => true,
-        ActivityKind::PotThreshold { .. } => true,
         // Publishing on cyberspace: our user's own action, rare by their API
         // rate limits (15 entries/day), and the funnel that advertises the
         // integration ("wait, you can post to cyberspace from here?").
@@ -218,7 +217,6 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
         | ActivityKind::TitleApplied { .. }
         | ActivityKind::BurnMilestone { .. }
         | ActivityKind::MessageGilded { .. }
-        | ActivityKind::PotThreshold { .. }
         | ActivityKind::CyberspacePosted { .. }
         | ActivityKind::WentLive { .. }
         | ActivityKind::WatchingStream { .. } => None,

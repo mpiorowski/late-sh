@@ -244,14 +244,6 @@ impl ActivityPublisher {
         });
     }
 
-    /// A pot crossed a threshold. The only publisher method that resolves no
-    /// username: the line is the pot's own.
-    pub fn pot_threshold(&self, pot_id: Uuid, threshold: i64) {
-        let _ = self
-            .tx
-            .send(ActivityEvent::pot_threshold(pot_id, threshold));
-    }
-
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

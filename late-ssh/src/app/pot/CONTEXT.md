@@ -24,7 +24,7 @@ There is no house wallet and no stored running total. A live pot's size is
 
 | File | Owns |
 |---|---|
-| `late-core/src/models/pot.rs` | Both tables, the fixed numbers (`POT_TICKET_PRICE`, `POT_MAX_TICKETS_PER_DAY`, `POT_DRAW_HOUR_UTC`, `POT_THRESHOLDS`), and the pure money math: `payout_for`, `next_draw_at`, `draw_from_seed`. |
+| `late-core/src/models/pot.rs` | Both tables, the fixed numbers (`POT_TICKET_PRICE`, `POT_MAX_TICKETS_PER_DAY`, `POT_DRAW_WEEKDAY`, `POT_DRAW_HOUR_UTC`), and the pure money math: `payout_for`, `next_draw_at`, `draw_from_seed`. |
 | `late-core/src/models/pot_test.rs` | The whole-state draw assertion, the weighting guard, the cap-in-the-insert test, the one-open-pot and one-sweeper-settles tests, the notify test. |
 | `svc.rs` | `PotService`: the shared snapshot, the buy transaction, the sweeper, the Postgres listener, every refusal and every log line. |
 | `state.rs` | `PotView` (the per-session projection the panel draws) and the one countdown format. |
@@ -47,7 +47,6 @@ fixed-numbers table. Change them there, not in a code comment.
 | Per-user cap | 10 tickets per UTC day (70 a week; decided 2026-08-27 so the raffle is about showing up, and 1,000 a day is reachable by anyone who plays) | `POT_MAX_TICKETS_PER_DAY` |
 | Payout | 80% of the ticket sum, floored | `payout_for` |
 | Draw | Monday 21:00 UTC (late evening in Europe, afternoon across the US) | `POT_DRAW_WEEKDAY`, `POT_DRAW_HOUR_UTC` |
-| Threshold lines | 50,000 and 100,000, once each per pot | `POT_THRESHOLDS` |
 
 ## 4. Chips
 
@@ -92,13 +91,6 @@ reading the same sum. The holding (`user_total`) is the whole pot; the cap
 a pot the sweeper is drawing: after the draw commits, the blocked buy
 re-evaluates its `WHERE status = 'open'`, finds nothing, and refuses with
 `PotRefusal::Closed` (uncharged).
-
-Threshold lines are claimed the same way: `UPDATE pots SET
-announced_threshold = $2 WHERE id = $1 AND status = 'open' AND
-announced_threshold < $2 RETURNING id`. The "once per pot" therefore survives
-a restart and any number of replicas, and it is checked both by the buy that
-crossed the line (so the line lands with the buy) and by the sweeper (the
-backstop).
 
 ## 6. Distribution
 
@@ -167,12 +159,11 @@ Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
   `filter::lounge_headline` (the crown is the first): a headline is a real
   #lounge row rather than a ticker line that is gone by the time an offline
   winner reconnects.
-- `PotThreshold { pot_id, threshold }` -> "the pot is over 50,000 chips". The
-  only activity line with no user behind it: `user_id` is `None` and the
-  username is `POT_FEED_AUTHOR` ("the pot"), because nobody did this, the room
-  did. Ticker line only, no headline.
-
 A pot that rolls empty announces nothing: no chips moved and nobody lost.
+
+There are no mid-week size lines any more (migration 162 dropped
+`pots.announced_threshold`, 2026-08-27): the size sits in the status HUD on
+every screen all week, so a #lounge nudge only repeated what the border said.
 
 ## 9. Telemetry
 

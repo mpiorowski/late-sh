@@ -114,14 +114,11 @@ fn lounge_headlines_only_the_crown_with_both_names_and_the_next_price() {
     assert_eq!(lounge_headline(&joined), None);
 }
 
-/// The pot's two lines. The draw names the winner and the odds and also
+/// The pot's one line. The draw names the winner and the odds and also
 /// headlines (a real #lounge row, so a winner who was offline reads it on
-/// return); the threshold line is attributed to the pot itself and stays a
-/// ticker line, because it is an invitation, not a result.
+/// return).
 #[test]
-fn lounge_includes_both_of_the_pots_lines() {
-    use crate::app::activity::event::POT_FEED_AUTHOR;
-
+fn lounge_includes_the_pots_draw_line() {
     let pot_id = Uuid::nil();
     let drawn = ActivityEvent::pot_drawn(Uuid::nil(), "mira", pot_id, 67_360, 3, 312);
     assert!(lounge_includes(&drawn));
@@ -134,16 +131,6 @@ fn lounge_includes_both_of_the_pots_lines() {
         Some("\u{1F3B0} mira won the pot: 67,360 chips on 3 of 312 tickets.".to_string())
     );
 
-    let threshold = ActivityEvent::pot_threshold(pot_id, 50_000);
-    assert!(lounge_includes(&threshold));
-    assert_eq!(threshold.username, POT_FEED_AUTHOR);
-    assert_eq!(threshold.action, "is over 50,000 chips");
-    assert_eq!(
-        lounge_headline(&threshold),
-        None,
-        "a threshold is a nudge, not a headline"
-    );
-
     // Feed bodies never carry an @.
-    assert!(!drawn.action.contains('@') && !threshold.action.contains('@'));
+    assert!(!drawn.action.contains('@'));
 }
