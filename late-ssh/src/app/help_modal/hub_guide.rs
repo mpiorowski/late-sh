@@ -101,11 +101,8 @@ fn bar_sections() -> Vec<GuideSection> {
         GuideSection {
             title: "The Round",
             body: vec![
-                "Tell @bartender \"round for everyone\" and you buy the house one."
-                    .to_string(),
-                format!(
-                    "{ROUND_PRICE_PER_PATRON} chips a head, for everyone online but you."
-                ),
+                "Tell @bartender \"round for everyone\" and you buy the house one.".to_string(),
+                format!("{ROUND_PRICE_PER_PATRON} chips a head, for everyone online but you."),
                 "Say it plainly; he only rings up those exact words.".to_string(),
                 "Nobody is poured into. Each of them gets a drink waiting".to_string(),
                 format!(

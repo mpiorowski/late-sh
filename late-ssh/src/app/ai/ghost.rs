@@ -877,76 +877,63 @@ impl GhostService {
                 // together cannot drink the same free drink twice. `None` here
                 // means there was nothing open (or it went between the read
                 // above and now) and the patron pays for their own.
-                match self
+                if let Some(comped) = self
                     .chip_service
                     .cash_round_drink(trigger_message.user_id)
                     .await?
                 {
-                    Some(comped) => {
-                        self.clubhouse_lobby.record_drink(
-                            trigger_message.user_id,
-                            comped.drunk_points,
-                            comped.last_drink_at,
-                        );
-                        metrics::record_round_drink_cashed();
-                        tracing::info!(
-                            user_id = %trigger_message.user_id,
-                            round_id = %comped.round_id,
-                            drink = %drink,
-                            "bartender poured a drink on someone else's round"
-                        );
-                        return self.send_bartender_line(&bartender, &trigger_message, line, delay);
+                    self.clubhouse_lobby.record_drink(
+                        trigger_message.user_id,
+                        comped.drunk_points,
+                        comped.last_drink_at,
+                    );
+                    metrics::record_round_drink_cashed();
+                    tracing::info!(
+                        user_id = %trigger_message.user_id,
+                        round_id = %comped.round_id,
+                        drink = %drink,
+                        "bartender poured a drink on someone else's round"
+                    );
+                    line
+                } else {
+                    match self
+                        .chip_service
+                        .buy_drink(trigger_message.user_id, price, &drink)
+                        .await?
+                    {
+                        Some(purchase) => {
+                            self.clubhouse_lobby.record_drink(
+                                trigger_message.user_id,
+                                purchase.drunk_points,
+                                purchase.last_drink_at,
+                            );
+                            tracing::info!(
+                                user_id = %trigger_message.user_id,
+                                price,
+                                drink = %drink,
+                                new_balance = purchase.balance,
+                                "bartender poured a drink"
+                            );
+                            line
+                        }
+                        // The balance moved between the prompt and the debit;
+                        // the floor guard refused the pour. Never retry, never
+                        // charge.
+                        None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
                     }
-                    None => {}
-                }
-                match self
-                    .chip_service
-                    .buy_drink(trigger_message.user_id, price, &drink)
-                    .await?
-                {
-                    Some(purchase) => {
-                        self.clubhouse_lobby.record_drink(
-                            trigger_message.user_id,
-                            purchase.drunk_points,
-                            purchase.last_drink_at,
-                        );
-                        tracing::info!(
-                            user_id = %trigger_message.user_id,
-                            price,
-                            drink = %drink,
-                            new_balance = purchase.balance,
-                            "bartender poured a drink"
-                        );
-                        line
-                    }
-                    // The balance moved between the prompt and the debit; the
-                    // floor guard refused the pour. Never retry, never charge.
-                    None => format!("{patron} {BARTENDER_TAB_BOUNCED_LINE}"),
                 }
             }
         };
 
-        self.send_bartender_line(&bartender, &trigger_message, body, delay)
-    }
+        tokio::time::sleep(Duration::from_secs(delay)).await;
 
-    /// Post one bartender line after the beat he always takes before speaking.
-    /// The sleep rides the spawned task rather than this one so a pour that
-    /// already moved chips is never held up by it.
-    fn send_bartender_line(
-        &self,
-        bartender: &BotUser,
-        trigger_message: &ChatMessage,
-        body: String,
-        delay: u64,
-    ) -> Result<()> {
-        let chat_service = self.chat_service.clone();
-        let bartender_id = bartender.id;
-        let room_id = trigger_message.room_id;
-        let patron_id = trigger_message.user_id;
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-            chat_service.send_bot_reply_task(bartender_id, room_id, body, Some(patron_id));
-        });
+        self.chat_service.send_bot_reply_task(
+            bartender.id,
+            trigger_message.room_id,
+            body,
+            Some(trigger_message.user_id),
+        );
+
         Ok(())
     }
 
@@ -1011,8 +998,8 @@ impl GhostService {
             Err(RoundError::Failed(error)) => return Err(error.context("buying a round")),
         };
 
-        // No pause before this one, unlike a pour: the chips have already
-        // moved, and a silent beat after a purchase reads as a failure.
+        // No pause before this one, unlike a pour: the chips have already moved,
+        // and a silent beat after a purchase reads as a failure.
         self.chat_service.send_bot_reply_task(
             bartender.id,
             trigger_message.room_id,

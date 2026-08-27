@@ -280,9 +280,9 @@ fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
             '`' => in_code = !in_code,
             ' ' if !in_code
                 && index >= from
-                && !protected.iter().any(|(start, stop)| {
-                    (*start..*stop).contains(&index)
-                }) =>
+                && !protected
+                    .iter()
+                    .any(|(start, stop)| (*start..*stop).contains(&index)) =>
             {
                 gaps.push(index)
             }

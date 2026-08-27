@@ -348,7 +348,9 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_round_drinks_cashed_total")
-                .with_description("Round credits actually drunk (the gap against granted is what expired)")
+                .with_description(
+                    "Round credits actually drunk (the gap against granted is what expired)",
+                )
                 .build()
         })
     }

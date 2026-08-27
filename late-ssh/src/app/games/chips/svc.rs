@@ -273,10 +273,7 @@ impl ChipService {
     /// transaction, so the credit cannot be spent without the drink landing.
     /// `None` means there was nothing to spend, and the caller charges for the
     /// pour as usual.
-    pub async fn cash_round_drink(
-        &self,
-        user_id: Uuid,
-    ) -> anyhow::Result<Option<CompedDrink>> {
+    pub async fn cash_round_drink(&self, user_id: Uuid) -> anyhow::Result<Option<CompedDrink>> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
         let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {

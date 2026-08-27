@@ -190,6 +190,10 @@ fn earning_exclusions_and_reason_uniqueness() {
             // buying in a pure negative on a board the winner cannot climb.
             "pot_ticket",
             "pot_won",
+            // The same vanity burn as the crown, one rung more generous:
+            // buying the bar a drink must not cost the buyer their place on
+            // the earners board.
+            "round_purchase",
             "shop_purchase"
         ]
     );

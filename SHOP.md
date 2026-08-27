@@ -106,6 +106,9 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Pot draw | Monday 21:00 UTC, two constants (weekly since 2026-08-27; the hour is the EU evening / US afternoon overlap) |
 | News share | 500 per link, once per URL per person, at most 3 paid per UTC day (PR #565; the only chip reward outside the Shop and the games, and `s` on an RSS entry is one keypress, so the day cap is what keeps an inbox from being a printer) |
 | Pot threshold lines | none (removed 2026-08-27, migration 162: the size rides the status HUD on every screen all week, so a mid-week #lounge nudge repeated the border) |
+| Round price | 100 a head, matching the cheapest pour: a round is a lot of small kindnesses, and the room's size is the only multiplier |
+| Round drink | 300 drunk points, three times what the buyer paid and exactly the buzzed threshold, so a sober room visibly moves a level; the buzz is free to hand out, only the chips are a sink |
+| Round credit | one open per patron at a time, 24h to claim, cashed by ordering from @bartender |
 
 ## Process
 
@@ -1006,13 +1009,87 @@ draw offers, house-table stakes, an entry fee on unwagered matches, elapsed
 time as a gate (no claim timestamp exists; add one only if a game ever
 needs it).
 
+## Phase 8: the round
+
+Goal: a sink whose whole product is one line in #lounge, "mira bought the
+house a round". The chips are burned; what the room gets is a story and a
+free drink each.
+
+Behavior:
+- Tables (migration 164): `drink_rounds(id uuidv7, buyer_user_id,
+  price_per_patron, created)` and `drink_credits(id uuidv7, round_id,
+  user_id, expires_at, cashed_at, created)`, with a partial unique index on
+  `(user_id) WHERE cashed_at IS NULL`. No stored total on the round: the
+  credits are the witness of how many it bought and the ledger row is the
+  record of what it cost, exactly like the pot's tickets.
+- **The trigger is a literal phrase, not a model decision.** `ROUND_PHRASES`
+  in `late-core/src/models/drink_round.rs` is the closed list ("round for
+  everyone", "round for all", "round for the house", ...), matched
+  case-insensitively on word boundaries. This is the only bartender action
+  that spends more than one drink's worth, and the price is the size of the
+  room, so the phrase itself is the confirmation. @bartender never decides
+  to buy one; the prompt tells him to hand out the words instead.
+- **`chat/slur.rs` never scrambles the phrase.** Drunk text is stored, not
+  rendered, so a wasted patron's "round for everyone" would otherwise reach
+  the matcher as "ronud for eevryone", breaking the feature for exactly the
+  people most likely to use it. Both the guard and the matcher read the one
+  list, so they cannot drift. The hiccup is kept out of it too.
+- **Price** `ROUND_PRICE_PER_PATRON` (100) for every credit that actually
+  landed, `ChipMove::RoundPurchase`, floor-guarded, burned whole with no
+  credit row anywhere (the crown's shape), excluded from Top Chips like
+  every other vanity burn. Presence is the in-process `active_users` roster
+  minus the buyer and the bots: single-replica, and deliberately so (see the
+  status block).
+- **Nobody is poured into.** A drink makes a patron type drunk in public, so
+  the round hands out a credit, not a drink; it is cashed only when they walk
+  up and order from @bartender themselves. One open credit per patron
+  (across every round, so a second round moments later reaches nobody and is
+  refused uncharged), `ROUND_CREDIT_TTL_HOURS` (24) to claim it, and cashing
+  is one guarded UPDATE so it can only ever be drunk once.
+- **A cashed drink pours `ROUND_DRINK_POINTS` (300)** whatever the bartender
+  invented to call it: three times what the buyer paid, and exactly the
+  buzzed threshold, so a sober room that drinks the round visibly moves a
+  level for about an hour. `lifetime_spent` does not move; the chips are on
+  the buyer's ledger row.
+- Refusals (`RoundRefusal`, all uncharged): nobody else at the bar, everyone
+  already holding one, and the chip floor. Each gets a scripted line from
+  @bartender, as does the purchase itself: this is the one line that has to
+  quote the number the patron was actually charged, and it must land the
+  moment the chips move rather than after a model round trip.
+
+Status:
+- **Presence is in-process, not a DB query**, unlike the original sketch.
+  There is no presence table in this repo: `users.last_seen` is written only
+  at connect and `user_online_time` is a cumulative total. Building one was
+  more work than the feature, so the round reads `active_users` like the
+  clubhouse headcount does. On a second replica a round would only reach the
+  buyer's own pod; the credits it grants are DB rows and cash from anywhere.
+  Revisit with the rest of the multi-replica work (root `CONTEXT.md`).
+- **No `round` action in the bartender's JSON schema**, unlike the sketch.
+  The phrase gate replaced it, which also means a round costs no model call
+  and cannot be throttled by the mention ladder.
+
+Acceptance:
+- [x] Phrase gate: every listed phrase fires, "turn around for all of us"
+      does not, and the spans land on the phrase itself.
+- [x] The order survives every drunk level at 200 seeds, verbatim, while
+      the words around it still take their beating.
+- [x] One open credit per patron; an expired one is re-used rather than
+      blocking the slot forever.
+- [x] A credit is drunk exactly once, and an expired one cannot be drunk.
+- [x] The buyer pays for the credits that landed, not the heads counted;
+      an unaffordable round leaves no credits and no charge.
+- [x] A cashed drink costs the drinker nothing and lands them at buzzed.
+- [x] Ticker line, metrics (granted vs cashed), help copy, and the
+      `chat/CONTEXT.md` section.
+
+Out of scope: a DB presence table, rounds for one named person (that is
+`/gift`), a round in the Clubhouse tavern without @bartender, extending or
+gifting a credit, and any per-buyer cooldown (the one-credit rule is the
+throttle).
+
 ## Parked
 
-- **The round** ("mira bought the house a round"): price 100 x patrons
-  present (a DB presence query, never lobby state), DB-backed
-  `drink_credits` as consent (one open credit per user, 24h expiry, cashed
-  by ordering from @bartender), `ChipMove::RoundPurchase`, a `round`
-  action in the bartender schema. About the size of gild. After Phase 5.
 - **Sealed daily bids for the marquee line**: the pot's tables with `max`
   instead of `random`. After the pot.
 - **Split the shop snapshot refresh** (only if chip notifies ever get

@@ -223,7 +223,10 @@ pub struct DrinkCredit;
 impl DrinkCredit {
     /// The patron's open credit, if the bar owes them a drink right now.
     /// Read before pouring so the bartender's line can name who bought it.
-    pub async fn find_open(client: &impl GenericClient, user_id: Uuid) -> Result<Option<OpenCredit>> {
+    pub async fn find_open(
+        client: &impl GenericClient,
+        user_id: Uuid,
+    ) -> Result<Option<OpenCredit>> {
         let row = client
             .query_opt(
                 "SELECT c.round_id, c.expires_at, r.buyer_user_id
