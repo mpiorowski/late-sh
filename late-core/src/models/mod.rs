@@ -56,6 +56,9 @@ pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;
 pub mod door_run;
+pub mod drink_round;
+#[cfg(test)]
+mod drink_round_test;
 pub mod drinks;
 #[cfg(test)]
 mod drinks_test;

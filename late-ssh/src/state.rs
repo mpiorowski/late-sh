@@ -81,6 +81,24 @@ pub fn online_human_count(active_users: &ActiveUsers) -> usize {
         .count()
 }
 
+/// Everyone at the bar right now except `buyer`: the roster a round pays for.
+///
+/// Same fingerprint filter as [`online_human_count`], since the always-on bots
+/// are furniture rather than patrons, and the buyer is never their own guest,
+/// which is what makes "nobody to buy for" a real refusal instead of a round
+/// bought for one. This is in-process presence, so on a second replica a round
+/// would only reach the buyer's own pod. That is the accepted single-replica
+/// assumption (root `CONTEXT.md`, multi-replica readiness), not an oversight:
+/// the credits it grants are DB rows and are cashed from anywhere.
+pub fn online_human_ids_excluding(active_users: &ActiveUsers, buyer: Uuid) -> Vec<Uuid> {
+    active_users
+        .lock_recover()
+        .iter()
+        .filter(|(user_id, user)| user.fingerprint.is_some() && **user_id != buyer)
+        .map(|(user_id, _)| *user_id)
+        .collect()
+}
+
 pub fn afk_users_snapshot(afk_users: &AfkUsers) -> Arc<HashSet<Uuid>> {
     Arc::clone(&afk_users.lock_recover())
 }

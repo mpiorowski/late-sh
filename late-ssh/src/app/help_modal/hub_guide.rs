@@ -12,6 +12,7 @@ use crate::app::lobby::house::{
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
+    drink_round::{ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON},
     drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
@@ -95,6 +96,22 @@ fn bar_sections() -> Vec<GuideSection> {
                 "Your first ever drink is on the house.".to_string(),
                 "He only pours for you; use /gift @user <n> to send someone else chips."
                     .to_string(),
+            ],
+        },
+        GuideSection {
+            title: "The Round",
+            body: vec![
+                "Tell @bartender \"round for everyone\" and you buy the house one."
+                    .to_string(),
+                format!(
+                    "{ROUND_PRICE_PER_PATRON} chips a head, for everyone online but you."
+                ),
+                "Say it plainly; he only rings up those exact words.".to_string(),
+                "Nobody is poured into. Each of them gets a drink waiting".to_string(),
+                format!(
+                    "at the bar, good for {ROUND_CREDIT_TTL_HOURS}h, claimed by ordering from him."
+                ),
+                "One waiting drink each: a second round buys nobody a spare.".to_string(),
             ],
         },
         GuideSection {

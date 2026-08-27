@@ -1,5 +1,6 @@
 use super::*;
 
+use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request};
 use late_core::models::drinks::DRUNK_MAX_LEVEL;
 
 /// A few dozen ordinary chat words, long enough that per-word odds average out.
@@ -105,6 +106,41 @@ fn the_things_that_carry_meaning_are_never_garbled() {
         assert!(slurred.contains("`cargo nextest run`"), "{slurred}");
         assert!(slurred.contains("---NEWS---"), "{slurred}");
     }
+}
+
+/// The one sentence that spends chips. A wasted patron is exactly who buys the
+/// house a round, and @bartender matches the phrase literally, so a scramble or
+/// a hiccup landing in it would break the feature for precisely the people it
+/// is for. Every level, every seed, verbatim.
+#[test]
+fn an_order_for_a_round_survives_any_amount_of_drink() {
+    for phrase in ROUND_PHRASES {
+        let body = format!("@bartender it has been a long week, {phrase} tonight");
+        for level in 1..=DRUNK_MAX_LEVEL {
+            for seed in 1..200 {
+                let slurred = slur(&body, level, seed);
+                assert!(
+                    slurred.contains(phrase),
+                    "level {level} seed {seed} lost the order: {slurred}"
+                );
+                assert!(
+                    contains_round_request(&slurred),
+                    "level {level} seed {seed} no longer reads as a round: {slurred}"
+                );
+            }
+        }
+    }
+}
+
+/// The words around the order still take their beating: protecting the phrase
+/// is a narrow carve-out, not a way to type soberly by mentioning drinks.
+#[test]
+fn protecting_the_order_does_not_sober_up_the_rest_of_the_line() {
+    let body = format!("{CORPUS} round for everyone");
+    let untouched = (1..200)
+        .filter(|seed| slur(&body, DRUNK_MAX_LEVEL, *seed) == body)
+        .count();
+    assert_eq!(untouched, 0, "a wasted patron never types the rest cleanly");
 }
 
 #[test]

@@ -29,6 +29,9 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
     match &event.kind {
         // Presence story: someone showed up.
         ActivityKind::UserJoined => true,
+        // One person's generosity, in front of the room. The whole point of
+        // the mechanic is this line.
+        ActivityKind::RoundBought { .. } => true,
         // Invitations: an open seat someone can still claim.
         ActivityKind::SatDown { .. } => true,
         // Door-game stories: entering a world, felling its bosses.
@@ -202,7 +205,11 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
                 thousands(*total_tickets)
             ))
         }
-        ActivityKind::UserJoined
+        // No headline: @bartender already says it out loud in the room where
+        // it was bought, and everyone it reached is online by definition, so a
+        // #lounge row would be the third telling of one drink.
+        ActivityKind::RoundBought { .. }
+        | ActivityKind::UserJoined
         | ActivityKind::GameStarted { .. }
         | ActivityKind::GameWon { .. }
         | ActivityKind::GameScored { .. }

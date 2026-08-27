@@ -1,6 +1,8 @@
-use crate::app::games::chips::svc::ChipService;
+use crate::app::games::chips::svc::{ChipService, RoundError, RoundRefusal};
 use late_core::{
     models::chips::{ChipMove, UserChips},
+    models::drink_round::{ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON},
+    models::drinks::{UserDrinks, drunk_level},
     models::reward::{
         DARKROOM_ESCAPE_REWARD_KEY, GREENDRAGON_DRAGON_REWARD_KEY, LATEANIA_ARCHDEMON_REWARD_KEY,
     },
@@ -450,4 +452,146 @@ async fn balance(db: &late_core::db::Db, user_id: Uuid) -> i64 {
         .await
         .expect("chips row")
         .balance
+}
+
+/// The buyer pays for the drinks that were actually poured, never for the
+/// heads that were counted. A patron already holding one is skipped, and the
+/// price follows.
+#[tokio::test]
+async fn a_round_charges_for_the_drinks_it_actually_pours() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "round-buyer").await;
+    let first = create_test_user(&test_db.db, "round-drinker-one").await;
+    let second = create_test_user(&test_db.db, "round-drinker-two").await;
+    let holding = create_test_user(&test_db.db, "round-already-holding").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.expect("buyer chips");
+
+    // Somebody else got to `holding` first, so this round cannot reach them.
+    let earlier = create_test_user(&test_db.db, "round-earlier-buyer").await;
+    chips.ensure_chips(earlier.id).await.expect("earlier chips");
+    chips
+        .buy_round(earlier.id, ROUND_PRICE_PER_PATRON, &[holding.id])
+        .await
+        .expect("the earlier round");
+
+    let purchase = chips
+        .buy_round(
+            buyer.id,
+            ROUND_PRICE_PER_PATRON,
+            &[first.id, second.id, holding.id],
+        )
+        .await
+        .expect("the round settles");
+
+    assert_eq!(purchase.patrons, 2, "the third was already holding one");
+    assert_eq!(purchase.total_chips, 2 * ROUND_PRICE_PER_PATRON);
+    assert_eq!(purchase.balance, 1_000 - 2 * ROUND_PRICE_PER_PATRON);
+    assert_eq!(balance(&test_db.db, buyer.id).await, 800);
+
+    let client = test_db.db.get().await.expect("db client");
+    let rows = client
+        .query(
+            "SELECT delta, reason, source_ref FROM chip_ledger WHERE user_id = $1",
+            &[&buyer.id],
+        )
+        .await
+        .expect("ledger");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i64>("delta"), -200);
+    assert_eq!(rows[0].get::<_, &str>("reason"), "round_purchase");
+    assert_eq!(
+        rows[0].get::<_, Option<&str>>("source_ref"),
+        Some(purchase.round_id.to_string().as_str()),
+        "the ledger row points at the round it paid for"
+    );
+}
+
+/// A round the buyer cannot cover leaves nothing behind: no charge, and no
+/// credits either. The grant and the charge are one transaction precisely so
+/// the bar never promises drinks nobody paid for.
+#[tokio::test]
+async fn an_unaffordable_round_leaves_no_credits_and_no_charge() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "broke-round-buyer").await;
+    let mut patrons = Vec::new();
+    for index in 0..20 {
+        patrons.push(
+            create_test_user(&test_db.db, &format!("broke-round-patron-{index}"))
+                .await
+                .id,
+        );
+    }
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.expect("buyer chips");
+
+    match chips
+        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, &patrons)
+        .await
+    {
+        Err(RoundError::Refused(RoundRefusal::InsufficientChips { patrons, total })) => {
+            assert_eq!(patrons, 20);
+            assert_eq!(total, 20 * ROUND_PRICE_PER_PATRON);
+        }
+        other => panic!("expected a refusal on the chip floor, got {other:?}"),
+    }
+
+    assert_eq!(balance(&test_db.db, buyer.id).await, 1_000);
+    let client = test_db.db.get().await.expect("db client");
+    let credits: i64 = client
+        .query_one("SELECT count(*) AS granted FROM drink_credits", &[])
+        .await
+        .expect("count")
+        .get("granted");
+    assert_eq!(credits, 0, "a refused round promises nobody anything");
+}
+
+/// What the round is actually for: the drinker pays nothing and still gets the
+/// buzz, and it is worth three times what the buyer put in, which is what puts
+/// a sober room at buzzed.
+#[tokio::test]
+async fn a_cashed_round_drink_costs_the_drinker_nothing() {
+    let test_db = new_test_db().await;
+    let buyer = create_test_user(&test_db.db, "comped-round-buyer").await;
+    let patron = create_test_user(&test_db.db, "comped-round-patron").await;
+    let chips = ChipService::new(test_db.db.clone());
+    chips.ensure_chips(buyer.id).await.expect("buyer chips");
+    chips
+        .buy_round(buyer.id, ROUND_PRICE_PER_PATRON, &[patron.id])
+        .await
+        .expect("the round settles");
+
+    let comped = chips
+        .cash_round_drink(patron.id)
+        .await
+        .expect("cashing works")
+        .expect("a drink was waiting");
+    assert_eq!(comped.buyer_user_id, Some(buyer.id));
+    assert_eq!(comped.drunk_points, ROUND_DRINK_POINTS);
+    assert!(
+        drunk_level(comped.drunk_points) >= 2,
+        "a round drink lands a sober patron at buzzed"
+    );
+
+    assert_eq!(
+        balance(&test_db.db, patron.id).await,
+        1_000,
+        "the drinker's chips never move"
+    );
+    let client = test_db.db.get().await.expect("db client");
+    let drinks = UserDrinks::find(&client, patron.id)
+        .await
+        .expect("drinks row")
+        .expect("a row");
+    assert_eq!(
+        drinks.lifetime_spent, 0,
+        "somebody else's round is not the drinker's tab"
+    );
+    assert!(
+        chips
+            .cash_round_drink(patron.id)
+            .await
+            .expect("second cash")
+            .is_none()
+    );
 }

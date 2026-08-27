@@ -5,6 +5,7 @@ use late_core::models::leaderboard::DoorGame;
 use crate::app::activity::event::ActivityGame;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
+use crate::app::games::chips::svc::RoundRefusal;
 use crate::app::lobby::daily::svc::DailyWinPayout;
 use crate::app::pot::svc::PotRefusal;
 
@@ -70,8 +71,8 @@ mod inner {
 
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, SummaryResult,
-        TranslationResult,
+        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
+        SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -310,6 +311,64 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_crown_takes_refused_total")
                 .with_description("Crown takeovers refused, by reason (none were charged)")
+                .build()
+        })
+    }
+
+    fn round_refusal_label(refusal: RoundRefusal) -> &'static str {
+        match refusal {
+            RoundRefusal::EmptyHouse => "empty_house",
+            RoundRefusal::AllHolding => "all_holding",
+            RoundRefusal::InsufficientChips { .. } => "insufficient_chips",
+        }
+    }
+
+    fn rounds_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_rounds_total")
+                .with_description("Rounds bought for the house that settled")
+                .build()
+        })
+    }
+
+    fn round_drinks_granted_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_round_drinks_granted_total")
+                .with_description("Drink credits handed out by rounds")
+                .build()
+        })
+    }
+
+    fn round_drinks_cashed_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_round_drinks_cashed_total")
+                .with_description("Round credits actually drunk (the gap against granted is what expired)")
+                .build()
+        })
+    }
+
+    fn round_chips_burned_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_round_chips_burned_total")
+                .with_description("Chips destroyed by rounds (the whole price)")
+                .build()
+        })
+    }
+
+    fn rounds_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_rounds_refused_total")
+                .with_description("Rounds refused, by reason (none were charged)")
                 .build()
         })
     }
@@ -567,6 +626,24 @@ mod inner {
             .add(1, &[KeyValue::new("reason", crown_refusal_label(refusal))]);
     }
 
+    /// A settled round. The price is burned whole like the crown's, and the
+    /// drinks are counted separately from the rounds because the interesting
+    /// number is how many of them ever get drunk.
+    pub fn record_round_bought(patrons: i64, chips: i64) {
+        rounds_total().add(1, &[]);
+        round_drinks_granted_total().add(patrons.max(0) as u64, &[]);
+        round_chips_burned_total().add(chips.max(0) as u64, &[]);
+    }
+
+    pub fn record_round_refused(refusal: RoundRefusal) {
+        rounds_refused_total().add(1, &[KeyValue::new("reason", round_refusal_label(refusal))]);
+    }
+
+    /// A patron walked up and drank a credit somebody else paid for.
+    pub fn record_round_drink_cashed() {
+        round_drinks_cashed_total().add(1, &[]);
+    }
+
     /// A settled buy. Two counters, because the burn is only visible as the
     /// gap between what went in and what came out.
     pub fn record_pot_tickets_bought(tickets: i64, chips: i64) {
@@ -708,8 +785,8 @@ mod inner {
 mod inner {
     use super::{
         ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
-        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, SummaryResult,
-        TranslationResult,
+        NewsShareReward, OnlineTimeFlushResult, PotRefusal, RenderReason, RoundRefusal,
+        SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -732,6 +809,9 @@ mod inner {
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}
+    pub fn record_round_bought(_patrons: i64, _chips: i64) {}
+    pub fn record_round_refused(_refusal: RoundRefusal) {}
+    pub fn record_round_drink_cashed() {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}

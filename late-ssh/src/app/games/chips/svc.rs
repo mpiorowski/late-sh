@@ -1,6 +1,10 @@
+use anyhow::Context;
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
+use late_core::models::drink_round::{
+    DrinkCredit, DrinkRound, OpenCredit, ROUND_CREDIT_TTL_HOURS, ROUND_DRINK_POINTS,
+};
 use late_core::models::drinks::UserDrinks;
 use late_core::models::game_payout::{
     GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutClaim, GamePayoutKey, GamePayoutMultiGrant,
@@ -44,6 +48,59 @@ pub struct RewardGrant {
 #[derive(Debug, Clone, Copy)]
 pub struct DrinkPurchase {
     pub balance: i64,
+    pub drunk_points: i64,
+    pub last_drink_at: DateTime<Utc>,
+}
+
+/// A round that was bought and paid for.
+#[derive(Debug, Clone, Copy)]
+pub struct RoundPurchase {
+    pub round_id: Uuid,
+    /// Credits that actually landed, which is what the buyer paid for.
+    pub patrons: i64,
+    pub total_chips: i64,
+    pub balance: i64,
+}
+
+/// Why a round did not happen. Every arm is uncharged: a refused round leaves
+/// no ledger row and no credits. The wording lives with the bartender, who is
+/// the only one who ever says these out loud.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundRefusal {
+    /// Nobody else is at the bar. The buyer is never counted as their own
+    /// patron, so drinking alone cannot be sold as generosity.
+    EmptyHouse,
+    /// Everyone present is already holding an uncashed drink. This is what
+    /// makes a second round moments after the first cost nothing, and it is
+    /// the only throttle the mechanic has.
+    AllHolding,
+    /// The total would take the buyer below the chip floor. Quotes what the
+    /// round would have cost, since the price is the room's size and the
+    /// buyer has no other way to know it.
+    InsufficientChips { patrons: i64, total: i64 },
+}
+
+/// A round that did not pay: a rule said no, or the database did. Same split
+/// as the crown's, and for the same reason: only one of the two is the
+/// patron's business.
+#[derive(Debug)]
+pub enum RoundError {
+    Refused(RoundRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for RoundError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// A drink the house poured against somebody else's round.
+#[derive(Debug, Clone, Copy)]
+pub struct CompedDrink {
+    pub round_id: Uuid,
+    /// Who bought the round, absent once they delete their account.
+    pub buyer_user_id: Option<Uuid>,
     pub drunk_points: i64,
     pub last_drink_at: DateTime<Utc>,
 }
@@ -133,6 +190,103 @@ impl ChipService {
         tx.commit().await?;
         Ok(Some(DrinkPurchase {
             balance: chips.balance,
+            drunk_points: drinks.drunk_points,
+            last_drink_at: drinks.last_drink_at,
+        }))
+    }
+
+    /// Buy the house a round: grant one credit to every patron at the bar who
+    /// is not already holding one, then charge the buyer for exactly the
+    /// credits that landed. One transaction, so a crash can neither charge for
+    /// drinks nobody was promised nor promise drinks nobody paid for.
+    ///
+    /// `candidates` is the buyer's own presence read, minus the buyer: this
+    /// takes the roster it is given and never asks who is online, so the
+    /// caller owns that policy. The buyer is a connected patron, so their
+    /// chips row already exists (`ensure_chips` at login) and nothing here
+    /// creates one; a missing row reads as a floor refusal, the same way
+    /// [`Self::buy_drink`] treats it.
+    pub async fn buy_round(
+        &self,
+        buyer_id: Uuid,
+        price_per_patron: i64,
+        candidates: &[Uuid],
+    ) -> Result<RoundPurchase, RoundError> {
+        if candidates.is_empty() {
+            return Err(RoundError::Refused(RoundRefusal::EmptyHouse));
+        }
+
+        let mut client = self.db.get().await?;
+        let tx = client
+            .transaction()
+            .await
+            .context("opening the round transaction")?;
+        let grant = DrinkRound::open(
+            &tx,
+            buyer_id,
+            price_per_patron,
+            candidates,
+            ROUND_CREDIT_TTL_HOURS,
+        )
+        .await?;
+        let patrons = grant.patron_count();
+        if patrons == 0 {
+            return Err(RoundError::Refused(RoundRefusal::AllHolding));
+        }
+
+        let total = grant.total_chips();
+        let source_ref = grant.round.id.to_string();
+        let Some(chips) = UserChips::apply(
+            &*tx,
+            buyer_id,
+            ChipMove::RoundPurchase,
+            total,
+            Some(&source_ref),
+        )
+        .await?
+        else {
+            return Err(RoundError::Refused(RoundRefusal::InsufficientChips {
+                patrons,
+                total,
+            }));
+        };
+        tx.commit().await.context("committing the round")?;
+
+        Ok(RoundPurchase {
+            round_id: grant.round.id,
+            patrons,
+            total_chips: total,
+            balance: chips.balance,
+        })
+    }
+
+    /// The patron's open credit, read before the bartender decides anything so
+    /// his line can name who is buying. Not a claim: [`Self::cash_round_drink`]
+    /// is what spends it.
+    pub async fn open_round_credit(&self, user_id: Uuid) -> anyhow::Result<Option<OpenCredit>> {
+        let client = self.db.get().await?;
+        DrinkCredit::find_open(&client, user_id).await
+    }
+
+    /// Pour against a round's credit: spend the credit and record a flat
+    /// [`ROUND_DRINK_POINTS`] of buzz, with no chip debit anywhere. One
+    /// transaction, so the credit cannot be spent without the drink landing.
+    /// `None` means there was nothing to spend, and the caller charges for the
+    /// pour as usual.
+    pub async fn cash_round_drink(
+        &self,
+        user_id: Uuid,
+    ) -> anyhow::Result<Option<CompedDrink>> {
+        let mut client = self.db.get().await?;
+        let tx = client.transaction().await?;
+        let Some(credit) = DrinkCredit::cash(&tx, user_id).await? else {
+            return Ok(None);
+        };
+        let drinks = UserDrinks::record_comped_pour(&tx, user_id, ROUND_DRINK_POINTS).await?;
+        tx.commit().await?;
+        Ok(Some(CompedDrink {
+            round_id: credit.round_id,
+            buyer_user_id: credit.buyer_user_id,
             drunk_points: drinks.drunk_points,
             last_drink_at: drinks.last_drink_at,
         }))

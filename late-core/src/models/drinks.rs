@@ -113,21 +113,46 @@ impl UserDrinks {
         drunk_level(self.effective_points(now))
     }
 
-    /// Record a paid drink: `price` chips become both buzz and tab. Decays
-    /// the stored buzz to now, adds the pour, caps, and bumps the tallies.
-    /// One statement, so concurrent buys from two sessions can't
-    /// double-count the decay window. Every numeric parameter is cast to
-    /// bigint so Postgres never infers a `LEAST`/`GREATEST` argument as text.
+    /// Record a paid drink: `price` chips become both buzz and tab.
     pub async fn record_purchase(
         client: &impl GenericClient,
         user_id: Uuid,
         price: i64,
     ) -> Result<Self> {
+        Self::record_pour(client, user_id, price, price).await
+    }
+
+    /// Record a drink somebody else already paid for: the buzz lands, the tab
+    /// does not. A round's credit is the only way to get one
+    /// ([`crate::models::drink_round`]), and it pours a flat
+    /// [`crate::models::drink_round::ROUND_DRINK_POINTS`] whatever the
+    /// bartender named the drink, so what the house comps never depends on
+    /// what he invented to call it. `lifetime_spent` stays put because the
+    /// drinker spent nothing: the chips are on the buyer's ledger row.
+    pub async fn record_comped_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        points: i64,
+    ) -> Result<Self> {
+        Self::record_pour(client, user_id, points, 0).await
+    }
+
+    /// Decay the stored buzz to now, add `points`, cap it, and bump the
+    /// tallies by `spent`. One statement, so concurrent buys from two
+    /// sessions can't double-count the decay window. Every numeric parameter
+    /// is cast to bigint so Postgres never infers a `LEAST`/`GREATEST`
+    /// argument as text.
+    async fn record_pour(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        points: i64,
+        spent: i64,
+    ) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO user_drinks
                     (user_id, drunk_points, lifetime_spent, drink_count, last_drink_at)
-                 VALUES ($1, LEAST($2::bigint, $4::bigint), $2::bigint, 1, current_timestamp)
+                 VALUES ($1, LEAST($2::bigint, $4::bigint), $5::bigint, 1, current_timestamp)
                  ON CONFLICT (user_id) DO UPDATE SET
                     drunk_points = LEAST(
                         GREATEST(
@@ -137,12 +162,18 @@ impl UserDrinks {
                         ) + $2::bigint,
                         $4::bigint
                     ),
-                    lifetime_spent = user_drinks.lifetime_spent + $2::bigint,
+                    lifetime_spent = user_drinks.lifetime_spent + $5::bigint,
                     drink_count = user_drinks.drink_count + 1,
                     last_drink_at = current_timestamp,
                     updated = current_timestamp
                  RETURNING *",
-                &[&user_id, &price, &DRUNK_DECAY_PER_HOUR, &MAX_DRUNK_POINTS],
+                &[
+                    &user_id,
+                    &points,
+                    &DRUNK_DECAY_PER_HOUR,
+                    &MAX_DRUNK_POINTS,
+                    &spent,
+                ],
             )
             .await?;
         Ok(Self::from(row))

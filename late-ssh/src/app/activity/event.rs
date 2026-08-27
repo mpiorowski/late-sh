@@ -106,6 +106,16 @@ pub enum ActivityKind {
         /// The deposed holder, absent when the crown was vacant.
         from: Option<String>,
     },
+    /// Someone bought the house a round. The buyer is the whole story, so the
+    /// line names them and the size of their gesture, never the patrons who
+    /// got a drink out of it. `round_id` keys the #lounge repeat throttle;
+    /// a second round minutes later reaches almost nobody and refuses, so
+    /// there is nothing to collapse.
+    RoundBought {
+        round_id: Uuid,
+        patrons: i64,
+        total_chips: i64,
+    },
     /// The weekly pot drew. Names the winner and the odds they beat, because
     /// the odds are the story: a three-ticket win off three hundred reads
     /// very differently from a fifty-ticket one. `pot_id` keys the #lounge
@@ -153,6 +163,7 @@ impl ActivityKind {
             | Self::BurnMilestone { .. }
             | Self::MessageGilded { .. }
             | Self::CrownTaken { .. }
+            | Self::RoundBought { .. }
             | Self::PotDrawn { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
@@ -572,6 +583,32 @@ impl ActivityEvent {
                 price,
                 next_price,
                 from,
+            },
+            action,
+        )
+    }
+
+    /// Someone bought the house a round. The line quotes both numbers because
+    /// each says something different: how many people it reached, and what it
+    /// cost the one who bought it.
+    pub fn round_bought(
+        buyer_id: Uuid,
+        buyer: impl Into<String>,
+        round_id: Uuid,
+        patrons: i64,
+        total_chips: i64,
+    ) -> Self {
+        let action = format!(
+            "bought the house a round, {patrons} drinks for {} chips",
+            crate::app::common::primitives::thousands(total_chips)
+        );
+        Self::new(
+            Some(buyer_id),
+            buyer,
+            ActivityKind::RoundBought {
+                round_id,
+                patrons,
+                total_chips,
             },
             action,
         )

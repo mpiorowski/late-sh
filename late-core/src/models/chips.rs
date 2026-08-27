@@ -119,6 +119,12 @@ chip_moves!(
     /// what caps the reward at one per URL per user, and it has to outlive
     /// the article being deleted (see [`crate::models::article::Article::create_shared`]).
     NewsShared,
+    /// Chips paid to buy the house a round: one price per credit the round
+    /// actually granted, floor-guarded, and burned whole like the crown.
+    /// Nothing is credited to the patrons, who get a
+    /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
+    /// `source_ref` is the round id.
+    RoundPurchase,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -182,6 +188,7 @@ impl ChipMove {
             Self::PotTicket => "pot_ticket",
             Self::PotWon => "pot_won",
             Self::NewsShared => "news_shared",
+            Self::RoundPurchase => "round_purchase",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -229,6 +236,7 @@ impl ChipMove {
             Self::CrownTaken => "crown_reigns",
             Self::PotTicket | Self::PotWon => "pots",
             Self::NewsShared => "articles",
+            Self::RoundPurchase => "drink_rounds",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -301,6 +309,7 @@ impl ChipMove {
             | Self::GildSent
             | Self::CrownTaken
             | Self::PotTicket
+            | Self::RoundPurchase
             | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
@@ -319,12 +328,16 @@ impl ChipMove {
             // must not top the earners board, and if the win is out then the
             // ticket has to be out too, or buying in would be a pure
             // negative on a board the winner cannot climb.
+            // A round is the same vanity burn as the crown, one rung more
+            // generous: buying the bar a drink must not cost the buyer their
+            // place on the earners board.
             Self::FloorRestore
             | Self::ShopPurchase
             | Self::GildReceived
             | Self::CrownTaken
             | Self::PotTicket
-            | Self::PotWon => false,
+            | Self::PotWon
+            | Self::RoundPurchase => false,
             Self::Credit
             | Self::Bet
             | Self::GiftSent
