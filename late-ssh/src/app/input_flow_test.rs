@@ -184,6 +184,7 @@ async fn backtick_hops_out_of_lateania_and_back_in_while_the_window_is_live() {
 #[tokio::test]
 async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     use crate::app::common::primitives::Screen;
+    use crate::app::door::hub::state::HubGame;
     use late_core::models::door_rc::{DoorRc, DoorRcGame};
 
     let test_db = new_test_db().await;
@@ -191,10 +192,15 @@ async fn games_hub_config_modal_saves_and_clears_the_door_rc() {
     let client = test_db.db.get().await.expect("db client");
     let mut app = make_app(test_db.db.clone(), user.id, "door-rc-flow-it");
 
-    // Walk the hub sidebar to NetHack (Lateania, DCSS, NetHack) and open the
-    // config box.
+    // Walk the hub sidebar down to NetHack and open the config box. The step
+    // count comes from the selector order itself, so a game inserted above
+    // NetHack moves the cursor here instead of opening another game's config.
+    let steps = HubGame::ALL
+        .iter()
+        .position(|game| *game == HubGame::Nethack)
+        .expect("nethack is in the selector");
     app.set_screen(Screen::Games);
-    app.handle_input(b"jj");
+    app.handle_input(&b"j".repeat(steps));
     app.handle_input(b"c");
     let frame = render_plain(&mut app);
     assert!(
