@@ -699,7 +699,11 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
     lines.extend([
         Line::from(""),
         landing::heading("Once Inside"),
-        landing::hint("j/k, w/s, arrows", "move the cursor; Enter or space picks", 18),
+        landing::hint(
+            "j/k, w/s, arrows",
+            "move the cursor; Enter or space picks",
+            18,
+        ),
         landing::hint("Tab", "switch between the room and outside", 18),
         landing::hint("+/- and </>", "move one or ten villagers between jobs", 18),
         landing::hint("wasd / arrows", "walk the wasteland, steer the ship", 18),

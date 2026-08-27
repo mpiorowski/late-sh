@@ -220,6 +220,36 @@ impl ActivityPublisher {
         });
     }
 
+    /// The pot drew. `winner_id` is resolved to a username here like every
+    /// other line; the odds come from the draw, which already counted them.
+    pub fn pot_drawn_task(
+        &self,
+        winner_id: Uuid,
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
+    ) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            let username = publisher.username_for(winner_id).await;
+            let _ = publisher.tx.send(ActivityEvent::pot_drawn(
+                winner_id,
+                username,
+                pot_id,
+                payout,
+                winner_tickets,
+                total_tickets,
+            ));
+        });
+    }
+
+    /// A pot crossed a threshold. The only publisher method that resolves no
+    /// username: the line is the pot's own.
+    pub fn pot_threshold(&self, pot_id: Uuid, threshold: i64) {
+        let _ = self.tx.send(ActivityEvent::pot_threshold(pot_id, threshold));
+    }
+
     pub fn went_live_task(&self, user_id: Uuid, title: Option<String>) {
         let publisher = self.clone();
         tokio::spawn(async move {

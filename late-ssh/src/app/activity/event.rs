@@ -5,6 +5,11 @@ use uuid::Uuid;
 
 use crate::metrics;
 
+/// Who the pot's threshold line is from. The feed renders
+/// `<username> <action>`, and nobody made the pot cross 50,000: the room did,
+/// so the line speaks as the pot ("the pot is over 50,000 chips").
+pub const POT_FEED_AUTHOR: &str = "the pot";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityCategory {
     Session,
@@ -106,6 +111,23 @@ pub enum ActivityKind {
         /// The deposed holder, absent when the crown was vacant.
         from: Option<String>,
     },
+    /// The daily pot drew. Names the winner and the odds they beat, because
+    /// the odds are the story: a three-ticket win off three hundred reads
+    /// very differently from a fifty-ticket one. `pot_id` keys the #lounge
+    /// repeat throttle; there is one of these a day anyway.
+    PotDrawn {
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
+    },
+    /// A live pot crossed a size threshold. The only activity line with no
+    /// user behind it: nobody did this, the room did, so it is attributed to
+    /// the pot itself. Once per threshold per pot, enforced in the table.
+    PotThreshold {
+        pot_id: Uuid,
+        threshold: i64,
+    },
     /// A linked user published an entry on cyberspace.online from late.sh.
     /// Announces our user's own action, never cyberspace content.
     CyberspacePosted {
@@ -143,6 +165,8 @@ impl ActivityKind {
             | Self::BurnMilestone { .. }
             | Self::MessageGilded { .. }
             | Self::CrownTaken { .. }
+            | Self::PotDrawn { .. }
+            | Self::PotThreshold { .. }
             | Self::CyberspacePosted { .. }
             | Self::WentLive { .. }
             | Self::WatchingStream { .. } => ActivityCategory::Session,
@@ -562,6 +586,50 @@ impl ActivityEvent {
                 next_price,
                 from,
             },
+            action,
+        )
+    }
+
+    /// The pot drew. The line quotes what the winner actually received (the
+    /// fifth that was burned is not theirs to be congratulated for) and the
+    /// odds behind it.
+    pub fn pot_drawn(
+        winner_id: Uuid,
+        winner: impl Into<String>,
+        pot_id: Uuid,
+        payout: i64,
+        winner_tickets: i64,
+        total_tickets: i64,
+    ) -> Self {
+        use crate::app::common::primitives::thousands;
+        let action = format!(
+            "won {} chips from the pot on {} of {} tickets",
+            thousands(payout),
+            thousands(winner_tickets),
+            thousands(total_tickets)
+        );
+        Self::new(
+            Some(winner_id),
+            winner,
+            ActivityKind::PotDrawn {
+                pot_id,
+                payout,
+                winner_tickets,
+                total_tickets,
+            },
+            action,
+        )
+    }
+
+    /// A pot crossed a threshold. Attributed to nobody: the line exists to
+    /// pull people in before the draw, and no one player made it happen.
+    pub fn pot_threshold(pot_id: Uuid, threshold: i64) -> Self {
+        use crate::app::common::primitives::thousands;
+        let action = format!("is over {} chips", thousands(threshold));
+        Self::new(
+            None,
+            POT_FEED_AUTHOR,
+            ActivityKind::PotThreshold { pot_id, threshold },
             action,
         )
     }

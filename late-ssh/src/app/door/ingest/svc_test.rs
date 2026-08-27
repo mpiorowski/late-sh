@@ -449,7 +449,10 @@ async fn replayed_nethack_run_lands_one_row_and_pays_nothing() {
     // A death carrying the Amulet pays nothing: the xlogfile achieve bit is
     // not a milestone source, whatever it says.
     tokio::task::yield_now().await;
-    assert_eq!(award_chip_total_for(&test_db.db, user.id, "nethack").await, 0);
+    assert_eq!(
+        award_chip_total_for(&test_db.db, user.id, "nethack").await,
+        0
+    );
     assert_eq!(badge_count(&test_db.db, user.id, "nethack_amulet").await, 0);
 
     let client = test_db.db.get().await.expect("db client");

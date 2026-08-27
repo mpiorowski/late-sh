@@ -107,6 +107,9 @@ mod notification_test;
 pub mod pet;
 #[cfg(test)]
 mod pet_test;
+pub mod pot;
+#[cfg(test)]
+mod pot_test;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]

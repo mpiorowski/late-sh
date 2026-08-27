@@ -23,6 +23,9 @@ crate::model! {
         pub challenger_result_seen_at: Option<DateTime<Utc>>,
         pub opponent_result_seen_at: Option<DateTime<Utc>>,
         pub chat_room_id: Option<Uuid>,
+        // `paid` / `unplayed` / `pair_day_capped` / `failed` once a decisive
+        // finish has settled its chips; NULL for draws and pre-gate rows.
+        pub win_payout: Option<String>,
     }
 }
 
@@ -260,6 +263,20 @@ impl DailyMatch {
             )
             .await?;
         Ok(updated)
+    }
+
+    /// Record what the win payout did, after the finish is durable. The
+    /// CHECK on the column is the closed set; the caller maps its enum to it.
+    pub async fn set_win_payout(client: &Client, match_id: Uuid, win_payout: &str) -> Result<()> {
+        client
+            .execute(
+                "UPDATE daily_matches
+                 SET win_payout = $2, updated = current_timestamp
+                 WHERE id = $1 AND status = $3",
+                &[&match_id, &win_payout, &Self::STATUS_FINISHED],
+            )
+            .await?;
+        Ok(())
     }
 
     /// Forfeit every active match whose move deadline has passed. The player

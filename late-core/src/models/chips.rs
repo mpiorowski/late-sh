@@ -106,6 +106,13 @@ chip_moves!(
     /// is no matching credit anywhere, so every take shrinks the supply by
     /// the full price. `source_ref` is the reign id.
     CrownTaken,
+    /// Chips paid for pot tickets. Floor-guarded like a gift; `source_ref` is
+    /// the pot id, and one row per buy rather than per ticket.
+    PotTicket,
+    /// The pot's payout to the one ticket that was drawn: 80% of what the
+    /// tickets paid in. The other fifth has no ledger row at all, the way a
+    /// gild's third has none: that gap is the burn.
+    PotWon,
     DrinkPurchase,
     ShopPurchase,
     QuestReward,
@@ -166,6 +173,8 @@ impl ChipMove {
             Self::GildSent => "chip_gild_sent",
             Self::GildReceived => "chip_gild_received",
             Self::CrownTaken => "chip_crown_taken",
+            Self::PotTicket => "pot_ticket",
+            Self::PotWon => "pot_won",
             Self::DrinkPurchase => "drink_purchase",
             Self::ShopPurchase => "shop_purchase",
             Self::QuestReward => "quest_reward",
@@ -211,6 +220,7 @@ impl ChipMove {
             | Self::SsnakeArenaLost => "user_chips",
             Self::GildSent | Self::GildReceived => "chat_messages",
             Self::CrownTaken => "crown_reigns",
+            Self::PotTicket | Self::PotWon => "pots",
             Self::DrinkPurchase => "bartender",
             Self::ShopPurchase => "marketplace_item",
             Self::QuestReward => "quest_assignment",
@@ -247,6 +257,7 @@ impl ChipMove {
             Self::Credit
             | Self::GiftReceived
             | Self::GildReceived
+            | Self::PotWon
             | Self::QuestReward
             | Self::DailyQuestStreakReward
             | Self::DailyPuzzleWin
@@ -277,9 +288,11 @@ impl ChipMove {
             Self::Bet | Self::ShopPurchase | Self::SsnakeArenaLost => {
                 ChipDirection::Debit { floor: 0 }
             }
-            Self::GiftSent | Self::GildSent | Self::CrownTaken | Self::DrinkPurchase => {
-                ChipDirection::Debit { floor: CHIP_FLOOR }
-            }
+            Self::GiftSent
+            | Self::GildSent
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::DrinkPurchase => ChipDirection::Debit { floor: CHIP_FLOOR },
             Self::FloorRestore => ChipDirection::Restore,
         }
     }
@@ -293,9 +306,16 @@ impl ChipMove {
             // would make the board about who has generous friends. The crown
             // is Shop-like vanity spending: a burn that bought a glyph must
             // not knock the buyer off the earners board.
-            Self::FloorRestore | Self::ShopPurchase | Self::GildReceived | Self::CrownTaken => {
-                false
-            }
+            // The pot is excluded on both sides on purpose: a lottery win
+            // must not top the earners board, and if the win is out then the
+            // ticket has to be out too, or buying in would be a pure
+            // negative on a board the winner cannot climb.
+            Self::FloorRestore
+            | Self::ShopPurchase
+            | Self::GildReceived
+            | Self::CrownTaken
+            | Self::PotTicket
+            | Self::PotWon => false,
             Self::Credit
             | Self::Bet
             | Self::GiftSent

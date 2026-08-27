@@ -4,6 +4,7 @@ use late_core::models::leaderboard::DoorGame;
 use crate::app::activity::event::ActivityGame;
 use crate::app::chat::svc::GildRefusal;
 use crate::app::crown::svc::CrownRefusal;
+use crate::app::lobby::daily::svc::DailyWinPayout;
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
@@ -66,8 +67,8 @@ mod inner {
     };
 
     use super::{
-        ActivityGame, CrownRefusal, DoorGame, GildRefusal, GildTier, OnlineTimeFlushResult,
-        RenderReason, SummaryResult, TranslationResult,
+        ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
+        OnlineTimeFlushResult, RenderReason, SummaryResult, TranslationResult,
     };
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -330,6 +331,18 @@ mod inner {
         })
     }
 
+    fn daily_win_payouts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_daily_win_payouts_total")
+                .with_description(
+                    "Daily correspondence match wins by what the chips did (paid, or refused by a lobby gate)",
+                )
+                .build()
+        })
+    }
+
     fn game_wins_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -406,6 +419,22 @@ mod inner {
 
     pub fn record_game_win(game: ActivityGame) {
         game_wins_total().add(1, &[KeyValue::new("game", game_label(game))]);
+    }
+
+    fn daily_win_payout_label(payout: DailyWinPayout) -> &'static str {
+        match payout {
+            DailyWinPayout::Paid => "paid",
+            DailyWinPayout::Unplayed => "unplayed",
+            DailyWinPayout::PairDayCapped => "pair_day_capped",
+            DailyWinPayout::Failed => "failed",
+        }
+    }
+
+    pub fn record_daily_win_payout(payout: DailyWinPayout) {
+        daily_win_payouts_total().add(
+            1,
+            &[KeyValue::new("outcome", daily_win_payout_label(payout))],
+        );
     }
 
     pub fn record_gild_bought(tier: GildTier) {
@@ -548,8 +577,8 @@ mod inner {
 #[cfg(not(feature = "otel"))]
 mod inner {
     use super::{
-        ActivityGame, CrownRefusal, DoorGame, GildRefusal, GildTier, OnlineTimeFlushResult,
-        RenderReason, SummaryResult, TranslationResult,
+        ActivityGame, CrownRefusal, DailyWinPayout, DoorGame, GildRefusal, GildTier,
+        OnlineTimeFlushResult, RenderReason, SummaryResult, TranslationResult,
     };
 
     pub fn record_ssh_connection() {}
@@ -566,6 +595,7 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
+    pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
     pub fn record_crown_taken(_price: i64) {}

@@ -92,9 +92,15 @@ fn the_landing_names_both_endings_their_badges_and_the_second_pass() {
         "light the fire",
         "start over",
     ] {
-        assert!(text.contains(needle), "landing is missing {needle:?}:\n{text}");
+        assert!(
+            text.contains(needle),
+            "landing is missing {needle:?}:\n{text}"
+        );
     }
-    assert!(!text.contains("once per account"), "the chips repeat; only the badge is once");
+    assert!(
+        !text.contains("once per account"),
+        "the chips repeat; only the badge is once"
+    );
 
     let confirm = landing_text(true);
     assert!(confirm.contains("press again to burn it all down"));

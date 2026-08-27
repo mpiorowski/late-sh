@@ -22,6 +22,9 @@ use crate::app::activity::{
 // life any more. The rows already banked under it stay as history, and no gate
 // reads them.
 const PER_EVENT_REWARD_PERIOD_KIND: &str = "event";
+/// The lobby's pair-day cap (SHOP.md Phase 7): one paid win per opponent per
+/// UTC day the match was posted. The key is `<opponent id>:<posting date>`.
+const PAIR_DAY_REWARD_PERIOD_KIND: &str = "pair_day";
 
 #[derive(Clone)]
 pub struct ChipService {
@@ -296,6 +299,52 @@ impl ChipService {
                 payout_kind: template.payout_kind()?,
                 period_kind: PER_EVENT_REWARD_PERIOD_KIND,
                 period_key: event_key,
+                amount: template.reward_chips,
+                chip_move,
+            },
+        )
+        .await?;
+        Ok(reward_grant(template.reward_chips, claim))
+    }
+
+    /// Credit a `per_event` reward that is also capped per counterpart per
+    /// posting day: it pays once per distinct `event_key` (a daily match id)
+    /// AND once per `pair_day_key` (`<opponent id>:<UTC date the match was
+    /// posted>`). Both claims land or neither does.
+    ///
+    /// This is what closes the lobby's resign loop (SHOP.md Phase 7): two
+    /// accounts can post, claim and resign all day, but every match they post
+    /// today shares one pair-day key and pays once. Keying on the posting day
+    /// rather than the finishing day is what keeps honest play whole: two long
+    /// games against the same opponent were posted on different days, so both
+    /// pay whichever day they end.
+    pub async fn credit_per_event_pair_day_reward_template(
+        &self,
+        user_id: Uuid,
+        reward_key: &str,
+        event_key: &str,
+        pair_day_key: &str,
+        chip_move: ChipMove,
+    ) -> anyhow::Result<RewardGrant> {
+        let mut client = self.db.get().await?;
+        let template = RewardTemplate::get_active_by_key(&**client, reward_key).await?;
+        template.ensure_claim_policy(REWARD_CLAIM_POLICY_PER_EVENT)?;
+        let claim = GamePayout::grant_multi(
+            &mut client,
+            GamePayoutMultiGrant {
+                user_id,
+                game: template.game()?,
+                payout_kind: template.payout_kind()?,
+                keys: &[
+                    GamePayoutKey::Unique {
+                        period_kind: PER_EVENT_REWARD_PERIOD_KIND,
+                        period_key: event_key,
+                    },
+                    GamePayoutKey::Unique {
+                        period_kind: PAIR_DAY_REWARD_PERIOD_KIND,
+                        period_key: pair_day_key,
+                    },
+                ],
                 amount: template.reward_chips,
                 chip_move,
             },
