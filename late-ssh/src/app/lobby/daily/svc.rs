@@ -1605,7 +1605,7 @@ impl DailyService {
     async fn record_win_payout(&self, match_id: Uuid, payout: DailyWinPayout) {
         let written = match self.db.get().await {
             Ok(client) => DailyMatch::set_win_payout(&client, match_id, payout.db_str()).await,
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         };
         if let Err(error) = written {
             tracing::error!(

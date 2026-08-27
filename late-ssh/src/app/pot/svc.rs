@@ -23,8 +23,8 @@ use late_core::{
     models::{
         chips::{ChipMove, UserChips},
         pot::{
-            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot,
-            PotChange, PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
+            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange,
+            PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
             next_draw_at,
         },
     },
@@ -646,7 +646,6 @@ impl PotService {
             );
         }
     }
-
 }
 
 /// The draw's seed. The wall clock in nanoseconds, mixed once inside

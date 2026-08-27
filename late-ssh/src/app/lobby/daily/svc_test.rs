@@ -117,7 +117,7 @@ async fn resigned_match(
 
 /// The stored payout outcome of one finished match, as the lingering result
 /// row will read it.
-async fn stored_win_payout(svc: &DailyService, match_id: Uuid) -> Option<DailyWinPayout> {
+fn stored_win_payout(svc: &DailyService, match_id: Uuid) -> Option<DailyWinPayout> {
     let snapshot = svc.subscribe_snapshot().borrow().clone();
     snapshot
         .finished_matches
@@ -317,7 +317,7 @@ async fn checkmate_finishes_match_and_pays_the_winner() {
         "winner never received the win payout"
     );
     assert_eq!(
-        stored_win_payout(&svc, claimed.id).await,
+        stored_win_payout(&svc, claimed.id),
         Some(DailyWinPayout::Paid)
     );
 }
@@ -368,7 +368,7 @@ async fn win_under_the_move_floor_pays_nothing() {
     );
     // The reason survives on the row for a winner who was not connected.
     assert_eq!(
-        stored_win_payout(&svc, claimed.id).await,
+        stored_win_payout(&svc, claimed.id),
         Some(DailyWinPayout::Unplayed)
     );
 }
@@ -392,11 +392,11 @@ async fn pair_day_cap_pays_one_win_per_opponent_per_posting_day() {
         "the second win against the same opponent paid"
     );
     assert_eq!(
-        stored_win_payout(&svc, first.id).await,
+        stored_win_payout(&svc, first.id),
         Some(DailyWinPayout::Paid)
     );
     assert_eq!(
-        stored_win_payout(&svc, second.id).await,
+        stored_win_payout(&svc, second.id),
         Some(DailyWinPayout::PairDayCapped)
     );
 
@@ -442,18 +442,18 @@ async fn pair_day_cap_is_scoped_to_the_game() {
         "a second game against the same opponent is its own cap"
     );
     assert_eq!(
-        stored_win_payout(&svc, chess.id).await,
+        stored_win_payout(&svc, chess.id),
         Some(DailyWinPayout::Paid)
     );
     assert_eq!(
-        stored_win_payout(&svc, chess960.id).await,
+        stored_win_payout(&svc, chess960.id),
         Some(DailyWinPayout::Paid)
     );
 
     // The same game again is where the cap lives.
     let again = resigned_match(&svc, DailyGame::Chess960, a.id, b.id, true).await;
     assert_eq!(
-        stored_win_payout(&svc, again.id).await,
+        stored_win_payout(&svc, again.id),
         Some(DailyWinPayout::PairDayCapped)
     );
     assert_eq!(

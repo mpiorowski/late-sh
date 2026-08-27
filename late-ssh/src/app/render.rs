@@ -1300,10 +1300,14 @@ impl App {
         }) {
             Some(hud) => {
                 // The right-aligned title's last cell sits just inside the
-                // top-right corner, and the mentions segment leads the line.
+                // top-right corner; the mentions segment sits `mentions_offset`
+                // cells into the line, after the pomodoro and voice badges.
                 let total = hud.line.width() as u16;
                 let rect = (hud.mentions_width > 0).then(|| Rect {
-                    x: area.right().saturating_sub(total + 1),
+                    x: area
+                        .right()
+                        .saturating_sub(total + 1)
+                        .saturating_add(hud.mentions_offset),
                     y: area.y,
                     width: hud.mentions_width,
                     height: 1,
@@ -2360,13 +2364,16 @@ fn sponsor_line(include_thanks: bool, include_protocol: bool) -> Line<'static> {
     Line::from(spans).right_aligned()
 }
 
-/// The top-border status line plus the width of its leading mentions
-/// segment, so the click hit test can find the mentions text inside the
-/// right-aligned line (the voice/chips text after it is not clickable).
+/// The top-border status line plus where its mentions segment sits, so the
+/// click hit test can find the mentions text inside the right-aligned line
+/// (no other segment is clickable).
 struct StatusHud {
     line: Line<'static>,
     /// Display cells of the mentions segment, 0 when nothing is unread.
     mentions_width: u16,
+    /// Cells between the start of the line and the mentions segment, so the
+    /// hit test still lands on the text behind the badges leading the HUD.
+    mentions_offset: u16,
 }
 
 /// Everything the status HUD needs, named: `voice_badge` and `pomodoro_badge`
@@ -2411,7 +2418,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     let spare_cols = border_width.saturating_sub(2).saturating_sub(title_width);
 
     // The three long-standing segments always render; the order of the line
-    // is mentions | pomodoro | voice | pot | chips, and the two newcomers are
+    // is pomodoro | voice | mentions | pot | chips, and the two newcomers are
     // fitted against whatever the fixed three leave, the pot last, so under a
     // tight border the pot yields before the countdown does.
     let mentions: Option<HudSegment> = (unread > 0).then(|| {
@@ -2451,12 +2458,12 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
 
     // Width the fixed segments take, dividers between them included, so a
     // newcomer fits when its own width plus its one divider still fits.
-    let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips]
-        .into_iter()
-        .flatten()
-        .collect();
+    let fixed: Vec<&HudSegment> = [&mentions, &voice, &chips].into_iter().flatten().collect();
     let mut count = fixed.len() as u16;
-    let mut used = fixed.iter().map(|segment| hud_segment_width(segment)).sum::<u16>()
+    let mut used = fixed
+        .iter()
+        .map(|segment| hud_segment_width(segment))
+        .sum::<u16>()
         + count.saturating_sub(1);
     let fits = |used: u16, count: u16, text_width: u16| {
         // +2 for the spaces padding the badge inside its segment, +1 for the
@@ -2518,19 +2525,25 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
         ])
     });
 
-    let segments: Vec<HudSegment> = [mentions, pomodoro, voice, pot, chips]
+    // Mentions sit behind the pomodoro and the voice badge, so the hit test
+    // needs how far into the line they start: every segment before them, each
+    // with the divider it brings.
+    let mentions_width = mentions.as_ref().map_or(0, hud_segment_width);
+    let mentions_offset: u16 = match &mentions {
+        Some(_) => [&pomodoro, &voice]
+            .into_iter()
+            .flatten()
+            .map(|segment| hud_segment_width(segment) + 1)
+            .sum(),
+        None => 0,
+    };
+    let segments: Vec<HudSegment> = [pomodoro, voice, mentions, pot, chips]
         .into_iter()
         .flatten()
         .collect();
     if segments.is_empty() {
         return None;
     }
-    // Mentions lead the line, so the hit-test rect measured here stays
-    // correct whatever else the HUD carries.
-    let mentions_width = match unread > 0 {
-        true => hud_segment_width(&segments[0]),
-        false => 0,
-    };
     let mut spans = Vec::new();
     for (index, segment) in segments.into_iter().enumerate() {
         if index > 0 {
@@ -2541,6 +2554,7 @@ fn status_hud_title(inputs: StatusHudInputs<'_>) -> Option<StatusHud> {
     Some(StatusHud {
         line: Line::from(spans).right_aligned(),
         mentions_width,
+        mentions_offset,
     })
 }
 
