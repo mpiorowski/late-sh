@@ -1,8 +1,9 @@
-//! The pot: one parimutuel raffle a day, drawn at a fixed UTC hour.
+//! The pot: one parimutuel raffle a week, drawn on a fixed weekday at a
+//! fixed UTC hour.
 //!
 //! Tickets cost [`POT_TICKET_PRICE`] and are capped at
-//! [`POT_MAX_TICKETS_PER_USER`] per player per pot, so the price is set by
-//! how many people want in rather than by us. At the draw one ticket is
+//! [`POT_MAX_TICKETS_PER_DAY`] per player per UTC day, so the draw is about
+//! showing up through the week rather than about bank. At the draw one ticket is
 //! pulled weighted by holding, [`payout_for`] of the pot goes to whoever
 //! holds it, and the rest has no credit row anywhere: that gap is the burn.
 //!
@@ -12,7 +13,7 @@
 //! that does both belongs to the caller.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{Client, GenericClient, Row, Transaction};
 use uuid::Uuid;
@@ -27,13 +28,18 @@ pub const POT_CHANGED_CHANNEL: &str = "pot_changed";
 /// whole clubhouse rather than from three whales.
 pub const POT_TICKET_PRICE: i64 = 100;
 
-/// The most tickets one account may hold in one pot. The cap is what keeps
-/// the draw a raffle instead of an auction: a six-figure balance can buy the
-/// same 50 tickets a 5,000-chip balance can.
-pub const POT_MAX_TICKETS_PER_USER: i64 = 50;
+/// The most tickets one account may buy in one UTC day. The cap is what
+/// keeps the draw a raffle instead of an auction, and the day is what makes
+/// it a reason to come back: a full week is 70 tickets and nobody can buy
+/// them on Monday. 1,000 chips a day is an arcade afternoon, so the cap is
+/// reachable by anyone who plays, not only by a six-figure balance.
+pub const POT_MAX_TICKETS_PER_DAY: i64 = 10;
 
-/// The UTC hour the pot draws at, every day. One constant: the countdown,
-/// the sweeper, and the next pot's `draws_at` all derive from it.
+/// The weekday and UTC hour the pot draws at, every week. Two constants: the
+/// countdown, the sweeper, and the next pot's `draws_at` all derive from
+/// them. Monday 21:00 UTC is late evening in Europe and afternoon across the
+/// US, the widest overlap the clubhouse has.
+pub const POT_DRAW_WEEKDAY: Weekday = Weekday::Mon;
 pub const POT_DRAW_HOUR_UTC: u32 = 21;
 
 /// Pot sizes that get a #lounge line, once each per pot, in ascending order.
@@ -48,19 +54,25 @@ pub fn payout_for(size: i64) -> i64 {
     size.saturating_mul(4) / 5
 }
 
-/// The next [`POT_DRAW_HOUR_UTC`] strictly after `now`. A draw that settles
-/// at 21:00:30 schedules the next pot for tomorrow, and a pot opened at
-/// 09:00 draws this evening.
+/// The next [`POT_DRAW_WEEKDAY`] at [`POT_DRAW_HOUR_UTC`] strictly after
+/// `now`. A draw that settles Monday at 21:00:30 schedules the next pot for
+/// the following Monday, and a pot opened on a Thursday draws the coming
+/// Monday evening.
 pub fn next_draw_at(now: DateTime<Utc>) -> DateTime<Utc> {
     let today = now
         .date_naive()
         .and_hms_opt(POT_DRAW_HOUR_UTC, 0, 0)
         .expect("the draw hour is a valid time of day")
         .and_utc();
-    match today > now {
+    // The first draw hour strictly after now, then forward to the weekday.
+    let candidate = match today > now {
         true => today,
         false => today + Duration::days(1),
-    }
+    };
+    let days_ahead = (i64::from(POT_DRAW_WEEKDAY.num_days_from_monday())
+        - i64::from(candidate.weekday().num_days_from_monday()))
+    .rem_euclid(7);
+    candidate + Duration::days(days_ahead)
 }
 
 /// Where a pot is in its life. Closed, because every read that branches on it
@@ -381,29 +393,34 @@ pub struct PotTicket;
 
 impl PotTicket {
     /// Buy `count` tickets, refusing in the query when the buyer is already
-    /// at the cap. `None` means the cap said no; the caller turns that into a
-    /// refusal and rolls back, so nothing was charged.
+    /// at today's cap. `None` means the cap said no; the caller turns that
+    /// into a refusal and rolls back, so nothing was charged. `Some` is the
+    /// buyer's whole holding in the pot after the buy.
     ///
-    /// The cap is enforced by the `WHERE` on the insert, and made exact by
-    /// the caller holding [`Pot::lock_open_for_buy`]: without that lock two
-    /// concurrent buys by one player could both read the same sum.
+    /// The cap is per UTC day (`created`, in UTC, on today's date), enforced
+    /// by the `WHERE` on the insert, and made exact by the caller holding
+    /// [`Pot::lock_open_for_buy`]: without that lock two concurrent buys by
+    /// one player could both read the same sum.
     pub async fn buy_in_tx(
         tx: &Transaction<'_>,
         pot_id: Uuid,
         user_id: Uuid,
         count: i64,
-        cap: i64,
+        daily_cap: i64,
     ) -> Result<Option<i64>> {
         let inserted = tx
             .query_opt(
                 "INSERT INTO pot_tickets (pot_id, user_id, count)
                  SELECT $1, $2, $3
                  WHERE COALESCE(
-                     (SELECT SUM(count) FROM pot_tickets WHERE pot_id = $1 AND user_id = $2),
+                     (SELECT SUM(count) FROM pot_tickets
+                      WHERE pot_id = $1 AND user_id = $2
+                        AND (created AT TIME ZONE 'UTC')::date
+                            = (current_timestamp AT TIME ZONE 'UTC')::date),
                      0
                  )::BIGINT + $3 <= $4
                  RETURNING id",
-                &[&pot_id, &user_id, &count, &cap],
+                &[&pot_id, &user_id, &count, &daily_cap],
             )
             .await?;
         match inserted {
@@ -426,6 +443,26 @@ impl PotTicket {
                 "SELECT COALESCE(SUM(count), 0)::BIGINT AS tickets
                  FROM pot_tickets
                  WHERE pot_id = $1 AND user_id = $2",
+                &[&pot_id, &user_id],
+            )
+            .await?;
+        Ok(row.get("tickets"))
+    }
+
+    /// How many tickets one player bought in one pot today (UTC), the number
+    /// the daily cap counts. Scoped to the user in the query.
+    pub async fn user_total_today(
+        client: &impl GenericClient,
+        pot_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<i64> {
+        let row = client
+            .query_one(
+                "SELECT COALESCE(SUM(count), 0)::BIGINT AS tickets
+                 FROM pot_tickets
+                 WHERE pot_id = $1 AND user_id = $2
+                   AND (created AT TIME ZONE 'UTC')::date
+                       = (current_timestamp AT TIME ZONE 'UTC')::date",
                 &[&pot_id, &user_id],
             )
             .await?;

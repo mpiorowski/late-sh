@@ -46,7 +46,7 @@ fn click_global_offset_splits_into_line_and_col() {
 /// and anything else is a usage banner rather than a refused transaction.
 #[test]
 fn parse_pot_command_only_admits_a_buyable_count() {
-    use late_core::models::pot::POT_MAX_TICKETS_PER_USER;
+    use late_core::models::pot::POT_MAX_TICKETS_PER_DAY;
 
     assert_eq!(parse_pot_command("/pot"), Some(Some(PotCommand::Status)));
     assert_eq!(
@@ -58,9 +58,9 @@ fn parse_pot_command_only_admits_a_buyable_count() {
         Some(Some(PotCommand::Buy { count: 5 }))
     );
     assert_eq!(
-        parse_pot_command(&format!("/pot buy {POT_MAX_TICKETS_PER_USER}")),
+        parse_pot_command(&format!("/pot buy {POT_MAX_TICKETS_PER_DAY}")),
         Some(Some(PotCommand::Buy {
-            count: POT_MAX_TICKETS_PER_USER
+            count: POT_MAX_TICKETS_PER_DAY
         }))
     );
 
@@ -69,7 +69,7 @@ fn parse_pot_command_only_admits_a_buyable_count() {
     for junk in [
         "/pot buy 0",
         "/pot buy -3",
-        &format!("/pot buy {}", POT_MAX_TICKETS_PER_USER + 1),
+        &format!("/pot buy {}", POT_MAX_TICKETS_PER_DAY + 1),
         "/pot buy all",
         "/pot buy",
         "/pot sell 3",

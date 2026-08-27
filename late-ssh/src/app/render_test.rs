@@ -5,6 +5,7 @@ use super::{
     room_list_sidebar_enabled, sidebar_enabled, sponsor_line, status_hud_title,
 };
 use crate::app::common::primitives::Screen;
+use crate::app::pot::state::PotView;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
 use uuid::Uuid;
 
@@ -30,6 +31,7 @@ fn hud(
         unread,
         voice_badge,
         pomodoro_badge,
+        pot: None,
         border_width: WIDE_HUD_BORDER,
         title_width: 0,
     })
@@ -250,6 +252,77 @@ fn status_hud_title_renders_pomodoro_between_mentions_and_voice() {
     assert_eq!(combined.mentions_width, " 2 unread mentions ".len() as u16);
 }
 
+/// The pot sits right before the chips, so the prize reads against the
+/// viewer's own balance, and it is the first segment the border sheds:
+/// countdown first, then the whole badge, before the pomodoro gives up its
+/// label.
+#[test]
+fn status_hud_title_renders_pot_before_chips_and_sheds_it_first() {
+    let pot = PotView {
+        size: 84_200,
+        ticket_count: 842,
+        my_tickets: 5,
+        draws_in: "3h12m".to_string(),
+        open: true,
+    };
+    let with_pot = |border_width: u16| {
+        status_hud_title(StatusHudInputs {
+            balance: Some(1_500),
+            unread: 2,
+            voice_badge: Some(" mic #lounge [muted] "),
+            pomodoro_badge: Some("05:00 Pomodoro"),
+            pot: Some(&pot),
+            border_width,
+            title_width: 0,
+        })
+        .map(|hud| line_text(&hud.line))
+    };
+    let full =
+        " 2 unread mentions | 05:00 Pomodoro | mic #lounge [muted] | pot 84,200 · 3h12m | 1500 chips ";
+    let without_clock =
+        " 2 unread mentions | 05:00 Pomodoro | mic #lounge [muted] | pot 84,200 | 1500 chips ";
+    let without_pot = " 2 unread mentions | 05:00 Pomodoro | mic #lounge [muted] | 1500 chips ";
+    let width = |text: &str| text.chars().count() as u16 + 2;
+
+    assert_eq!(with_pot(WIDE_HUD_BORDER).as_deref(), Some(full));
+    assert_eq!(
+        with_pot(width(full) - 1).as_deref(),
+        Some(without_clock),
+        "one cell short drops the countdown, not the pot"
+    );
+    assert_eq!(
+        with_pot(width(without_clock) - 1).as_deref(),
+        Some(without_pot),
+        "too tight for the size drops the pot before the pomodoro label"
+    );
+
+    // Alone with the chips it still reads pot first, balance last, and a
+    // pot with nothing else keeps the HUD alive on its own.
+    let alone = status_hud_title(StatusHudInputs {
+        balance: Some(1_500),
+        unread: 0,
+        voice_badge: None,
+        pomodoro_badge: None,
+        pot: Some(&pot),
+        border_width: WIDE_HUD_BORDER,
+        title_width: 0,
+    })
+    .expect("pot + chips should render");
+    assert_eq!(line_text(&alone.line), " pot 84,200 · 3h12m | 1500 chips ");
+    assert_eq!(alone.mentions_width, 0);
+    let only = status_hud_title(StatusHudInputs {
+        balance: None,
+        unread: 0,
+        voice_badge: None,
+        pomodoro_badge: None,
+        pot: Some(&pot),
+        border_width: WIDE_HUD_BORDER,
+        title_width: 0,
+    })
+    .expect("pot alone should render");
+    assert_eq!(line_text(&only.line), " pot 84,200 · 3h12m ");
+}
+
 #[test]
 fn sponsor_title_drops_optional_segments_before_overlapping_help_hints() {
     let full_width = line_width(&sponsor_line(true, true));
@@ -332,6 +405,7 @@ fn status_hud_title_degrades_pomodoro_to_fit_the_border() {
             unread: 2,
             voice_badge: Some(" mic #lounge [muted] "),
             pomodoro_badge: Some("05:00 Pomodoro"),
+            pot: None,
             border_width: spare + 2 + TABS,
             title_width: TABS,
         })
@@ -366,6 +440,7 @@ fn status_hud_title_drops_pomodoro_when_the_title_outgrows_the_border() {
         unread: 0,
         voice_badge: None,
         pomodoro_badge: Some("05:00 Pomodoro"),
+        pot: None,
         border_width: 10,
         title_width: 40,
     })
@@ -393,6 +468,7 @@ fn status_hud_title_places_pomodoro_dividers_without_mentions() {
         unread: 0,
         voice_badge: Some(" mic #lounge [muted] "),
         pomodoro_badge: Some("05:00 focus"),
+        pot: None,
         border_width: 7,
         title_width: 0,
     })

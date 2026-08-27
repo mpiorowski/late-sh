@@ -181,7 +181,7 @@ fn repeat_key(event: &ActivityEvent) -> String {
         // the user alone would swallow a re-take after someone else briefly
         // held it.
         ActivityKind::CrownTaken { reign_id, .. } => format!("crown-taken:{reign_id}"),
-        // Keyed on the pot: there is one draw a day and one line per
+        // Keyed on the pot: there is one draw a week and one line per
         // threshold per pot, both already once-only in the table, so the key
         // only has to keep two pots' lines from throttling each other.
         ActivityKind::PotDrawn { pot_id, .. } => format!("pot-drawn:{pot_id}"),

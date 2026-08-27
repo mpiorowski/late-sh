@@ -330,9 +330,10 @@ pub(crate) enum PotCommand {
 /// line is not a pot command at all.
 ///
 /// The count is parsed here rather than in the service: a boundary that only
-/// admits 1..=cap is what lets everything downstream trust the number.
+/// admits 1..=(the daily cap) is what lets everything downstream trust the
+/// number; whether today still has room is the service's call.
 fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
-    use late_core::models::pot::POT_MAX_TICKETS_PER_USER;
+    use late_core::models::pot::POT_MAX_TICKETS_PER_DAY;
     let rest = body.trim().strip_prefix("/pot")?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return None;
@@ -349,7 +350,7 @@ fn parse_pot_command(body: &str) -> Option<Option<PotCommand>> {
             .trim()
             .parse::<i64>()
             .ok()
-            .filter(|count| (1..=POT_MAX_TICKETS_PER_USER).contains(count))
+            .filter(|count| (1..=POT_MAX_TICKETS_PER_DAY).contains(count))
             .map(|count| PotCommand::Buy { count }),
     )
 }
@@ -3422,7 +3423,7 @@ impl ChatState {
             let Some(command) = parsed else {
                 return Some(Banner::error(&format!(
                     "Usage: /pot, or /pot buy N (1 to {})",
-                    late_core::models::pot::POT_MAX_TICKETS_PER_USER
+                    late_core::models::pot::POT_MAX_TICKETS_PER_DAY
                 )));
             };
             self.requested_pot = Some(command);

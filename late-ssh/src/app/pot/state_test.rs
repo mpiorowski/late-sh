@@ -6,7 +6,9 @@ use super::{countdown, short_duration};
 /// pot reads `soon` rather than `0s` or a negative: the sweeper wakes once a
 /// minute, so "now" would be a promise the panel cannot keep.
 #[test]
-fn the_countdown_reads_the_four_shapes_it_has() {
+fn the_countdown_reads_the_five_shapes_it_has() {
+    assert_eq!(short_duration(4 * 86_400 + 12 * 3_600 + 30 * 60), "4d12h");
+    assert_eq!(short_duration(86_400), "1d00h");
     assert_eq!(short_duration(3 * 3_600 + 12 * 60), "3h12m");
     assert_eq!(short_duration(12 * 60), "12m");
     assert_eq!(short_duration(45), "45s");

@@ -111,10 +111,10 @@ pub enum ActivityKind {
         /// The deposed holder, absent when the crown was vacant.
         from: Option<String>,
     },
-    /// The daily pot drew. Names the winner and the odds they beat, because
+    /// The weekly pot drew. Names the winner and the odds they beat, because
     /// the odds are the story: a three-ticket win off three hundred reads
     /// very differently from a fifty-ticket one. `pot_id` keys the #lounge
-    /// repeat throttle; there is one of these a day anyway.
+    /// repeat throttle; there is one of these a week anyway.
     PotDrawn {
         pot_id: Uuid,
         payout: i64,

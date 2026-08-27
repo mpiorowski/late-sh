@@ -1,6 +1,6 @@
-//! The pot: orchestration for the daily raffle.
+//! The pot: orchestration for the weekly raffle.
 //!
-//! Two commands (`/pot`, `/pot buy N`), one sweeper, one story a day. This
+//! Two commands (`/pot`, `/pot buy N`), one sweeper, one story a week. This
 //! module owns every refusal, every log line, the #lounge lines, and the
 //! process-shared snapshot the sidebar panel reads;
 //! `late_core::models::pot` owns the tables and the money math underneath it.
@@ -23,7 +23,7 @@ use late_core::{
     models::{
         chips::{ChipMove, UserChips},
         pot::{
-            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_USER, POT_THRESHOLDS, POT_TICKET_PRICE, Pot,
+            POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_THRESHOLDS, POT_TICKET_PRICE, Pot,
             PotChange, PotDraw, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
             next_draw_at,
         },
@@ -92,10 +92,10 @@ impl PotSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PotRefusal {
     /// The pot drew between the command and the transaction. Vanishingly
-    /// rare (one 60-second sweep a day), and the next pot is already open.
+    /// rare (one 60-second sweep a week), and the next pot is already open.
     Closed,
-    /// This buy would take the player past the per-pot cap.
-    CapReached { held: i64 },
+    /// This buy would take the player past today's cap.
+    CapReached { bought_today: i64 },
     /// The price would take the buyer below the chip floor.
     InsufficientChips { price: i64 },
 }
@@ -105,8 +105,8 @@ impl PotRefusal {
     pub fn message(self) -> String {
         match self {
             Self::Closed => "The pot just drew, the next one is open".to_string(),
-            Self::CapReached { held } => format!(
-                "You hold {held} of the {POT_MAX_TICKETS_PER_USER} tickets one player may hold"
+            Self::CapReached { bought_today } => format!(
+                "You bought {bought_today} of the {POT_MAX_TICKETS_PER_DAY} tickets one player may buy a day"
             ),
             Self::InsufficientChips { price } => {
                 format!("That many tickets costs {} chips", thousands(price))
@@ -486,9 +486,9 @@ impl PotService {
     /// notify. Every early return drops the transaction, which rolls it back,
     /// so a refusal here is uncharged too.
     ///
-    /// The row lock is what makes the cap exact: two buys by the same player
-    /// at the same instant serialize on it instead of both reading the same
-    /// holding, and a buy can never land in a pot the sweeper is drawing.
+    /// The row lock is what makes the daily cap exact: two buys by the same
+    /// player at the same instant serialize on it instead of both reading the
+    /// same sum, and a buy can never land in a pot the sweeper is drawing.
     pub(super) async fn buy(&self, user_id: Uuid, count: i64) -> Result<PotBuyOutcome, PotError> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await.map_err(anyhow::Error::from)?;
@@ -496,10 +496,10 @@ impl PotService {
             return Err(PotError::Refused(PotRefusal::Closed));
         };
         let Some(held) =
-            PotTicket::buy_in_tx(&tx, pot.id, user_id, count, POT_MAX_TICKETS_PER_USER).await?
+            PotTicket::buy_in_tx(&tx, pot.id, user_id, count, POT_MAX_TICKETS_PER_DAY).await?
         else {
-            let held = PotTicket::user_total(&*tx, pot.id, user_id).await?;
-            return Err(PotError::Refused(PotRefusal::CapReached { held }));
+            let bought_today = PotTicket::user_total_today(&*tx, pot.id, user_id).await?;
+            return Err(PotError::Refused(PotRefusal::CapReached { bought_today }));
         };
         let price = count.saturating_mul(pot.ticket_price);
         let Some(chips) = UserChips::apply(

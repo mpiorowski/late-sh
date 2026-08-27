@@ -101,9 +101,9 @@ North-star check, borrowed from GAME.md: **does it ship a story into
 | Burn milestones | 🕯️ Wick 50,000 / 🧨 Fuse 150,000 / 🌋 Furnace 500,000 (lowered from 100,000 / 500,000 / 1,000,000 on 2026-08-26, when the ultimates came down to 1M and took the ceiling) |
 | Ultimate spell | 1,000,000 (lowered from 10,000,000 on 2026-08-26: at ten million neither spell ever sold, and the shop's ceiling belongs on a thing people can actually reach) |
 | Pot ticket | 100 chips |
-| Pot per-user cap | 50 tickets per pot |
+| Pot per-user cap | 10 tickets per UTC day, 70 a week (was 50 per pot while the pot was daily; decided 2026-08-27) |
 | Pot payout | 80% of ticket sum to one ticket-weighted winner; 20% never re-minted |
-| Pot draw hour | 21:00 UTC, one constant |
+| Pot draw | Monday 21:00 UTC, two constants (weekly since 2026-08-27; the hour is the EU evening / US afternoon overlap) |
 | Pot threshold lines | 50,000 and 100,000, once each per pot |
 
 ## Process
@@ -525,7 +525,8 @@ ultimate spells, any equip choice between milestones.
 
 ## Phase 5: the pot
 
-Goal: a daily parimutuel raffle. The biggest sink that works at any
+Goal: a parimutuel raffle (daily as designed, weekly as shipped, see the
+status below). The biggest sink that works at any
 concurrency, one story a day, and the arena's betting engine (GAME.md
 phase 4) built early. Do not generalize it into a "pool" abstraction; the
 arena copies the shape when it exists.
@@ -572,6 +573,21 @@ Behavior:
 
 Status: shipped 2026-08-27 (migration 160, `late-core/src/models/pot.rs`,
 `late-ssh/src/app/pot/`). Deviations from the design above, each deliberate:
+- **Weekly, not daily**, drawn Monday 21:00 UTC, and the cap is **10 a
+  day** rather than N per pot (decided 2026-08-27, same day). At the clubhouse's size a daily pot is a few
+  thousand chips, the 50k / 100k threshold lines would never fire, and empty
+  days rolling would quietly say nobody plays. One real story a week, a
+  countdown in days, and a daily cap so nobody can buy the week on Monday:
+  the raffle is about showing up seven times, and 1,000 chips a day is an
+  arcade afternoon, reachable by anyone who plays. The pot therefore stops
+  being a whale sink (7,000 a week per player at most); the crown and the
+  milestones are the whale sinks. No schema change: `next_draw_at` picks the
+  next Monday, `short_duration` learned days, and the cap check in the insert
+  counts today's rows (`created` on today's UTC date) instead of the pot's. The 21:00 hour stays as the EU evening / US
+  afternoon overlap.
+- **The pot also rides the status HUD**, `pot 84,200 · 4d12h` right before
+  the chips so the prize reads against the viewer's balance, on every
+  screen. It sheds first under a tight border (countdown, then itself).
 - **`/pot` costs no query.** The design put "the caller's ticket count" in
   the `watch` snapshot, which a process-wide watch cannot carry. Instead
   `PotSnapshot` holds a private `HashMap<Uuid, i64>` of holdings and

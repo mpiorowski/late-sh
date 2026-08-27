@@ -7,7 +7,7 @@
 use chrono::{Duration, Utc};
 use late_core::models::{
     chips::{CHIP_FLOOR, ChipMove, INITIAL_CHIP_BALANCE, UserChips},
-    pot::{POT_MAX_TICKETS_PER_USER, POT_TICKET_PRICE, Pot, PotStatus, next_draw_at},
+    pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotStatus, next_draw_at},
 };
 use late_core::test_utils::create_test_user;
 use uuid::Uuid;
@@ -154,10 +154,10 @@ async fn a_buy_debits_once_and_grows_the_pot() {
     assert_eq!(status.size, 500);
 }
 
-/// The cap is a refusal, not an error, and a refused buy costs nothing: no
-/// ticket row and no ledger row.
+/// Today's cap is a refusal, not an error, and a refused buy costs nothing:
+/// no ticket row and no ledger row.
 #[tokio::test]
-async fn a_buy_past_the_cap_is_refused_uncharged() {
+async fn a_buy_past_the_daily_cap_is_refused_uncharged() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let service = PotService::new(test_db.db.clone());
@@ -168,21 +168,21 @@ async fn a_buy_past_the_cap_is_refused_uncharged() {
 
     service.settle_due().await.expect("open the first pot");
     service
-        .buy(buyer.id, POT_MAX_TICKETS_PER_USER)
+        .buy(buyer.id, POT_MAX_TICKETS_PER_DAY)
         .await
         .expect("buy to the cap");
     let after_the_cap = balance(&client, buyer.id).await;
 
     match service.buy(buyer.id, 1).await {
-        Err(PotError::Refused(PotRefusal::CapReached { held })) => {
-            assert_eq!(held, POT_MAX_TICKETS_PER_USER);
+        Err(PotError::Refused(PotRefusal::CapReached { bought_today })) => {
+            assert_eq!(bought_today, POT_MAX_TICKETS_PER_DAY);
         }
         other => panic!("expected a cap refusal, got {other:?}"),
     }
     assert_eq!(balance(&client, buyer.id).await, after_the_cap);
     assert_eq!(
         pot_ledger(&client, buyer.id).await,
-        vec![-POT_MAX_TICKETS_PER_USER * POT_TICKET_PRICE],
+        vec![-POT_MAX_TICKETS_PER_DAY * POT_TICKET_PRICE],
         "the refused buy wrote no ledger row"
     );
 }

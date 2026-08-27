@@ -126,7 +126,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // by price (each take is 1.5x the last), so this is the story the
         // crown exists to ship.
         ActivityKind::CrownTaken { .. } => true,
-        // The pot's two lines: once a day when it draws, and at most twice
+        // The pot's two lines: once a week when it draws, and at most twice
         // before that when it crosses a size worth looking up for. Both are
         // invitations, and both are rare by construction.
         ActivityKind::PotDrawn { .. } => true,

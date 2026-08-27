@@ -1,15 +1,16 @@
 # Pot Context
 
 ## Metadata
-- Domain: the daily pot, late.sh's parimutuel raffle and its largest concurrency-safe chip sink
+- Domain: the weekly pot, late.sh's parimutuel raffle and its largest concurrency-safe chip sink
 - Scope: `late-ssh/src/app/pot/`, `late-core/src/models/pot.rs`, migration 160, the `pot` sidebar panel, the `/pot` composer commands
 - Read this before: changing the ticket price or the cap, the draw hour, the payout split, the sweeper, or anything that reads `pots` / `pot_tickets`
 - Related: root `CONTEXT.md` (routing, chips), `SHOP.md` phase 5 (the decided design and the fixed numbers), `late-ssh/src/app/crown/svc.rs` (the service shape this copies)
 
 ## 1. Summary
 
-One pot is open at a time. Tickets cost a flat 100 chips, capped at 50 per
-player per pot. At 21:00 UTC the pot draws: one ticket is pulled weighted by
+One pot is open at a time. Tickets cost a flat 100 chips, at most 10 per
+player per UTC day (so a full week is 70, and nobody can buy them all on
+Monday). Monday 21:00 UTC the pot draws: one ticket is pulled weighted by
 holding, its owner takes 80% of everything the tickets paid in, and the other
 fifth has no credit row anywhere. That gap is the burn. The next pot opens in
 the same transaction, so there is always exactly one open pot and `/pot`
@@ -23,7 +24,7 @@ There is no house wallet and no stored running total. A live pot's size is
 
 | File | Owns |
 |---|---|
-| `late-core/src/models/pot.rs` | Both tables, the fixed numbers (`POT_TICKET_PRICE`, `POT_MAX_TICKETS_PER_USER`, `POT_DRAW_HOUR_UTC`, `POT_THRESHOLDS`), and the pure money math: `payout_for`, `next_draw_at`, `draw_from_seed`. |
+| `late-core/src/models/pot.rs` | Both tables, the fixed numbers (`POT_TICKET_PRICE`, `POT_MAX_TICKETS_PER_DAY`, `POT_DRAW_HOUR_UTC`, `POT_THRESHOLDS`), and the pure money math: `payout_for`, `next_draw_at`, `draw_from_seed`. |
 | `late-core/src/models/pot_test.rs` | The whole-state draw assertion, the weighting guard, the cap-in-the-insert test, the one-open-pot and one-sweeper-settles tests, the notify test. |
 | `svc.rs` | `PotService`: the shared snapshot, the buy transaction, the sweeper, the Postgres listener, every refusal and every log line. |
 | `state.rs` | `PotView` (the per-session projection the panel draws) and the one countdown format. |
@@ -41,10 +42,11 @@ fixed-numbers table. Change them there, not in a code comment.
 
 | Dial | Value | Constant |
 |---|---|---|
+| Cadence | weekly (decided 2026-08-27; the design said daily, but at this size a daily pot is an arcade afternoon and its thresholds never fire) | `next_draw_at` |
 | Ticket price | 100 chips | `POT_TICKET_PRICE` |
-| Per-user cap | 50 tickets per pot | `POT_MAX_TICKETS_PER_USER` |
+| Per-user cap | 10 tickets per UTC day (70 a week; decided 2026-08-27 so the raffle is about showing up, and 1,000 a day is reachable by anyone who plays) | `POT_MAX_TICKETS_PER_DAY` |
 | Payout | 80% of the ticket sum, floored | `payout_for` |
-| Draw hour | 21:00 UTC | `POT_DRAW_HOUR_UTC` |
+| Draw | Monday 21:00 UTC (late evening in Europe, afternoon across the US) | `POT_DRAW_WEEKDAY`, `POT_DRAW_HOUR_UTC` |
 | Threshold lines | 50,000 and 100,000, once each per pot | `POT_THRESHOLDS` |
 
 ## 4. Chips
@@ -82,9 +84,11 @@ Three separate guards, none of which replaces another:
    announcement.
 
 The buy path takes `Pot::lock_open_for_buy` (row lock, no advisory lock). That
-row lock is what makes the per-user cap exact: the cap is checked inside the
-insert's `WHERE`, and two concurrent buys by one player serialize on the pot
-row instead of both reading the same sum. It also keeps a buy from landing in
+row lock is what makes the daily cap exact: the cap is checked inside the
+insert's `WHERE` (today's rows only, `created` on today's UTC date), and two
+concurrent buys by one player serialize on the pot row instead of both
+reading the same sum. The holding (`user_total`) is the whole pot; the cap
+(`user_total_today`) is today. It also keeps a buy from landing in
 a pot the sweeper is drawing: after the draw commits, the blocked buy
 re-evaluates its `WHERE status = 'open'`, finds nothing, and refuses with
 `PotRefusal::Closed` (uncharged).
@@ -139,6 +143,17 @@ The rail is 24 columns and the panel draws into 21:
 Before the first refresh (and in a process with no pot service) both rows are
 dashes rather than a zero-chip pot nobody can buy into.
 
+## 7b. The status HUD badge
+
+`render.rs::status_hud_title` carries the open pot as `pot 84,200 · 3h12m`,
+placed right before the chips segment so the prize reads against the viewer's
+own balance (`... | pot 84,200 · 3h12m | 1500 chips`). It reads the same
+`App.pot_view` the panel does, so it costs no query and repaints on the same
+~1s edge. The HUD is painted over the left title, so under a tight border it
+degrades: countdown first (`pot 84,200`), then the whole badge, and it yields
+before the pomodoro badge does because it is ambient and `/pot` still answers.
+Absent before the first refresh and in a process with no pot service.
+
 ## 8. Feed lines
 
 Two `ActivityKind` arms, both explicit in `filter::lounge_includes`:
@@ -168,7 +183,7 @@ A pot that rolls empty announces nothing: no chips moved and nobody lost.
   `svc_test.rs` that moves `draws_at` into the past. `PotService` always
   schedules from `next_draw_at`; `Pot::open_in_tx` takes the hour explicitly
   rather than defaulting, so nothing can silently pick when money moves.
-- **`next_draw_at` is strictly after `now`.** A pot settling at exactly 21:00
+- **`next_draw_at` is strictly after `now`.** A pot settling at exactly Monday 21:00
   schedules tomorrow, not itself.
 - **A winner who deletes their account** leaves `pots.winner_user_id` NULL
   (`ON DELETE SET NULL`); the drawn/rolled CHECK constraints tell the two
@@ -178,7 +193,8 @@ A pot that rolls empty announces nothing: no chips moved and nobody lost.
   `BIGINT` before comparing against a bound `i64`. Dropping the cast gets you
   "inconsistent types deduced for parameter".
 - The composer parse is the boundary for the ticket count: only `1..=cap`
-  reaches the service, so nothing downstream re-checks it.
+  (the daily cap) reaches the service, so nothing downstream re-checks the
+  number; whether today still has room is the insert's `WHERE`.
 
 ## 11. Out of scope (SHOP.md phase 5)
 

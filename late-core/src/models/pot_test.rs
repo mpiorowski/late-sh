@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     models::pot::{
-        POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_USER, POT_TICKET_PRICE, Pot, PotChange, PotDraw,
+        POT_CHANGED_CHANNEL, POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE, Pot, PotChange, PotDraw,
         PotStatus, PotTicket, PotTicketHolder, draw_from_seed, listen_for_pot_changes,
         next_draw_at, payout_for,
     },
@@ -92,33 +92,50 @@ fn the_payout_floors_at_four_fifths() {
     assert_eq!(payout_for(999), 799);
 }
 
-/// The draw hour is one constant, and "next" is strictly after now, so a pot
-/// settling at its own draw hour schedules tomorrow rather than itself.
+/// The draw is Monday 21:00 UTC, and "next" is strictly after now, so a pot
+/// settling at its own draw hour schedules the following Monday rather than
+/// itself. 2026-08-31 is a Monday.
 #[test]
-fn the_next_draw_is_the_next_twenty_one_hundred_utc() {
-    let morning = Utc.with_ymd_and_hms(2026, 8, 27, 9, 0, 0).unwrap();
+fn the_next_draw_is_the_next_monday_twenty_one_hundred_utc() {
+    let thursday = Utc.with_ymd_and_hms(2026, 8, 27, 9, 0, 0).unwrap();
     assert_eq!(
-        next_draw_at(morning),
-        Utc.with_ymd_and_hms(2026, 8, 27, 21, 0, 0).unwrap()
+        next_draw_at(thursday),
+        Utc.with_ymd_and_hms(2026, 8, 31, 21, 0, 0).unwrap()
     );
 
-    let on_the_hour = Utc.with_ymd_and_hms(2026, 8, 27, 21, 0, 0).unwrap();
+    let monday_morning = Utc.with_ymd_and_hms(2026, 8, 31, 9, 0, 0).unwrap();
+    assert_eq!(
+        next_draw_at(monday_morning),
+        Utc.with_ymd_and_hms(2026, 8, 31, 21, 0, 0).unwrap(),
+        "a Monday before the hour draws that evening"
+    );
+
+    let on_the_hour = Utc.with_ymd_and_hms(2026, 8, 31, 21, 0, 0).unwrap();
     assert_eq!(
         next_draw_at(on_the_hour),
-        Utc.with_ymd_and_hms(2026, 8, 28, 21, 0, 0).unwrap()
+        Utc.with_ymd_and_hms(2026, 9, 7, 21, 0, 0).unwrap(),
+        "exactly on the hour is the following week"
     );
 
-    let late = Utc.with_ymd_and_hms(2026, 8, 27, 23, 30, 0).unwrap();
+    let monday_late = Utc.with_ymd_and_hms(2026, 8, 31, 23, 30, 0).unwrap();
     assert_eq!(
-        next_draw_at(late),
-        Utc.with_ymd_and_hms(2026, 8, 28, 21, 0, 0).unwrap()
+        next_draw_at(monday_late),
+        Utc.with_ymd_and_hms(2026, 9, 7, 21, 0, 0).unwrap()
+    );
+
+    let sunday_late = Utc.with_ymd_and_hms(2026, 8, 30, 23, 30, 0).unwrap();
+    assert_eq!(
+        next_draw_at(sunday_late),
+        Utc.with_ymd_and_hms(2026, 8, 31, 21, 0, 0).unwrap()
     );
 }
 
 /// The cap is enforced by the insert itself: a buy that would take a player
-/// past it writes no row, so the caller can roll back an uncharged refusal.
+/// past today's cap writes no row, so the caller can roll back an uncharged
+/// refusal. It counts today's tickets only: yesterday's rows are held, not
+/// spent against today.
 #[tokio::test]
-async fn the_per_user_cap_is_enforced_by_the_insert() {
+async fn the_daily_cap_is_enforced_by_the_insert() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
     let buyer = create_test_user(&test_db.db, "pot-cap-buyer").await;
@@ -132,15 +149,15 @@ async fn the_per_user_cap_is_enforced_by_the_insert() {
         &tx,
         pot.id,
         buyer.id,
-        POT_MAX_TICKETS_PER_USER - 1,
-        POT_MAX_TICKETS_PER_USER,
+        POT_MAX_TICKETS_PER_DAY - 1,
+        POT_MAX_TICKETS_PER_DAY,
     )
     .await
     .expect("buy");
-    assert_eq!(held, Some(POT_MAX_TICKETS_PER_USER - 1));
+    assert_eq!(held, Some(POT_MAX_TICKETS_PER_DAY - 1));
 
     // One over the cap: no row, and the holding is untouched.
-    let refused = PotTicket::buy_in_tx(&tx, pot.id, buyer.id, 2, POT_MAX_TICKETS_PER_USER)
+    let refused = PotTicket::buy_in_tx(&tx, pot.id, buyer.id, 2, POT_MAX_TICKETS_PER_DAY)
         .await
         .expect("buy");
     assert_eq!(refused, None);
@@ -148,19 +165,19 @@ async fn the_per_user_cap_is_enforced_by_the_insert() {
         PotTicket::user_total(&*tx, pot.id, buyer.id)
             .await
             .expect("total"),
-        POT_MAX_TICKETS_PER_USER - 1
+        POT_MAX_TICKETS_PER_DAY - 1
     );
 
     // Exactly to the cap goes through, and the cap is per player: someone
-    // else's holding is not counted against it.
+    // else's tickets are not counted against it.
     assert_eq!(
-        PotTicket::buy_in_tx(&tx, pot.id, buyer.id, 1, POT_MAX_TICKETS_PER_USER)
+        PotTicket::buy_in_tx(&tx, pot.id, buyer.id, 1, POT_MAX_TICKETS_PER_DAY)
             .await
             .expect("buy"),
-        Some(POT_MAX_TICKETS_PER_USER)
+        Some(POT_MAX_TICKETS_PER_DAY)
     );
     assert_eq!(
-        PotTicket::buy_in_tx(&tx, pot.id, other.id, 5, POT_MAX_TICKETS_PER_USER)
+        PotTicket::buy_in_tx(&tx, pot.id, other.id, 5, POT_MAX_TICKETS_PER_DAY)
             .await
             .expect("buy"),
         Some(5)
@@ -171,6 +188,36 @@ async fn the_per_user_cap_is_enforced_by_the_insert() {
             .expect("holders")
             .len(),
         2
+    );
+
+    // A new day: yesterday's tickets are still held but no longer count, so
+    // the same player can buy the whole cap again. Only a test may move a
+    // ticket's clock, and only against the table this test is exercising.
+    tx.execute(
+        "UPDATE pot_tickets SET created = created - interval '1 day'
+         WHERE pot_id = $1 AND user_id = $2",
+        &[&pot.id, &buyer.id],
+    )
+    .await
+    .expect("age the tickets");
+    assert_eq!(
+        PotTicket::user_total_today(&*tx, pot.id, buyer.id)
+            .await
+            .expect("today"),
+        0
+    );
+    assert_eq!(
+        PotTicket::buy_in_tx(
+            &tx,
+            pot.id,
+            buyer.id,
+            POT_MAX_TICKETS_PER_DAY,
+            POT_MAX_TICKETS_PER_DAY
+        )
+        .await
+        .expect("buy"),
+        Some(2 * POT_MAX_TICKETS_PER_DAY),
+        "the holding is the whole week; the cap is today"
     );
     tx.commit().await.expect("commit");
 }
@@ -187,7 +234,7 @@ async fn only_one_sweeper_settles_a_pot() {
     let pot = Pot::open_in_tx(&tx, next_draw_at(Utc::now()), POT_TICKET_PRICE)
         .await
         .expect("open");
-    PotTicket::buy_in_tx(&tx, pot.id, winner.id, 3, POT_MAX_TICKETS_PER_USER)
+    PotTicket::buy_in_tx(&tx, pot.id, winner.id, 3, POT_MAX_TICKETS_PER_DAY)
         .await
         .expect("buy");
     let draw = PotDraw {

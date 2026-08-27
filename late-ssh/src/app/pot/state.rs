@@ -22,7 +22,7 @@ pub(crate) struct PotView {
     /// How many the viewer holds. Their own count only: the map behind it
     /// never leaves the service.
     pub my_tickets: i64,
-    /// `3h12m`, `12m`, `45s`, or `soon` once the draw hour has passed and the
+    /// `4d12h`, `3h12m`, `12m`, `45s`, or `soon` once the draw hour has passed and the
     /// sweeper has not settled it yet. Already rounded, so an equal string
     /// means an equal frame.
     pub draws_in: String,
@@ -46,8 +46,8 @@ impl PotView {
     }
 }
 
-/// `3h12m`, `12m`, `45s`, `soon`: the one countdown format the pot's copy
-/// uses, in the panel and in the `/pot` line alike.
+/// `4d12h`, `3h12m`, `12m`, `45s`, `soon`: the one countdown format the
+/// pot's copy uses, in the panel, the HUD, and the `/pot` line alike.
 pub(crate) fn countdown(draws_at: DateTime<Utc>, now: DateTime<Utc>) -> String {
     short_duration((draws_at - now).num_seconds())
 }
@@ -60,11 +60,14 @@ pub(crate) fn short_duration(secs: i64) -> String {
     if secs <= 0 {
         return "soon".to_string();
     }
-    let (hours, minutes) = (secs / 3_600, (secs % 3_600) / 60);
-    match (hours, minutes) {
-        (0, 0) => format!("{secs}s"),
-        (0, minutes) => format!("{minutes}m"),
-        (hours, minutes) => format!("{hours}h{minutes:02}m"),
+    let (days, hours, minutes) = (secs / 86_400, (secs % 86_400) / 3_600, (secs % 3_600) / 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => format!("{secs}s"),
+        (0, 0, minutes) => format!("{minutes}m"),
+        (0, hours, minutes) => format!("{hours}h{minutes:02}m"),
+        // Past a day the minutes are noise; the hours are zero-padded for
+        // the same reason the minutes are below a day.
+        (days, hours, _) => format!("{days}d{hours:02}h"),
     }
 }
 
