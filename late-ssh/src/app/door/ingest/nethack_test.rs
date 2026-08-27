@@ -21,7 +21,6 @@ fn parses_a_death_line() {
     assert_eq!(run.turns, Some(23456));
     assert_eq!(run.death, "killed by a soldier ant");
     assert_eq!(run.death_level, Some(6));
-    assert!(!run.amulet);
     assert!(!run.cheat_mode);
     assert_eq!(run.ended_at, Utc.timestamp_opt(1754560000, 0).unwrap());
     // The full line rides along for boards not invented yet.
@@ -34,8 +33,6 @@ fn parses_an_ascension() {
     let run = parse_xlogfile_line(ASCENSION_LINE).expect("ascension parses");
     assert_eq!(run.result, DoorRunResult::Win);
     assert_eq!(run.score, Some(3654321));
-    // achieve 0x1ff includes ACH_AMUL (0x20).
-    assert!(run.amulet);
     assert!(!run.cheat_mode);
 }
 
@@ -64,11 +61,12 @@ fn flags_wizard_and_explore_games_as_cheat_mode() {
 
 #[test]
 fn amulet_bit_alone_does_not_win() {
-    // Died carrying the Amulet: the achieve bit is set but death is a death.
+    // Died carrying the Amulet: the achieve bit is set but death is a death,
+    // and the bit itself is not read (the livelog pickup line is the only
+    // Amulet source).
     let line = "name=X\tdeath=killed by Death\tendtime=1754560000\tachieve=0x20";
     let run = parse_xlogfile_line(line).expect("line parses");
     assert_eq!(run.result, DoorRunResult::Death);
-    assert!(run.amulet);
 }
 
 #[test]

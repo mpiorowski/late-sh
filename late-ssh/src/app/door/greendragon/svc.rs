@@ -1392,10 +1392,17 @@ impl GreenDragonService {
                     return;
                 }
             };
-            // This kill already paid (a retry of the same fire-and-forget
-            // task); the badge insert below would be a no-op anyway.
+            // This kill already paid: the chips stay suppressed, but the
+            // badge insert below still runs (it is `NOT EXISTS` idempotent),
+            // so a badge insert that failed on the crediting kill heals here
+            // instead of being lost for good. Same rule as award.rs and
+            // darkroom/svc.rs.
             if !grant.credited {
-                return;
+                tracing::info!(
+                    user_id = %user_id,
+                    event_key = %event_key,
+                    "suppressed greendragon dragon-kill chips because this kill already paid"
+                );
             }
 
             let badge = award_badge(GREENDRAGON_DRAGON_AWARD_CATEGORY, 1);

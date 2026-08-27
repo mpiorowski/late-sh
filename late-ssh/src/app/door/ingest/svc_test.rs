@@ -353,8 +353,11 @@ async fn a_lost_badge_heals_on_the_next_sighting() {
     assert_eq!(award_chip_total(&test_db.db, user.id).await, 20_000);
 }
 
+/// One line, one milestone: the win line pays the win and never the Orb
+/// pickup it implies. The pickup has its own line on the milestone stream;
+/// paying it here too would pay it twice once the pickup's week had passed.
 #[tokio::test]
-async fn a_win_grants_both_badges() {
+async fn a_win_grants_only_its_own_badge() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dcss-win").await;
     claim_handle(&test_db.db, user.id).await;
@@ -364,32 +367,28 @@ async fn a_win_grants_both_badges() {
         .await
         .expect("win ingest");
 
-    // The win pays 50k and back-grants the 20k Orb pickup: separate
-    // milestones, so each has its own lockout and both land.
     let db = test_db.db.clone();
     wait_until(
         || {
             let db = db.clone();
-            async move { award_chip_total(&db, user.id).await == 70_000 }
+            async move { award_chip_total(&db, user.id).await == 50_000 }
         },
-        "win + orb chips granted",
+        "win chips granted",
     )
     .await;
 
-    // The badge inserts trail the chip credits inside the grant tasks, so
-    // they get their own wait before the exact-rows assertion.
+    // The badge insert trails the chip credit inside the grant task, so it
+    // gets its own wait before the exact-rows assertion.
     let db = test_db.db.clone();
     wait_until(
         || {
             let db = db.clone();
-            async move {
-                badge_count(&db, user.id, "dcss_orb").await == 1
-                    && badge_count(&db, user.id, "dcss_win").await == 1
-            }
+            async move { badge_count(&db, user.id, "dcss_win").await == 1 }
         },
-        "both badges granted",
+        "win badge granted",
     )
     .await;
+    assert_eq!(badge_count(&test_db.db, user.id, "dcss_orb").await, 0);
 
     let client = test_db.db.get().await.expect("db client");
     let categories: Vec<String> = client
@@ -404,7 +403,7 @@ async fn a_win_grants_both_badges() {
         .into_iter()
         .map(|row| row.get("category"))
         .collect();
-    assert_eq!(categories, vec!["dcss_orb", "dcss_win"]);
+    assert_eq!(categories, vec!["dcss_win"]);
 
     let row = client
         .query_one(
@@ -420,8 +419,8 @@ fn nethack_death_frame(offset: i64) -> StatsFrame {
     StatsFrame {
         file: "xlogfile".to_string(),
         next_offset: offset,
-        // Died carrying the Amulet (achieve 0x20): the end-of-run bit must
-        // back-fill the pickup badge even without a livelog line.
+        // Died carrying the Amulet (achieve 0x20): the bit is a fact about
+        // the run and never a payout; only the livelog pickup line pays.
         line: format!(
             "version=5.0.0\tpoints=12345\tdeathlev=6\tmaxlvl=8\tname={HANDLE}\tdeath=killed by a soldier ant\tturns=23456\tachieve=0x20\tendtime=1754560000\tflags=0x4"
         ),
@@ -429,7 +428,7 @@ fn nethack_death_frame(offset: i64) -> StatsFrame {
 }
 
 #[tokio::test]
-async fn replayed_nethack_run_lands_one_row_and_backfills_the_amulet() {
+async fn replayed_nethack_run_lands_one_row_and_pays_nothing() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-replay").await;
     claim_handle(&test_db.db, user.id).await;
@@ -447,16 +446,11 @@ async fn replayed_nethack_run_lands_one_row_and_backfills_the_amulet() {
         Some(500)
     );
 
-    // The achieve-bit backstop pays the Amulet exactly once across replays.
-    let db = test_db.db.clone();
-    wait_until(
-        || {
-            let db = db.clone();
-            async move { award_chip_total_for(&db, user.id, "nethack").await == 20_000 }
-        },
-        "amulet chips granted",
-    )
-    .await;
+    // A death carrying the Amulet pays nothing: the xlogfile achieve bit is
+    // not a milestone source, whatever it says.
+    tokio::task::yield_now().await;
+    assert_eq!(award_chip_total_for(&test_db.db, user.id, "nethack").await, 0);
+    assert_eq!(badge_count(&test_db.db, user.id, "nethack_amulet").await, 0);
 
     let client = test_db.db.get().await.expect("db client");
     let row = client
@@ -503,8 +497,10 @@ async fn cheat_mode_nethack_runs_advance_the_cursor_without_attribution() {
     );
 }
 
+/// The xlogfile ascension line pays the ascension only. The Amulet pickup
+/// has its own livelog line and its own payout; nothing here touches it.
 #[tokio::test]
-async fn a_nethack_ascension_grants_both_badges() {
+async fn a_nethack_ascension_grants_only_its_own_badge() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "nh-win").await;
     claim_handle(&test_db.db, user.id).await;
@@ -520,32 +516,28 @@ async fn a_nethack_ascension_grants_both_badges() {
     .await
     .expect("ascension ingest");
 
-    // The ascension pays 50k and back-grants the 20k Amulet pickup: separate
-    // milestones, so each has its own lockout and both land.
     let db = test_db.db.clone();
     wait_until(
         || {
             let db = db.clone();
-            async move { award_chip_total_for(&db, user.id, "nethack").await == 70_000 }
+            async move { award_chip_total_for(&db, user.id, "nethack").await == 50_000 }
         },
-        "ascension + amulet chips granted",
+        "ascension chips granted",
     )
     .await;
 
-    // The badge inserts trail the chip credits inside the grant tasks, so
-    // they get their own wait before the exact-rows assertion.
+    // The badge insert trails the chip credit inside the grant task, so it
+    // gets its own wait before the exact-rows assertion.
     let db = test_db.db.clone();
     wait_until(
         || {
             let db = db.clone();
-            async move {
-                badge_count(&db, user.id, "nethack_amulet").await == 1
-                    && badge_count(&db, user.id, "nethack_ascension").await == 1
-            }
+            async move { badge_count(&db, user.id, "nethack_ascension").await == 1 }
         },
-        "both badges granted",
+        "ascension badge granted",
     )
     .await;
+    assert_eq!(badge_count(&test_db.db, user.id, "nethack_amulet").await, 0);
 
     let client = test_db.db.get().await.expect("db client");
     let categories: Vec<String> = client
@@ -560,7 +552,7 @@ async fn a_nethack_ascension_grants_both_badges() {
         .into_iter()
         .map(|row| row.get("category"))
         .collect();
-    assert_eq!(categories, vec!["nethack_amulet", "nethack_ascension"]);
+    assert_eq!(categories, vec!["nethack_ascension"]);
 
     let row = client
         .query_one(

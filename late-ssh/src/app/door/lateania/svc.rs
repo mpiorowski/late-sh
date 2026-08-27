@@ -6610,7 +6610,7 @@ impl WorldState {
         if let Some(achievement) = achievement {
             let line = match achievement.payout.is_some() {
                 true => format!(
-                    "Defeating {} pays chips once per character, and one crown every 7 days; the {} badge is yours the first time.",
+                    "Defeating {} pays chips once per character, and at most once every 7 days; the {} badge is yours the first time.",
                     achievement.mob_name,
                     award_badge(achievement.award_category, 1)
                 ),

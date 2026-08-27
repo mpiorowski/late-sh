@@ -44,10 +44,12 @@ impl HubGroup {
 }
 
 impl HubGame {
-    /// Selector order, top to bottom: the house game first, the roguelikes by
+    /// Selector order, top to bottom: the house games first (Lateania, then
+    /// A Dark Room, our own build of the original), the roguelikes by
     /// stature, the BBS doors led by Green Dragon, then the back room.
     pub const ALL: [HubGame; 11] = [
         HubGame::Lateania,
+        HubGame::Darkroom,
         HubGame::Dcss,
         HubGame::Nethack,
         HubGame::Brogue,
@@ -55,7 +57,6 @@ impl HubGame {
         HubGame::Usurper,
         HubGame::Dopewars,
         HubGame::Bashquest,
-        HubGame::Darkroom,
         HubGame::Rebels,
         HubGame::Codekeep,
     ];
@@ -78,12 +79,12 @@ impl HubGame {
 
     pub fn group(self) -> HubGroup {
         match self {
-            HubGame::Lateania => HubGroup::House,
+            HubGame::Lateania | HubGame::Darkroom => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
             HubGame::GreenDragon | HubGame::Usurper | HubGame::Dopewars | HubGame::Bashquest => {
                 HubGroup::Doors
             }
-            HubGame::Darkroom | HubGame::Rebels | HubGame::Codekeep => HubGroup::BackRoom,
+            HubGame::Rebels | HubGame::Codekeep => HubGroup::BackRoom,
         }
     }
 

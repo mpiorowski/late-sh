@@ -339,7 +339,7 @@ fn draw_launch_copy(
         24,
     ));
     lines.push(Line::from(Span::styled(
-        "  A crown pays once per character, and at most one crown every 7 days per account.",
+        "  Each crown pays once per character, and at most once every 7 days per account.",
         Style::default().fg(theme::TEXT_FAINT()),
     )));
     lines.push(Line::raw(""));

@@ -500,12 +500,6 @@ fn footer(state: &State, game: &Game) -> Line<'static> {
     Line::from(spans)
 }
 
-/// What the landing says the endings pay, both of them at once. The per-
-/// ending line lives on [`Escape::reward_line`]; this is the summary, and the
-/// badge is called out separately because it is the one half that never
-/// repeats.
-const LANDING_REWARD: &str = "15,000 or 20,000 chips every run, and the badge the first time";
-
 /// The two lines that say the run is over for good.
 const ENDING_WIPED: &str = "the save is gone. the room is dark and cold again.";
 const ENDING_PROMPT: &str = "press any key to step outside";
@@ -644,12 +638,44 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
             ),
             10,
         ),
-        landing::hint("reward", LANDING_REWARD, 10),
-        landing::hint(
-            "ending",
-            "flying out wipes the save: the room starts dark again",
-            10,
+        Line::from(""),
+        landing::heading("Rewards"),
+        landing::stat(
+            "Fly out",
+            "15,000 chips, and the ADE badge the first time",
+            15,
         ),
+        landing::stat(
+            "Fleet beacon",
+            "20,000 chips, and the ADB badge the first time",
+            15,
+        ),
+        Line::from(Span::styled(
+            "  Every run that gets out pays: the ending wipes the save,",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::from(Span::styled(
+            "  so a repeat is the whole arc again, not a shortcut.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::from(""),
+        landing::heading("The second pass"),
+        Line::from(Span::styled(
+            "Flying out once makes you a veteran. Your next map carries",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "the ravaged battleship, a wreck no first run ever sees: clear",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "it, kill the immortal wanderer, take the fleet beacon, and",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        Line::from(Span::styled(
+            "fly out holding it for the second ending.",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
         Line::from(""),
     ]);
 
@@ -669,6 +695,16 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, delete_confirm: bool) {
         ));
         lines.push(landing::action("x", "d", "start over", theme::ERROR()));
     }
+
+    lines.extend([
+        Line::from(""),
+        landing::heading("Once Inside"),
+        landing::hint("j/k, w/s, arrows", "move the cursor; Enter or space picks", 18),
+        landing::hint("Tab", "switch between the room and outside", 18),
+        landing::hint("+/- and </>", "move one or ten villagers between jobs", 18),
+        landing::hint("wasd / arrows", "walk the wasteland, steer the ship", 18),
+        landing::hint("Esc", "park the trip and step out; time keeps banking", 18),
+    ]);
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

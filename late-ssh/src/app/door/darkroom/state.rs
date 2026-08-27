@@ -458,7 +458,7 @@ impl State {
             }
             // The one ending. The account keeps the badge and the chips; the
             // save does not survive, so the room is dark again next time and
-            // the whole arc is there to walk a second time — and paid for
+            // the whole arc is there to walk a second time, and paid for
             // again, keyed on this run's id.
             Some(Flight::Won) => {
                 self.flight = None;

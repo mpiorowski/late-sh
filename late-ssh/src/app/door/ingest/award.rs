@@ -6,14 +6,20 @@
 //! the second time, so it pays the full amount again, gated two ways at once
 //! by `credit_run_cooldown_reward_template`: once per ingested log line, and
 //! at most once per the template's 7-day window per account. The line key is
-//! what makes a replay safe — the ingest grants on every sighting, fresh or
-//! replayed, precisely so a crash between insert and grant heals — and the
+//! what makes a replay safe (the ingest grants on every sighting, fresh or
+//! replayed, precisely so a crash between insert and grant heals), and the
 //! window is what stops a lucky week paying four times.
 //! The profile badge stays once per account for life: the `NOT EXISTS` insert
 //! runs on every sighting, credited or not, so a badge lost to a crash heals
 //! on the next one.
 //! Backfilled historical wins DO grant (owner decision): it is the same
 //! achievement, and the two gates make it safe.
+//!
+//! One line, one milestone. A win line grants the win and nothing else: it
+//! never back-grants the Orb or Amulet pickup "in case the milestone stream
+//! missed it". A pickup that never landed is an ingest bug and shows up as a
+//! missing badge; paying it off the win line would hide the bug and, once the
+//! pickup's 7-day window had passed, pay the pickup a second time.
 //!
 //! This sink only moves chips and badges. Feed events stay with the ingest
 //! service, which gates them on insert freshness and recency instead.
@@ -115,32 +121,11 @@ impl DoorAwards {
         Self { chip_svc, db }
     }
 
-    /// Grant the chips + badge for a milestone landed by `line`. A DCSS or
-    /// NetHack win implies the lesser artifact pickup (neither game lets you
-    /// win without it), so it back-grants the pair's lesser badge in case the
-    /// milestone stream missed it; that back-grant carries the win line's own
-    /// key, and the 7-day window absorbs it when the pickup already paid off
-    /// the milestone stream. Brogue's endings are alternatives, not stages — a
-    /// Mastery run never passes through an Escape — so its badges grant only
-    /// themselves.
+    /// Grant the chips + badge for the one milestone `line` landed as. Every
+    /// badge grants only itself (see the module doc): a DCSS or NetHack win
+    /// does not pay the pickup it implies, and a Brogue Mastery does not pay
+    /// the Escape it never passed through.
     pub fn grant(&self, user_id: Uuid, badge: DoorBadge, line: &DoorLineKey) {
-        match badge {
-            DoorBadge::DcssOrb => self.spawn_grant(user_id, DoorBadge::DcssOrb, line),
-            DoorBadge::DcssWin => {
-                self.spawn_grant(user_id, DoorBadge::DcssOrb, line);
-                self.spawn_grant(user_id, DoorBadge::DcssWin, line);
-            }
-            DoorBadge::NethackAmulet => self.spawn_grant(user_id, DoorBadge::NethackAmulet, line),
-            DoorBadge::NethackAscension => {
-                self.spawn_grant(user_id, DoorBadge::NethackAmulet, line);
-                self.spawn_grant(user_id, DoorBadge::NethackAscension, line);
-            }
-            DoorBadge::BrogueEscape => self.spawn_grant(user_id, DoorBadge::BrogueEscape, line),
-            DoorBadge::BrogueMastery => self.spawn_grant(user_id, DoorBadge::BrogueMastery, line),
-        }
-    }
-
-    fn spawn_grant(&self, user_id: Uuid, badge: DoorBadge, line: &DoorLineKey) {
         let chip_svc = self.chip_svc.clone();
         let db = self.db.clone();
         let event_key = line.event_key();

@@ -247,7 +247,7 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards fire on every sighting, fresh or replayed — that heals a
+        // Awards fire on every sighting, fresh or replayed: that heals a
         // crash between insert and grant, and the line key they carry is what
         // makes the replay pay nothing (see award.rs).
         if run.result == DoorRunResult::Win {
@@ -379,17 +379,15 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards fire on every sighting, fresh or replayed — that heals a
+        // Awards fire on every sighting, fresh or replayed: that heals a
         // crash between insert and grant, and the line key they carry is what
         // makes the replay pay nothing (see award.rs).
-        // The end-of-run achieve bit also back-fills an Amulet pickup the
-        // livelog stream missed.
+        // The Amulet pays from the livelog pickup line only; the xlogfile
+        // `achieve` bit is not read for it (award.rs, "one line, one
+        // milestone").
         if run.result == DoorRunResult::Win {
             self.awards
                 .grant(user_id, DoorBadge::NethackAscension, &line_key(frame));
-        } else if run.amulet {
-            self.awards
-                .grant(user_id, DoorBadge::NethackAmulet, &line_key(frame));
         }
 
         let recent = Utc::now().signed_duration_since(run.ended_at) < FEED_RECENCY;
@@ -511,7 +509,7 @@ impl DoorIngestService {
         DoorLogCursor::upsert(&tx, game, &frame.file, frame.next_offset).await?;
         tx.commit().await?;
 
-        // Awards fire on every sighting, fresh or replayed — that heals a
+        // Awards fire on every sighting, fresh or replayed: that heals a
         // crash between insert and grant, and the line key they carry is what
         // makes the replay pay nothing (see award.rs).
         // Brogue's endings are alternatives (see award.rs), so each grants

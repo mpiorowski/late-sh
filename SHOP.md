@@ -620,10 +620,10 @@ What the code says today (investigated 2026-08-25):
   line older than 7 days would pay again. The repeat claim therefore has to
   be keyed on the run's identity as well: `door_runs` and
   `door_milestones` carry `UNIQUE (game, source_file, source_offset)`, and
-  `insert_ignore` returns whether the row was fresh. NetHack's Amulet and
-  DCSS's Orb are granted twice per winning run (once from the milestone
-  line, once from the win line, `award.rs::grant`); the cooldown absorbs the
-  second sighting.
+  `insert_ignore` returns whether the row was fresh. (Before 2026-08-27
+  NetHack's Amulet and DCSS's Orb were also granted a second time off the
+  win line, as a backstop for a missed pickup line; see the deviation
+  below for why that is gone.)
 - **Green Dragon.** `Character::slay_dragon` bumps `dragon_kills` and resets
   the character to level 1 (gold and gems restart from the kill count), so
   the loop already exists in-game. `reward_dragon_kill(user_id, kills)`
@@ -753,7 +753,25 @@ Deviations from the design above, each deliberate:
 - Two copy sites the investigation missed are fixed in the same pass:
   `door/greendragon/ui.rs` ("the chip payout is a lifetime claim") and
   `door/lateania/screen.rs`, which still said Yssgar and Kaethyr pay "no
-  chips, only glory" — stale since migration 144 flattened the crowns.
+  chips, only glory", stale since migration 144 flattened the crowns.
+- **No back-grant, found in verification 2026-08-27.** `award.rs::grant` used
+  to pay the Orb / Amulet a second time off the win line ("in case the
+  milestone stream missed it"), and the NetHack xlogfile `achieve` bit paid
+  the Amulet off a death line. Under the new gate the back-grant carried the
+  win line's own key, so the only thing stopping it was the 7-day window:
+  a run whose pickup and win were more than a week apart paid the pickup
+  twice (90k for a DCSS run the table prices at 70k). Both backstops are
+  deleted, not re-keyed: a pickup line the pipe missed is an ingest bug
+  that has to surface as a missing badge, not get paid from somewhere else.
+  One line, one milestone, every door. The `NethackRun.amulet` field went
+  with it.
+- **A refused line can pay on a later replay** (noted in verification
+  2026-08-27, accepted). A win refused by the 7-day window writes no claim
+  row at all (all gates or none), so it looks fresh to a later re-read. A
+  cursor reset or backfill after the window therefore pays every win that
+  was refused inside its week, not only wins the pipe never saw. Only an
+  operator can trigger a re-read, and it sits inside the "backfilled
+  historical wins still grant" decision; know it before resetting a cursor.
 - The amounts are quoted in the in-door landings, the badge guide, and the
   help modal because that is what a player reads, and in the CONTEXT.md files
   that already quoted the old ones. Every one of those points back here.
