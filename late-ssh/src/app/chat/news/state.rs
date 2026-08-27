@@ -17,9 +17,9 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
         NewsShareReward::Paid => {
             Banner::success(&format!("{lead} +{NEWS_SHARE_REWARD_CHIPS} chips"))
         }
-        NewsShareReward::RepeatUrl => {
-            Banner::success(&format!("{lead} Already paid for this link, no chips this time."))
-        }
+        NewsShareReward::RepeatUrl => Banner::success(&format!(
+            "{lead} Already paid for this link, no chips this time."
+        )),
         NewsShareReward::DailyCapReached => Banner::success(&format!(
             "{lead} Today's {NEWS_SHARE_MAX_PAID_PER_DAY} paid shares are used up, no chips this time."
         )),

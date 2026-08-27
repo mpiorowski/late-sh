@@ -357,9 +357,9 @@ impl ArticleService {
         //    place a share is rewarded.
         tracing::info!(%url, "saving article to database");
         let reward = {
-            let db_client = self.db.get().await?;
+            let mut db_client = self.db.get().await?;
             let (_, reward) = Article::create_shared(
-                &db_client,
+                &mut db_client,
                 user_id,
                 ArticleParams {
                     user_id,

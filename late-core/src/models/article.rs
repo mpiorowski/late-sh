@@ -78,17 +78,44 @@ impl Article {
     /// person, not per link. The daily cap counts the same rows by their
     /// UTC date, the way pot tickets are capped.
     ///
-    /// The plain `create_by_user_id` still exists for fixtures and backfills;
-    /// this is the only path a user-facing share may take, so the reward
-    /// cannot be forgotten at one call site and applied at another.
+    /// Insert, lookup, and credit are one transaction under a per-user
+    /// advisory lock, like every other claim-plus-credit path: a credit that
+    /// fails leaves no orphan article squatting on the URL, and two shares by
+    /// one person landing together cannot both read the same count and pay a
+    /// fourth. The insert is spelled out here rather than going through the
+    /// generated `create_by_user_id`, which only takes a bare `Client`; that
+    /// one still exists for fixtures and backfills. This is the only path a
+    /// user-facing share may take, so the reward cannot be forgotten at one
+    /// call site and applied at another.
     pub async fn create_shared(
-        client: &Client,
+        client: &mut Client,
         user_id: Uuid,
         params: ArticleParams,
     ) -> Result<(Self, NewsShareReward)> {
-        let url = params.url.clone();
-        let article = Self::create_by_user_id(client, user_id, params).await?;
-        let row = client
+        let tx = client.transaction().await?;
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock(
+               hashtextextended(concat_ws(':', 'news_share', ($1::uuid)::text), 0)
+             )",
+            &[&user_id],
+        )
+        .await?;
+        let row = tx
+            .query_one(
+                "INSERT INTO articles (user_id, url, title, summary, ascii_art)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING *",
+                &[
+                    &user_id,
+                    &params.url,
+                    &params.title,
+                    &params.summary,
+                    &params.ascii_art,
+                ],
+            )
+            .await?;
+        let article = Self::from(row);
+        let row = tx
             .query_one(
                 "SELECT
                      COALESCE(bool_or(source_ref = $3), false) AS paid_url,
@@ -98,27 +125,28 @@ impl Article {
                      )::BIGINT AS paid_today
                  FROM chip_ledger
                  WHERE user_id = $1 AND reason = $2",
-                &[&user_id, &ChipMove::NewsShared.reason(), &url],
+                &[&user_id, &ChipMove::NewsShared.reason(), &article.url],
             )
             .await?;
         let paid_url: bool = row.get("paid_url");
         let paid_today: i64 = row.get("paid_today");
-        if paid_url {
-            return Ok((article, NewsShareReward::RepeatUrl));
-        }
-        if paid_today >= NEWS_SHARE_MAX_PAID_PER_DAY {
-            return Ok((article, NewsShareReward::DailyCapReached));
-        }
-
-        UserChips::apply(
-            client,
-            user_id,
-            ChipMove::NewsShared,
-            NEWS_SHARE_REWARD_CHIPS,
-            Some(&url),
-        )
-        .await?;
-        Ok((article, NewsShareReward::Paid))
+        let reward = if paid_url {
+            NewsShareReward::RepeatUrl
+        } else if paid_today >= NEWS_SHARE_MAX_PAID_PER_DAY {
+            NewsShareReward::DailyCapReached
+        } else {
+            UserChips::apply(
+                &tx,
+                user_id,
+                ChipMove::NewsShared,
+                NEWS_SHARE_REWARD_CHIPS,
+                Some(&article.url),
+            )
+            .await?;
+            NewsShareReward::Paid
+        };
+        tx.commit().await?;
+        Ok((article, reward))
     }
 
     pub async fn find_by_url(client: &Client, url: &str) -> Result<Option<Self>> {

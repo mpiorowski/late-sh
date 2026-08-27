@@ -248,12 +248,7 @@ impl FeedService {
         Ok(())
     }
 
-    pub fn mark_shared_task(
-        &self,
-        user_id: Uuid,
-        entry_id: Uuid,
-        reward: Option<NewsShareReward>,
-    ) {
+    pub fn mark_shared_task(&self, user_id: Uuid, entry_id: Uuid, reward: Option<NewsShareReward>) {
         let service = self.clone();
         tokio::spawn(async move {
             if let Err(e) = service.do_mark_shared(user_id, entry_id, reward).await {
