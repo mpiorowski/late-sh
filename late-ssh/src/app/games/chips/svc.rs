@@ -23,7 +23,9 @@ use crate::app::activity::{
 // reads them.
 const PER_EVENT_REWARD_PERIOD_KIND: &str = "event";
 /// The lobby's pair-day cap (SHOP.md Phase 7): one paid win per opponent per
-/// UTC day the match was posted. The key is `<opponent id>:<posting date>`.
+/// game per UTC day the match was posted. The key is
+/// `<opponent id>:<posting date>`, and the claim row carries the template's
+/// `game` like every other claim, so each roster game has its own row.
 const PAIR_DAY_REWARD_PERIOD_KIND: &str = "pair_day";
 
 #[derive(Clone)]
@@ -312,9 +314,16 @@ impl ChipService {
     /// AND once per `pair_day_key` (`<opponent id>:<UTC date the match was
     /// posted>`). Both claims land or neither does.
     ///
-    /// This is what closes the lobby's resign loop (SHOP.md Phase 7): two
-    /// accounts can post, claim and resign all day, but every match they post
-    /// today shares one pair-day key and pays once. Keying on the posting day
+    /// Both claims are scoped to the template's `game`, so the cap is per
+    /// roster game: chess and battleship against the same opponent on the
+    /// same day both pay. Decided in SHOP.md Phase 7 (2026-08-27): honest
+    /// friends who play several games together are never touched, and a
+    /// colluding pair is bounded at one paid win per game per direction per
+    /// day, which is the whole list of eight before it stops.
+    ///
+    /// This is what closes the lobby's resign loop: two accounts can post,
+    /// claim and resign all day, but every match they post today in one game
+    /// shares one pair-day key and pays once. Keying on the posting day
     /// rather than the finishing day is what keeps honest play whole: two long
     /// games against the same opponent were posted on different days, so both
     /// pay whichever day they end.

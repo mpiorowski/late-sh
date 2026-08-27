@@ -162,8 +162,8 @@ pub enum DailyWinPayout {
     Paid,
     /// Fewer than `DAILY_WIN_MIN_MOVES` half-moves were played.
     Unplayed,
-    /// A win against this opponent from the same posting day already paid
-    /// (SHOP.md Phase 7's pair-day cap).
+    /// A win against this opponent in this game from the same posting day
+    /// already paid (SHOP.md Phase 7's pair-day cap, scoped per roster game).
     PairDayCapped,
     /// The credit call failed; logged, the match is finished all the same.
     Failed,
@@ -1534,8 +1534,9 @@ impl DailyService {
     /// The win payout behind its two gates (SHOP.md Phase 7). Gate 1 is the
     /// match itself: fewer than `DAILY_WIN_MIN_MOVES` half-moves and nothing is
     /// even asked of the DB. Gate 2 is the pair: one paid win per opponent per
-    /// UTC day the match was posted, enforced inside the grant. Every outcome
-    /// is logged and counted here and nowhere else.
+    /// game per UTC day the match was posted, enforced inside the grant (the
+    /// claim row carries the template's `game`, so each roster game is its
+    /// own cap). Every outcome is logged and counted here and nowhere else.
     async fn pay_winner(
         &self,
         row: &DailyMatch,

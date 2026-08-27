@@ -378,7 +378,7 @@ fn win_payout_phrase(item: &DailyFinishedItem) -> String {
             format!(" · no chips, under {DAILY_WIN_MIN_MOVES} moves")
         }
         Some(DailyWinPayout::PairDayCapped) => {
-            " · no chips, one paid win per opponent per day".to_string()
+            " · no chips, one paid win per opponent per game per day".to_string()
         }
         Some(DailyWinPayout::Failed) => " · payout failed".to_string(),
         None => String::new(),

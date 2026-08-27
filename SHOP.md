@@ -880,7 +880,7 @@ Decided numbers:
 
 | Dial | Value |
 |---|---|
-| Paid results per opponent per UTC day | 1 (win payout and consolation both) |
+| Paid results per opponent per game per posting day | 1 (win payout; the claim is scoped to the roster game, decided 2026-08-27; the consolation was dropped) |
 | Consolation | 100 chips, flat, every roster game |
 | Consolation gate | `state.revision >= DailyGame::consolation_min_moves()`: chess and chess960 40, battleship 40, reversi 30, checkers 30, connect four 20, backgammon 20, briscola 20 (revision counts both players' moves) |
 | Who gets consolation | the loser on every decisive result except `timeout`; both players on `draw`; nobody on `timeout` |
@@ -939,19 +939,49 @@ Behavior:
   wagered match. `DailyGame::win_payout` stays display-only and equal to
   the template, same rule for `consolation_min_moves`.
 
+Status: part 1 shipped 2026-08-27 (migration 161, `DailyService::pay_winner`,
+`ChipService::credit_per_event_pair_day_reward_template`). Part 2, the wager,
+is still open. Deviations from the design above, each deliberate:
+- **The pair-day cap is per opponent per game**, not per opponent. The
+  `pair_day` claim rides `grant_multi` under the template's `game`
+  (`daily_chess`, `daily_battleship`, ...) like every claim row, so chess and
+  battleship against the same person on the same posting day both pay.
+  Decided 2026-08-27 in review: friends who play several games together are
+  never touched, and a colluding pair is bounded at one paid win per roster
+  game per direction per posting day (about 3,300 chips each way, and only
+  after playing all eight games). If Top Chips ever looks wrong, the
+  per-account daily quota is the next step, not a tighter pair key.
+- **A win pays only with at least 5 half-moves played**
+  (`DAILY_WIN_MIN_MOVES`; both players' moves count, a resign is not a move,
+  a timeout counts what was played). Not in the design. It stops the
+  zero-move claim-and-resign and nothing more: a move count sets a rate, not
+  a bound, since there is no minimum time per move. The pair-day cap is the
+  bound.
+- **The consolation is dropped, not built.** 100 chips for showing up could
+  not be paid without reopening the faucet the cap just closed, and the wager
+  is the real finish-your-games lever. The rows for it in the table above
+  stay as the record of what was considered.
+- The credit is awaited inside `finish_events` rather than spawned, so the
+  `MatchFinished` event and the banner say what the chips did
+  (`DailyWinPayout`: paid / unplayed / pair_day_capped / failed), and the same
+  outcome is stored in `daily_matches.win_payout` for the lingering result
+  row, so an offline winner learns why the chips did or did not come. A
+  failed credit never un-finishes a match.
+
 Checklist:
-- [ ] Pair-day cap on the win payout, with a test: two decisive matches
+- [x] Pair-day cap on the win payout, with a test: two decisive matches
       against the same opponent on one UTC day pay once; the next day pays
       again; a different opponent the same day pays.
-- [ ] Consolation: loser at the threshold is paid, one move short is not,
-      draw pays both, timeout pays neither, and the pair-day cap covers it.
+- [ ] Test pinning the per-game scope: chess and battleship against the
+      same opponent on one posting day both pay.
+- [x] Consolation: dropped, see the status block above.
 - [ ] Wager: hold on post, match on claim, short balance fails the right
       step, settle on every finish path, refund on cancel and draw, timeout
       pays the pot, retry of any path is a no-op. Whole-ledger assertions:
       the sum of the four wager moves for a match equals minus the burn.
-- [ ] `daily/CONTEXT.md` sections 1, 3, 6, 8 and the chips context updated;
-      help copy for the stake row; roster protocol ("Adding a game to the
-      roster") gains the `consolation_min_moves` arm.
+- [ ] `daily/CONTEXT.md` sections 1, 3, 6, 8 and the chips context updated
+      (done for part 1); help copy for the stake row waits on the wager. The
+      `consolation_min_moves` roster arm is gone with the consolation.
 
 Out of scope: spectator side bets (the arena, GAME.md phase 4), tournaments,
 draw offers, house-table stakes, an entry fee on unwagered matches, elapsed
@@ -981,9 +1011,8 @@ Owner notes to pick up in a later spitball, kept here so they are not lost:
   eat what they pay). Still open there: Asterion's daily 4,000.
 - ~~Lobby game economics.~~ Phase 7 above (pair-day cap, consolation,
   wagers). Still open in the Lobby: spectator side bets, tournaments.
-- ~~A payout for the loser, gated on effort.~~ Phase 7 above: 100 chips at
-  a per-game move threshold, never on timeout, capped per opponent per
-  day.
+- ~~A payout for the loser, gated on effort.~~ Was Phase 7's consolation;
+  dropped 2026-08-27 (see the Phase 7 status block).
 
 ## Dropped
 

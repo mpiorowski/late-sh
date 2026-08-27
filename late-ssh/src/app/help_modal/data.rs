@@ -413,7 +413,7 @@ fn chips_help_lines() -> Vec<String> {
         "    Battleship       300 chips".to_string(),
         "    A draw pays nobody. Only the winner is paid, and each match pays once.".to_string(),
         format!("    A win pays only if at least {} moves were played (both players' moves count),", crate::app::lobby::daily::svc::DAILY_WIN_MIN_MOVES),
-        "    and at most one win per opponent per day the challenge was posted is paid.".to_string(),
+        "    and at most one win per opponent per game per day the challenge was posted is paid.".to_string(),
         "    Two long games against the same person can end the same day and both pay:".to_string(),
         "    they were posted on different days.".to_string(),
         "".to_string(),

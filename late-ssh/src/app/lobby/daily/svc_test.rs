@@ -87,8 +87,19 @@ async fn resigned_chess_match(
     opponent: Uuid,
     played: bool,
 ) -> DailyMatch {
+    resigned_match(svc, DailyGame::Chess, challenger, opponent, played).await
+}
+
+/// The same, in any game `play_min_moves` can drive (chess or chess960).
+async fn resigned_match(
+    svc: &DailyService,
+    game: DailyGame,
+    challenger: Uuid,
+    opponent: Uuid,
+    played: bool,
+) -> DailyMatch {
     let challenge = svc
-        .post_challenge(challenger, DailyGame::Chess, None)
+        .post_challenge(challenger, game, None)
         .await
         .expect("post challenge");
     let claimed = svc
@@ -402,6 +413,52 @@ async fn pair_day_cap_pays_one_win_per_opponent_per_posting_day() {
     assert_eq!(
         win_deltas(&client, a.id, "daily_chess_win").await,
         vec![500, 500]
+    );
+}
+
+/// The cap is scoped to the roster game (SHOP.md Phase 7, decided
+/// 2026-08-27): a chess win and a chess960 win against the same opponent on
+/// the same posting day are two keys, so both pay. Friends who play several
+/// games together are never touched; a colluding pair runs out of games. If
+/// this goes red because the key became roster-wide, that is a decision
+/// reversal, not a fix.
+#[tokio::test]
+async fn pair_day_cap_is_scoped_to_the_game() {
+    let test_db = new_test_db().await;
+    let a = create_test_user(&test_db.db, "daily-pergame-a").await;
+    let b = create_test_user(&test_db.db, "daily-pergame-b").await;
+    let svc = daily_service(&test_db);
+    let client = test_db.db.get().await.expect("db client");
+
+    let chess = resigned_match(&svc, DailyGame::Chess, a.id, b.id, true).await;
+    let chess960 = resigned_match(&svc, DailyGame::Chess960, a.id, b.id, true).await;
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess_win").await,
+        vec![500]
+    );
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess960_win").await,
+        vec![500],
+        "a second game against the same opponent is its own cap"
+    );
+    assert_eq!(
+        stored_win_payout(&svc, chess.id).await,
+        Some(DailyWinPayout::Paid)
+    );
+    assert_eq!(
+        stored_win_payout(&svc, chess960.id).await,
+        Some(DailyWinPayout::Paid)
+    );
+
+    // The same game again is where the cap lives.
+    let again = resigned_match(&svc, DailyGame::Chess960, a.id, b.id, true).await;
+    assert_eq!(
+        stored_win_payout(&svc, again.id).await,
+        Some(DailyWinPayout::PairDayCapped)
+    );
+    assert_eq!(
+        win_deltas(&client, a.id, "daily_chess960_win").await,
+        vec![500]
     );
 }
 

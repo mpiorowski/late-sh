@@ -449,7 +449,7 @@ impl DailyState {
                                 DAILY_WIN_MIN_MOVES
                             )),
                             DailyWinPayout::PairDayCapped => Banner::success(&format!(
-                                "Daily {}: you won the match (no chips: one paid win per opponent per posting day)",
+                                "Daily {}: you won the match (no chips: one paid win per opponent per game per posting day)",
                                 game.label()
                             )),
                             DailyWinPayout::Failed => Banner::success(&format!(
